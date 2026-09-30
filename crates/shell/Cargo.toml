@@ -1,0 +1,16 @@
+[package]
+name = "compusophy-shell"
+description = "The compusophyOS desktop shell: panel, window chrome, pointer and keyboard bindings. Turns wm layouts into draw lists and input into wm commands."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[lib]
+name = "shell"
+
+[dependencies]
+compusophy-wm.workspace = true
+compusophy-gfx.workspace = true

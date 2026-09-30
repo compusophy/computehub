@@ -1,7 +1,8 @@
 # compusophyOS — design
 
-Status: phase 0 in progress (workspace, constitution scripts, forked crates,
-`wm`). Started 2026-09-30. Author: compusophy.
+Status: phase 0 done (workspace, constitution scripts, forked crates, `wm`);
+phase 1 in progress (`gfx`, `shell`, `platform`, `os`, the web build).
+Started 2026-09-30. Author: compusophy.
 
 ## What it is
 
@@ -91,10 +92,12 @@ main thread ─ one <canvas>, WebGL2
 | `wm` | tiling tree, workspaces, focus; deterministic, replayable | new, no web deps |
 | `kernel` | processes, caps, VFS, input routing; composes `wm` | new, no web deps |
 | `gfx` | draw protocol and compositor | new |
+| `shell` | panel, window chrome and bindings over `wm`; no web deps | new |
 | `platform` | canvas, input, text-input bridge, OPFS, workers, clipboard | new |
 | `os` | the wasm entry point | new |
 | `sdk` | what tier 1 apps link against | new |
 | `tools/atlas` | build-time MSDF font baker | new, never shipped |
+| `tools/serve` | dev-only static server for `dist/` | new, never shipped |
 
 Package names take a `compusophy-` prefix (`compusophy-fuel`, ...) so they can
 be published later.
@@ -230,10 +233,10 @@ coefficient list, and generate → verify → keep as the main mesh workload.
 
 ## Phases
 
-0. Workspace, constitution scripts, budgets in CI. Fork the litelite crates.
-   The `wm` tiling tree with tests.
-1. Platform and compositor: canvas, WebGL2, rounded rectangles, MSDF text,
-   input. A desktop with panel, tiling and launcher.
+0. (done) Workspace, constitution scripts, budgets in CI. Fork the litelite
+   crates. The `wm` tiling tree with tests.
+1. (in progress) Platform and compositor: canvas, WebGL2, rounded
+   rectangles, MSDF text, input. A desktop with panel, tiling and launcher.
 2. Tier 0: applang apps in windows; a terminal.
 3. Storage: OPFS-backed VFS and desktop snapshots.
 4. Tier 1: Worker pool, ring buffers, syscall table, SDK, a Rust hello-world

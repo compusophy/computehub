@@ -8,20 +8,28 @@ CRATE_CAP=2000
 REPO_CAP=25000
 CLAUDE_CAP=8000
 # Only these crates may touch the browser, so only they may take the
-# wasm-bindgen family. Empty until phase 1 adds `platform` and `os`.
-WEB_CRATES=""
+# wasm-bindgen family.
+WEB_CRATES="platform os"
 WEB_DEPS="wasm-bindgen js-sys web-sys"
 # Registry packages Cargo.lock may hold: the web deps' transitive closure,
-# listed by name when phase 1 adds them. Empty: nothing comes from a registry.
-LOCK_ALLOW=""
+# listed by name. Anything new here is a reviewed decision, not a drift.
+LOCK_ALLOW="bumpalo cfg-if futures-core futures-task futures-util js-sys once_cell pin-project-lite proc-macro2 quote rustversion slab syn unicode-ident wasm-bindgen wasm-bindgen-macro wasm-bindgen-macro-support wasm-bindgen-shared web-sys"
 # Crates whose state must replay bit-for-bit: no floats, no hash-ordered or
 # randomly seeded collections, no clocks, no randomness.
 DETERMINISTIC_CRATES="wm"
 DET_TOKENS="HashMap|HashSet|RandomState|DefaultHasher|Instant|SystemTime|UNIX_EPOCH|thread_rng"
 fail=0
 
+# Crates live under crates/ (the libraries) and tools/ (build and dev tools).
+# Tools never ship, but they are Rust in this repo: every check below that
+# walks crates walks both.
+crate_dirs=()
+for c in crates/*/ tools/*/; do
+  if [ -d "$c" ]; then crate_dirs+=("$c"); fi
+done
+
 # 1. Lines of Rust per crate and in total (tests count: they ship in the repo).
-for c in crates/*/; do
+for c in "${crate_dirs[@]}"; do
   n=$(find "$c" -name '*.rs' -print0 | xargs -0 cat | wc -l)
   printf '%-26s %6d LOC (cap %d)\n' "$c" "$n" "$CRATE_CAP"
   if [ "$n" -gt "$CRATE_CAP" ]; then
@@ -29,7 +37,7 @@ for c in crates/*/; do
     fail=1
   fi
 done
-total=$(find crates -name '*.rs' -print0 | xargs -0 cat | wc -l)
+total=$(find "${crate_dirs[@]}" -name '*.rs' -print0 | xargs -0 cat | wc -l)
 printf '%-26s %6d LOC (cap %d)\n' "total" "$total" "$REPO_CAP"
 if [ "$total" -gt "$REPO_CAP" ]; then
   echo "FAIL: repo exceeds the total cap"
@@ -64,7 +72,9 @@ else
     echo "FAIL: could not read every dependency from cargo metadata"
     fail=1
   fi
-  for toml in crates/*/Cargo.toml; do
+  for c in "${crate_dirs[@]}"; do
+    toml="${c}Cargo.toml"
+    [ -f "$toml" ] || continue
     name=$(awk -F'"' '/^name = "/ { print $2; exit }' "$toml")
     case " $members" in
       *" $name@"*) ;;
@@ -164,7 +174,7 @@ done
 
 # 5. Every crate carries the license text: cargo packages only the crate dir,
 #    and Apache-2.0 wants the text with every copy.
-for c in crates/*/; do
+for c in "${crate_dirs[@]}"; do
   if ! cmp -s LICENSE "${c}LICENSE"; then
     echo "FAIL: ${c}LICENSE is missing or differs from the root LICENSE"
     fail=1

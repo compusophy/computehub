@@ -1,0 +1,14 @@
+[package]
+name = "compusophy-gfx"
+description = "Draw lists for compusophyOS: rounded rects, borders, soft shadows and icons as one flat instance buffer for a single instanced draw call."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[lib]
+name = "gfx"
+
+[dependencies]

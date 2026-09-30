@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# Builds the web bundle and deploys it to Vercel as a prebuilt static site
+# (Build Output API v3), so Vercel never compiles Rust. Needs the repo linked
+# to the Vercel project (`vercel link`).
+#   bash scripts/deploy.sh          preview deployment
+#   bash scripts/deploy.sh prod     production deployment
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+bash scripts/build-web.sh
+bash scripts/budget.sh
+
+rm -rf .vercel/output
+mkdir -p .vercel/output/static
+cp -R dist/. .vercel/output/static/
+printf '{ "version": 3 }\n' > .vercel/output/config.json
+
+if [ "${1:-}" = "prod" ]; then
+  vercel deploy --prebuilt --prod --yes
+else
+  vercel deploy --prebuilt --yes
+fi

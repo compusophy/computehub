@@ -27,6 +27,14 @@ jobs:
         run: cargo doc --workspace --no-deps
         env:
           RUSTDOCFLAGS: -D warnings
+      # The CLI must match the wasm-bindgen version in Cargo.lock exactly;
+      # build-web.sh checks and fails loudly otherwise.
+      - name: install the wasm-bindgen CLI (the locked version)
+        uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-bindgen@0.2.121
+      - name: web build
+        run: bash scripts/build-web.sh
       - name: size budget
         run: bash scripts/budget.sh
 

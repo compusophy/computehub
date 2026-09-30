@@ -1,0 +1,42 @@
+[package]
+name = "compusophy-platform"
+description = "The compusophyOS browser boundary: canvas, WebGL2 renderer for gfx draw lists, input events and on-demand frame scheduling."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[lib]
+name = "platform"
+
+[dependencies]
+compusophy-gfx.workspace = true
+wasm-bindgen.workspace = true
+js-sys.workspace = true
+web-sys = { workspace = true, features = [
+    "AddEventListenerOptions",
+    "console",
+    "Document",
+    "DomRect",
+    "Element",
+    "Event",
+    "EventTarget",
+    "HtmlCanvasElement",
+    "KeyboardEvent",
+    "Location",
+    "MediaQueryList",
+    "MouseEvent",
+    "Performance",
+    "PointerEvent",
+    "WebGl2RenderingContext",
+    "WebGlBuffer",
+    "WebGlContextAttributes",
+    "WebGlPowerPreference",
+    "WebGlProgram",
+    "WebGlShader",
+    "WebGlUniformLocation",
+    "WebGlVertexArrayObject",
+    "Window",
+] }

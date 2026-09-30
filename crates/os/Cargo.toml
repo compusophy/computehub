@@ -1,0 +1,20 @@
+[package]
+name = "compusophy-os"
+description = "compusophyOS: the wasm entry point that wires wm, shell, gfx and platform into a desktop in one canvas."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[lib]
+name = "os"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+compusophy-wm.workspace = true
+compusophy-gfx.workspace = true
+compusophy-shell.workspace = true
+compusophy-platform.workspace = true
+wasm-bindgen.workspace = true

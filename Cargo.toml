@@ -8,6 +8,11 @@ members = [
     "crates/applang-syntax",
     "crates/applang",
     "crates/wm",
+    "crates/gfx",
+    "crates/shell",
+    "crates/platform",
+    "crates/os",
+    "tools/serve",
 ]
 
 # Every crate inherits these. The version lives here, once.
@@ -30,6 +35,16 @@ compusophy-wasmgen = { path = "crates/wasmgen", version = "0.1.0" }
 compusophy-applang-syntax = { path = "crates/applang-syntax", version = "0.1.0" }
 compusophy-applang = { path = "crates/applang", version = "0.1.0" }
 compusophy-wm = { path = "crates/wm", version = "0.1.0" }
+compusophy-gfx = { path = "crates/gfx", version = "0.1.0" }
+compusophy-shell = { path = "crates/shell", version = "0.1.0" }
+compusophy-platform = { path = "crates/platform", version = "0.1.0" }
+
+# The browser boundary. Only `platform` and `os` may use these (scripts/caps.sh).
+# wasm-bindgen is pinned to the exact version of the wasm-bindgen CLI that
+# scripts/build-web.sh runs; the two must match byte for byte.
+wasm-bindgen = "=0.2.121"
+js-sys = "0.3"
+web-sys = "0.3"
 
 # Ultra lite: every shipped byte is budgeted.
 [profile.release]

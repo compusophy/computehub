@@ -40,8 +40,15 @@ crates/
   applang-syntax/  applang lexer/parser/checker   (split from applite)
   applang/         applang runtime (tier 0 apps)  (split from applite)
   wm/              tiling window manager, deterministic
+  gfx/             instanced-quad draw list + the WebGL2 shaders (no web deps)
+  shell/           panel, window chrome, key/pointer bindings over wm (no web deps)
+  platform/        the browser boundary: canvas, WebGL2 renderer, input, rAF
+  os/              the wasm entry point: shell + platform glue
+tools/serve/       dev-only static server for dist/ (never shipped)
+web/index.html     the page: <canvas id="os"> + the one-line module bootstrap
 scripts/caps.sh    caps: lines, deps, determinism, per-crate LICENSE, privacy
-scripts/budget.sh  the size budget
+scripts/budget.sh  the size budget (measures dist/)
+scripts/build-web.sh  wasm build + wasm-bindgen (+ wasm-opt) into dist/
 ```
 
 Forks come from litelite 0.2.0, commit `4f5e056` (2026-07-20). Package names
@@ -58,7 +65,9 @@ cargo fmt --all --check
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
 cargo +1.85 test --workspace   # the MSRV: rust-version in Cargo.toml
 bash scripts/caps.sh
+bash scripts/build-web.sh        # dist/; needs wasm-bindgen CLI = Cargo.lock's
 bash scripts/budget.sh
+cargo run -p serve --release -- dist 8080   # preview (.claude/launch.json "os")
 ```
 
 ## Conventions
