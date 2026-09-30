@@ -1,0 +1,44 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+          components: clippy, rustfmt
+      - name: constitution caps
+        run: bash scripts/caps.sh
+      - name: format
+        run: cargo fmt --all --check
+      - name: test
+        run: cargo test --workspace
+      - name: wasm32 stays green
+        run: cargo check --workspace --target wasm32-unknown-unknown
+      - name: clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: docs build without warnings
+        run: cargo doc --workspace --no-deps
+        env:
+          RUSTDOCFLAGS: -D warnings
+      - name: size budget
+        run: bash scripts/budget.sh
+
+  # The oldest compiler the manifests promise (rust-version in Cargo.toml).
+  # Clippy on stable does not catch newer language features, such as let
+  # chains, so build and test on this one too.
+  msrv:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.85"
+      - name: test on the declared MSRV
+        run: cargo test --workspace

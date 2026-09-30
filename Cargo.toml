@@ -1,0 +1,40 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/fuel",
+    "crates/cap",
+    "crates/lang",
+    "crates/wasmgen",
+    "crates/applang-syntax",
+    "crates/applang",
+    "crates/wm",
+]
+
+# Every crate inherits these. The version lives here, once.
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "Apache-2.0"
+authors = ["compusophy"]
+repository = "https://github.com/compusophy/computehub"
+
+# Internal deps, declared once. Package names carry the `compusophy-` prefix so
+# they can be published; each crate's [lib] name is the short one code uses
+# (`fuel::Fuel`, `lang::Diag`, `wm::Wm`).
+[workspace.dependencies]
+compusophy-fuel = { path = "crates/fuel", version = "0.1.0" }
+compusophy-cap = { path = "crates/cap", version = "0.1.0" }
+compusophy-lang = { path = "crates/lang", version = "0.1.0" }
+compusophy-wasmgen = { path = "crates/wasmgen", version = "0.1.0" }
+compusophy-applang-syntax = { path = "crates/applang-syntax", version = "0.1.0" }
+compusophy-applang = { path = "crates/applang", version = "0.1.0" }
+compusophy-wm = { path = "crates/wm", version = "0.1.0" }
+
+# Ultra lite: every shipped byte is budgeted.
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

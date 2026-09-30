@@ -1,0 +1,15 @@
+[package]
+name = "compusophy-applang-syntax"
+description = "The applang front end: lexer, parser, and static checker for the total, fuel-bounded UI-app language."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[lib]
+name = "applang_syntax"
+
+[dependencies]
+compusophy-lang.workspace = true

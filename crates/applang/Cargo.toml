@@ -1,0 +1,17 @@
+[package]
+name = "compusophy-applang"
+description = "applang: a total, fuel-bounded UI-app language. Event handlers provably halt, faults roll back atomically, memory is bounded."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[lib]
+name = "applang"
+
+[dependencies]
+compusophy-applang-syntax.workspace = true
+compusophy-lang.workspace = true
+compusophy-fuel.workspace = true
