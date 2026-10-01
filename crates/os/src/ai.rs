@@ -68,9 +68,14 @@ impl Ai {
         *self.0.borrow_mut() = h;
     }
 
+    /// Whether stream `id` is a request in flight.
+    pub fn streams(&self, id: u32) -> bool {
+        self.0.borrow().live.iter().any(|l| l.0 == id)
+    }
+
     /// What apps see.
     pub fn status(&self) -> AiStatus {
-        AiStatus { model: MODELS[self.0.borrow().model].into() }
+        AiStatus { model: MODELS[self.0.borrow().model].into(), ..AiStatus::default() }
     }
 
     /// Saves the model an app chose (one not on offer is the default).

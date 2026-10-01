@@ -3,7 +3,7 @@
 //! colors ([`Theme::icon_colors`]).
 
 use gfx::{DrawList, RectF, Rgba};
-pub use icons::{Glyph, PHI, Point, outline};
+pub use icons::{Glyph, MARK_HOLE, PHI, Point, outline, rings};
 use text::TextSystem;
 
 use crate::Theme;

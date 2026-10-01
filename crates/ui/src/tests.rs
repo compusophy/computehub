@@ -505,7 +505,9 @@ fn apps_and_their_context() {
         Pref { key: \"dock\", value: \"left\" }]";
     assert_eq!(format!("{:?}", cx.take_requests()), want);
     assert!(cx.take_requests().is_empty() && cx.now_ms == 5.0);
-    assert_eq!(cx.ai, AiStatus { model: "m".into() });
+    assert_eq!(cx.ai, AiStatus { model: "m".into(), ..AiStatus::default() });
+    cx.pref(REPORTS, "off");
+    assert!(cx.ai.reports_off && !cx.ai.held);
     assert_eq!(fs.read("/tmp/clicks"), Ok(&[1][..]));
     assert_eq!(app.title(), "Echo 1");
 }

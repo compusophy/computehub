@@ -102,6 +102,7 @@ fn show(r: &Request) -> String {
         Request::LoadFallbackFonts => "fonts".into(),
         Request::SetTheme(name) => format!("theme {name}"),
         Request::Pref { key, value } => format!("pref {key}={value}"),
+        Request::Feedback { kind, text, context } => format!("feedback {kind} {context} {text}"),
         other => format!("{other:?}"),
     }
 }
@@ -283,11 +284,12 @@ fn inks(list: &DrawList) -> Vec<Rgba> {
     of(list, Kind::Glyph).map(|i| i.color).collect()
 }
 
-/// Checks that every glyph of `list` is in a readable ink of `t` (never the
-/// faint one) or an app icon's ink, and every shape lies on device pixels.
+/// Checks that every glyph of `list` is in a readable ink of `t` (never the faint one), text on
+/// the accent, or an app icon's ink, and every shape lies on device pixels.
 fn refined(list: &DrawList, t: &Theme, dpr: f32, what: &str) {
-    let icons = [kit::TERMINAL, kit::STUDIO, kit::SETTINGS, kit::WELCOME];
-    let mut ok = vec![t.text, t.text_dim, t.accent];
+    use kit::*;
+    let icons = [TERMINAL, STUDIO, ASSISTANT, SETTINGS, WELCOME, FILES, ABOUT, FEEDBACK, FILE];
+    let mut ok = vec![t.text, t.text_dim, t.accent, t.accent_text];
     ok.extend(icons.map(|i| t.icon_colors(i.hue)[2]));
     inks(list).iter().for_each(|i| assert!(ok.contains(i), "{what} in {}: ink {i:?}", t.name));
     let on = |v: f32| ((v * dpr) - (v * dpr).round()).abs() < 1e-3;
@@ -296,6 +298,16 @@ fn refined(list: &DrawList, t: &Theme, dpr: f32, what: &str) {
         let [x, y, w, h] = i.rect;
         assert!([x, y, x + w, y + h].into_iter().all(on), "{what} in {}: {i:?} at {dpr}", t.name);
     }
+}
+
+/// Whether `list` has the scroll thumb: a 3 px fill in the faint ink.
+fn thumb(list: &DrawList, t: &Theme) -> bool {
+    of(list, Kind::Fill).any(|i| i.color == t.text_faint && i.rect[2] == 3.0)
+}
+
+/// The ids of `hits`, in order.
+fn ids(hits: &[Hit]) -> Vec<u32> {
+    hits.iter().map(|h| h.id.0).collect()
 }
 
 #[test]
@@ -307,13 +319,18 @@ fn apps_have_grids_titles_icons_and_sizes_and_are_refined_in_every_theme() {
     t.term.feed(b"\x1b]2;notes\x07");
     assert_eq!(t.title(), "Terminal — notes");
     assert!(t.wants_text_input() && open("launcher").is_none(), "the shell owns the launcher");
-    let sizes = [(720.0, 420.0), (W80, H24), (720.0, 520.0)];
-    let icons = [(Glyph::Mark, 0xf472b6), (Glyph::Terminal, 0x2dd4bf), (Glyph::Cog, 0x94a3b8)];
-    assert_eq!(NAMES, ["welcome", "terminal", "settings"]);
-    for ((name, (glyph, hue)), size) in NAMES.iter().zip(icons).zip(sizes) {
+    assert_eq!(NAMES, ["welcome", "terminal", "settings", "about", "feedback", "files"]);
+    #[rustfmt::skip]
+    let want = [
+        (Glyph::Mark, 0xf472b6, (520.0, 768.0), true), (Glyph::Terminal, 0x2dd4bf, (W80, H24), false),
+        (Glyph::Cog, 0x94a3b8, (720.0, 520.0), true), (Glyph::About, 0xfbbf24, (560.0, 640.0), true),
+        (Glyph::Feedback, 0x34d399, (520.0, 420.0), true), (Glyph::Folder, 0x60a5fa, (640.0, 480.0), false),
+    ];
+    for (name, (glyph, hue, size, compact)) in NAMES.iter().zip(want) {
         let (app, icon) = (open(name).unwrap(), ui::AppIcon { glyph, hue: Rgba::hex(hue) });
-        assert_eq!((app.icon(), app.preferred_size()), (icon, Some(size)));
+        assert_eq!((app.icon(), app.preferred_size(), app.compact()), (icon, Some(size), compact));
     }
+    assert!(open("files:~/apps").is_some() && open("files").is_some());
     for dpr in [1.0, 1.5, 2.0] {
         let mut ts = text_system();
         ts.set_dpr(dpr);
@@ -321,10 +338,10 @@ fn apps_have_grids_titles_icons_and_sizes_and_are_refined_in_every_theme() {
             let mut app = open(name).unwrap();
             for (w, h) in [(720.0, 520.0), (360.0, 640.0)] {
                 let r = RectF::new(0.0, 36.0, w, h);
-                // Under the pointer and held: the first widget.
+                // Under the pointer and held: the first widget; past Welcome's reveal.
                 let hits = frame(app.as_mut(), &mut ts, r, UiState::default(), theme).1;
                 let id = hits.first().map(|h| h.id);
-                let state = UiState { hover: id, pressed: id, focused: true, now_ms: 0.0 };
+                let state = UiState { hover: id, pressed: id, focused: true, now_ms: 1e4 };
                 let (list, _) = frame(app.as_mut(), &mut ts, r, state, theme);
                 assert!(!list.is_empty(), "{name}");
                 if name != "terminal" {
@@ -336,38 +353,49 @@ fn apps_have_grids_titles_icons_and_sizes_and_are_refined_in_every_theme() {
 }
 
 #[test]
-fn welcome_cards_open_apps_and_wrap_and_settings_switches_pages_and_themes() {
+fn welcome_lists_the_apps_under_the_mark_it_reveals_once() {
     let mut ts = text_system();
     let mut s = Sim::new(Welcome::default());
-    let r = RectF::new(0.0, 36.0, 720.0, 420.0);
-    let hits = draw(&mut s.app, &mut ts, r, MIDNIGHT).1;
-    assert_eq!(hits.iter().map(|h| h.id.0).collect::<Vec<_>>(), [1, 2, 3]);
-    let ys: Vec<f32> = hits.iter().map(|h| h.rect.y).collect();
-    assert!(ys.iter().all(|&y| y == ys[0]), "three across: {hits:?}");
-    let opened = [s.click(1), s.click(2), s.click(3)].join(",");
-    assert_eq!(opened, "open terminal,open studio,open settings");
-    assert!(!s.wheel(50.0), "it all fits");
+    assert!(!s.app.animating(0.0), "not before it is drawn");
+    let at = |now_ms| UiState { focused: true, now_ms, ..UiState::default() };
+    let r = RectF::new(0.0, 36.0, 520.0, 768.0);
+    let (early, hits) = frame(&mut s.app, &mut ts, r, at(100.0), MIDNIGHT);
+    assert_eq!(ids(&hits), [1, 2, 3, 4, 5, 6, 7]);
+    let (a, b) = (hits[0].rect, hits[6].rect);
+    assert!(a.x == b.x && a.w == b.w && b.y == a.y + 6.0 * 55.0 && a.h == 55.0, "{a:?} {b:?}");
+    assert!(a.x >= 27.0 && a.x + a.w <= 493.0 && b.y + b.h <= 796.0, "in the window: {b:?}");
+    // The reveal runs 618 ms from the first draw, frames only meanwhile: bands and 365 holes, then
+    // the mark's one glyph (144 px: 1/φ of the shorter side is more).
+    assert!(s.app.animating(400.0) && !s.app.animating(718.0) && !s.app.animating(f64::NAN));
+    let done = frame(&mut s.app, &mut ts, r, at(718.0), MIDNIGHT).0;
+    assert!(of(&early, Kind::Fill).count() >= of(&done, Kind::Fill).count() + 365);
+    assert_eq!(of(&done, Kind::Glyph).filter(|g| (144.0..147.0).contains(&g.rect[2])).count(), 1);
+    let opened: Vec<String> = (1..=7).map(|i| s.click(i)).collect();
+    assert_eq!(
+        opened.join(","),
+        "open studio,open assistant,open terminal,open files,open settings,open about,open feedback"
+    );
+    assert!(!s.wheel(50.0) && !thumb(&done, MIDNIGHT), "it all fits");
     assert!(!s.both(AppEvent::Key { key: Key::Enter, mods: NO }).0);
-    // Narrow: the cards stack, each across the content, all in the window.
-    let r = RectF::new(0.0, 0.0, 360.0, 720.0);
-    let hits = draw(&mut s.app, &mut ts, r, MIDNIGHT).1;
-    let fits = |h: &Hit| h.rect.x >= 20.0 && h.rect.x + h.rect.w <= 340.0 && h.rect.w >= 300.0;
-    assert!(hits.len() == 3 && hits.iter().all(fits), "{hits:?}");
-    assert!(hits[0].rect.y < hits[1].rect.y && hits[1].rect.y < hits[2].rect.y);
-    // Short: it scrolls, and the cards move up with it.
-    let r = RectF::new(0.0, 0.0, 360.0, 300.0);
-    let y0 = draw(&mut s.app, &mut ts, r, MIDNIGHT).1[0].rect.y;
+    // Short: it scrolls, a thumb shows, the rows move up; the mark shrinks to 1/φ.
+    let r = RectF::new(0.0, 0.0, 360.0, 420.0);
+    let (list, hits) = draw(&mut s.app, &mut ts, r, MIDNIGHT);
+    assert!(thumb(&list, MIDNIGHT) && hits.len() < 7, "{hits:?}");
+    let y0 = hits[0].rect.y;
     assert!(s.wheel(40.0) && s.wheel(1e9) && !s.wheel(1.0));
-    let y1 = draw(&mut s.app, &mut ts, r, MIDNIGHT).1[0].rect.y;
-    assert!(y1 < y0 - 40.0, "{y0} {y1}");
-    // Settings switches pages and themes.
+    let hits = draw(&mut s.app, &mut ts, r, MIDNIGHT).1;
+    assert!(hits.len() == 7 && hits[0].rect.y < y0 - 40.0, "{y0} {hits:?}");
+}
+
+#[test]
+fn settings_switches_pages_and_themes_the_default_first() {
+    let mut ts = text_system();
     let mut s = Sim::new(Settings::default());
-    assert_eq!(s.app.title(), "Settings");
+    assert!(s.app.title() == "Settings" && s.app.compact());
     let r = RectF::new(0.0, 36.0, 720.0, 520.0);
     for (i, theme) in THEMES.iter().enumerate() {
         let (list, hits) = draw(&mut s.app, &mut ts, r, theme);
-        let ids: Vec<u32> = hits.iter().map(|h| h.id.0).collect();
-        assert_eq!(ids, [1, 2, 3, 10, 11, 12], "nav, then the theme cards");
+        assert_eq!(ids(&hits), [1, 2, 3, 12, 10, 11], "nav, then Mono and the others");
         // The current theme's card wears a 2 px accent ring outside it.
         let card = hit(&hits, 10 + i as u32).rect;
         let ring = |b: &&Instance| b.color == theme.accent && b.p0 == 2.0;
@@ -386,19 +414,187 @@ fn welcome_cards_open_apps_and_wrap_and_settings_switches_pages_and_themes() {
     };
     assert_eq!([rows(&mut s, 720.0), rows(&mut s, 560.0), rows(&mut s, 360.0)], [1, 2, 2]);
     assert_eq!([s.click(10), s.click(12)].join(","), "theme Midnight,theme Mono");
-    // About: the version and the stack, taller than the window: it scrolls.
-    assert!(!s.both(AppEvent::Click(WidgetId(1))).0, "already there");
-    assert!(s.both(AppEvent::Click(WidgetId(3))).0 && s.app.page == 2);
-    let (list, hits) = draw(&mut s.app, &mut ts, r, MIDNIGHT);
-    assert_eq!(hits.len(), 3, "only the nav");
-    assert!(inks(&list).len() > 400, "the stack and the credits");
-    assert!(s.wheel(100.0) && s.wheel(1e9) && !s.wheel(5.0));
-    assert!(draw(&mut s.app, &mut ts, r, MIDNIGHT).0.instances() != list.instances());
     // A narrow window has tabs instead of the nav, and both still switch.
+    assert!(!s.both(AppEvent::Click(WidgetId(1))).0, "already there");
     let tabs = draw(&mut s.app, &mut ts, RectF::new(0.0, 0.0, 360.0, 640.0), MIDNIGHT).1;
-    let (a, b) = (hit(&tabs, 1).rect, hit(&tabs, 2).rect);
+    let (a, b) = (hit(&tabs, 1).rect, hit(&tabs, 3).rect);
     assert!(a.y == b.y && a.w == b.w && b.x > a.x, "{a:?} {b:?}");
-    assert!(s.both(AppEvent::Click(WidgetId(1))).0 && s.app.page == 0);
+    assert!(s.both(AppEvent::Click(WidgetId(3))).0 && s.app.page == 2);
+}
+
+#[test]
+fn settings_privacy_switches_reports_and_leads_to_feedback() {
+    let (mut ts, mut s) = (text_system(), Sim::new(Settings::default()));
+    assert!(s.both(AppEvent::Click(WidgetId(3))).0 && s.app.page == 2);
+    let r = RectF::new(0.0, 36.0, 720.0, 520.0);
+    let track = |list: &DrawList| {
+        let t = of(list, Kind::Fill).find(|i| i.rect[2] == 34.0 && i.rect[3] == 21.0);
+        t.expect("the switch").color
+    };
+    let (list, hits) = draw(&mut s.app, &mut ts, r, MIDNIGHT);
+    assert_eq!(ids(&hits), [1, 2, 3, 30, 31]);
+    assert_eq!(track(&list), MIDNIGHT.accent, "on until said otherwise");
+    assert!(inks(&list).len() > 300, "what a report holds");
+    // The switch sets the preference and shows it at once.
+    assert_eq!(s.click(30), "pref reports=off");
+    assert!(s.app.reports_off && s.ai.reports_off);
+    assert_eq!(track(&draw(&mut s.app, &mut ts, r, MIDNIGHT).0), MIDNIGHT.surface_lo);
+    // The host hears it only from the page, later: until its word changes, ours stands.
+    s.ai.reports_off = false;
+    assert!(!s.both(AppEvent::Focus(true)).0 && s.app.reports_off);
+    s.ai.reports_off = true;
+    assert!(s.both(AppEvent::Focus(true)).0 && s.app.reports_off);
+    s.ai.reports_off = false;
+    assert!(s.both(AppEvent::Focus(true)).0 && !s.app.reports_off, "changed elsewhere");
+    assert_eq!(s.click(30), "pref reports=off");
+    assert_eq!(s.click(30), "pref reports=on");
+    assert_eq!(s.click(31), "open feedback");
+    // Narrow, it all wraps and scrolls.
+    let r = RectF::new(0.0, 0.0, 360.0, 300.0);
+    let list = draw(&mut s.app, &mut ts, r, MIDNIGHT).0;
+    assert!(thumb(&list, MIDNIGHT) && s.wheel(100.0));
+}
+
+#[test]
+fn about_shows_the_mark_the_stack_and_credits_and_scrolls() {
+    let (mut ts, mut s) = (text_system(), Sim::new(About::default()));
+    assert_eq!(s.app.title(), "About");
+    let r = RectF::new(0.0, 36.0, 560.0, 640.0);
+    let (list, hits) = draw(&mut s.app, &mut ts, r, MIDNIGHT);
+    assert!(hits.is_empty(), "nothing to click");
+    assert_eq!(of(&list, Kind::Glyph).filter(|g| (89.0..92.0).contains(&g.rect[2])).count(), 1);
+    assert!(inks(&list).len() > 600 && thumb(&list, MIDNIGHT), "{}", inks(&list).len());
+    assert!(s.wheel(200.0) && s.wheel(1e9) && !s.wheel(5.0));
+    let moved = draw(&mut s.app, &mut ts, r, MIDNIGHT).0;
+    assert!(moved.instances() != list.instances());
+    assert!(inks(&moved).contains(&MIDNIGHT.accent), "the source, in the accent");
+    assert!(!s.both(AppEvent::Click(WidgetId(1))).0);
+    // Narrow: roles go under the names, so it is taller.
+    let narrow = draw(&mut s.app, &mut ts, RectF::new(0.0, 0.0, 300.0, 640.0), MIDNIGHT).0;
+    assert!(inks(&narrow).len() > 300);
+}
+
+#[test]
+fn feedback_composes_and_sends_with_its_kind_and_context() {
+    let (mut ts, mut s) = (text_system(), Sim::new(Feedback::default()));
+    assert!(s.app.wants_text_input(), "ready to type");
+    let r = RectF::new(0.0, 36.0, 520.0, 600.0);
+    let (list, hits) = draw(&mut s.app, &mut ts, r, MIDNIGHT);
+    assert_eq!(ids(&hits), [1, 2, 3, 10, 11, 12]);
+    assert!(s.click(12).is_empty(), "nothing to send yet");
+    let idea = hit(&hits, 2).rect;
+    let fills: Vec<_> = of(&list, Kind::Fill).map(|i| (i.rect, i.color)).collect();
+    assert!(fills.contains(&([idea.x, idea.y, idea.w, idea.h], MIDNIGHT.accent)), "Idea at first");
+    // Typing and editing.
+    s.text("Hello wrld");
+    s.keys(&[Key::Left; 3]);
+    s.text("o");
+    s.key(Key::End, NO);
+    s.key(Key::Enter, NO);
+    s.text("second\u{7}");
+    assert_eq!((s.app.text.as_str(), s.app.at), ("Hello world\nsecond", 18));
+    s.keys(&[Key::Home, Key::Backspace, Key::Delete]);
+    assert_eq!((s.app.text.as_str(), s.app.at), ("Hello worldecond", 11));
+    s.keys(&[Key::Enter, Key::Right]);
+    // Up and down go by rows, resolved where text is measured: the next draw.
+    s.key(Key::Up, NO);
+    let hits = draw(&mut s.app, &mut ts, r, MIDNIGHT).1;
+    assert_eq!(s.app.at, 1, "under the caret, a row up");
+    // A press in the text puts the caret there; one on nothing leaves the text.
+    let well = hit(&hits, 10).rect;
+    let (x, y) = (well.x + 13.0 - r.x, well.y + 13.0 + 17.0 + 5.0 - r.y);
+    s.ev(AppEvent::PointerDown { x, y, id: Some(WidgetId(10)) });
+    draw(&mut s.app, &mut ts, r, MIDNIGHT);
+    assert_eq!(s.app.at, 12, "the start of the second row");
+    assert!(s.both(AppEvent::PointerDown { x: 1.0, y: 1.0, id: None }).0);
+    assert!(!s.app.wants_text_input() && s.text("ignored").is_empty());
+    s.ev(AppEvent::PointerDown { x, y, id: Some(WidgetId(10)) });
+    // The kind and the context; then Send, which clears and says it went.
+    assert_eq!([s.click(1), s.click(11)].concat(), "");
+    assert!(s.app.kind == 0 && !s.app.context && s.app.focus);
+    let hits = draw(&mut s.app, &mut ts, r, MIDNIGHT).1;
+    assert_eq!(ids(&hits), [1, 2, 3, 10, 11, 12]);
+    let sent = s.click(12);
+    assert_eq!(sent, "feedback bug false Hello world\necond");
+    assert!(s.app.text.is_empty() && s.app.status == Some(feedback::SENT));
+    let list = draw(&mut s.app, &mut ts, r, MIDNIGHT).0;
+    assert!(inks(&list).len() > 100);
+    assert!(s.click(12).is_empty(), "nothing to send");
+    // Typing hides the note; while reports wait, the next is saved for later. Ctrl+Enter sends.
+    s.text("  Love the mono theme  ");
+    assert!(s.app.status.is_none());
+    s.ai.held = true;
+    let sent = s.key(Key::Enter, CTRL);
+    assert_eq!(sent, "feedback bug false Love the mono theme");
+    assert_eq!(s.app.status, Some(feedback::SAVED));
+    // A long text grows the box and the page follows the caret down.
+    for _ in 0..40 {
+        s.text("line\n");
+    }
+    let list = draw(&mut s.app, &mut ts, r, MIDNIGHT).0;
+    let well = of(&list, Kind::Fill).find(|i| i.color == MIDNIGHT.surface_lo).expect("the box");
+    assert!(well.rect[3] > 600.0 && thumb(&list, MIDNIGHT), "{well:?}");
+    let caret = of(&list, Kind::Fill).find(|i| i.color == MIDNIGHT.accent && i.rect[2] <= 2.0);
+    let caret = caret.expect("the caret");
+    assert!(caret.rect[1] > 36.0 && caret.rect[1] < 636.0, "in view: {caret:?}");
+    assert!(s.key(Key::Escape, NO).is_empty() && !s.app.focus);
+    assert!(s.both(AppEvent::Wheel { x: 0.0, y: 0.0, dy: -50.0 }).0);
+}
+
+#[test]
+fn files_walks_folders_and_opens_what_it_finds() {
+    let (mut ts, mut s) = (text_system(), Sim::new(Files::default()));
+    let home = Vfs::HOME.to_string();
+    s.fs.mkdir_all(&[&home, "/apps"].concat()).unwrap();
+    s.fs.mkdir_all(&[&home, "/zed"].concat()).unwrap();
+    s.fs.write(&[&home, "/apps/clock.app"].concat(), b"app").unwrap();
+    s.fs.write(&[&home, "/notes.txt"].concat(), b"hello").unwrap();
+    let r = RectF::new(0.0, 36.0, 640.0, 480.0);
+    assert!(draw(&mut s.app, &mut ts, r, MIDNIGHT).1.len() == 2, "not listed before an event");
+    assert!(s.both(AppEvent::Resized { w: 640.0, h: 480.0 }).0);
+    let (list, hits) = draw(&mut s.app, &mut ts, r, MIDNIGHT);
+    assert_eq!(ids(&hits), [1, 10, 1000, 1001, 1002], "Up, ~, folders first, then files");
+    assert!(inks(&list).len() > 20 && !thumb(&list, MIDNIGHT));
+    assert_eq!([kit::size(5), kit::size(1536), kit::size(3_500_000)], ["5 B", "1.5 KB", "3.3 MB"]);
+    // Into a folder, the crumbs follow; a .app runs, other files open in Studio.
+    assert!(s.click(1000).is_empty() && s.app.dir == [&home, "/apps"].concat());
+    assert_eq!(ids(&draw(&mut s.app, &mut ts, r, MIDNIGHT).1), [1, 10, 11, 1000]);
+    assert_eq!(s.click(1000), ["open ", &home, "/apps/clock.app"].concat());
+    assert!(s.both(AppEvent::Click(WidgetId(10))).0 && s.app.dir == home);
+    assert_eq!(s.click(1002), ["open studio:", &home, "/notes.txt"].concat());
+    // Up, out of home: crumbs from /, home's own tile; at the root no Up.
+    assert!(s.both(AppEvent::Click(WidgetId(1))).0 && s.app.dir == "/home");
+    let hits = draw(&mut s.app, &mut ts, r, MIDNIGHT).1;
+    assert_eq!(ids(&hits), [1, 10, 11, 1000]);
+    assert!(s.both(AppEvent::Click(WidgetId(1))).0 && s.app.dir == "/");
+    assert_eq!(ids(&draw(&mut s.app, &mut ts, r, MIDNIGHT).1)[..2], [10, 1000]);
+    assert!(!s.both(AppEvent::Click(WidgetId(10))).0, "already there");
+    // A change to the files shows at the next event.
+    s.fs.write("/top.txt", b"x").unwrap();
+    assert!(s.both(AppEvent::Focus(true)).0 && !s.both(AppEvent::Focus(true)).0);
+    // files:<dir> opens there; a folder that is not falls back to home; an empty one says so.
+    let mut f = Sim::new(Files::new("~/apps"));
+    f.fs = std::mem::replace(&mut s.fs, Vfs::new());
+    f.both(AppEvent::Focus(true));
+    assert_eq!(f.app.dir, [&home, "/apps"].concat());
+    let mut gone = Sim::new(Files::new("/nope"));
+    gone.both(AppEvent::Focus(true));
+    assert_eq!(gone.app.dir, home);
+    let (list, hits) = draw(&mut gone.app, &mut ts, r, MIDNIGHT);
+    assert!(ids(&hits) == [1, 10] && inks(&list).len() > 15, "empty, and saying so");
+    // Many files scroll, under a thumb; a deep path drops its first crumbs when narrow.
+    for i in 0..30 {
+        f.fs.write(&[&home, "/apps/", &i.to_string(), ".txt"].concat(), b"").unwrap();
+    }
+    f.both(AppEvent::Focus(true));
+    let list = draw(&mut f.app, &mut ts, r, MIDNIGHT).0;
+    assert!(thumb(&list, MIDNIGHT) && f.wheel(300.0) && f.wheel(1e9) && !f.wheel(1.0));
+    f.fs.mkdir_all(&[&home, "/apps/a/very/deep/folder/indeed"].concat()).unwrap();
+    f.app = Files::new("~/apps/a/very/deep/folder/indeed");
+    f.both(AppEvent::Focus(true));
+    let hits = draw(&mut f.app, &mut ts, RectF::new(0.0, 0.0, 240.0, 400.0), MIDNIGHT).1;
+    let crumbs: Vec<u32> = ids(&hits).into_iter().filter(|&i| (10..1000).contains(&i)).collect();
+    assert!(crumbs.last() == Some(&16) && crumbs[0] > 10, "{crumbs:?}");
 }
 
 #[test]
