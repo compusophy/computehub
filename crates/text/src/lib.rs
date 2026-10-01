@@ -1,6 +1,13 @@
-//! Text on the glyph atlas: three UI font slots plus fallbacks, measured in
-//! logical pixels and drawn as device-pixel-exact glyphs. Split from `ui`,
-//! which re-exports it; pure Rust, no browser.
+//! Text on the glyph atlas for compusophyOS (re-exported by `ui`): three UI
+//! font slots plus fallbacks, measured in logical pixels.
+//!
+//! - Sans is the boot font. Until [`TextSystem::set_font`] fills them,
+//!   SansBold is Sans and Mono keeps JetBrains Mono's grid but draws nothing.
+//! - Lookup: the style's face, the other built-in family, the fallbacks,
+//!   else `.notdef`. No kerning; a tab is four spaces, controls are empty.
+//! - Glyphs are rasterized at `size * dpr`, cached, and placed on device
+//!   pixels (the atlas samples 1:1). A full atlas is cleared and
+//!   [`TextSystem::take_atlas_reset`] asks for the frame again.
 
 #![forbid(unsafe_code)]
 
@@ -13,48 +20,38 @@ pub const ATLAS_SIZE: u32 = 1024;
 pub const MAX_FALLBACKS: usize = 8;
 /// Glyphs above this many device pixels per em are not drawn.
 const MAX_PX: f32 = 1000.0;
-/// The built-in slots, in [`FontId`] order; fallbacks follow.
 const BUILTIN: usize = 3;
-/// JetBrains Mono's units per em, ascender, descender, line gap and advance:
-/// an empty Mono measures with these, so the grid holds when it arrives.
-const MONO_METRICS: [i32; 5] = [1000, 1020, -300, 0, 600];
+/// JetBrains Mono's metrics and advance, for an empty Mono.
+const MONO_METRICS: [i32; 4] = [1000, 1020, -300, 0];
+const MONO_ADVANCE: i32 = 600;
 
-/// One of the three built-in font slots.
+/// The built-in font slots: Inter Regular, Inter SemiBold, JetBrains Mono.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum FontId {
-    /// Inter Regular: body text.
     Sans,
-    /// Inter SemiBold: headings and emphasis.
     SansBold,
-    /// JetBrains Mono: code and the terminal.
     Mono,
 }
 
-/// How a run of text looks: face, size in logical pixels, color.
+/// How a run of text looks: face, em size in logical pixels, straight color.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TextStyle {
-    /// The face.
     pub font: FontId,
-    /// The em size in logical pixels.
     pub size: f32,
-    /// Straight sRGB color.
     pub color: Rgba,
 }
 
 impl TextStyle {
-    /// A style from its parts.
     pub const fn new(font: FontId, size: f32, color: Rgba) -> TextStyle {
         TextStyle { font, size, color }
     }
 
-    /// The same style in `color`.
     pub const fn with_color(self, color: Rgba) -> TextStyle {
         TextStyle::new(self.font, self.size, color)
     }
 }
 
-/// A cached glyph: its atlas rect and its offset from the pen and baseline,
-/// all in device pixels.
+/// A cached glyph: atlas rect, offset from pen and baseline (device px).
 #[derive(Clone, Copy, Debug)]
 struct Slot {
     uv: RectF,
@@ -62,28 +59,10 @@ struct Slot {
     top: i32,
 }
 
-/// Fonts, a glyph cache and the atlas the cache lives in.
-///
-/// - **Slots:** [`TextSystem::new`] takes only Sans (the boot font);
-///   [`TextSystem::set_font`] fills SansBold and Mono when they arrive.
-///   Until then SansBold draws and measures as Sans, and Mono measures as
-///   JetBrains Mono (0.6 em a char, the same cell grid) but draws nothing.
-/// - **Lookup:** from the style's face, else the other built-in family (Mono
-///   for Sans, Sans for Mono), else each fallback in the order added. A char
-///   found nowhere draws the face's `.notdef` box, or in a cell a hollow box.
-/// - **Metrics:** the fonts' own advances, scaled, with no kerning. A tab is
-///   four spaces wide; other control chars have no width and no ink.
-/// - **Pixels:** glyphs are rasterized at `size * dpr` device pixels per em
-///   rounded to a quarter pixel, cached by (face, glyph, that size), and
-///   placed with pen and baseline rounded to device pixels
-///   (`round(v * dpr) / dpr`), so the atlas is sampled 1:1.
-/// - **Atlas full:** it is cleared, the cache dropped, and
-///   [`TextSystem::take_atlas_reset`] turns true once: glyphs already pushed
-///   this frame show stale pixels, so the caller redraws the frame.
+/// The faces (slots in [`FontId`] order, then fallbacks), a glyph cache
+/// sorted by face, glyph and px per em in 64ths, and its atlas.
 pub struct TextSystem {
-    /// The slots in [`FontId`] order (Sans always filled), then fallbacks.
     faces: Vec<Option<Font>>,
-    /// Glyphs by [`cache_key`], sorted.
     cache: Vec<(u64, Option<Slot>)>,
     atlas: Atlas,
     bitmap: Bitmap,
@@ -91,40 +70,20 @@ pub struct TextSystem {
     reset: bool,
 }
 
-impl std::fmt::Debug for TextSystem {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "TextSystem({} fallbacks)", self.fallback_count())
-    }
-}
-
 fn usable(size: f32) -> bool {
     size.is_finite() && size > 0.0
 }
 
-/// Whether a line may break after `c` (a joiner, kept on the line) between
-/// `prev` and `next`: a `+`, `/` or `-` between letters or digits, but not
-/// between two digits (`Alt+Shift`, `a/b`, `well-known`; not `1-4`, `--x`).
+/// Whether a line may break after `c`: a `+`, `/` or `-` between letters or
+/// digits, but not between two digits (`Alt+Shift`, `a/b`; not `1-4`, `--x`).
 fn breaks_after(prev: Option<char>, c: char, next: Option<char>) -> bool {
-    let (Some(p), Some(n)) = (prev, next) else {
-        return false;
-    };
+    let (Some(p), Some(n)) = (prev, next) else { return false };
     let digits = p.is_ascii_digit() && n.is_ascii_digit();
     matches!(c, '+' | '/' | '-') && p.is_alphanumeric() && n.is_alphanumeric() && !digits
 }
 
-/// `px` rounded to a quarter pixel: the sizes text glyphs are cached at.
-fn quarter(px: f32) -> f32 {
-    (px * 4.0).round() / 4.0
-}
-
-/// `units` of a font with `upem` units per em, in pixels at `size`.
 fn scaled(units: i32, size: f32, upem: i32) -> f32 {
     units as f32 * size / upem as f32
-}
-
-/// The cache key of a glyph: face, glyph, and device px per em in 64ths.
-fn cache_key(face: usize, gid: u16, px: f32) -> u64 {
-    ((face as u64) << 48) | (u64::from(gid) << 32) | u64::from((px * 64.0).round() as u32)
 }
 
 fn parse(name: &str, bytes: Vec<u8>) -> Result<Font, String> {
@@ -132,8 +91,7 @@ fn parse(name: &str, bytes: Vec<u8>) -> Result<Font, String> {
 }
 
 impl TextSystem {
-    /// Parses the boot face, Sans; SansBold and Mono start empty (see
-    /// [`TextSystem::set_font`]). The error starts with `sans`.
+    /// Parses the boot face, Sans; an error starts with `sans`.
     pub fn new(sans: Vec<u8>) -> Result<TextSystem, String> {
         Ok(TextSystem {
             faces: vec![Some(parse("sans", sans)?), None, None],
@@ -145,9 +103,7 @@ impl TextSystem {
         })
     }
 
-    /// Fills (or replaces) the slot `id` and drops its cached glyphs; redraw
-    /// afterwards. On a bad font the slot is unchanged and the error starts
-    /// with the slot's name (`sans`, `sans bold` or `mono`).
+    /// Fills slot `id`, dropping its cached glyphs; an error names the slot.
     pub fn set_font(&mut self, id: FontId, bytes: Vec<u8>) -> Result<(), String> {
         let i = id as usize;
         self.faces[i] = Some(parse(["sans", "sans bold", "mono"][i], bytes)?);
@@ -155,13 +111,11 @@ impl TextSystem {
         Ok(())
     }
 
-    /// Whether the slot `id` holds a font.
     pub fn has_font(&self, id: FontId) -> bool {
         self.faces[id as usize].is_some()
     }
 
-    /// Adds a font to try, after the built-in faces and earlier fallbacks,
-    /// for chars they lack. Fails on a bad font or past [`MAX_FALLBACKS`].
+    /// Adds a font to try after the others, up to [`MAX_FALLBACKS`].
     pub fn add_fallback(&mut self, bytes: Vec<u8>) -> Result<(), String> {
         if self.fallback_count() >= MAX_FALLBACKS {
             return Err(format!("at most {MAX_FALLBACKS} fallback fonts"));
@@ -170,26 +124,21 @@ impl TextSystem {
         Ok(())
     }
 
-    /// How many fallback fonts were added.
     pub fn fallback_count(&self) -> usize {
         self.faces.len() - BUILTIN
     }
 
-    /// The atlas, for the platform to upload its dirty rows
-    /// ([`Atlas::take_dirty`]).
     pub fn atlas_mut(&mut self) -> &mut Atlas {
         &mut self.atlas
     }
 
-    /// Sets the device pixel ratio. Values that are not finite and positive
-    /// are ignored; others are clamped to `0.25..=8`.
+    /// Sets the device pixel ratio, clamped to `0.25..=8`; others are ignored.
     pub fn set_dpr(&mut self, dpr: f32) {
         if usable(dpr) {
             self.dpr = dpr.clamp(0.25, 8.0);
         }
     }
 
-    /// The device pixel ratio (1 until [`TextSystem::set_dpr`]).
     pub fn dpr(&self) -> f32 {
         self.dpr
     }
@@ -199,14 +148,12 @@ impl TextSystem {
         (v * self.dpr).round() / self.dpr
     }
 
-    /// Whether the atlas was cleared since the last call. When true, redraw
-    /// the frame: glyphs pushed before the clear show stale pixels.
+    /// Whether the atlas was cleared since the last call: redraw the frame then.
     pub fn take_atlas_reset(&mut self) -> bool {
         std::mem::take(&mut self.reset)
     }
 
-    /// The width of `text` in logical pixels: the sum of its advances.
-    /// Equal to what [`TextSystem::draw_text`] returns for the same text.
+    /// The width of `text` in logical pixels, as [`TextSystem::draw_text`] advances.
     pub fn measure(&mut self, text: &str, style: TextStyle) -> f32 {
         if !usable(style.size) {
             return 0.0;
@@ -214,22 +161,18 @@ impl TextSystem {
         text.chars().map(|c| self.lookup(style.font, c, style.size).1).sum()
     }
 
-    /// Distance between baselines: the face's ascender minus descender plus
-    /// line gap, scaled, rounded to device pixels (at least one). 0 for an
-    /// unusable size.
+    /// Ascender - descender + line gap, on device pixels (at least one).
     pub fn line_height(&self, style: TextStyle) -> f32 {
         let [_, asc, desc, gap] = self.vmetrics(style.font);
         self.vertical(style, asc - desc + gap)
     }
 
-    /// The face's ascender: logical pixels from the top of a line to its
-    /// baseline, rounded to device pixels.
+    /// From the top of a line to its baseline, on device pixels.
     pub fn ascent(&self, style: TextStyle) -> f32 {
         self.vertical(style, self.vmetrics(style.font)[1])
     }
 
-    /// The face's descender as a positive depth below the baseline, rounded
-    /// to device pixels.
+    /// The depth below the baseline, on device pixels.
     pub fn descent(&self, style: TextStyle) -> f32 {
         self.vertical(style, (-self.vmetrics(style.font)[2]).max(0))
     }
@@ -243,29 +186,18 @@ impl TextSystem {
         px.max(1.0) / self.dpr
     }
 
-    /// The slot `font` draws with and its face: its own, Sans for an empty
-    /// SansBold, `None` for an empty Mono.
+    /// The slot and face `font` draws with: Sans for an empty SansBold.
     fn face(&self, font: FontId) -> Option<(usize, &Font)> {
-        let i = match (font, &self.faces[1]) {
-            (FontId::SansBold, None) => 0,
-            _ => font as usize,
-        };
+        let bold = font == FontId::SansBold && self.faces[1].is_none();
+        let i = if bold { 0 } else { font as usize };
         Some((i, self.faces[i].as_ref()?))
     }
 
-    /// Units per em, ascender, descender and line gap of `font`'s face, or
-    /// JetBrains Mono's for an empty Mono.
     fn vmetrics(&self, font: FontId) -> [i32; 4] {
-        let [upem, asc, desc, gap, _] = MONO_METRICS;
-        self.face(font).map_or([upem, asc, desc, gap], |(_, f)| {
-            let (asc, desc, gap) = (f.ascender(), f.descender(), f.line_gap());
-            [f.units_per_em().into(), asc.into(), desc.into(), gap.into()]
-        })
+        self.face(font).map_or(MONO_METRICS, |(_, f)| f.metrics())
     }
 
-    /// Draws `text` on one line with its pen starting at `x` and its baseline
-    /// at `baseline`, and returns its advance (as [`TextSystem::measure`]).
-    /// Nothing is drawn for an unusable size.
+    /// Draws `text` on one line from pen `x` on `baseline`; returns its advance.
     pub fn draw_text(
         &mut self,
         list: &mut DrawList,
@@ -277,7 +209,7 @@ impl TextSystem {
         if !usable(style.size) {
             return 0.0;
         }
-        let px = quarter(style.size * self.dpr);
+        let px = (style.size * self.dpr * 4.0).round() / 4.0; // cached to a quarter px
         let mut adv = 0.0;
         for c in text.chars() {
             let (g, a) = self.lookup(style.font, c, style.size);
@@ -289,13 +221,9 @@ impl TextSystem {
         adv
     }
 
-    /// Breaks `text` into lines no wider than `width`: at each `\n` (a
-    /// trailing `\r` is dropped), else at the last break that fits (before
-    /// a run of spaces, or after a `+`, `/` or `-` between letters or
-    /// digits, as in `Alt+Shift+` / `Enter`), else (a word longer than the
-    /// line) between chars. Every line holds at least one char, spaces at a
-    /// break are dropped, and an empty paragraph is an empty line, so the
-    /// result is never empty.
+    /// Lines no wider than `width`: split at `\n` (and `\r\n`), else at the last
+    /// space run or joiner that fits, else between chars; spaces at a break
+    /// are dropped and every paragraph gives at least one line.
     pub fn wrap<'t>(&mut self, text: &'t str, style: TextStyle, width: f32) -> Vec<&'t str> {
         let mut lines = Vec::new();
         for para in text.split('\n') {
@@ -305,10 +233,8 @@ impl TextSystem {
                 let adv = self.lookup(style.font, c, style.size).1;
                 if c == ' ' {
                     // A run of spaces breaks before its first space.
-                    brk = Some(match brk {
-                        Some((end, _)) if prev == Some(' ') => (end, i + 1),
-                        _ => (i, i + 1),
-                    });
+                    let end = brk.filter(|_| prev == Some(' ')).map_or(i, |b: (usize, _)| b.0);
+                    brk = Some((end, i + 1));
                     (prev, w) = (Some(c), w + adv);
                     continue;
                 }
@@ -338,30 +264,7 @@ impl TextSystem {
         lines
     }
 
-    /// The width of the widest piece of `text` that [`TextSystem::wrap`]
-    /// breaks only between chars: the narrowest `width` at which it wraps
-    /// without splitting a word. 0 for an unusable size.
-    pub fn min_width(&mut self, text: &str, style: TextStyle) -> f32 {
-        if !usable(style.size) {
-            return 0.0;
-        }
-        let (mut widest, mut w, mut prev) = (0.0f32, 0.0, None);
-        let mut chars = text.chars().peekable();
-        while let Some(c) = chars.next() {
-            if c != ' ' && c != '\n' {
-                w += self.lookup(style.font, c, style.size).1;
-            }
-            if c == ' ' || c == '\n' || breaks_after(prev, c, chars.peek().copied()) {
-                (widest, w) = (widest.max(w), 0.0);
-            }
-            prev = Some(c);
-        }
-        widest.max(w)
-    }
-
-    /// `s` if it fits in `room`, else its longest prefix that fits with an
-    /// ellipsis after it (spaces before the ellipsis dropped); empty if not
-    /// even the ellipsis fits.
+    /// `s`, or its longest prefix that fits in `room` with an ellipsis.
     pub fn ellipsize(&mut self, s: &str, style: TextStyle, room: f32) -> String {
         if self.measure(s, style) <= room {
             return s.to_string();
@@ -381,10 +284,7 @@ impl TextSystem {
         s[..end].trim_end().to_string() + "\u{2026}"
     }
 
-    /// The width of a terminal cell at `size`: the Mono advance of `0`
-    /// (0.6 * `size` while Mono is empty, as JetBrains Mono's), rounded to
-    /// device pixels (at least one) so a grid of cells stays on the pixel
-    /// grid. 0 for an unusable size.
+    /// A terminal cell's width: Mono's advance of `0`, on device pixels.
     pub fn cell_width(&mut self, size: f32) -> f32 {
         if !usable(size) {
             return 0.0;
@@ -393,14 +293,8 @@ impl TextSystem {
         (adv * self.dpr).round().max(1.0) / self.dpr
     }
 
-    /// Draws `c` centered (by advance) in the terminal cell at `x`, `cell_w`
-    /// wide, with its baseline at `baseline`. Rows are expected to be Mono's
-    /// [`TextSystem::line_height`] tall, the baseline [`TextSystem::ascent`]
-    /// below the row's top. A fallback glyph wider than the cell shrinks to
-    /// fit about the cell's center line; box drawing and blocks (U+2500-259F)
-    /// grow just enough to cover the cell and row, so they join without
-    /// seams. A char in no font draws a hollow box; spaces, control chars
-    /// and anything while Mono is empty draw nothing.
+    /// Draws `c` centered in a cell; a wider fallback shrinks, and box drawing
+    /// and blocks (U+2500-259F) grow to cover cell and Mono row, so they join.
     #[allow(clippy::too_many_arguments)]
     pub fn draw_cell_char(
         &mut self,
@@ -413,8 +307,8 @@ impl TextSystem {
         color: Rgba,
     ) {
         let mono = FontId::Mono as usize;
-        let empty = self.faces[mono].is_none();
-        if empty || !usable(size) || !usable(cell_w) || c == ' ' || c.is_control() {
+        let skip = c == ' ' || c.is_control() || !usable(size) || !usable(cell_w);
+        if skip || self.faces[mono].is_none() {
             return;
         }
         let style = TextStyle::new(FontId::Mono, size, color);
@@ -424,8 +318,7 @@ impl TextSystem {
             list.border(r, 0.0, 1.0, color);
             return;
         };
-        let adv = self.advance(face, gid, size);
-        let d = self.dpr;
+        let (adv, d) = (self.advance(face, gid, size), self.dpr);
         let px = size * d;
         let (scale, lift, exact) = if face == mono && ('\u{2500}'..='\u{259f}').contains(&c) {
             // Cover the cell (width) and the row (ascent and descent).
@@ -437,45 +330,35 @@ impl TextSystem {
             let fits = [wide, asc / em(ascender), below / em(descender)];
             (fits.into_iter().filter(|v| v.is_finite()).fold(1.0, f32::max), 0.0, true)
         } else if face != mono && adv > cell_w {
-            // Shrink about the cell's center line, halfway between the Mono
-            // ascender and descender.
+            // Shrink about the center line, halfway between ascender and descender.
             let s = cell_w / adv;
             let center = (self.ascent(style) - self.descent(style)) / 2.0;
             (s, center * (1.0 - s), false)
         } else {
             (1.0, 0.0, false)
         };
-        let px = px * scale;
-        let px = if exact { px } else { quarter(px) };
+        let px = if exact { px * scale } else { (px * scale * 4.0).round() / 4.0 };
         let pen = x + (cell_w - adv * scale) / 2.0;
         self.put(list, (face, gid, px), (pen, baseline - lift), color);
     }
 
-    /// The face and glyph for `c`, or `None` when no font has it (or `font`
-    /// is an empty Mono).
     fn find(&self, font: FontId, c: char) -> Option<(usize, u16)> {
         let (own, _) = self.face(font)?;
         let other = if font == FontId::Mono { 0 } else { 2 };
-        [own, other]
-            .into_iter()
-            .chain(BUILTIN..self.faces.len())
-            .find_map(|i| self.faces[i].as_ref()?.glyph_index(c).map(|g| (i, g)))
+        let mut order = [own, other].into_iter().chain(BUILTIN..self.faces.len());
+        order.find_map(|i| self.faces[i].as_ref()?.glyph_index(c).map(|g| (i, g)))
     }
 
     fn advance(&self, face: usize, gid: u16, size: f32) -> f32 {
-        let adv = |f: &Font| scaled(f.advance(gid).into(), size, f.units_per_em().into());
+        let adv = |f: &Font| scaled(f.advance(gid).into(), size, f.metrics()[0]);
         self.faces[face].as_ref().map_or(0.0, adv)
     }
 
-    /// Face and glyph (none for an empty Mono) and advance for `c` at
-    /// `size`: `.notdef` of the style's face when no font has it, four
-    /// spaces for a tab, zero width for other control chars.
+    /// Face and glyph (none for an empty Mono) and advance of `c` at `size`.
     fn lookup(&self, font: FontId, c: char, size: f32) -> (Option<(usize, u16)>, f32) {
         let key = if c == '\t' { ' ' } else { c };
-        let notdef = self.face(font).map(|(own, _)| (own, 0));
-        let g = self.find(font, key).or(notdef);
-        let [upem, .., mono] = MONO_METRICS;
-        let empty = scaled(mono, size, upem);
+        let g = self.find(font, key).or(self.face(font).map(|(own, _)| (own, 0)));
+        let empty = scaled(MONO_ADVANCE, size, MONO_METRICS[0]);
         let adv = g.map_or(empty, |(f, gid)| self.advance(f, gid, size));
         let adv = match c {
             '\t' => 4.0 * adv,
@@ -485,12 +368,9 @@ impl TextSystem {
         (g, adv)
     }
 
-    /// Pushes glyph `g` = (face, glyph, device px per em) with its pen and
-    /// baseline at `at`, snapped to device pixels.
+    /// Pushes glyph `g` (face, glyph, px per em) with pen and baseline at `at`.
     fn put(&mut self, list: &mut DrawList, g: (usize, u16, f32), at: (f32, f32), color: Rgba) {
-        let Some(s) = self.glyph(g.0, g.1, g.2) else {
-            return;
-        };
+        let Some(s) = self.glyph(g.0, g.1, g.2) else { return };
         let d = self.dpr;
         let gx = (at.0 * d).round() + s.left as f32;
         let gy = (at.1 * d).round() + s.top as f32;
@@ -498,13 +378,13 @@ impl TextSystem {
         list.glyph(dst, s.uv, color);
     }
 
-    /// The cached glyph at `px` device pixels per em, rasterizing it into the
-    /// atlas on a miss. `None` for an empty or undrawable glyph.
+    /// The cached glyph, rasterized into the atlas on a miss.
     fn glyph(&mut self, face: usize, gid: u16, px: f32) -> Option<Slot> {
         if !(px > 0.0 && px <= MAX_PX) {
             return None;
         }
-        let key = cache_key(face, gid, px);
+        let px64 = u64::from((px * 64.0).round() as u32);
+        let key = ((face as u64) << 48) | (u64::from(gid) << 32) | px64;
         let at = |cache: &[(u64, Option<Slot>)]| cache.partition_point(|e| e.0 < key);
         if let Some(e) = self.cache.get(at(&self.cache)).filter(|e| e.0 == key) {
             return e.1;
@@ -516,10 +396,8 @@ impl TextSystem {
     }
 
     fn rasterize(&mut self, face: usize, gid: u16, px: f32) -> Option<Slot> {
-        let f = self.faces[face].as_ref()?;
-        f.rasterize(gid, px, &mut self.bitmap).ok()?;
-        let b = &self.bitmap;
-        let (w, h, left, top) = (b.w, b.h, b.left, b.top);
+        self.faces[face].as_ref()?.rasterize(gid, px, &mut self.bitmap).ok()?;
+        let Bitmap { w, h, left, top, .. } = self.bitmap;
         if w == 0 || h == 0 {
             return None;
         }

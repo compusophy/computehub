@@ -1,15 +1,11 @@
-//! Drawing helpers the desktop's layers share: whole device pixels,
-//! centered capitals, lit top edges, fading, app icons, and the desktop's
-//! small glyphs.
+//! Drawing helpers: device pixels, centered capitals, lit edges, fading, app
+//! icons and the desktop's small glyphs.
 
 use gfx::{DrawList, Icon, RectF, Rgba};
 use ui::theme::mix;
 use ui::{AppIcon, FontId, TextStyle, TextSystem};
 
-/// Cap height of Inter, in ems: one-line labels center their capitals.
-pub const CAP: f32 = 0.727;
-/// The side an app icon is designed at (a dock tile, a [`ui::Ui::tile`]'s
-/// icon); [`draw_icon`] scales from it.
+/// The side an app icon is designed at.
 pub const ICON: f32 = 44.0;
 const WHITE: Rgba = Rgba(255, 255, 255, 255);
 const BLACK: Rgba = Rgba(0, 0, 0, 255);
@@ -20,28 +16,24 @@ pub fn px(text: &TextSystem, v: f32) -> f32 {
     (v * d).round().max(1.0) / d
 }
 
-/// The baseline that centers capitals of `size` px in `h` px from `top`.
+/// The baseline that centers capitals (0.727 em in Inter) in `h` from `top`.
 pub fn cap_baseline(text: &TextSystem, top: f32, h: f32, size: f32) -> f32 {
-    text.snap(top + (h + CAP * size) / 2.0)
+    text.snap(top + (h + 0.727 * size) / 2.0)
 }
 
-/// The lit top edge of glass or a raised surface: its `line`-wide outline
-/// clipped to the top row.
+/// The lit top edge of a surface: its outline clipped to the top `line`.
 pub fn sheen(list: &mut DrawList, r: RectF, radius: f32, line: f32, color: Rgba) {
     list.push_clip(RectF { h: line, ..r });
     list.border(r, radius, line, color);
     list.pop_clip();
 }
 
-/// `c` at `a` (0 to 1) of its alpha.
 pub fn faded(c: Rgba, a: f32) -> Rgba {
     c.with_alpha((f32::from(c.3) * a.clamp(0.0, 1.0)).round() as u8)
 }
 
-/// An app icon in the square `r`, as [`ui::Ui::tile`] draws one at
-/// [`ICON`] px and to scale: a rounded square in a vertical gradient of the
-/// app's hue with a faint white rim and a drop shadow (half of `shadow`),
-/// its glyph (else `label`'s first letter) centered in white.
+/// An app icon in the square `r`, as [`ui::Ui::tile`] draws one: the app's
+/// hue in a gradient, a white rim, a shadow, its glyph (or initial) in white.
 pub fn draw_icon(
     list: &mut DrawList,
     text: &mut TextSystem,
@@ -62,8 +54,7 @@ pub fn draw_icon(
         false => FontId::Mono,
     };
     let mut style = TextStyle::new(font, (80.0 * k).round() / 4.0, WHITE);
-    let room = r.w - 16.0 * k;
-    let w = text.measure(glyph, style);
+    let (room, w) = (r.w - 16.0 * k, text.measure(glyph, style));
     if w > room {
         style.size = (style.size * room / w * 4.0).floor() / 4.0;
     }
@@ -73,9 +64,8 @@ pub fn draw_icon(
     text.draw_text(list, x, base, glyph, style);
 }
 
-/// A window control's glyph on its circle `c`: minimize (`i` 0), maximize
-/// or, when `maximized`, restore (1), close (2); in `ink` on the circle's
-/// `fill`, its edges on whole pixels.
+/// Window control `i`'s glyph on its circle `c`: minimize, maximize (or
+/// restore), close.
 pub fn control_glyph(
     list: &mut DrawList,
     text: &TextSystem,
@@ -99,19 +89,17 @@ pub fn control_glyph(
     }
 }
 
-/// The square of side `side` centered at `(cx, cy)`.
 fn square((cx, cy): (f32, f32), side: f32) -> RectF {
     RectF::new(cx - side / 2.0, cy - side / 2.0, side, side)
 }
 
-/// compusophy's mark, `side` across at `at`: a ring with a dot.
+/// compusophy's mark: a ring with a dot.
 pub fn mark(list: &mut DrawList, at: (f32, f32), side: f32, color: Rgba) {
     list.border(square(at, side), side / 2.0, 1.5, color);
     list.fill(square(at, 5.0), 2.5, color);
 }
 
-/// Settings, `side` across at `at`: two sliders, their 1 px tracks on
-/// whole pixels when `at` is.
+/// Settings: two sliders.
 pub fn sliders(list: &mut DrawList, (cx, cy): (f32, f32), side: f32, color: Rgba) {
     for d in [-3.0, 3.0] {
         list.fill(RectF::new(cx - side / 2.0, cy + d, side, 1.0), 0.5, color);
@@ -119,7 +107,7 @@ pub fn sliders(list: &mut DrawList, (cx, cy): (f32, f32), side: f32, color: Rgba
     }
 }
 
-/// Light and dark, `side` across at `at`: a ring with its left half filled.
+/// Light and dark: a ring with its left half filled.
 pub fn contrast(list: &mut DrawList, at: (f32, f32), side: f32, color: Rgba) {
     let g = square(at, side);
     list.border(g, side / 2.0, 1.5, color);
@@ -128,8 +116,7 @@ pub fn contrast(list: &mut DrawList, at: (f32, f32), side: f32, color: Rgba) {
     list.pop_clip();
 }
 
-/// A magnifier centered at `(cx, cy)`: an 11 px ring and a handle of
-/// overlapping dots down to the right.
+/// A magnifier: an 11 px ring and a handle of dots.
 pub fn magnifier(list: &mut DrawList, (cx, cy): (f32, f32), color: Rgba) {
     list.border(square((cx, cy), 11.0), 5.5, 1.75, color);
     for i in 0..=6 {

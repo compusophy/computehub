@@ -1,22 +1,21 @@
-//! The top bar: the mark at the left (the launcher), the date and time in
+//! The top bar: the mark (the launcher) at the left, the date and time in
 //! the middle, the settings and theme buttons at the right.
 
 use gfx::{DrawList, RectF};
+use host::paint::{cap_baseline, contrast, mark, px, sliders};
 use ui::{FontId, TextStyle, Theme};
 
 use crate::desktop::Target;
 use crate::{BAR_H, Shell};
-use host::paint::{cap_baseline, contrast, mark, px, sliders};
 
-/// A bar button's hit (and hover) rect, the side of its glyph, and the
-/// glyphs' distance from the screen's edges.
+/// A button's size, its glyph's, and the glyphs' distance from the edges.
 const BTN_W: f32 = 28.0;
 const BTN_H: f32 = 24.0;
 const GLYPH: f32 = 14.0;
 const EDGE: f32 = 12.0;
 const CLOCK_SIZE: f32 = 13.0;
+
 impl Shell {
-    /// The mark, settings and theme buttons.
     fn bar_buttons(&self) -> [(RectF, Target); 3] {
         let at = |cx: f32| RectF::new(cx - BTN_W / 2.0, (BAR_H - BTN_H) / 2.0, BTN_W, BTN_H);
         let right = self.size.0 - EDGE - GLYPH / 2.0;
@@ -27,16 +26,15 @@ impl Shell {
         ]
     }
 
-    /// The bar's button at `(x, y)`, else the bare bar.
     pub(crate) fn bar_hit(&self, x: f32, y: f32) -> Target {
         let mut buttons = self.bar_buttons().into_iter();
         buttons.find(|b| b.0.contains(x, y)).map_or(Target::Bar, |b| b.1)
     }
 
-    /// Glass across the top with a hairline under it, the buttons (a wash
-    /// while hovered), and the clock once a tick has set it.
+    /// The glass, the buttons, and the clock once ticked (the time alone if
+    /// the date does not fit).
     pub(crate) fn draw_bar(&mut self, list: &mut DrawList, theme: &Theme) {
-        let (w, line) = (self.size.0, px(self.host.text(), 1.0));
+        let (w, line) = (self.size.0, px(&self.host.text, 1.0));
         list.fill(RectF::new(0.0, 0.0, w, BAR_H), 0.0, theme.glass);
         list.fill(RectF::new(0.0, BAR_H - line, w, line), 0.0, theme.border);
         for (r, target) in self.bar_buttons() {
@@ -55,24 +53,17 @@ impl Shell {
         };
         let (date, clock) = (time.date(), time.clock());
         let style = TextStyle::new(FontId::Sans, CLOCK_SIZE, theme.text_dim);
-        let text = self.host.text_mut();
+        let text = &mut self.host.text;
         let (dw, sw, cw) =
             (text.measure(&date, style), text.measure("  ", style), text.measure(&clock, style));
         let base = cap_baseline(text, 0.0, BAR_H, CLOCK_SIZE);
-        // Without room for the date beside the buttons, the time alone.
-        let room = w - 2.0 * (EDGE + GLYPH + BTN_W + EDGE);
         let x = text.snap((w - dw - sw - cw) / 2.0);
-        if dw + sw + cw <= room {
+        let x = if dw + sw + cw <= w - 2.0 * (EDGE + GLYPH + BTN_W + EDGE) {
             text.draw_text(list, x, base, &date, style);
-            text.draw_text(list, x + dw + sw, base, &clock, style.with_color(theme.text));
+            x + dw + sw
         } else {
-            text.draw_text(
-                list,
-                text.snap((w - cw) / 2.0),
-                base,
-                &clock,
-                style.with_color(theme.text),
-            );
-        }
+            text.snap((w - cw) / 2.0)
+        };
+        text.draw_text(list, x, base, &clock, style.with_color(theme.text));
     }
 }

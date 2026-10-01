@@ -1,16 +1,11 @@
-//! # applang-syntax — the applang front end
+//! # applang-syntax: the applang front end
 //!
-//! The lexer ([`lex`]), parser and static checker behind [`compile`], the
-//! verify step of generate → verify → run. The runtime (`App`, `Event`,
-//! `Limits`, `Node`, `Value`) and the language card (`REFERENCE`) live in
-//! the `applang` crate, which re-exports this crate's public items (all but
-//! [`ast`]); most callers want `applang`.
-//!
-//! [`codes`] is the one diagnostic table for both crates, runtime codes
-//! included. [`ast`] exposes the parsed tree read-only so the runtime can
-//! walk it; a [`Program`] can only be built by [`compile`], so every one
-//! has been type-checked (the parser alone is not public: the runtime's
-//! invariants assume the checker ran).
+//! The lexer, parser and static checker behind [`compile`], the verify step
+//! of generate, verify, run. The runtime and the language card live in the
+//! `applang` crate, which re-exports [`compile`], [`Program`] and [`codes`].
+//! [`ast`] is the read-only tree the runtime walks; only [`compile`] builds a
+//! [`Program`], so every one has been type-checked. [`codes`] is the one
+//! diagnostic table for both crates.
 //!
 //! Forked from litelite's applite 0.2.0 (commit 4f5e056), whose lexer,
 //! parser, checker and diagnostic codes this crate holds.
@@ -21,71 +16,125 @@ mod check;
 mod lex;
 mod parse;
 
-pub use check::Type;
 pub use lang::{Diag, Span};
-pub use lex::{TokKind, Token, lex};
 pub use parse::Program;
 
-/// The parsed tree, read-only: what [`Program::states`] and
-/// [`Program::widgets`] hand out. Public so the `applang` runtime can walk
-/// it; only [`compile`] builds a [`Program`], and it type-checks what it
-/// builds.
+/// The parsed tree, read-only, for the `applang` runtime.
 pub mod ast {
     pub use crate::parse::{BinOp, Expr, Lit, StateDecl, Stmt, UnOp, Widget};
 }
 
 /// Stable diagnostic codes, banded by stage: lex `E00xx`, parse `E01xx`,
-/// runtime `E02xx`, static check `E03xx`. `BAD_EVENT` and `STATE_TOO_BIG`
-/// are spanless — they locate a host event or a commit, not source text.
+/// runtime `E02xx`, static check `E03xx`. `STATE_TOO_BIG` and `BAD_EVENT`
+/// have no span: they locate a commit or a host event, not source text.
 pub mod codes {
-    /// A character that starts no applang token.
     pub const UNEXPECTED_CHAR: u16 = 1;
-    /// `/*` without its matching `*/`.
     pub const UNTERMINATED_COMMENT: u16 = 2;
-    /// Malformed or out-of-range integer literal.
+    /// A malformed or out-of-range integer literal.
     pub const BAD_INT: u16 = 3;
-    /// `"` without its closing `"` on the same line.
+    /// A string with no closing `"` on its line.
     pub const UNTERMINATED_STRING: u16 = 4;
-    /// A `\` escape that is not `\"`, `\\`, or `\n`.
+    /// An escape other than `\"`, `\\` and `\n`.
     pub const BAD_ESCAPE: u16 = 5;
-    /// The parser needed a different token (the message names both sides).
     pub const UNEXPECTED_TOKEN: u16 = 101;
-    /// Source nests deeper than the `lang::parse` depth cap.
+    /// Nesting past the `lang::parse` depth cap.
     pub const TOO_DEEP: u16 = 102;
-    /// `/` or `%` with a zero divisor.
     pub const DIV_BY_ZERO: u16 = 203;
     /// Arithmetic left the 64-bit integer range.
     pub const OVERFLOW: u16 = 204;
-    /// `repeat` with a negative count.
     pub const NEGATIVE_REPEAT: u16 = 205;
-    /// The fuel tank ran dry — the render or handler was stopped, as promised.
+    /// A render or handler ran out of fuel and was stopped.
     pub const FUEL_EXHAUSTED: u16 = 206;
-    /// A string value would exceed `applang::Limits::max_str_bytes`.
+    /// A string value past `Limits::max_str_bytes`.
     pub const STR_TOO_LONG: u16 = 211;
-    /// Committed string state would exceed `applang::Limits::max_state_bytes`.
+    /// String state past `Limits::max_state_bytes` at commit.
     pub const STATE_TOO_BIG: u16 = 212;
-    /// The host sent an event no widget or state matches.
+    /// A host event that no widget or state matches.
     pub const BAD_EVENT: u16 = 213;
-    /// One render's text would exceed `applang::Limits::max_render_bytes`.
+    /// One render's text past `Limits::max_render_bytes`.
     pub const RENDER_TOO_BIG: u16 = 214;
-    /// The same state name declared twice.
     pub const DUP_STATE: u16 = 301;
     /// A name that is no declared state or visible local.
     pub const UNKNOWN_NAME: u16 = 302;
-    /// An operator, condition, binding, or assignment got the wrong type.
     pub const TYPE_MISMATCH: u16 = 303;
 }
 
-/// Parse AND statically check `src` — the verify step. A [`Program`] you
-/// hold has passed both; running it can only fault on arithmetic, fuel, or
-/// string bounds, and those roll back.
-///
-/// ```compile_fail,E0423
-/// // There is no public parse-only route to a `Program`.
-/// let _ = applang_syntax::parse("label x;");
-/// ```
+/// Parses and statically checks `src`: the verify step. Running the
+/// [`Program`] can then only fault on arithmetic, fuel or string bounds.
 pub fn compile(src: &str) -> Result<Program, Diag> {
     let program = parse::parse(src)?;
     check::check(&program)?;
     Ok(program)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ast::{Lit, Widget};
+    use super::codes::*;
+    use super::*;
+
+    #[test]
+    fn every_failure_is_coded() {
+        #[rustfmt::skip]
+        let cases = [
+            ("\"open", UNTERMINATED_STRING), ("\"line\nbreak\"", UNTERMINATED_STRING),
+            ("\"bad \\q escape\"", BAD_ESCAPE), ("123abc", BAD_INT),
+            ("label 99999999999999999999;", BAD_INT), ("@", UNEXPECTED_CHAR),
+            ("/* open", UNTERMINATED_COMMENT),
+            ("label 1; state x = 0;", UNEXPECTED_TOKEN), ("state x = y;", UNEXPECTED_TOKEN),
+            ("state x = -true;", UNEXPECTED_TOKEN), ("button { }", UNEXPECTED_TOKEN),
+            ("label 1", UNEXPECTED_TOKEN), ("row label 1; }", UNEXPECTED_TOKEN),
+            ("widget", UNEXPECTED_TOKEN),
+            ("label nope;", UNKNOWN_NAME), ("state x = 1; button \"b\" { y = 2; }", UNKNOWN_NAME),
+            ("input missing;", UNKNOWN_NAME), ("state x = 1; state x = 2;", DUP_STATE),
+            ("state n = 0; input n;", TYPE_MISMATCH), ("if 1 { label 1; }", TYPE_MISMATCH),
+            ("state x = 1; button \"b\" { x = \"s\"; }", TYPE_MISMATCH),
+            ("state x = 1; button \"b\" { repeat true { } }", TYPE_MISMATCH),
+            ("label 1 == \"1\";", TYPE_MISMATCH), ("label true + true;", TYPE_MISMATCH),
+            ("label -true;", TYPE_MISMATCH),
+            // A block-local disappears when its block ends.
+            ("state x = 1; button \"b\" { if true { let t = 1; } x = t; }", UNKNOWN_NAME),
+        ];
+        for (src, want) in cases {
+            assert_eq!(compile(src).unwrap_err().code, Some(want), "{src}");
+        }
+        let e = compile("label 1; state x = 0;").unwrap_err();
+        assert!(e.message.contains("before the first widget"), "{e}");
+    }
+
+    #[test]
+    fn a_whole_app_compiles() {
+        let p = compile(
+            "state count = 0; state name = \"w\\\"o\\\\r\\nld\"; state neg = -1_000;
+             label \"Counter\"; /* a /* nested */ comment */
+             row { button \"-\" { count = count - 1; } label count; }
+             input name; // a line comment
+             if count > 1000 { label \"big \" + count; } else if (count == 0) { } else { }",
+        )
+        .unwrap();
+        let inits: Vec<_> = p.states().iter().map(|s| s.init.clone()).collect();
+        assert_eq!(inits, [Lit::Int(0), Lit::Str("w\"o\\r\nld".into()), Lit::Int(-1000)]);
+        assert_eq!(p.widgets().len(), 4);
+        assert!(matches!(&p.widgets()[3], Widget::If { arms, .. } if arms.len() == 2));
+        // `+` with a string operand concatenates; locals may shadow a state
+        // with another type.
+        assert!(compile("state s = \"x\"; label 1 + 2; label \"n = \" + s;").is_ok());
+        assert!(compile("state x = 1; button \"b\" { let x = \"s\"; x = \"t\"; }").is_ok());
+        // Spans count bytes and cover multi-byte chars whole.
+        let span = |src| compile(src).map(drop).unwrap_err().span;
+        assert_eq!(span("label \"é\" é;"), Some(Span::new(11, 13)));
+        assert_eq!(span("label !\"é\";"), Some(Span::new(6, 11)));
+    }
+
+    #[test]
+    fn nesting_and_operator_chains_charge_the_guard() {
+        // Deep widget nesting trips the cap, never a stack overflow, and so
+        // do long flat operator chains (the AST spine eval walks).
+        let deep = format!("{}label 1;{}", "row {".repeat(200), "}".repeat(200));
+        let chain = format!("label {}0;", "1+".repeat(500));
+        for src in [deep, chain] {
+            assert_eq!(compile(&src).unwrap_err().code, Some(TOO_DEEP));
+        }
+        assert!(compile(&format!("label {}0;", "1+".repeat(40))).is_ok());
+    }
 }

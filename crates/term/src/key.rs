@@ -1,61 +1,42 @@
 //! Input: the bytes a key press or a paste sends to the program.
 
-/// A key the host reports. Text arrives as `Char`, already shifted.
+/// A key the host reports; text arrives as `Char`, already shifted.
+#[allow(missing_docs)] // the variants are the keys they name
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Key {
-    /// A character key, with shift already applied (`'A'`, `'!'`).
+    /// A character key, shift applied (`'A'`, `'!'`).
     Char(char),
-    /// Enter or Return.
     Enter,
-    /// Backspace.
     Backspace,
-    /// Tab.
     Tab,
-    /// Escape.
     Escape,
-    /// Arrow up.
     Up,
-    /// Arrow down.
     Down,
-    /// Arrow left.
     Left,
-    /// Arrow right.
     Right,
-    /// Home.
     Home,
-    /// End.
     End,
-    /// Page up.
     PageUp,
-    /// Page down.
     PageDown,
-    /// Insert.
     Insert,
-    /// Delete (forward).
     Delete,
-    /// A function key, F1 to F12; others send nothing.
+    /// A function key: F1 to F12 send bytes, others nothing.
     F(u8),
 }
 
-/// The modifiers held with a key.
+/// The modifiers held with a key; alt sends an ESC prefix or a modifier code.
+#[allow(missing_docs)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct KeyMods {
-    /// Shift.
     pub shift: bool,
-    /// Control.
     pub ctrl: bool,
-    /// Alt (Option on a Mac); sent as an ESC prefix or as a modifier code.
     pub alt: bool,
 }
 
-/// The bytes xterm sends for `key` with `mods`. `app_cursor` is
-/// [`Term::app_cursor_keys`](crate::Term::app_cursor_keys): arrows, Home and
-/// End then send `ESC O` forms.
-///
-/// Modified cursor and function keys use xterm's `CSI 1 ; m X` and
-/// `CSI n ; m ~` forms, with m = 1 + shift + 2 alt + 4 ctrl. Ctrl with a
-/// letter or one of `@ [ \ ] ^ _` and space sends the C0 control, and ctrl
-/// with `?` sends DEL; alt prefixes ESC.
+/// The bytes xterm sends for `key`; with `app_cursor`
+/// ([`Term::app_cursor_keys`](crate::Term::app_cursor_keys)) arrows, Home and
+/// End send `ESC O` forms. Modified keys send `CSI 1 ; m X` or `CSI n ; m ~`
+/// (m = 1 + shift + 2 alt + 4 ctrl); ctrl makes C0 controls, alt prefixes ESC.
 pub fn encode_key(key: Key, mods: KeyMods, app_cursor: bool) -> Vec<u8> {
     let m = 1 + u8::from(mods.shift) + 2 * u8::from(mods.alt) + 4 * u8::from(mods.ctrl);
     let letter = |ss3: bool, x: u8| match (m, ss3) {
@@ -67,24 +48,12 @@ pub fn encode_key(key: Key, mods: KeyMods, app_cursor: bool) -> Vec<u8> {
         1 => format!("\x1b[{n}~").into_bytes(),
         _ => format!("\x1b[{n};{m}~").into_bytes(),
     };
-    let alt = |bytes: &[u8]| {
-        let mut out = if mods.alt { vec![0x1B] } else { Vec::new() };
-        out.extend_from_slice(bytes);
-        out
-    };
+    let alt = |bytes: &[u8]| [&b"\x1b"[..usize::from(mods.alt)], bytes].concat();
     match key {
-        Key::Char(c) => {
-            let control = match c {
-                '@'..='_' | 'a'..='z' => Some(c as u8 & 0x1F),
-                ' ' => Some(0),
-                '?' => Some(0x7F),
-                _ => None,
-            };
-            match control {
-                Some(b) if mods.ctrl => alt(&[b]),
-                _ => alt(c.encode_utf8(&mut [0; 4]).as_bytes()),
-            }
+        Key::Char(c) if mods.ctrl && matches!(c, '@'..='_' | 'a'..='z' | ' ' | '?') => {
+            alt(&[if c == '?' { 0x7F } else { c as u8 & 0x1F }])
         }
+        Key::Char(c) => alt(c.encode_utf8(&mut [0; 4]).as_bytes()),
         Key::Enter => alt(b"\r"),
         Key::Backspace if mods.ctrl => alt(b"\x08"),
         Key::Backspace => alt(b"\x7f"),
@@ -107,30 +76,10 @@ pub fn encode_key(key: Key, mods: KeyMods, app_cursor: bool) -> Vec<u8> {
     }
 }
 
-/// The bytes that paste `text`: line breaks (`\r\n` or `\n`) become `\r`,
-/// as typed Enter would send, and ESC bytes are removed so the text cannot
-/// smuggle in sequences or end a bracketed paste early. With `bracketed`
-/// ([`Term::bracketed_paste`](crate::Term::bracketed_paste)) the result is
-/// wrapped in `ESC [ 200 ~` and `ESC [ 201 ~`.
+/// The bytes that paste `text`: line breaks become `\r` (as Enter) and ESC is
+/// dropped, so the text cannot end a bracketed paste (`bracketed`) early.
 pub fn paste(text: &str, bracketed: bool) -> Vec<u8> {
-    let mut out = Vec::with_capacity(text.len() + 12);
-    if bracketed {
-        out.extend_from_slice(b"\x1b[200~");
-    }
-    let mut bytes = text.bytes().peekable();
-    while let Some(b) = bytes.next() {
-        match b {
-            b'\r' => {
-                bytes.next_if_eq(&b'\n');
-                out.push(b'\r');
-            }
-            b'\n' => out.push(b'\r'),
-            0x1B => {}
-            _ => out.push(b),
-        }
-    }
-    if bracketed {
-        out.extend_from_slice(b"\x1b[201~");
-    }
-    out
+    let text = text.replace("\r\n", "\r").replace('\n', "\r").replace('\x1b', "");
+    let [open, close] = if bracketed { ["\x1b[200~", "\x1b[201~"] } else { ["", ""] };
+    [open, &text, close].concat().into_bytes()
 }

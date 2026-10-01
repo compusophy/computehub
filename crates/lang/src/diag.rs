@@ -1,75 +1,41 @@
-//! Diagnostics kernel: byte-offset [`Span`]s, coded [`Diag`]s, and caret-snippet
-//! rendering. Zero dependencies, native + wasm32.
-//!
-//! Lineage: hoisted from `localharness::rustlite` (where `soliditylite` already
-//! consumed it verbatim — the existence proof that this kernel is language-neutral).
+//! Byte-offset [`Span`]s, coded [`Diag`]s and caret-snippet rendering.
 
-/// A byte-offset range in the source text.
+/// A byte-offset range in the source text, `start` inclusive, `end` exclusive.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Span {
-    /// Start byte offset (inclusive).
     pub start: usize,
-    /// End byte offset (exclusive).
     pub end: usize,
 }
 
 impl Span {
-    /// Construct a span; `end < start` is normalized to empty at `start`.
+    /// A span; `end < start` is normalized to empty at `start`.
     pub fn new(start: usize, end: usize) -> Self {
         Self { start, end: end.max(start) }
     }
 }
 
-/// A diagnostic: message + optional source span + optional stable numeric code.
-///
-/// `Display` prefixes `E{code:04}:` when a code is present. A language wanting
-/// its own label space (e.g. `LH0204`) formats the code itself instead of using
-/// the default `Display`.
+/// A diagnostic: a message, an optional span and an optional stable code.
+/// `Display` writes `E{code:04}: message [start..end]`.
 #[derive(Debug, Clone)]
 pub struct Diag {
-    /// Human-readable description.
     pub message: String,
-    /// Source location, if available.
     pub span: Option<Span>,
-    /// Stable registry code. Keep codes per-stage-banded (lex 0xx, parse 1xx, …)
-    /// so agents and tests can assert on them.
+    /// Stable registry code, banded per stage so agents and tests can assert on it.
     pub code: Option<u16>,
 }
 
 impl Diag {
-    /// Error with no span and no code.
-    pub fn new(message: impl Into<String>) -> Self {
-        Self { message: message.into(), span: None, code: None }
-    }
-    /// Error pinned to a span (no code).
-    pub fn at(message: impl Into<String>, span: Span) -> Self {
-        Self { message: message.into(), span: Some(span), code: None }
-    }
-    /// Coded error pinned to a span — the canonical constructor.
+    /// A coded diagnostic pinned to `span`.
     pub fn at_code(code: u16, message: impl Into<String>, span: Span) -> Self {
-        Self::at(message, span).with_code(code)
+        Self { message: message.into(), span: Some(span), code: Some(code) }
     }
-    /// Coded error with no span.
+
+    /// A coded diagnostic with no span.
     pub fn new_code(code: u16, message: impl Into<String>) -> Self {
-        Self::new(message).with_code(code)
-    }
-    /// Attach (or replace) the stable code.
-    pub fn with_code(mut self, code: u16) -> Self {
-        self.code = Some(code);
-        self
+        Self { message: message.into(), span: None, code: Some(code) }
     }
 
-    /// `"line N, col M"` of this diag's span in `source`, when it has one.
-    pub fn location(&self, source: &str) -> Option<String> {
-        let span = self.span?;
-        let (line, col) = line_col(source, span.start.min(source.len()));
-        Some(format!("line {line}, col {col}"))
-    }
-
-    /// Full rendering: `Display` form plus, when a span is present, the
-    /// offending line with a caret marker. Prefer this over `to_string()` on
-    /// every surface that has the source at hand — a byte offset alone makes
-    /// the reader (human or agent) hunt.
+    /// `Display`, then the offending line with a caret row when there is a span.
     pub fn render(&self, source: &str) -> String {
         match self.span.and_then(|s| render_snippet(source, s)) {
             Some(snippet) => format!("{self}\n{snippet}"),
@@ -83,38 +49,25 @@ impl std::fmt::Display for Diag {
         if let Some(code) = self.code {
             write!(f, "E{code:04}: ")?;
         }
-        if let Some(span) = self.span {
-            write!(f, "{} [{}..{}]", self.message, span.start, span.end)
-        } else {
-            write!(f, "{}", self.message)
+        match self.span {
+            Some(span) => write!(f, "{} [{}..{}]", self.message, span.start, span.end),
+            None => write!(f, "{}", self.message),
         }
     }
 }
 
 impl std::error::Error for Diag {}
 
-impl From<String> for Diag {
-    fn from(s: String) -> Self {
-        Self::new(s)
-    }
-}
-
-/// 1-based `(line, column)` of a byte offset in `source`.
-///
-/// The column counts CHARACTERS from the start of the line (so a caret row of
-/// single-width spaces lines up). Offsets past the end clamp; an offset inside
-/// a multi-byte char floors to that char's start.
+/// 1-based `(line, column)` of a byte offset, the column in chars. Offsets
+/// past the end clamp; one inside a multi-byte char floors to its start.
 pub fn line_col(source: &str, offset: usize) -> (usize, usize) {
-    let offset = offset.min(source.len());
-    let mut line = 1usize;
-    let mut col = 1usize;
+    let (mut line, mut col) = (1, 1);
     for (i, ch) in source.char_indices() {
         if i >= offset {
             break;
         }
         if ch == '\n' {
-            line += 1;
-            col = 1;
+            (line, col) = (line + 1, 1);
         } else {
             col += 1;
         }
@@ -122,12 +75,8 @@ pub fn line_col(source: &str, offset: usize) -> (usize, usize) {
     (line, col)
 }
 
-/// Largest char boundary `<= i`, clamped to `s.len()`. A span offset can land
-/// INSIDE a multi-byte char (e.g. an em-dash in a string literal) and slicing
-/// there panics; `str::floor_char_boundary` is still unstable, so roll the
-/// two-liner. (Without this, one non-ASCII source byte turned a clean Diag
-/// into a compiler PANIC — caught by the rustlite cartridge corpus.)
-fn floor_char_boundary(s: &str, i: usize) -> usize {
+/// The largest char boundary `<= i`, clamped to `s.len()`.
+pub(crate) fn floor_boundary(s: &str, i: usize) -> usize {
     let mut i = i.min(s.len());
     while i > 0 && !s.is_char_boundary(i) {
         i -= 1;
@@ -135,29 +84,20 @@ fn floor_char_boundary(s: &str, i: usize) -> usize {
     i
 }
 
-/// Render `line N, col M` + offending line + caret row for `span`:
-///
-/// ```text
-/// line 2, col 11
-///   let x = true + 1;
-///           ^^^^^^^^
-/// ```
-///
-/// The caret row underlines the span where it intersects its FIRST line
-/// (multi-line spans clamp to that line; a zero-width or line-end span still
-/// gets one `^`). Tabs widen to a single space so the caret row stays aligned.
-/// Returns `None` only when `source` is empty.
+/// `line N, col M`, the span's first line and a caret row under the span
+/// (at least one `^`, clamped to that line; tabs shown as one space).
+/// `None` only for an empty `source`.
 pub fn render_snippet(source: &str, span: Span) -> Option<String> {
     if source.is_empty() {
         return None;
     }
-    let start = floor_char_boundary(source, span.start);
+    let start = floor_boundary(source, span.start);
     let (line, col) = line_col(source, start);
-    let line_start = source[..start].rfind('\n').map(|i| i + 1).unwrap_or(0);
-    let line_end = source[line_start..].find('\n').map(|i| line_start + i).unwrap_or(source.len());
+    let line_start = source[..start].rfind('\n').map_or(0, |i| i + 1);
+    let line_end = source[line_start..].find('\n').map_or(source.len(), |i| line_start + i);
     let line_text: String =
         source[line_start..line_end].chars().map(|c| if c == '\t' { ' ' } else { c }).collect();
-    let span_end = floor_char_boundary(source, span.end.clamp(start, line_end.max(start)));
+    let span_end = floor_boundary(source, span.end.clamp(start, line_end.max(start)));
     let width = source[start..span_end].chars().count().max(1);
     let line_chars = line_text.chars().count();
     let pad = (col - 1).min(line_chars);
@@ -176,58 +116,32 @@ mod tests {
     #[test]
     fn line_col_is_one_based_and_clamped() {
         let src = "ab\ncde\nf";
-        assert_eq!(line_col(src, 0), (1, 1));
-        assert_eq!(line_col(src, 3), (2, 1));
-        assert_eq!(line_col(src, 5), (2, 3));
-        assert_eq!(line_col(src, 7), (3, 1));
-        assert_eq!(line_col(src, 999), (3, 2)); // clamps to end
+        let got: Vec<_> = [0, 3, 5, 7, 999].iter().map(|&o| line_col(src, o)).collect();
+        assert_eq!(got, [(1, 1), (2, 1), (2, 3), (3, 1), (3, 2)]);
     }
 
     #[test]
-    fn snippet_carets_cover_the_span() {
+    fn snippets_put_carets_under_the_span() {
+        let snip = |src, s, e| render_snippet(src, Span::new(s, e));
         let src = "let a = 1;\nlet x = true + 1;";
-        let s = render_snippet(src, Span::new(19, 27)).unwrap();
-        assert_eq!(s, "line 2, col 9\n  let x = true + 1;\n          ^^^^^^^^");
+        let want = "line 2, col 9\n  let x = true + 1;\n          ^^^^^^^^";
+        assert_eq!(snip(src, 19, 27).unwrap(), want);
+        // Zero-width at the end still gets one caret; an empty source none.
+        assert!(snip("abc", 3, 3).unwrap().ends_with('^'));
+        assert!(snip("", 0, 0).is_none());
+        // A span starting inside the em-dash must not panic.
+        assert!(snip("a — b", 3, 4).unwrap().contains("a — b"));
+        // Tabs widen to one space so the carets stay aligned.
+        assert_eq!(snip("\tlet x = 1;", 1, 4).unwrap(), "line 1, col 2\n   let x = 1;\n   ^^^");
     }
 
     #[test]
-    fn snippet_zero_width_and_line_end_get_one_caret() {
-        let src = "abc";
-        let s = render_snippet(src, Span::new(3, 3)).unwrap();
-        assert!(s.ends_with('^'), "{s}");
-        assert!(render_snippet("", Span::new(0, 0)).is_none());
-    }
-
-    #[test]
-    fn snippet_survives_mid_char_offsets() {
-        // Span start landing inside the em-dash's UTF-8 bytes must not panic.
-        let src = "a — b";
-        let s = render_snippet(src, Span::new(3, 4)).unwrap();
-        assert!(s.contains("a — b"), "{s}");
-    }
-
-    #[test]
-    fn snippet_widens_tabs_to_keep_carets_aligned() {
-        let src = "\tlet x = 1;";
-        let s = render_snippet(src, Span::new(1, 4)).unwrap();
-        assert_eq!(s, "line 1, col 2\n   let x = 1;\n   ^^^");
-    }
-
-    #[test]
-    fn display_prefixes_code_and_span() {
+    fn display_and_render() {
         let d = Diag::at_code(204, "type mismatch", Span::new(12, 18));
         assert_eq!(d.to_string(), "E0204: type mismatch [12..18]");
-        assert_eq!(Diag::new("boom").to_string(), "boom");
-        assert_eq!(
-            Diag::at("x", Span::new(19, 20)).location("let a = 1;\nlet x = 1;").unwrap(),
-            "line 2, col 9"
-        );
-    }
-
-    #[test]
-    fn render_combines_display_and_snippet() {
-        let d = Diag::at_code(1, "bad", Span::new(0, 3));
-        let r = d.render("abc");
+        let plain = Diag { message: "boom".into(), span: None, code: None };
+        assert_eq!(plain.to_string(), "boom");
+        let r = Diag::at_code(1, "bad", Span::new(0, 3)).render("abc");
         assert!(r.starts_with("E0001: bad [0..3]\nline 1, col 1"), "{r}");
         assert_eq!(Diag::new_code(7, "no span").render("abc"), "E0007: no span");
     }

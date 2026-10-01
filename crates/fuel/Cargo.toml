@@ -1,6 +1,6 @@
 [package]
 name = "compusophy-fuel"
-description = "Fuel and byte budgets: mechanical termination and output bounds, one shared budget across all composition."
+description = "Fuel: a draining execution budget for mechanical termination, one shared tank across all composition."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

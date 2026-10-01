@@ -14,49 +14,38 @@ use crate::{Problem, file_name, join};
 const INPUT: u32 = 1 << 31;
 /// "Edit in Studio", shown when the file cannot run.
 const EDIT: WidgetId = WidgetId(INPUT - 1);
-/// The fault line: a bar this tall, this far in from the content's
-/// bottom and sides.
+/// The fault bar: this tall, this far in from the bottom and sides.
 const STATUS_H: f32 = 32.0;
 const STATUS_INSET: f32 = 12.0;
-/// The most one render may show: widgets, and bytes of text (labels,
-/// buttons, inputs' values and names). applang bounds each string, not
-/// their sum, and every frame lays out all of it; past these the host
-/// keeps the widgets that fit and shows [`TOO_BIG`].
+/// The most one render may show, in widgets and in bytes of text. applang
+/// bounds each string, not their sum, and every frame lays out all of it.
 const MAX_WIDGETS: usize = 2048;
 const MAX_TEXT: usize = 32 * 1024;
 pub(crate) const TOO_BIG: &str =
     "renders more than 2048 widgets or 32 KiB of text; the rest is not shown";
 
 #[derive(Debug, Default)]
-enum Run {
+pub(crate) enum Run {
     /// Not read yet.
     #[default]
     Pending,
     Live(applang::App),
-    /// It could not be read or did not compile: see `problems`.
-    Broken,
+    /// It could not be read or did not compile.
+    Broken(Problem),
 }
 
-/// Runs one `.app` file: compiled from the filesystem on its first event
-/// (or by [`AppHost::load`]), then driven by [`applang::App`] with
-/// [`Limits::default`]. Labels, buttons and inputs become `ui` widgets;
-/// `row` lays out left to right and `col` top to bottom.
-///
-/// An input takes focus on a press, typed text is appended and Backspace
-/// deletes a char, each change sent as an `Event::Input`; Escape or a press
-/// elsewhere drops focus. A fault in a handler or a render shows in a
-/// danger-tinted bar at the bottom, and the state stays as applang left it
-/// (rolled back). So does a render that shows more than 2,048 widgets or
-/// 32 KiB of text: only the widgets that fit are drawn, so a frame's cost
-/// stays bounded. A file that cannot be read or compiled shows its problem
-/// instead, with a button to open it in Studio.
+/// Runs one `.app` file with [`applang::App`] and [`Limits::default`],
+/// compiled on its first event (or by [`AppHost::load`]). A press focuses an
+/// input, whose edits go out as `Event::Input`s; a fault shows in a bar at
+/// the bottom over the rolled-back state; a render past 2,048 widgets or
+/// 32 KiB of text draws only what fits; a file that cannot run shows its
+/// problem and a button to open it in Studio.
 #[derive(Debug, Default)]
 pub struct AppHost {
     path: String,
     src: String,
-    run: Run,
+    pub(crate) run: Run,
     pub(crate) nodes: Vec<Node>,
-    pub(crate) problems: Vec<Problem>,
     /// The offending source line and carets of a compile error.
     pub(crate) snippet: String,
     pub(crate) fault: Option<Problem>,
@@ -69,20 +58,21 @@ pub struct AppHost {
 }
 
 /// Each input's state and value, in render order.
-fn inputs(nodes: &[Node]) -> Vec<(&str, &str)> {
-    let mut out = Vec::new();
-    collect_inputs(nodes, &mut out);
-    out
-}
-
-fn collect_inputs<'n>(nodes: &'n [Node], out: &mut Vec<(&'n str, &'n str)>) {
+fn inputs<'n>(nodes: &'n [Node], out: &mut Vec<(&'n str, &'n str)>) {
     for n in nodes {
         match n {
             Node::Input { state, value } => out.push((state, value)),
-            Node::Row { children } | Node::Col { children } => collect_inputs(children, out),
+            Node::Row { children } | Node::Col { children } => inputs(children, out),
             Node::Label { .. } | Node::Button { .. } => {}
         }
     }
+}
+
+/// The value of input `state`, if one is drawn.
+fn input_value<'n>(nodes: &'n [Node], state: &str) -> Option<&'n str> {
+    let mut all = Vec::new();
+    inputs(nodes, &mut all);
+    all.into_iter().find(|(s, _)| *s == state).map(|(_, v)| v)
 }
 
 /// Keeps the widgets of `nodes`, in render order, while they fit in
@@ -119,35 +109,22 @@ fn union(a: Option<RectF>, b: RectF) -> RectF {
 /// The focused input's state, and how many inputs are drawn so far.
 type Focus<'f> = (Option<&'f str>, u32);
 
-/// The height of the tallest control directly in `children`, which the
-/// labels beside them center on; 0 for none.
-fn band(children: &[Node]) -> f32 {
-    let h = |c: &Node| match c {
-        Node::Button { .. } => BUTTON_H,
-        Node::Input { .. } => FIELD_H,
-        _ => 0.0,
-    };
-    children.iter().map(h).fold(0.0, f32::max)
-}
-
-/// A label in a row beside controls `band` tall, centered on them.
-fn label_beside(ui: &mut Ui<'_>, text: &str, band: f32) -> RectF {
-    let ((x, y), body, r) = (ui.cursor(), ui.theme().body(), ui.rect());
-    let ts = ui.text_system();
-    let lines = ts.wrap(text, body, r.x + r.w - PAD - x).len() as f32;
-    let dy = ts.snap(((band - lines * ts.line_height(body)) / 2.0).max(0.0));
-    ui.set_cursor(x, y + dy);
-    let got = ui.label(text);
-    ui.set_cursor(ui.cursor().0, y);
-    got
-}
-
-/// Draws one node, in a row beside controls `Some(band)` tall or not in a
-/// row; returns the rect around everything it drew.
+/// Draws one node, in a row whose controls are `Some(band)` tall or not in
+/// a row; returns the rect around everything it drew.
 fn node(ui: &mut Ui<'_>, n: &Node, f: &mut Focus<'_>, in_row: Option<f32>) -> RectF {
     match n {
+        // Beside controls, a label centers on their height.
         Node::Label { text } => match in_row {
-            Some(band) if band > 0.0 => label_beside(ui, text, band),
+            Some(band) if band > 0.0 => {
+                let ((x, y), body, r) = (ui.cursor(), ui.theme().body(), ui.rect());
+                let ts = ui.text_system();
+                let lines = ts.wrap(text, body, r.x + r.w - PAD - x).len() as f32;
+                let dy = ts.snap(((band - lines * ts.line_height(body)) / 2.0).max(0.0));
+                ui.set_cursor(x, y + dy);
+                let got = ui.label(text);
+                ui.set_cursor(ui.cursor().0, y);
+                got
+            }
             _ => ui.label(text),
         },
         Node::Button { text, id } => ui.button(WidgetId(*id), text),
@@ -157,7 +134,13 @@ fn node(ui: &mut Ui<'_>, n: &Node, f: &mut Focus<'_>, in_row: Option<f32>) -> Re
             ui.text_field(id, value, f.0 == Some(state.as_str()), state)
         }
         Node::Row { children } => {
-            let (mut b, band) = (None, band(children));
+            // The tallest control directly in the row; 0 for none.
+            let h = |c: &Node| match c {
+                Node::Button { .. } => BUTTON_H,
+                Node::Input { .. } => FIELD_H,
+                _ => 0.0,
+            };
+            let (mut b, band) = (None, children.iter().map(h).fold(0.0, f32::max));
             let r = ui.row(|ui| {
                 for c in children {
                     b = Some(union(b, node(ui, c, f, Some(band))));
@@ -192,20 +175,17 @@ fn col(ui: &mut Ui<'_>, children: &[Node], f: &mut Focus<'_>, in_row: bool) -> O
 impl AppHost {
     /// A host for the file at `path`, not read yet.
     pub fn new(path: &str) -> AppHost {
-        let path = path.to_string();
-        AppHost { path, ..AppHost::default() }
+        AppHost { path: path.to_string(), ..AppHost::default() }
     }
 
     /// Reads and compiles the file and renders it once.
     pub fn load(&mut self, vfs: &Vfs) {
-        (self.nodes, self.problems, self.fault, self.focus) = (Vec::new(), Vec::new(), None, None);
+        (self.nodes, self.fault, self.focus) = (Vec::new(), None, None);
         let src = match vfs.read(&self.path) {
             Ok(bytes) => String::from_utf8_lossy(bytes).into_owned(),
             Err(e) => {
                 let message = join(&["cannot read ", &self.path, ": ", &e.to_string()]);
-                let (code, pos) = (None, None);
-                self.problems = vec![Problem { code, pos, message }];
-                self.run = Run::Broken;
+                self.run = Run::Broken(Problem::plain(message));
                 return;
             }
         };
@@ -216,11 +196,11 @@ impl AppHost {
                 self.render();
             }
             Err(d) => {
-                self.problems = vec![Problem::new(&d, &src)];
+                self.run = Run::Broken(Problem::new(&d, &src));
                 let snip = d.span.and_then(|s| lang::diag::render_snippet(&src, s));
                 let snip = snip.unwrap_or_default();
                 self.snippet = snip.split_once('\n').map_or("", |(_, s)| s).to_string();
-                (self.src, self.run) = (src, Run::Broken);
+                self.src = src;
             }
         }
     }
@@ -230,8 +210,7 @@ impl AppHost {
         match app.render() {
             Ok(mut nodes) => {
                 if !fit(&mut nodes, &mut (MAX_WIDGETS, MAX_TEXT)) {
-                    let (code, pos, message) = (None, None, TOO_BIG.to_string());
-                    self.fault = Some(Problem { code, pos, message });
+                    self.fault = Some(Problem::plain(TOO_BIG.to_string()));
                 }
                 self.nodes = nodes;
             }
@@ -240,8 +219,7 @@ impl AppHost {
                 self.fault = Some(Problem::new(&d, &self.src));
             }
         }
-        let focus = self.focus.as_deref();
-        if !inputs(&self.nodes).iter().any(|(s, _)| Some(*s) == focus) {
+        if self.focus.as_deref().is_some_and(|s| input_value(&self.nodes, s).is_none()) {
             self.focus = None;
         }
     }
@@ -259,17 +237,10 @@ impl AppHost {
         let Some(state) = self.focus.clone() else {
             return false;
         };
-        let have = inputs(&self.nodes);
-        let old = have.iter().find(|(s, _)| *s == state).map_or("", |(_, v)| v);
+        let old = input_value(&self.nodes, &state).unwrap_or("");
         let mut text = old.to_string();
         match typed {
-            Some(t) => {
-                for c in t.chars() {
-                    if !c.is_control() {
-                        text.push(c);
-                    }
-                }
-            }
+            Some(t) => text.extend(t.chars().filter(|c| !c.is_control())),
             None => _ = text.pop(),
         }
         if text == old {
@@ -299,7 +270,7 @@ impl App for AppHost {
             self.load(cx.vfs);
         }
         let redraw = match ev {
-            AppEvent::Click(EDIT) if matches!(self.run, Run::Broken) => {
+            AppEvent::Click(EDIT) if matches!(self.run, Run::Broken(_)) => {
                 cx.open(&join(&["studio:", &self.path]));
                 false
             }
@@ -308,9 +279,10 @@ impl App for AppHost {
                 true
             }
             AppEvent::PointerDown { id, .. } => {
+                let mut all = Vec::new();
+                inputs(&self.nodes, &mut all);
                 let i = id.and_then(|w| w.0.checked_sub(INPUT));
-                let have = inputs(&self.nodes);
-                let focus = i.and_then(|i| have.get(i as usize)).map(|(s, _)| s.to_string());
+                let focus = i.and_then(|i| all.get(i as usize)).map(|(s, _)| s.to_string());
                 std::mem::replace(&mut self.focus, focus.clone()) != focus
             }
             AppEvent::Text(t) => self.edit(Some(&t)),
@@ -333,11 +305,9 @@ impl App for AppHost {
         self.view_h = r.h - if self.fault.is_some() { bar } else { 0.0 };
         match &self.run {
             Run::Pending => _ = ui.small(&join(&["Loading ", &self.path, "…"])),
-            Run::Broken => {
+            Run::Broken(p) => {
                 ui.heading(&join(&[file_name(&self.path), " cannot run"]));
-                for p in &self.problems {
-                    ui.wrapped(&p.line(), t.mono().with_color(t.danger));
-                }
+                ui.wrapped(&p.line(), t.mono().with_color(t.danger));
                 if !self.snippet.is_empty() {
                     ui.wrapped(&self.snippet, t.mono().with_color(t.text_dim));
                 }
@@ -353,31 +323,26 @@ impl App for AppHost {
                 self.content_h = bottom + self.scroll - r.y + PAD;
             }
         }
-        if let Some(fault) = &self.fault {
-            status(ui, r, fault);
-        }
+        let Some(fault) = &self.fault else { return };
+        // The fault bar: the code in the danger color, then the position
+        // and the message, cut to fit.
+        let (line, inset) = (px(ui, 1.0), STATUS_INSET);
+        let at = RectF::new(r.x + inset, r.y + r.h - inset - STATUS_H, r.w - 2.0 * inset, STATUS_H);
+        let bar = snapped(ui, at);
+        ui.fill(bar, RADIUS_SM, mix(t.surface_hi, t.danger, 0.12));
+        ui.border(bar, RADIUS_SM, line, t.danger.with_alpha(110));
+        let (code, pos) = fault.head();
+        let style = t.small().with_color(t.text);
+        let ts = ui.text_system();
+        let (a, d) = (ts.ascent(style), ts.descent(style));
+        let base = ts.snap(bar.y + (bar.h - a - d) / 2.0 + a);
+        let rest = join(&[&pos, if pos.is_empty() { "" } else { "  " }, &fault.message]);
+        let x = bar.x + 12.0;
+        ui.push_clip(bar);
+        let w = ui.text(x, base, &code, style.with_color(t.danger)) + 10.0;
+        let room = bar.x + bar.w - 12.0 - (x + w);
+        let shown = ui.text_system().ellipsize(&rest, style, room);
+        ui.text(x + w, base, &shown, style);
+        ui.pop_clip();
     }
-}
-
-/// The fault bar along the bottom of `r`: the code in the danger color,
-/// then the position and the message, cut to fit.
-fn status(ui: &mut Ui<'_>, r: RectF, fault: &Problem) {
-    let (t, line, inset) = (ui.theme(), px(ui, 1.0), STATUS_INSET);
-    let at = RectF::new(r.x + inset, r.y + r.h - inset - STATUS_H, r.w - 2.0 * inset, STATUS_H);
-    let bar = snapped(ui, at);
-    ui.fill(bar, RADIUS_SM, mix(t.surface_hi, t.danger, 0.12));
-    ui.border(bar, RADIUS_SM, line, t.danger.with_alpha(110));
-    let (code, pos) = fault.head();
-    let style = t.small().with_color(t.text);
-    let ts = ui.text_system();
-    let (a, d) = (ts.ascent(style), ts.descent(style));
-    let base = ts.snap(bar.y + (bar.h - a - d) / 2.0 + a);
-    let rest = join(&[&pos, if pos.is_empty() { "" } else { "  " }, &fault.message]);
-    let x = bar.x + 12.0;
-    ui.push_clip(bar);
-    let w = ui.text(x, base, &code, style.with_color(t.danger)) + 10.0;
-    let room = bar.x + bar.w - 12.0 - (x + w);
-    let shown = ui.text_system().ellipsize(&rest, style, room);
-    ui.text(x + w, base, &shown, style);
-    ui.pop_clip();
 }

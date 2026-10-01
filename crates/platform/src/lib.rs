@@ -1,87 +1,18 @@
 //! The compusophyOS browser boundary: the only crate that calls browser APIs.
 //!
-//! [`run`] takes an [`App`], finds `<canvas id="os">`, and from then on feeds
-//! the app [`Event`]s and asks it for frames. The app draws by handing a
-//! [`gfx::DrawList`] and the glyph [`gfx::Atlas`] to [`Renderer::draw`],
-//! which uploads the instance bytes (and the atlas rows that changed) and
-//! issues one instanced WebGL2 draw call. Both calls get a [`Ctl`], the
-//! app's handle on the rest of the page: text input, fetch, frames, the
-//! cursor, `localStorage` and the clocks. The crate compiles for the host so
-//! the workspace can test natively, but only in the browser does [`run`] do
-//! anything.
+//! [`run`] finds `<canvas id="os">` and drives an [`App`]: it feeds it
+//! [`Event`]s and asks it for frames, which [`Renderer::draw`] draws in one
+//! instanced WebGL2 call. Both calls get a [`Ctl`] for text input, fetch,
+//! frames, the cursor, `localStorage` and the clocks; what the app asks of it
+//! is applied after the app returns, so no browser call re-enters the app.
+//! Natively the crate only compiles, for tests: [`run`] needs a browser.
 //!
-//! # Frames are on demand
-//!
-//! Nothing runs while nothing happens: there is no render loop. When
-//! [`App::event`] returns [`Handled::redraw`] or calls
-//! [`Ctl::request_frame`] (or the canvas is resized) and no frame is
-//! pending, exactly one `requestAnimationFrame` is requested, and its
-//! callback calls [`App::frame`] once.
-//!
-//! Animation is the same rule applied from inside a frame: the pending flag
-//! is cleared before [`App::frame`] runs, so a [`Ctl::request_frame`] made
-//! during it requests exactly one more frame (the first frame, drawn
-//! synchronously by [`run`], included). An animation asks on every frame
-//! while it runs, timing itself with [`Ctl::monotonic_ms`]; the frame that
-//! does not ask is the last. Frames follow the display's refresh and pause
-//! while the page is hidden.
-//!
-//! The only timer is the one behind [`Event::Tick`], which fires once a
-//! minute; idle CPU is otherwise zero.
-//!
-//! # Events
-//!
-//! - keydown and keyup on `window` become [`Event::Key`] (`code` is
-//!   `KeyboardEvent.code`, `key` is `KeyboardEvent.key`). Keys pressed while
-//!   an IME composes are not delivered: the composition owns them.
-//!   Browsers keep a few shortcuts for themselves in a tab (Ctrl+W, Ctrl+T,
-//!   Ctrl+N; Cmd+W and Cmd+Q on macOS): those never arrive, or arrive and
-//!   cannot be prevented, so Ctrl+W closes the tab even when the app wants
-//!   it (readline's delete-word). Chromium passes them to a page only in an
-//!   installed app's own window, or in fullscreen with the Keyboard Lock
-//!   API.
-//! - Text comes only from the hidden `<textarea>` that [`Ctl::set_text_input`]
-//!   focuses, never from keydown: see [`Event::Text`].
-//! - Pointer events on the canvas, in CSS pixels relative to the canvas
-//!   (whole pixels: `offsetX` / `offsetY`). Only primary pointers are heard,
-//!   and during a press only the pressing one. A pointer down captures the
-//!   pointer; pointercancel arrives as [`Event::PointerUp`]; a button number
-//!   outside `0..=255` (such as the -1 of pointercancel) arrives as 0.
-//! - wheel on the canvas becomes [`Event::Wheel`] (a non-passive listener,
-//!   so the app can prevent scrolling and pinch zoom).
-//! - The canvas context menu is always suppressed.
-//! - [`Event::Resize`] carries the canvas CSS size (`getBoundingClientRect`)
-//!   and `devicePixelRatio`; it is sent at start, on window resize, and when
-//!   the pixel ratio changes (zoom, or a move to another screen).
-//! - [`Event::Tick`] is sent at start, at each local minute boundary, and
-//!   when the page is shown again after the local time moved on.
-//! - [`Event::Fetched`] reports what [`Ctl::fetch`] started.
-//!
-//! [`Handled::prevent_default`] calls `preventDefault` on the DOM event that
-//! produced the [`Event`], with one exception: while text input is active,
-//! Ctrl+V, Cmd+V and Shift+Insert are never prevented, so the paste reaches
-//! the textarea (and arrives as [`Event::Text`]). The V is the key whose
-//! `key` is `v` when `key` is an ASCII letter (Dvorak's V is not on `KeyV`),
-//! else the key at `KeyV` (a Cyrillic layout's).
-//!
-//! # Ctl effects
-//!
-//! What an app asks of its [`Ctl`] is applied after [`App::event`] or
-//! [`App::frame`] returns, so no browser call re-enters the app; events
-//! those calls cause synchronously (a blur ends a composition) are
-//! dispatched then, and asynchronous results arrive as later events.
-//!
-//! # Timing marks
-//!
-//! `performance.mark("first-frame")` runs once the first frame is drawn,
-//! synchronously inside [`run`]. If the page's query string contains
-//! `debug`, `performance.mark("frame")` runs after every frame.
-//!
-//! # Lost contexts
-//!
-//! When the WebGL context is lost, frames are skipped. When it is restored,
-//! the renderer is rebuilt (the next draw uploads the whole atlas again) and
-//! a frame is requested.
+//! Frames are on demand, with no render loop: a redraw or
+//! [`Ctl::request_frame`] requests one `requestAnimationFrame` unless one is
+//! pending. The flag clears before [`App::frame`] runs, so an animation asks
+//! on every frame and the first that does not ask is the last. The only
+//! timer is the minute tick behind [`Event::Tick`]. While the WebGL context
+//! is lost frames are skipped; on restore the renderer is rebuilt.
 
 #![forbid(unsafe_code)]
 
@@ -91,7 +22,7 @@ mod render;
 #[cfg(test)]
 mod tests;
 
-pub use ctl::{Ctl, Cursor, Effect, LocalTime};
+pub use ctl::{Ctl, Effect, LocalTime};
 pub use render::Renderer;
 
 use std::cell::{Cell, RefCell};
@@ -104,118 +35,77 @@ use web_sys::{
     HtmlTextAreaElement, KeyboardEvent, MediaQueryList, PointerEvent, WheelEvent, Window,
 };
 
-/// Input and environment changes delivered to [`App::event`].
+/// Input and environment changes delivered to [`App::event`]. Positions are
+/// whole CSS pixels relative to the canvas.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Event {
-    /// A key went down (or auto-repeated) or up.
+    /// A key went down (or repeated) or up, never while an IME composes.
+    /// `code` and `key` are `KeyboardEvent`'s, `altgr` its
+    /// `getModifierState("AltGraph")`. Typed text comes as [`Event::Text`].
     Key {
-        /// `KeyboardEvent.code`: the physical key, such as `"KeyA"`.
         code: String,
-        /// `KeyboardEvent.key`: what the key means with the current layout
-        /// and modifiers, such as `"a"`, `"A"`, `"Enter"`; `"Unidentified"`
-        /// or `"Process"` from phone keyboards and IMEs. For shortcuts and
-        /// named keys only: typed text arrives as [`Event::Text`].
         key: String,
-        /// Whether the key went down.
         down: bool,
-        /// Whether this is an auto-repeat.
         repeat: bool,
-        /// Shift held.
         shift: bool,
-        /// Control held.
         ctrl: bool,
-        /// Alt (Option) held.
         alt: bool,
-        /// Meta (Command, Windows) held.
         meta: bool,
-        /// `getModifierState("AltGraph")`. Chrome and Edge on Windows report
-        /// AltGr as `ctrl` and `alt` too; Firefox on macOS sets it for Option.
         altgr: bool,
     },
-    /// Text typed, pasted or composed while text input is active
-    /// ([`Ctl::set_text_input`]): the data of each `input` event of an
-    /// `insert*` type (a printable key the app did not prevent, a paste, a
-    /// phone keyboard, `"\n"` for an unprevented Enter), and the committed
-    /// string of each IME composition. Never empty.
+    /// Text typed, pasted or composed while text input is on: the data of an
+    /// `insert*` input event or a committed composition. Never empty.
     Text(String),
-    /// The pointer moved to (`x`, `y`), in CSS pixels relative to the canvas.
+    /// The pointer moved.
     PointerMove { x: f32, y: f32 },
-    /// A pointer button went down at (`x`, `y`); the canvas captures the
-    /// pointer.
-    PointerDown {
-        x: f32,
-        y: f32,
-        /// `PointerEvent.button`: 0 primary, 1 middle, 2 secondary.
-        button: u8,
-    },
-    /// A pointer button went up at (`x`, `y`), or the pointer was cancelled.
-    PointerUp {
-        x: f32,
-        y: f32,
-        /// `PointerEvent.button`: 0 primary, 1 middle, 2 secondary.
-        button: u8,
-    },
+    /// A button (0 primary, 1 middle, 2 secondary) went down; the canvas
+    /// captures the pointer. Only a primary pointer is heard, and during a
+    /// press only the pressing one.
+    PointerDown { x: f32, y: f32, button: u8 },
+    /// A button went up or the pointer was cancelled (button 0 when the DOM's
+    /// is outside `0..=255`).
+    PointerUp { x: f32, y: f32, button: u8 },
     /// The pointer left the canvas.
     PointerLeave,
-    /// The wheel turned (or a touchpad scrolled) over (`x`, `y`), in CSS
-    /// pixels relative to the canvas.
-    Wheel {
-        x: f32,
-        y: f32,
-        /// `WheelEvent.deltaY` in CSS pixels, positive to scroll down: line
-        /// deltas count 16 px, page deltas the canvas height.
-        dy: f32,
-    },
-    /// The canvas has a new size or pixel ratio.
-    Resize {
-        /// Canvas width in CSS pixels.
-        w: f32,
-        /// Canvas height in CSS pixels.
-        h: f32,
-        /// `window.devicePixelRatio` (1 if the browser reports nonsense).
-        dpr: f32,
-    },
-    /// The local date and time, at start and whenever the minute changes.
-    Tick {
-        /// The local time now, to the minute.
-        time: LocalTime,
-    },
-    /// Fetch `id` finished ([`Ctl::fetch`]): the response body, or why
-    /// there is none.
+    /// `dy` in CSS pixels, positive down: a line is 16 px, a page the canvas.
+    Wheel { x: f32, y: f32, dy: f32 },
+    /// The canvas CSS size or `devicePixelRatio` (1 if nonsense) changed;
+    /// also sent at start.
+    Resize { w: f32, h: f32, dpr: f32 },
+    /// The local time: at start, each minute, and when a hidden page that
+    /// missed a minute is shown again.
+    Tick { time: LocalTime },
+    /// Fetch `id` ([`Ctl::fetch`]) finished: the body, or why there is none.
     Fetched { id: u32, result: Result<Vec<u8>, String> },
 }
 
 /// What an [`App`] did with an [`Event`].
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Handled {
-    /// Request a frame: [`App::frame`] runs on the next animation frame.
+    /// Request a frame.
     pub redraw: bool,
-    /// Call `preventDefault` on the DOM event, so the browser does not also
-    /// act on it (scroll, find-in-page, typing into the textarea, and so on).
+    /// `preventDefault` the DOM event; never done to a paste shortcut while
+    /// text input is on, so the paste reaches the textarea.
     pub prevent_default: bool,
 }
 
-/// A program driven by [`run`].
+/// A program driven by [`run`]. Calls never overlap.
 pub trait App {
-    /// Handles one event. Never called during [`App::frame`] or while
-    /// another call is running.
     fn event(&mut self, ev: Event, ctl: &mut Ctl) -> Handled;
-    /// Draws one frame, normally with one [`Renderer::draw`] call.
+    /// Draws one frame, normally with one [`Renderer::draw`].
     fn frame(&mut self, r: &mut Renderer, ctl: &mut Ctl);
 }
 
-/// Starts `app` on `<canvas id="os">`: creates the renderer and the hidden
-/// text-input `<textarea>`, delivers the first [`Event::Resize`] and
-/// [`Event::Tick`], draws the first frame, marks `first-frame`, then installs
-/// the event listeners and returns. The app lives as long as the page.
+/// Starts `app` on `<canvas id="os">`: sends the first [`Event::Resize`] and
+/// [`Event::Tick`], draws the first frame and marks it
+/// (`performance.mark("first-frame")`; with `debug` in the query string,
+/// `"frame"` after every frame), then listens. The app lives with the page.
 ///
 /// # Errors
 ///
-/// When there is no window, document or body, no `<canvas id="os">`, no
-/// WebGL2, or the shaders fail to compile or link (the message includes the
-/// info log).
+/// No window, document, body or canvas, no WebGL2, or a shader failure.
 pub fn run<A: App + 'static>(app: A) -> Result<(), JsValue> {
-    let window = web_sys::window().ok_or("no window")?;
+    let window = window().ok_or("no window")?;
     let document = window.document().ok_or("no document")?;
     let canvas: HtmlCanvasElement = document
         .get_element_by_id("os")
@@ -224,7 +114,7 @@ pub fn run<A: App + 'static>(app: A) -> Result<(), JsValue> {
         .map_err(|_| "#os is not a <canvas>")?;
     let renderer = Renderer::new(&canvas).map_err(|e| JsValue::from_str(&e))?;
     let sink = io::text_sink(&document)?;
-    let debug = window.location().search().is_ok_and(|q| is_debug(&q));
+    let debug = window.location().search().is_ok_and(|q| has(&q, "debug"));
     let s = Rc::new_cyclic(|me: &Weak<Shared>| Shared {
         window,
         document,
@@ -232,7 +122,7 @@ pub fn run<A: App + 'static>(app: A) -> Result<(), JsValue> {
         sink,
         app: RefCell::new(Box::new(app)),
         renderer: RefCell::new(Some(renderer)),
-        // Until the first frame is drawn, below, no other can be requested.
+        // No frame can be requested until the first is drawn, below.
         frame_pending: Cell::new(true),
         pressed: Cell::new(None),
         css_h: Cell::new(0.0),
@@ -244,7 +134,7 @@ pub fn run<A: App + 'static>(app: A) -> Result<(), JsValue> {
         tick_fn: handler(me, |s, _| tick(s, false)),
         tick_timer: Cell::new(None),
         time: Cell::new(None),
-        cursor: Cell::new(Cursor::Default),
+        cursor: Cell::new("default"),
         later: RefCell::new(Vec::new()),
         later_fn: handler(me, io::flush_later),
         dpr_watch: RefCell::new(None),
@@ -253,22 +143,18 @@ pub fn run<A: App + 'static>(app: A) -> Result<(), JsValue> {
 
     resize(&s);
     tick(&s, true);
-    // As on every animation frame: a request made while drawing (an opening
-    // animation) schedules the next frame.
     s.frame_pending.set(false);
     frame(&s);
     mark(&s.window, "first-frame");
     install(&s)?;
     watch_dpr(&s);
-    // Every callback holds only a `Weak`: this reference keeps the state
-    // alive for the life of the page.
+    // The callbacks hold only `Weak`s: this keeps the state for the page's life.
     core::mem::forget(s);
     Ok(())
 }
 
-/// Everything the callbacks share. Borrows of `app` and `renderer` never
-/// outlive the statement that takes them, except in [`frame`], which holds
-/// both across [`App::frame`]; [`Ctl`] effects run after every borrow ends.
+/// What the callbacks share. Borrows of `app` and `renderer` end within a
+/// statement, except across [`App::frame`]; effects apply after them.
 struct Shared {
     window: Window,
     document: Document,
@@ -278,25 +164,22 @@ struct Shared {
     app: RefCell<Box<dyn App>>,
     /// `None` while the WebGL context is lost.
     renderer: RefCell<Option<Renderer>>,
-    /// Whether a frame is requested (or the first is not drawn yet). Cleared
-    /// just before [`App::frame`] runs, so the frame can ask for the next.
+    /// Whether a frame is requested; cleared just before [`App::frame`].
     frame_pending: Cell<bool>,
-    /// The `pointerId` of the press the app is following, if any.
+    /// The `pointerId` of the press the app is following.
     pressed: Cell<Option<i32>>,
-    /// The canvas CSS height, as last measured (for page-sized wheel deltas).
+    /// The canvas CSS height, for page-sized wheel deltas.
     css_h: Cell<f32>,
     /// Whether the app asked for text input.
     typing: Cell<bool>,
-    /// The `requestAnimationFrame` callback.
     raf: Function,
-    /// The minute timer's callback, its pending handle, and the time last
-    /// sent as [`Event::Tick`].
+    /// The minute timer: its callback, its handle, and the time last sent.
     tick_fn: Function,
     tick_timer: Cell<Option<i32>>,
     time: Cell<Option<LocalTime>>,
-    /// The cursor last written to the canvas style.
-    cursor: Cell<Cursor>,
-    /// Events waiting for the microtask that runs `later_fn`.
+    /// The CSS cursor last written to the canvas.
+    cursor: Cell<&'static str>,
+    /// Events for the microtask that runs `later_fn`.
     later: RefCell<Vec<Event>>,
     later_fn: Function,
     /// The live `(resolution: Xdppx)` query, kept so its listener lives.
@@ -317,12 +200,12 @@ enum Ptr {
 type Handler = fn(&Rc<Shared>, &DomEvent);
 
 /// `f` as a JS function that runs while the state lives. Every callback is
-/// this one closure type, so its glue is compiled once.
+/// this one closure type, which fetches share, so its glue exists once.
 fn handler(me: &Weak<Shared>, f: Handler) -> Function {
     let me = me.clone();
-    let cb = Closure::<dyn FnMut(DomEvent)>::new(move |e: DomEvent| {
+    let cb = Closure::<dyn FnMut(JsValue)>::new(move |e: JsValue| {
         if let Some(s) = me.upgrade() {
-            f(&s, &e);
+            f(&s, e.unchecked_ref());
         }
     });
     cb.into_js_value().unchecked_into()
@@ -342,8 +225,7 @@ fn install(s: &Rc<Shared>) -> Result<(), JsValue> {
         (canvas, "pointercancel", |s, e| on_pointer(s, e, Ptr::Up)),
         (canvas, "pointerleave", |s, e| on_pointer(s, e, Ptr::Leave)),
         (canvas, "wheel", on_wheel),
-        // A press on the canvas would move focus to the body and so end text
-        // input: keep the focus where the app put it.
+        // A press would move focus to the body and end text input.
         (canvas, "mousedown", |s, e| {
             if s.typing.get() {
                 e.prevent_default();
@@ -364,10 +246,9 @@ fn install(s: &Rc<Shared>) -> Result<(), JsValue> {
         (sink, "input", io::on_input),
         (sink, "compositionend", io::on_composition_end),
     ];
-    // Not passive, so the app can prevent scrolling and pinch zoom on the
-    // wheel; that is already the default for every other listener here.
+    // Default options: none of these is passive (wheel defaults to passive
+    // only on window, document and body), so the app can prevent scrolling.
     let opts = AddEventListenerOptions::new();
-    opts.set_passive(false);
     for (on, ty, f) in listeners {
         let f = handler(&me, f);
         on.add_event_listener_with_callback_and_add_event_listener_options(ty, &f, &opts)?;
@@ -375,15 +256,14 @@ fn install(s: &Rc<Shared>) -> Result<(), JsValue> {
     Ok(())
 }
 
-/// Hands `ev` to the app, requests a frame if it asked for one, then applies
-/// what it asked of its [`Ctl`] (the app borrow has ended by then).
+/// Hands `ev` to the app, requests a frame if asked, then applies its [`Ctl`].
 fn dispatch(s: &Rc<Shared>, ev: Event) -> Handled {
-    let mut ctl = Ctl::new();
+    let mut ctl = Ctl::default();
     let h = s.app.borrow_mut().event(ev, &mut ctl);
     if h.redraw {
         request_frame(s);
     }
-    io::apply(s, ctl.into_effects());
+    io::apply(s, ctl.effects);
     h
 }
 
@@ -397,17 +277,9 @@ fn on_key(s: &Rc<Shared>, e: &DomEvent, down: bool) {
     let (code, key) = (k.code(), k.key());
     let (shift, ctrl, alt, meta) = (k.shift_key(), k.ctrl_key(), k.alt_key(), k.meta_key());
     let paste = s.typing.get() && is_paste(&code, &key, [shift, ctrl, alt, meta]);
-    let ev = Event::Key {
-        code,
-        key,
-        down,
-        repeat: k.repeat(),
-        shift,
-        ctrl,
-        alt,
-        meta,
-        altgr: k.get_modifier_state("AltGraph"),
-    };
+    let repeat = k.repeat();
+    let altgr = k.get_modifier_state("AltGraph");
+    let ev = Event::Key { code, key, down, repeat, shift, ctrl, alt, meta, altgr };
     if dispatch(s, ev).prevent_default && !paste {
         e.prevent_default();
     }
@@ -448,8 +320,8 @@ fn on_wheel(s: &Rc<Shared>, e: &DomEvent) {
     }
 }
 
-/// Re-measures the canvas, updates the renderer and sends [`Event::Resize`].
-/// Always requests a frame: the drawing surface itself changed.
+/// Re-measures the canvas and sends [`Event::Resize`]; always requests a
+/// frame, as the drawing surface itself changed.
 fn resize(s: &Rc<Shared>) {
     let (w, h, dpr) = measure(s);
     s.css_h.set(h);
@@ -466,8 +338,8 @@ fn measure(s: &Shared) -> (f32, f32, f32) {
     (rect.width() as f32, rect.height() as f32, dpr)
 }
 
-/// Sends [`Event::Tick`] if the local time changed since the last one (or
-/// `always`), and sets the one timer for just after the next minute starts.
+/// Sends [`Event::Tick`] if the local minute changed (or `always`), and sets
+/// the one timer for just after the next minute starts.
 fn tick(s: &Rc<Shared>, always: bool) {
     if let Some(t) = s.tick_timer.take() {
         s.window.clear_timeout_with_handle(t);
@@ -483,10 +355,11 @@ fn tick(s: &Rc<Shared>, always: bool) {
     }
 }
 
-/// Watches `(resolution: <current dpr>dppx)`; when it stops matching, sends
-/// a Resize and watches the new ratio. The listener fires once.
+/// Watches `(resolution: <dpr>dppx)`; when it stops matching (zoom, another
+/// screen), resizes and watches the new ratio.
 fn watch_dpr(s: &Rc<Shared>) {
-    // JS prints it as `${devicePixelRatio}` does: Rust float fmt costs ~10 KB.
+    // JS prints the ratio as `${devicePixelRatio}` would: Rust's float
+    // formatting costs ~10 KB.
     let ratio = js_sys::Number::from(s.window.device_pixel_ratio()).to_string_with_radix(10);
     let query = ratio.map(|n| ["(resolution: ", &String::from(n), "dppx)"].concat());
     let Ok(Some(mql)) = query.and_then(|q| s.window.match_media(&q)) else {
@@ -517,20 +390,16 @@ fn restore(s: &Shared) {
     }
 }
 
-/// Requests one animation frame unless one is pending (or the first frame
-/// has not been drawn yet). [`Handled::redraw`] and the
-/// [`Effect::RequestFrame`] of [`Ctl::request_frame`] both come here.
+/// Requests one animation frame unless one is pending.
 fn request_frame(s: &Shared) {
     if !s.frame_pending.get() && s.window.request_animation_frame(&s.raf).is_ok() {
         s.frame_pending.set(true);
     }
 }
 
-/// Runs [`App::frame`] if there is a renderer, then applies its [`Ctl`]: a
-/// [`Ctl::request_frame`] made while drawing requests the next frame, as
-/// `frame_pending` is already clear.
+/// Runs [`App::frame`] if there is a renderer, then applies its [`Ctl`].
 fn frame(s: &Rc<Shared>) {
-    let mut ctl = Ctl::new();
+    let mut ctl = Ctl::default();
     {
         let mut slot = s.renderer.borrow_mut();
         let Some(r) = slot.as_mut() else {
@@ -541,7 +410,7 @@ fn frame(s: &Rc<Shared>) {
     if s.debug {
         mark(&s.window, "frame");
     }
-    io::apply(s, ctl.into_effects());
+    io::apply(s, ctl.effects);
 }
 
 fn mark(window: &Window, name: &str) {
@@ -550,8 +419,20 @@ fn mark(window: &Window, name: &str) {
     }
 }
 
-/// A thrown or rejected JS value as text: an `Error`'s message, a string
-/// itself, else a generic note.
+#[wasm_bindgen::prelude::wasm_bindgen]
+extern "C" {
+    #[wasm_bindgen(thread_local_v2, js_name = window)]
+    static WINDOW: Option<Window>;
+}
+
+/// `window`, or `None` outside a page: `web_sys::window` without its search
+/// through the other global objects.
+fn window() -> Option<Window> {
+    WINDOW.with(Clone::clone)
+}
+
+/// A thrown or rejected value as text: an `Error`'s message, a string, or a
+/// generic note.
 pub(crate) fn js_text(e: &JsValue) -> String {
     match e.dyn_ref::<js_sys::Error>() {
         Some(err) => err.message().into(),
@@ -559,33 +440,27 @@ pub(crate) fn js_text(e: &JsValue) -> String {
     }
 }
 
-/// `devicePixelRatio` as `f32`, or 1 when it is not a positive finite number.
+/// `devicePixelRatio`, or 1 when it is not a positive finite number.
 fn sane_dpr(dpr: f64) -> f32 {
     if dpr.is_finite() && dpr > 0.0 { dpr as f32 } else { 1.0 }
 }
 
-/// Whether `location.search` asks for debug marks.
-fn is_debug(search: &str) -> bool {
-    has(search, "debug")
-}
-
-/// Whether `hay` contains `needle` (not empty): a byte scan, which is all
-/// these short strings need and far smaller than `str::contains`.
+/// Whether `hay` contains `needle`: a byte scan, far smaller than
+/// `str::contains`.
 pub(crate) fn has(hay: &str, needle: &str) -> bool {
     let needle = needle.as_bytes();
     hay.as_bytes().windows(needle.len()).any(|w| w == needle)
 }
 
-/// `PointerEvent.button` as `u8`; out-of-range values (such as -1) become 0.
+/// `PointerEvent.button` as `u8`; out-of-range values (such as -1) are 0.
 fn button_u8(b: i16) -> u8 {
     u8::try_from(b).unwrap_or(0)
 }
 
-/// Whether a key press is a paste shortcut, given `[shift, ctrl, alt, meta]`:
-/// Ctrl+V or Cmd+V, or Shift+Insert. The V goes by meaning when `key` is an
-/// ASCII letter (Dvorak's `v` on `Period`; its `k` on `KeyV` is no V), else
-/// by position (`KeyV`, for layouts like Cyrillic): the rule `os` maps
-/// shortcut letters by, so the shell sees the same key.
+/// Whether a key is a paste shortcut, given `[shift, ctrl, alt, meta]`:
+/// Ctrl/Cmd+V or Shift+Insert. The V goes by meaning when `key` is an ASCII
+/// letter (Dvorak), else by position (`KeyV`; Cyrillic), as `os` maps
+/// shortcut letters.
 fn is_paste(code: &str, key: &str, [shift, ctrl, alt, meta]: [bool; 4]) -> bool {
     let v = match key.as_bytes() {
         [b] if b.is_ascii_alphabetic() => b.eq_ignore_ascii_case(&b'v'),
@@ -594,8 +469,8 @@ fn is_paste(code: &str, key: &str, [shift, ctrl, alt, meta]: [bool; 4]) -> bool 
     ((ctrl || meta) && !alt && v) || (shift && !ctrl && !alt && !meta && code == "Insert")
 }
 
-/// `WheelEvent.deltaY` in CSS pixels: `DOM_DELTA_LINE` (1) counts 16 px,
-/// `DOM_DELTA_PAGE` (2) counts `page` px; a non-finite result is 0.
+/// `WheelEvent.deltaY` in CSS pixels: mode 1 (lines) counts 16 px, mode 2
+/// (pages) `page` px; a non-finite result is 0.
 fn wheel_px(delta: f64, mode: u32, page: f32) -> f32 {
     let scale = match mode {
         1 => 16.0,
@@ -606,17 +481,15 @@ fn wheel_px(delta: f64, mode: u32, page: f32) -> f32 {
     if px.is_finite() { px } else { 0.0 }
 }
 
-/// Milliseconds from `sec`:`ms` past a minute until just after the next
-/// minute starts (10 ms late, so a timer that fires a hair early still sees
-/// the new minute).
+/// Milliseconds from `sec`:`ms` past a minute until 10 ms after the next
+/// starts, so a timer that fires a hair early still sees the new minute.
 fn ms_to_next_minute(sec: u32, ms: u32) -> i32 {
     let into = sec.min(59) * 1000 + ms.min(999);
     (60_000 - into + 10) as i32
 }
 
-/// `Some(the pointer pressed after it)` if the app hears a pointer event, else
-/// `None`. Only primary pointers count, and during a press only the pressing
-/// one: a second finger or a touch mid-drag can neither steal nor end it.
+/// `Some(the press after it)` if the app hears a pointer event, else `None`:
+/// only primary pointers count, and during a press only the pressing one.
 fn gate(pressed: Option<i32>, id: i32, primary: bool, kind: Ptr) -> Option<Option<i32>> {
     if !primary || pressed.is_some_and(|p| p != id) {
         return None;

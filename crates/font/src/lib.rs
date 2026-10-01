@@ -1,39 +1,17 @@
 //! A dependency-free TrueType reader and glyph rasterizer for compusophyOS.
 //!
-//! [`Font::parse`] takes the font's bytes, finds the tables it needs and
-//! checks their offsets, lengths and counts; every later read is
-//! bounds-checked again, so malformed input is an `Err`, never a panic and
-//! never a garbage picture. [`Font::outline`] gives a glyph's contours in font
-//! units, and [`Font::rasterize`] turns them into an anti-aliased coverage
-//! [`Bitmap`] at any size.
-//!
-//! # Contract
-//!
-//! - TrueType (`glyf`) outlines only. Required tables: `head`, `hhea`,
-//!   `maxp`, `cmap`, `hmtx`, `loca`, `glyf`. CFF fonts (`OTTO`) and
-//!   collections (`ttcf`) are [`FontError::NotTrueType`].
-//! - Characters map through `cmap` (3,10) or (0,x) format 12 when present,
-//!   else (3,1) or (0,x) format 4. Glyph 0 (`.notdef`) and ids past `maxp`'s
-//!   glyph count map to `None`.
-//! - Outlines are in font units, y up. Composite glyphs apply their offsets,
-//!   scales and 2x2 matrices; point-matching components are placed at offset
-//!   0. Nesting deeper than 8 composite levels, more than 1,024 components or
-//!   more than 262,144 points is [`FontError::TooComplex`].
-//! - `loca` entries are checked per glyph when the glyph is read, so one bad
-//!   entry fails that glyph, not the whole font.
-//! - Hinting, variations, kerning and vertical metrics are not read.
-//!
-//! # Rasterizer
-//!
-//! Outlines are scaled by `px_per_em / units_per_em`, and each quadratic
-//! curve is flattened into lines until it is within 0.2 px of the true curve.
-//! Each line adds its signed area and coverage to the cells it crosses in an
-//! accumulation buffer; a running sum along each row then gives the winding
-//! coverage, output as `min(1, |sum|) * 255`. Holes (opposite winding) cancel
-//! and overlapping same-direction contours clamp at full coverage.
-//!
-//! Origin: new in compusophyOS (the accumulation technique follows the
-//! well-known font-rs design).
+//! - [`Font::parse`] checks the header and the bounds of every table it
+//!   needs (`head hhea maxp cmap hmtx loca glyf`); every later read is
+//!   bounds-checked again, so malformed input is an `Err`, never a panic or a
+//!   garbage picture. One bad `loca` entry fails only its glyph.
+//! - `glyf` outlines only (CFF and collections are [`FontError::NotTrueType`]);
+//!   `cmap` format 12 is preferred over format 4; no hinting, kerning or
+//!   variations. Composites apply offsets, scales and 2x2 matrices
+//!   (point-matched parts sit at offset 0), at most 8 levels deep, 1,024
+//!   components and 262,144 points.
+//! - [`Font::rasterize`] flattens curves to within 0.2 px and accumulates
+//!   signed area per cell (the font-rs technique): coverage is
+//!   `min(1, |winding|)`, so holes cancel and overlaps clamp.
 
 #![forbid(unsafe_code)]
 
@@ -44,92 +22,65 @@ mod raster;
 #[cfg(test)]
 mod tests;
 
-/// Composite glyphs may nest this many levels deep, and no deeper.
 const MAX_DEPTH: u32 = 8;
-/// Components one glyph may expand to, counting nested ones.
 const MAX_COMPONENTS: u32 = 1024;
-/// Points one glyph may expand to, counting every component.
 const MAX_POINTS: usize = 1 << 18;
 
 /// Why a font or glyph could not be read or drawn.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FontError {
-    /// Not a TrueType font this crate reads: a bad header, a CFF font or a
-    /// font collection.
+    /// A bad header, a CFF font or a collection.
     NotTrueType,
-    /// A required table is absent; the payload is its tag.
+    /// A required table (this tag) is absent.
     MissingTable([u8; 4]),
     /// An offset, length, count or field in this table is out of range.
     Malformed([u8; 4]),
-    /// The glyph id is not below the font's glyph count.
+    /// The glyph id is not below the glyph count.
     NoGlyph(u16),
-    /// A composite glyph nests deeper than 8 levels or expands past the
-    /// component or point limit.
+    /// A composite nests or expands past the limits.
     TooComplex,
-    /// `px_per_em` is not finite and positive, or the bitmap would exceed
-    /// 8,192 px on a side or 16 M pixels.
+    /// A size that is not finite and positive, or a bitmap past 8,192 px or 16 M px.
     BadSize,
 }
 
 impl fmt::Display for FontError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let tag = |t: &[u8; 4]| String::from_utf8_lossy(t).into_owned();
+        use FontError::*;
         match self {
-            FontError::NotTrueType => write!(f, "not a TrueType font"),
-            FontError::MissingTable(t) => write!(f, "missing `{}` table", tag(t)),
-            FontError::Malformed(t) => write!(f, "malformed `{}` table", tag(t)),
-            FontError::NoGlyph(g) => write!(f, "no glyph {g}"),
-            FontError::TooComplex => write!(f, "composite glyph too deep or too large"),
-            FontError::BadSize => write!(f, "bad pixel size or bitmap too large"),
+            NotTrueType => write!(f, "not a TrueType font"),
+            MissingTable(t) => write!(f, "missing `{}` table", String::from_utf8_lossy(t)),
+            Malformed(t) => write!(f, "malformed `{}` table", String::from_utf8_lossy(t)),
+            NoGlyph(g) => write!(f, "no glyph {g}"),
+            TooComplex => write!(f, "composite glyph too deep or too large"),
+            BadSize => write!(f, "bad pixel size or bitmap too large"),
         }
     }
 }
 
-impl std::error::Error for FontError {}
-
-/// One outline point in font units, y up.
+/// An outline point in font units, y up; `on` is false for a quadratic control.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Point {
-    /// Horizontal position.
     pub x: f32,
-    /// Vertical position, up from the baseline.
     pub y: f32,
-    /// On the curve; an off-curve point is a quadratic control point, and two
-    /// in a row imply an on-curve point halfway between them.
     pub on: bool,
 }
 
-/// A glyph's closed contours in font units, y up.
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct Outline {
-    /// Each contour in order; the last point connects back to the first.
-    pub contours: Vec<Vec<Point>>,
-}
-
-/// An 8-bit coverage bitmap of one glyph.
+/// An 8-bit coverage bitmap of one glyph: `w * h` bytes in `data`, row-major,
+/// its top-left corner `left` px right of the pen and `top` px below the baseline.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Bitmap {
-    /// Width in px.
     pub w: u32,
-    /// Height in px.
     pub h: u32,
-    /// The bitmap's left edge relative to the pen x, in px.
     pub left: i32,
-    /// The bitmap's top edge relative to the baseline, y down (negative is
-    /// above the baseline).
     pub top: i32,
-    /// `w * h` coverage bytes, row-major, top row first.
     pub data: Vec<u8>,
 }
 
 /// A parsed TrueType font. It owns its bytes.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Font {
     data: Vec<u8>,
-    upem: u16,
-    ascender: i16,
-    descender: i16,
-    line_gap: i16,
+    metrics: [i32; 4],
     num_glyphs: u16,
     num_hmetrics: u16,
     long_loca: bool,
@@ -139,43 +90,29 @@ pub struct Font {
     cmap: Cmap,
 }
 
-/// The chosen `cmap` subtable: its byte range in the font and its count.
+/// The chosen `cmap` subtable: its bytes, its segment or group count, its format.
 #[derive(Clone, Debug)]
-enum Cmap {
-    Format4 { sub: Range<usize>, segs: usize },
-    Format12 { sub: Range<usize>, groups: usize },
-}
-
-impl fmt::Debug for Font {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Font")
-            .field("bytes", &self.data.len())
-            .field("units_per_em", &self.upem)
-            .field("num_glyphs", &self.num_glyphs)
-            .field("cmap", &self.cmap)
-            .finish_non_exhaustive()
-    }
+struct Cmap {
+    sub: Range<usize>,
+    n: usize,
+    f12: bool,
 }
 
 fn u16_at(d: &[u8], at: usize) -> Option<u16> {
     d.get(at..at.checked_add(2)?)?.try_into().ok().map(u16::from_be_bytes)
 }
-
 fn i16_at(d: &[u8], at: usize) -> Option<i16> {
     u16_at(d, at).map(|v| v as i16)
 }
-
 fn u32_at(d: &[u8], at: usize) -> Option<u32> {
     d.get(at..at.checked_add(4)?)?.try_into().ok().map(u32::from_be_bytes)
 }
-
-/// `start..start + len` if it lies inside `d`.
 fn span(d: &[u8], start: usize, len: usize) -> Option<Range<usize>> {
     let end = start.checked_add(len)?;
     (end <= d.len()).then_some(start..end)
 }
 
-/// Finds a table in the directory and checks that it lies inside the file.
+/// Finds a table in the directory, checked to lie inside the file.
 fn table(d: &[u8], tag: &[u8; 4]) -> Result<Range<usize>, FontError> {
     let count = u16_at(d, 4).ok_or(FontError::NotTrueType)?;
     for i in 0..usize::from(count) {
@@ -195,7 +132,7 @@ fn pick_cmap(d: &[u8], cmap: Range<usize>) -> Result<Cmap, FontError> {
     let bad = FontError::Malformed(*b"cmap");
     let c = d.get(cmap.clone()).ok_or(bad)?;
     let count = u16_at(c, 2).ok_or(bad)?;
-    let mut best: Option<(u8, Cmap)> = None;
+    let mut best: Option<Cmap> = None;
     for i in 0..usize::from(count) {
         let rec = 4 + 8 * i;
         let (Some(plat), Some(enc), Some(off)) =
@@ -214,27 +151,25 @@ fn pick_cmap(d: &[u8], cmap: Range<usize>) -> Result<Cmap, FontError> {
                 let groups = u32_at(s, 12).ok_or(bad)? as usize;
                 let len = groups.checked_mul(12).and_then(|n| n.checked_add(16));
                 let sub = len.and_then(|n| span(d, at, n)).ok_or(bad)?;
-                (2, Cmap::Format12 { sub, groups })
+                Cmap { sub, n: groups, f12: true }
             }
             4 => {
                 let segs = usize::from(u16_at(s, 6).ok_or(bad)? / 2);
                 if segs == 0 || 16 + 8 * segs > s.len() {
                     return Err(bad);
                 }
-                let sub = at..cmap.end;
-                (1, Cmap::Format4 { sub, segs })
+                Cmap { sub: at..cmap.end, n: segs, f12: false }
             }
             _ => continue,
         };
-        if best.as_ref().is_none_or(|(rank, _)| found.0 > *rank) {
+        if best.as_ref().is_none_or(|b| found.f12 && !b.f12) {
             best = Some(found);
         }
     }
-    best.map(|(_, c)| c).ok_or(bad)
+    best.ok_or(bad)
 }
 
-/// Format 4: segments sorted by end code, each a range with a delta or an
-/// offset into the glyph id array.
+/// Format 4: sorted segments, each with a delta or glyph id array offset.
 fn cmap4(s: &[u8], segs: usize, c: u32) -> Option<u16> {
     let c = u16::try_from(c).ok()?;
     let (starts, deltas, ranges) = (16 + 2 * segs, 16 + 4 * segs, 16 + 6 * segs);
@@ -247,11 +182,8 @@ fn cmap4(s: &[u8], segs: usize, c: u32) -> Option<u16> {
             hi = mid;
         }
     }
-    if lo == segs {
-        return None;
-    }
     let start = u16_at(s, starts + 2 * lo)?;
-    if c < start {
+    if lo == segs || c < start {
         return None;
     }
     let delta = u16_at(s, deltas + 2 * lo)?;
@@ -283,32 +215,28 @@ fn cmap12(s: &[u8], groups: usize, c: u32) -> Option<u16> {
 
 /// An affine map `[a, b, c, d, e, f]`: `x' = a*x + c*y + e`, `y' = b*x + d*y + f`.
 type Affine = [f32; 6];
-
 const IDENTITY: Affine = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0];
 
-/// `outer` applied after `inner`.
-fn compose(outer: &Affine, inner: &Affine) -> Affine {
-    let [a, b, c, d, e, f] = *outer;
-    let [ia, ib, ic, id, ie, if_] = *inner;
-    [
-        a * ia + c * ib,
-        b * ia + d * ib,
-        a * ic + c * id,
-        b * ic + d * id,
-        a * ie + c * if_ + e,
-        b * ie + d * if_ + f,
-    ]
+/// The linear part of `m` applied to `(x, y)`.
+fn lin(m: &Affine, x: f32, y: f32) -> [f32; 2] {
+    [m[0] * x + m[2] * y, m[1] * x + m[3] * y]
 }
 
-/// What one glyph may still expand to.
-struct Budget {
+/// `o` applied after `i`.
+fn compose(o: &Affine, i: &Affine) -> Affine {
+    let ([a, b], [c, d], [e, f]) = (lin(o, i[0], i[1]), lin(o, i[2], i[3]), lin(o, i[4], i[5]));
+    [a, b, c, d, e + o[4], f + o[5]]
+}
+
+/// A glyph's outline being built, and what it may still expand to.
+struct Walk<'a> {
+    out: &'a mut Vec<Vec<Point>>,
     components: u32,
     points: usize,
 }
 
 impl Font {
-    /// Reads a TrueType font, checking the header, every required table's
-    /// bounds and the fields this crate uses.
+    /// Reads a TrueType font, checking the header and every table it uses.
     pub fn parse(data: Vec<u8>) -> Result<Font, FontError> {
         let d = &data[..];
         if !matches!(u32_at(d, 0), Some(0x0001_0000 | 0x7472_7565)) {
@@ -320,11 +248,7 @@ impl Font {
         if u32_at(head, 12) != Some(0x5F0F_3CF5) || !(16..=16384).contains(&upem) {
             return Err(bad);
         }
-        let long_loca = match i16_at(head, 50) {
-            Some(0) => false,
-            Some(1) => true,
-            _ => return Err(bad),
-        };
+        let long_loca = i16_at(head, 50).filter(|&v| v == 0 || v == 1).ok_or(bad)? == 1;
         let hhea = &d[table(d, b"hhea")?];
         let bad = FontError::Malformed(*b"hhea");
         let (Some(ascender), Some(descender), Some(line_gap), Some(num_hmetrics)) =
@@ -335,6 +259,7 @@ impl Font {
         if num_hmetrics == 0 {
             return Err(bad);
         }
+        let metrics = [upem.into(), ascender.into(), descender.into(), line_gap.into()];
         let maxp = &d[table(d, b"maxp")?];
         let num_glyphs = u16_at(maxp, 4).ok_or(FontError::Malformed(*b"maxp"))?;
         let hmtx = table(d, b"hmtx")?;
@@ -349,10 +274,7 @@ impl Font {
         let glyf = table(d, b"glyf")?;
         let cmap = pick_cmap(d, table(d, b"cmap")?)?;
         Ok(Font {
-            upem,
-            ascender,
-            descender,
-            line_gap,
+            metrics,
             num_glyphs,
             num_hmetrics,
             long_loca,
@@ -364,92 +286,53 @@ impl Font {
         })
     }
 
-    /// Font units per em (`head`).
-    pub fn units_per_em(&self) -> u16 {
-        self.upem
+    /// Units per em, ascender, descender (usually negative) and line gap.
+    pub fn metrics(&self) -> [i32; 4] {
+        self.metrics
     }
 
-    /// Typographic ascender in font units (`hhea`).
-    pub fn ascender(&self) -> i16 {
-        self.ascender
-    }
-
-    /// Typographic descender in font units, usually negative (`hhea`).
-    pub fn descender(&self) -> i16 {
-        self.descender
-    }
-
-    /// Extra space between lines in font units (`hhea`).
-    pub fn line_gap(&self) -> i16 {
-        self.line_gap
-    }
-
-    /// Number of glyphs (`maxp`); valid glyph ids are below it.
-    pub fn num_glyphs(&self) -> u16 {
-        self.num_glyphs
-    }
-
-    /// The glyph for a character, or `None` if the font maps it to nothing,
-    /// to glyph 0, or to an id past the glyph count.
+    /// The glyph for a character; `None` for none, glyph 0 or an id too big.
     pub fn glyph_index(&self, c: char) -> Option<u16> {
-        let g = match &self.cmap {
-            Cmap::Format4 { sub, segs } => cmap4(self.data.get(sub.clone())?, *segs, c.into()),
-            Cmap::Format12 { sub, groups } => {
-                cmap12(self.data.get(sub.clone())?, *groups, c.into())
-            }
-        }?;
+        let (s, n) = (self.data.get(self.cmap.sub.clone())?, self.cmap.n);
+        let g = if self.cmap.f12 { cmap12(s, n, c.into()) } else { cmap4(s, n, c.into()) }?;
         (g != 0 && g < self.num_glyphs).then_some(g)
     }
 
-    /// Horizontal advance in font units (`hmtx`); glyphs past
-    /// `numberOfHMetrics` take the last advance.
+    /// Horizontal advance in font units; glyphs past the last metric take it.
     pub fn advance(&self, glyph: u16) -> u16 {
         let i = usize::from(glyph.min(self.num_hmetrics.saturating_sub(1)));
         u16_at(&self.data, self.hmtx + 4 * i).unwrap_or(0)
     }
 
-    /// Where a glyph's `glyf` data lies in the font's bytes (empty for a
-    /// glyph with no outline).
+    /// Where a glyph's `glyf` data lies (empty for a glyph with no outline).
     fn glyph_range(&self, glyph: u16) -> Result<Range<usize>, FontError> {
         if glyph >= self.num_glyphs {
             return Err(FontError::NoGlyph(glyph));
         }
         let i = usize::from(glyph);
-        let at = |k: usize| {
-            if self.long_loca {
-                u32_at(&self.data, self.loca + 4 * k).map(|v| v as usize)
-            } else {
-                u16_at(&self.data, self.loca + 2 * k).map(|v| 2 * usize::from(v))
-            }
+        let at = |k: usize| match self.long_loca {
+            true => u32_at(&self.data, self.loca + 4 * k).map(|v| v as usize),
+            false => u16_at(&self.data, self.loca + 2 * k).map(|v| 2 * usize::from(v)),
         };
+        let start = self.glyf.start;
         match (at(i), at(i + 1)) {
-            (Some(a), Some(b)) if a <= b && b <= self.glyf.len() => {
-                Ok(self.glyf.start + a..self.glyf.start + b)
-            }
+            (Some(a), Some(b)) if a <= b && b <= self.glyf.len() => Ok(start + a..start + b),
             _ => Err(FontError::Malformed(*b"loca")),
         }
     }
 
-    /// A glyph's contours in font units, y up, replacing `out`'s contents.
-    /// On error `out` is left empty.
-    pub fn outline(&self, glyph: u16, out: &mut Outline) -> Result<(), FontError> {
-        out.contours.clear();
-        let mut budget = Budget { components: MAX_COMPONENTS, points: MAX_POINTS };
-        let r = self.outline_into(glyph, &IDENTITY, 0, &mut budget, out);
+    /// A glyph's contours in font units, replacing `out`'s (empty on error).
+    pub fn outline(&self, glyph: u16, out: &mut Vec<Vec<Point>>) -> Result<(), FontError> {
+        out.clear();
+        let mut w = Walk { out, components: MAX_COMPONENTS, points: MAX_POINTS };
+        let r = self.walk(glyph, &IDENTITY, 0, &mut w);
         if r.is_err() {
-            out.contours.clear();
+            w.out.clear();
         }
         r
     }
 
-    fn outline_into(
-        &self,
-        glyph: u16,
-        m: &Affine,
-        depth: u32,
-        budget: &mut Budget,
-        out: &mut Outline,
-    ) -> Result<(), FontError> {
+    fn walk(&self, glyph: u16, m: &Affine, depth: u32, w: &mut Walk) -> Result<(), FontError> {
         let range = self.glyph_range(glyph)?;
         let d = &self.data[range];
         if d.is_empty() {
@@ -458,7 +341,7 @@ impl Font {
         let bad = FontError::Malformed(*b"glyf");
         let contours = i16_at(d, 0).ok_or(bad)?;
         if contours >= 0 {
-            return simple(d, contours as usize, m, budget, out);
+            return simple(d, contours as usize, m, w);
         }
         let mut p = 10;
         loop {
@@ -475,10 +358,8 @@ impl Font {
                 return Err(bad);
             };
             p += if words { 4 } else { 2 };
-            // Without ARGS_ARE_XY_VALUES the args name points to match;
-            // those components are placed at offset 0.
-            let xy = flags & 0x0002 != 0;
-            let (dx, dy) = if xy { (dx, dy) } else { (0.0, 0.0) };
+            // Without ARGS_ARE_XY_VALUES the args name points to match.
+            let (dx, dy) = if flags & 0x0002 != 0 { (dx, dy) } else { (0.0, 0.0) };
             let f2 = |at: usize| i16_at(d, at).map(|v| f32::from(v) / 16384.0).ok_or(bad);
             let (a, b, c, e) = if flags & 0x0008 != 0 {
                 let s = f2(p)?;
@@ -493,42 +374,37 @@ impl Font {
             } else {
                 (1.0, 0.0, 0.0, 1.0)
             };
-            // SCALED_COMPONENT_OFFSET (and not UNSCALED_...): the offset is
-            // transformed too.
+            // SCALED_COMPONENT_OFFSET (without UNSCALED_...) transforms the offset.
             let (dx, dy) = if flags & 0x1800 == 0x0800 {
                 (a * dx + c * dy, b * dx + e * dy)
             } else {
                 (dx, dy)
             };
-            if depth >= MAX_DEPTH || budget.components == 0 {
+            if depth >= MAX_DEPTH || w.components == 0 {
                 return Err(FontError::TooComplex);
             }
-            budget.components -= 1;
-            let child_m = compose(m, &[a, b, c, e, dx, dy]);
-            self.outline_into(child, &child_m, depth + 1, budget, out)?;
+            w.components -= 1;
+            self.walk(child, &compose(m, &[a, b, c, e, dx, dy]), depth + 1, w)?;
             if flags & 0x0020 == 0 {
                 return Ok(());
             }
         }
     }
 
-    /// Draws a glyph at `px_per_em` pixels per em into `out`, replacing its
-    /// contents. Empty glyphs give `w = h = 0`; on error `out` is empty too.
+    /// Draws a glyph into `out`; an empty glyph or an error leaves `w = h = 0`.
     pub fn rasterize(&self, glyph: u16, px_per_em: f32, out: &mut Bitmap) -> Result<(), FontError> {
         (out.w, out.h, out.left, out.top) = (0, 0, 0, 0);
         out.data.clear();
         if !(px_per_em.is_finite() && px_per_em > 0.0) {
             return Err(FontError::BadSize);
         }
-        let mut outline = Outline::default();
+        let mut outline = Vec::new();
         self.outline(glyph, &mut outline)?;
-        raster::render(&outline, px_per_em / f32::from(self.upem), out)
+        raster::render(&outline, px_per_em / self.metrics[0] as f32, out)
     }
 }
 
-/// Reads per-point coordinate deltas: `short` marks a one-byte delta whose
-/// sign is `same` (set = positive); otherwise `same` repeats the previous
-/// value and its absence means a two-byte signed delta.
+/// Per-point deltas: `short` is a byte signed by `same`, else `same` repeats.
 fn deltas(d: &[u8], p: &mut usize, flags: &[u8], short: u8, same: u8) -> Option<Vec<i32>> {
     let mut out = Vec::with_capacity(flags.len());
     let mut v = 0i32;
@@ -546,22 +422,13 @@ fn deltas(d: &[u8], p: &mut usize, flags: &[u8], short: u8, same: u8) -> Option<
     Some(out)
 }
 
-/// A simple glyph: contour end points, instructions (skipped), flags, then
-/// x and y deltas.
-fn simple(
-    d: &[u8],
-    contours: usize,
-    m: &Affine,
-    budget: &mut Budget,
-    out: &mut Outline,
-) -> Result<(), FontError> {
+/// A simple glyph: contour ends, instructions (skipped), flags, x and y deltas.
+fn simple(d: &[u8], contours: usize, m: &Affine, w: &mut Walk) -> Result<(), FontError> {
     let bad = FontError::Malformed(*b"glyf");
     if contours == 0 {
         return Ok(());
     }
-    let mut ends = Vec::with_capacity(contours);
-    let mut n = 0usize;
-    let mut p = 10;
+    let (mut ends, mut n, mut p) = (Vec::with_capacity(contours), 0usize, 10);
     for _ in 0..contours {
         let end = usize::from(u16_at(d, p).ok_or(bad)?);
         if end < n {
@@ -571,10 +438,10 @@ fn simple(
         ends.push(n);
         p += 2;
     }
-    if n > budget.points {
+    if n > w.points {
         return Err(FontError::TooComplex);
     }
-    budget.points -= n;
+    w.points -= n;
     p += 2 + usize::from(u16_at(d, p).ok_or(bad)?);
     let mut flags = Vec::with_capacity(n);
     while flags.len() < n {
@@ -594,17 +461,13 @@ fn simple(
         .iter()
         .zip(xs.iter().zip(&ys))
         .map(|(&f, (&x, &y))| {
-            let (x, y) = (x as f32, y as f32);
-            Point {
-                x: m[0] * x + m[2] * y + m[4],
-                y: m[1] * x + m[3] * y + m[5],
-                on: f & 0x01 != 0,
-            }
+            let [x, y] = lin(m, x as f32, y as f32);
+            Point { x: x + m[4], y: y + m[5], on: f & 0x01 != 0 }
         })
         .collect();
     let mut start = 0;
     for end in ends {
-        out.contours.push(points.get(start..end).ok_or(bad)?.to_vec());
+        w.out.push(points.get(start..end).ok_or(bad)?.to_vec());
         start = end;
     }
     Ok(())

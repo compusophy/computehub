@@ -7,18 +7,16 @@ use ui::{SPACING, WidgetId};
 use crate::kit::{self, Scroll};
 
 const PAGES: [&str; 2] = ["Appearance", "About"];
-/// Page `i`'s nav item is widget `NAV + i`; theme card `i` is `THEME + i`.
+/// Widget ids: page `i`'s nav item is `NAV + i`, theme card `i` `THEME + i`.
 const NAV: u32 = 1;
 const THEME: u32 = 10;
-/// The nav column's width, and the narrowest window that has one;
-/// narrower, the pages are tabs above the content.
+/// The nav column's width, and the narrowest window with one (else tabs).
 const NAV_W: f32 = 172.0;
 const WIDE: f32 = 520.0;
 const ITEM_H: f32 = 32.0;
 /// The content's left margin beside the nav column.
 const MARGIN: f32 = 24.0;
-/// Theme cards: narrowest and widest, the space between, the preview's
-/// inset, and the band under it with the name.
+/// Theme cards: narrowest, widest, gap, preview inset, name band.
 const CARD_MIN: f32 = 150.0;
 const CARD_MAX: f32 = 216.0;
 const CARD_GAP: f32 = 16.0;
@@ -54,15 +52,12 @@ const STACK: [(&str, &str); 19] = [
     ("fuel", "Fuel and byte budgets"),
 ];
 
-/// Settings: a nav column (Appearance, About) beside the page, or tabs
-/// above it in a narrow window. Appearance shows each of [`THEMES`] as a
-/// miniature desktop (its backdrop and light, a window, a dock); a click
-/// applies one through [`Cx::set_theme`], and the current one wears an
-/// accent ring. About tells the version, the stack, the credits and the
-/// author. A page taller than the window scrolls with the wheel.
+/// Settings: Appearance (each of [`THEMES`] as a miniature desktop; a click
+/// applies it) and About (version, stack, credits), as a nav column or, when
+/// narrow, tabs. A page taller than the window scrolls with the wheel.
 #[derive(Debug, Default)]
 pub struct Settings {
-    /// The page shown: an index into [`PAGES`].
+    /// The page shown, an index into [`PAGES`].
     pub(crate) page: usize,
     scroll: Scroll,
 }
@@ -74,10 +69,8 @@ impl App for Settings {
 
     fn draw(&mut self, ui: &mut Ui<'_>) {
         let r = ui.rect();
-        let (view, margin) = match r.w >= WIDE {
-            true => (self.nav(ui), MARGIN),
-            false => (self.tabs(ui), PAD),
-        };
+        let (view, margin) =
+            if r.w >= WIDE { (self.nav(ui), MARGIN) } else { (self.tabs(ui), PAD) };
         ui.push_clip(view);
         let top = ui.text_system().snap(view.y + PAD - self.scroll.y);
         ui.set_cursor(view.x + margin, top);
@@ -124,20 +117,14 @@ impl Settings {
         let sep = ui.text_system().snap(r.x + NAV_W);
         ui.fill(RectF::new(sep, r.y, line, r.h), 0.0, t.border);
         for i in 0..PAGES.len() {
-            let at = RectF::new(
-                r.x + 12.0,
-                r.y + 12.0 + i as f32 * (ITEM_H + 2.0),
-                NAV_W - 24.0,
-                ITEM_H,
-            );
-            let item = kit::snapped(ui, at);
+            let y = r.y + 12.0 + i as f32 * (ITEM_H + 2.0);
+            let item = kit::snapped(ui, RectF::new(r.x + 12.0, y, NAV_W - 24.0, ITEM_H));
             self.item(ui, i, item, false);
         }
         RectF::new(sep + line, r.y, r.x + r.w - sep - line, r.h)
     }
 
-    /// The pages as a segmented control across the top; returns the
-    /// page's area, below it.
+    /// The pages as a segmented control on top; returns the page's area.
     fn tabs(&self, ui: &mut Ui<'_>) -> RectF {
         let (r, t, line) = (ui.rect(), ui.theme(), kit::px(ui, 1.0));
         let bar = kit::snapped(ui, RectF::new(r.x + PAD, r.y + 14.0, r.w - 2.0 * PAD, 36.0));
@@ -153,8 +140,7 @@ impl Settings {
         RectF::new(r.x, y, r.w, r.y + r.h - y)
     }
 
-    /// Nav item or tab `i` in `rect`: the current one lit (an accent tint,
-    /// or a raised segment), the others dim until the pointer is over them.
+    /// Nav item or tab `i`: the current one lit, the others dim until hovered.
     fn item(&self, ui: &mut Ui<'_>, i: usize, rect: RectF, tab: bool) {
         let t = ui.theme();
         let id = WidgetId(NAV + i as u32);
@@ -213,8 +199,8 @@ fn theme_card(ui: &mut Ui<'_>, i: usize, card: RectF, th: &Theme, ph: f32) {
         ui.border(card.inset(-gap), RADIUS_LG + gap, wide, t.accent);
     }
     kit::raised(ui, card, RADIUS_LG, fill, edge);
-    let at = RectF::new(card.x + INSET, card.y + INSET, card.w - 2.0 * INSET, ph);
-    let preview = kit::snapped(ui, at);
+    let preview =
+        kit::snapped(ui, RectF::new(card.x + INSET, card.y + INSET, card.w - 2.0 * INSET, ph));
     miniature(ui, preview, th, fill);
     let band = preview.y + preview.h;
     let band_h = card.y + card.h - band;
@@ -230,10 +216,8 @@ fn theme_card(ui: &mut Ui<'_>, i: usize, card: RectF, th: &Theme, ph: f32) {
     ui.hit(id, card, Sense::Click);
 }
 
-/// `th`'s desktop in small inside `p`: its base, light and grain, a window
-/// with text and an accent button, and a dock of app colors. Its corners
-/// are rounded concentric with the card's, the light trimmed to them by a
-/// ring in `under`, the card's fill.
+/// `th`'s desktop in small inside `p` (light, a window, a dock), its corners
+/// concentric with the card's, the light trimmed by a ring in `under`.
 fn miniature(ui: &mut Ui<'_>, p: RectF, th: &Theme, under: gfx::Rgba) {
     let (t, line) = (ui.theme(), kit::px(ui, 1.0));
     let radius = RADIUS_LG - INSET;
@@ -260,8 +244,7 @@ fn miniature(ui: &mut Ui<'_>, p: RectF, th: &Theme, under: gfx::Rgba) {
         (pad, bar + pad + 2.0 * stroke, 0.4, th.text_faint),
     ];
     for (dx, dy, frac, color) in bars {
-        let at = RectF::new(win.x + dx, win.y + dy, win.w * frac, stroke);
-        let r = kit::snapped(ui, at);
+        let r = kit::snapped(ui, RectF::new(win.x + dx, win.y + dy, win.w * frac, stroke));
         ui.fill(r, stroke / 2.0, color);
     }
     let (bw, bh) = ((win.w * 0.26).round(), (2.4 * stroke).round());
@@ -302,8 +285,7 @@ fn about(ui: &mut Ui<'_>) -> f32 {
     r.y + r.h
 }
 
-/// The stack as a table: each crate's name in mono, dim, and what it is
-/// beside it (or under it, when the card is narrow), wrapped.
+/// The stack as a table: crate names in dim mono, roles beside or under them.
 fn stack(ui: &mut Ui<'_>) {
     let t = ui.theme();
     let (key, val) = (t.mono().with_color(t.text_dim), t.body());

@@ -71,7 +71,7 @@ they can, in CI.
 
 ```
 DOM event → platform::Event → os → shell::Input → host → ui::AppEvent → app
-app → ui::Request → host (Effect, Ask) → shell → os → platform::Ctl → browser
+app → ui::Request → host (Effect) → shell → os → platform::Ctl → browser
 frame: os → shell::draw → gfx::DrawList → platform::Renderer: one draw call
 ```
 
@@ -139,9 +139,12 @@ one. Forked crates keep their Apache-2.0 license and note their origin.
   size under the pointer); double-click it to maximize or restore; drag an
   edge (6 px) or corner (14 px) to resize. Dropped at the left or right
   screen edge a window snaps to that half, at the top it maximizes, near
-  two edges it takes that quarter. New windows open centered, cascading by
-  28 px, and 64 px of every window stays on screen. Every change is a
-  `wm::Cmd`, so window state replays and hashes.
+  two edges it takes that quarter. A new window opens 28 px right of and
+  below the focused one (at the screen's corner when that would cross the
+  right or bottom edge; centered when no window is visible), and 64 px of
+  every window stays on screen. When the screen changes size, windows shrink
+  and move the least to fit inside it. Every change is a `wm::Cmd`, so
+  window state replays and hashes.
 - **Dock**: Terminal, Studio and Settings pinned, then the other running
   apps, with a dot under each running one and a tooltip on hover. A click
   opens, focuses or minimizes; windows minimize into their tile.
@@ -256,6 +259,6 @@ only the theme persists. OPFS persistence comes with the kernel.
   Alt+Q, Alt+arrows and Alt+Backquote before a terminal sees them
   (readline's Alt+F still arrives). A way through for apps that want them
   waits on the Super key question.
-- **The boot budget** is nearly spent (about 1.5 KB of headroom). Studio
+- **The boot budget** is nearly spent (about 6 KB of headroom). Studio
   and applang are the largest optional part of the boot wasm; separately
   loaded modules (R4) are how the OS grows past it.

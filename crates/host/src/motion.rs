@@ -1,18 +1,15 @@
-//! Motion: values that tween along the desktop's one ease-out curve, how a
-//! window is shown while it moves ([`Vis`]), replaying a draw list scaled,
-//! moved and faded ([`replay`]), and crossfading themes ([`blend`],
-//! [`Themes`]).
-//!
-//! Tweens start lazily: a new target waits ([`Tween::is_pending`]) until
-//! the next frame arms it ([`Tween::arm`]), so the first frame of every
-//! animation shows its first step, however long after the input it comes.
+//! Motion: tweens along one ease-out curve, how a window shows while it
+//! moves ([`Vis`]), replaying a draw list scaled and faded, theme crossfades.
+//! A new tween waits for the next frame to arm it, so every animation's first
+//! frame shows its first step.
 
 use gfx::{DrawList, Icon, Kind, RectF, Rgba};
 use ui::theme::{Glow, THEMES, Theme, mix};
 
-/// Values that interpolate.
+use crate::paint::faded;
+
+/// Values that move `t` (0 to 1) of the way to another.
 pub trait Lerp: Copy + PartialEq {
-    /// `self` moved `t` (0 to 1) of the way to `to`.
     fn lerp(self, to: Self, t: f32) -> Self;
 }
 
@@ -22,16 +19,8 @@ impl Lerp for f32 {
     }
 }
 
-impl Lerp for RectF {
-    fn lerp(self, to: RectF, t: f32) -> RectF {
-        let l = |a: f32, b: f32| a.lerp(b, t);
-        RectF::new(l(self.x, to.x), l(self.y, to.y), l(self.w, to.w), l(self.h, to.h))
-    }
-}
-
 /// The ease-out curve every animation follows: CSS
-/// `cubic-bezier(0.2, 0.8, 0.2, 1)`, from 0 at `t <= 0` (and NaN) to 1 at
-/// `t >= 1`.
+/// `cubic-bezier(0.2, 0.8, 0.2, 1)`, 0 at `t <= 0` (and NaN), 1 at `t >= 1`.
 pub fn ease(t: f32) -> f32 {
     if t.is_nan() || t <= 0.0 {
         return 0.0;
@@ -57,7 +46,7 @@ pub fn ease(t: f32) -> f32 {
 }
 
 /// A value moving to a target along [`ease`] over a duration.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Tween<T> {
     from: T,
     to: T,
@@ -67,7 +56,6 @@ pub struct Tween<T> {
 }
 
 impl<T: Lerp> Tween<T> {
-    /// At rest at `v`.
     pub fn new(v: T) -> Tween<T> {
         Tween { from: v, to: v, start: Some(0.0), dur: 0.0 }
     }
@@ -81,7 +69,6 @@ impl<T: Lerp> Tween<T> {
         }
     }
 
-    /// The value at `now`.
     pub fn value(&self, now: f64) -> T {
         match self.progress(now) {
             p if p >= 1.0 => self.to,
@@ -89,22 +76,20 @@ impl<T: Lerp> Tween<T> {
         }
     }
 
-    /// Where it is going.
     pub fn target(&self) -> T {
         self.to
     }
 
-    /// Heads for `to` from wherever it is at `now`, over `dur_ms`, starting
-    /// at the next [`Tween::arm`]. Nothing changes if `to` is already the
-    /// target.
+    /// Heads for a new target from where it is at `now`, over `dur_ms`, from
+    /// the next [`Tween::arm`].
     pub fn to(&mut self, to: T, now: f64, dur_ms: f32) {
         if to != self.to {
             (self.from, self.to, self.start, self.dur) = (self.value(now), to, None, dur_ms);
         }
     }
 
-    /// Follows a target that moves under the pointer: a running tween keeps
-    /// its course and timing but ends at `to`; one at rest jumps there.
+    /// Follows a target under the pointer: a running tween keeps its course
+    /// but ends at `to`; one at rest jumps there.
     pub fn chase(&mut self, to: T, now: f64) {
         if !self.is_running(now) {
             self.from = to;
@@ -112,14 +97,8 @@ impl<T: Lerp> Tween<T> {
         self.to = to;
     }
 
-    /// Starts a pending tween at `now`.
     pub fn arm(&mut self, now: f64) {
         self.start.get_or_insert(now);
-    }
-
-    /// Whether it waits for [`Tween::arm`].
-    pub fn is_pending(&self) -> bool {
-        self.start.is_none() && self.dur > 0.0
     }
 
     /// Whether it is still moving at `now` (pending counts).
@@ -128,43 +107,28 @@ impl<T: Lerp> Tween<T> {
     }
 }
 
-/// How a window (or a ghost of one) is shown: drawn at `rect`, then scaled
-/// by `s` about the rect's center, moved by `(dx, dy)` and drawn at opacity
-/// `a`.
-#[derive(Clone, Copy, Debug, PartialEq)]
+/// How a layer shows: drawn at `rect`, scaled by `s` about its center,
+/// moved by `(dx, dy)`, at opacity `a`.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Vis {
-    /// Where it is laid out.
     pub rect: RectF,
-    /// Its scale about the rect's center.
     pub s: f32,
-    /// How far it is moved right.
     pub dx: f32,
-    /// How far it is moved down.
     pub dy: f32,
-    /// Its opacity, 0 to 1.
     pub a: f32,
 }
 
 impl Vis {
-    /// Plainly at `rect`: no scale, move or fade.
     pub fn at(rect: RectF) -> Vis {
         Vis { rect, s: 1.0, dx: 0.0, dy: 0.0, a: 1.0 }
     }
 
-    /// Whether it draws plainly at its rect.
     pub fn is_plain(&self) -> bool {
         (self.s, self.dx, self.dy, self.a) == (1.0, 0.0, 0.0, 1.0)
     }
-
-    /// The transform that shows what was drawn at `rect` this way.
-    pub fn xform(&self) -> Xform {
-        let (ox, oy) = (self.rect.x + self.rect.w / 2.0, self.rect.y + self.rect.h / 2.0);
-        Xform { ox, oy, s: self.s, dx: self.dx, dy: self.dy, alpha: self.a }
-    }
 }
 
-/// How a window laid out at `base` hides in a dock tile `tile`: shrunk
-/// into it, clear.
+/// A window at `base` shrunk into the dock tile `tile`, clear.
 pub fn docked(base: RectF, tile: RectF) -> Vis {
     let (dx, dy) = (
         tile.x + tile.w / 2.0 - base.x - base.w / 2.0,
@@ -174,81 +138,52 @@ pub fn docked(base: RectF, tile: RectF) -> Vis {
 }
 
 impl Lerp for Vis {
-    /// Fading out lags the motion (`t` squared), so what leaves stays seen
-    /// while it moves.
+    /// Fading out lags the motion (`t` squared): what leaves stays seen.
     fn lerp(self, to: Vis, t: f32) -> Vis {
+        let l = |a: f32, b: f32| a.lerp(b, t);
+        let (r, q) = (self.rect, to.rect);
         Vis {
-            rect: self.rect.lerp(to.rect, t),
-            s: self.s.lerp(to.s, t),
-            dx: self.dx.lerp(to.dx, t),
-            dy: self.dy.lerp(to.dy, t),
+            rect: RectF::new(l(r.x, q.x), l(r.y, q.y), l(r.w, q.w), l(r.h, q.h)),
+            s: l(self.s, to.s),
+            dx: l(self.dx, to.dx),
+            dy: l(self.dy, to.dy),
             a: self.a.lerp(to.a, if to.a < self.a { t * t } else { t }),
         }
     }
 }
 
-/// A uniform scale by `s` about `(ox, oy)`, then a move by `(dx, dy)`, at
-/// opacity `alpha` (0 to 1).
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Xform {
-    pub ox: f32,
-    pub oy: f32,
-    pub s: f32,
-    pub dx: f32,
-    pub dy: f32,
-    pub alpha: f32,
-}
-
-impl Xform {
-    fn rect(&self, [x, y, w, h]: [f32; 4]) -> RectF {
-        let (x, y) = (self.ox + (x - self.ox) * self.s, self.oy + (y - self.oy) * self.s);
-        RectF::new(x + self.dx, y + self.dy, w * self.s, h * self.s)
-    }
-
-    fn fade(&self, c: Rgba) -> Rgba {
-        c.with_alpha((f32::from(c.3) * self.alpha.clamp(0.0, 1.0)).round() as u8)
-    }
-}
-
-/// Draws every instance of `src` into `dst` through `t`: rects, clips,
-/// radii, strokes and blurs scaled and moved, every alpha faded. Each keeps
-/// its own clip, within `dst`'s current one.
-pub fn replay(dst: &mut DrawList, src: &DrawList, t: Xform) {
+/// Draws `src` into `dst` as `v` shows what was drawn at `v.rect`.
+pub fn replay(dst: &mut DrawList, src: &DrawList, v: Vis) {
     const ICONS: [Icon; 6] =
         [Icon::Plus, Icon::Cross, Icon::Minus, Icon::Dot, Icon::Square, Icon::Grid];
-    const KINDS: [Kind; 8] = [
-        Kind::Fill,
-        Kind::Border,
-        Kind::Shadow,
-        Kind::Icon,
-        Kind::Glyph,
-        Kind::Gradient,
-        Kind::Glow,
-        Kind::Grain,
-    ];
+    use Kind::{Border, Fill, Glow, Glyph, Gradient, Grain, Shadow};
+    const KINDS: [Kind; 8] = [Fill, Border, Shadow, Kind::Icon, Glyph, Gradient, Glow, Grain];
+    let (ox, oy, s) = (v.rect.x + v.rect.w / 2.0, v.rect.y + v.rect.h / 2.0, v.s);
+    let rect = |[x, y, w, h]: [f32; 4]| {
+        RectF::new(ox + (x - ox) * s + v.dx, oy + (y - oy) * s + v.dy, w * s, h * s)
+    };
     for i in src.instances() {
         let Some(&kind) = KINDS.get(i.kind as usize) else {
             continue;
         };
-        let (r, c, radius) = (t.rect(i.rect), t.fade(i.color), i.radius * t.s);
-        dst.push_clip(t.rect(i.clip));
+        let (r, c, radius) = (rect(i.rect), faded(i.color, v.a), i.radius * s);
+        dst.push_clip(rect(i.clip));
         match kind {
-            Kind::Fill => dst.fill(r, radius, c),
-            Kind::Border => dst.border(r, radius, i.p0 * t.s, c),
-            Kind::Shadow => dst.shadow(r, radius, i.p0 * t.s, c),
-            Kind::Icon => dst.icon(r, ICONS[(i.p0 as usize).min(5)], i.p1 * t.s, c),
-            Kind::Glyph => dst.glyph(r, RectF::new(i.uv[0], i.uv[1], i.uv[2], i.uv[3]), c),
-            Kind::Gradient => dst.gradient(r, radius, c, t.fade(i.color2), i.p0),
-            Kind::Glow => dst.glow(r, c),
-            Kind::Grain => dst.grain(r, c.3, i.p0),
+            Fill => dst.fill(r, radius, c),
+            Border => dst.border(r, radius, i.p0 * s, c),
+            Shadow => dst.shadow(r, radius, i.p0 * s, c),
+            Kind::Icon => dst.icon(r, ICONS[(i.p0 as usize).min(5)], i.p1 * s, c),
+            Glyph => dst.glyph(r, RectF::new(i.uv[0], i.uv[1], i.uv[2], i.uv[3]), c),
+            Gradient => dst.gradient(r, radius, c, faded(i.color2, v.a), i.p0),
+            Glow => dst.glow(r, c),
+            Grain => dst.grain(r, c.3, i.p0),
         }
         dst.pop_clip();
     }
 }
 
-/// `a` crossfaded `t` (0 to 1) of the way to `b`: every color mixed, every
-/// light moved (a light only one side has keeps its place and fades); the
-/// name and darkness are `b`'s.
+/// `a` crossfaded `t` of the way to `b`: colors mixed, lights moved (or, on
+/// one side only, faded in place); the name and darkness are `b`'s.
 pub fn blend(a: &Theme, b: &Theme, t: f32) -> Theme {
     let m = |x: Rgba, y: Rgba| mix(x, y, t);
     let glow = |g: Glow, h: Glow| {
@@ -293,19 +228,16 @@ pub struct Themes {
 }
 
 impl Themes {
-    /// In the theme named `name` (the first of [`THEMES`] if none is).
     pub fn new(name: &str) -> Themes {
         Themes { current: ui::theme(name), fade: None }
     }
 
-    /// The theme switched to last.
     pub fn current(&self) -> &'static Theme {
         self.current
     }
 
-    /// Switches to the theme named `name` (ignoring ASCII case), fading
-    /// from what shows at `now` over `ms`; whether it switched (not to an
-    /// unknown name, nor to the current theme).
+    /// Switches to another theme named `name` (any ASCII case), fading from
+    /// what shows at `now` over `ms`; whether it did.
     pub fn set(&mut self, name: &str, now: f64, ms: f32) -> bool {
         let next = ui::theme(name);
         if !next.name.eq_ignore_ascii_case(name) || next.name == self.current.name {
@@ -317,14 +249,12 @@ impl Themes {
         true
     }
 
-    /// The name of the theme after the current one in [`THEMES`], the
-    /// first after the last.
     pub fn next(&self) -> &'static str {
         let i = THEMES.iter().position(|t| t.name == self.current.name).unwrap_or(0);
         THEMES[(i + 1) % THEMES.len()].name
     }
 
-    /// What shows at `now`: the current theme, or a crossfade into it.
+    /// What shows at `now`.
     pub fn at(&self, now: f64) -> Theme {
         match &self.fade {
             Some((from, t)) if t.is_running(now) => blend(from, self.current, t.value(now)),
@@ -332,14 +262,12 @@ impl Themes {
         }
     }
 
-    /// Starts a pending crossfade at `now`.
     pub fn arm(&mut self, now: f64) {
         if let Some(f) = &mut self.fade {
             f.1.arm(now);
         }
     }
 
-    /// Whether a crossfade runs at `now`.
     pub fn is_running(&self, now: f64) -> bool {
         self.fade.as_ref().is_some_and(|f| f.1.is_running(now))
     }

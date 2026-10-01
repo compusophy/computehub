@@ -1,12 +1,10 @@
-//! The launcher's search: ranking labels against a query, and what a query
-//! keeps, with a selection that moves through a grid of apps, then down a
-//! list of files.
+//! The launcher's search: what a query keeps, best first, and a selection
+//! that moves through a grid of apps, then down a list of files.
 
 use ui::{AppIcon, Key};
 
-/// Where `query` first matches `label` as a subsequence, ignoring the case
-/// of ASCII and Latin-1 letters ([`lower`]): the char index of its first
-/// char, 0 for an empty query, `None` for no match.
+/// Where `query` first matches `label` as a subsequence (ASCII and Latin-1
+/// case ignored): the char index of its first char, 0 for an empty query.
 pub fn rank(query: &str, label: &str) -> Option<usize> {
     let mut hay = label.chars().enumerate();
     let mut first = None;
@@ -17,9 +15,8 @@ pub fn rank(query: &str, label: &str) -> Option<usize> {
     Some(first.unwrap_or(0))
 }
 
-/// `c` in lower case if it is an ASCII or Latin-1 capital (`É` is `é`),
-/// else `c`. Not `char::to_lowercase`: core's Unicode case tables cost the
-/// boot download kilobytes.
+/// `c` in lower case if an ASCII or Latin-1 capital. Not `to_lowercase`:
+/// core's Unicode tables cost the boot kilobytes.
 pub fn lower(c: char) -> char {
     match c {
         'A'..='Z' | 'À'..='Ö' | 'Ø'..='Þ' => char::from(c as u8 + 32),
@@ -27,8 +24,7 @@ pub fn lower(c: char) -> char {
     }
 }
 
-/// `c` in upper case if it is an ASCII or Latin-1 small letter with a
-/// Latin-1 capital (`é` is `É`; `ß` and `ÿ` stay), else `c`. See [`lower`].
+/// `c` in upper case if a small letter with a Latin-1 capital (not `ß`, `ÿ`).
 pub fn upper(c: char) -> char {
     match c {
         'a'..='z' | 'à'..='ö' | 'ø'..='þ' => char::from(c as u8 - 32),
@@ -36,34 +32,18 @@ pub fn upper(c: char) -> char {
     }
 }
 
-/// The indices of `labels` that `query` matches ([`rank`]), best first, ties
-/// in order.
-pub fn filter<'a>(query: &str, labels: impl IntoIterator<Item = &'a str>) -> Vec<usize> {
-    let mut ranked: Vec<(usize, usize)> = Vec::new();
-    for (i, label) in labels.into_iter().enumerate() {
-        if let Some(r) = rank(query, label) {
-            let at = ranked.iter().take_while(|e| e.0 <= r).count();
-            ranked.insert(at, (r, i));
-        }
-    }
-    ranked.into_iter().map(|e| e.1).collect()
-}
-
-/// Something the launcher opens.
+/// Something the launcher opens: a registry name or a `.app` path, what it
+/// is called (and searched by), and where a file lives (`None` for an app).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Entry {
-    /// A registry name or a `.app` path.
     pub name: String,
-    /// What it is called, and searched by.
     pub label: String,
     pub icon: AppIcon,
-    /// Where a file lives, shown beside it; `None` for an app (a tile).
     pub place: Option<String>,
 }
 
-/// A query and its results: the apps that match as `tiles`, the files as
-/// `rows`, both best first. The selection `sel` runs over the tiles, then
-/// the rows; `first` is the first row on screen and `fit` how many fit.
+/// A query and its results (indices into `items`, best first), the selection
+/// over the tiles then the rows, and the first row on screen of `fit`.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Search {
     pub query: String,
@@ -76,37 +56,36 @@ pub struct Search {
 }
 
 impl Search {
-    /// A search over `items` with an empty query.
     pub fn new(items: Vec<Entry>) -> Search {
         let mut s = Search { items, fit: 1, ..Search::default() };
         s.refilter();
         s
     }
 
-    /// How many results there are.
     pub fn count(&self) -> usize {
         self.tiles.len() + self.rows.len()
     }
 
-    /// Result `k`, counting the tiles, then the rows.
+    /// Result `k`: the tiles, then the rows.
     pub fn get(&self, k: usize) -> Option<&Entry> {
         let i = self.tiles.get(k).or_else(|| self.rows.get(k.checked_sub(self.tiles.len())?))?;
         self.items.get(*i)
     }
 
-    /// Matches the query again, selecting the best, scrolled to the top.
+    /// Matches the query again (ties keep their order), selecting the best.
     fn refilter(&mut self) {
-        let (items, q) = (&self.items, self.query.as_str());
-        let of = |file: bool| {
-            let mine: Vec<usize> =
-                (0..items.len()).filter(|&i| items[i].place.is_some() == file).collect();
-            let found = filter(q, mine.iter().map(|&i| items[i].label.as_str()));
-            found.into_iter().map(|k| mine[k]).collect::<Vec<usize>>()
-        };
+        let mut ranked: Vec<(bool, usize, usize)> = Vec::new();
+        for (i, e) in self.items.iter().enumerate() {
+            if let Some(r) = rank(&self.query, &e.label) {
+                let key = (e.place.is_some(), r);
+                let at = ranked.iter().take_while(|e| (e.0, e.1) <= key).count();
+                ranked.insert(at, (key.0, r, i));
+            }
+        }
+        let of = |file: bool| ranked.iter().filter(|e| e.0 == file).map(|e| e.2).collect();
         (self.tiles, self.rows, self.sel, self.first) = (of(false), of(true), 0, 0);
     }
 
-    /// Typed text joins the query (control characters do not).
     pub fn type_text(&mut self, s: &str) {
         let len = self.query.len();
         self.query.extend(s.chars().filter(|c| !c.is_control()));
@@ -115,10 +94,8 @@ impl Search {
         }
     }
 
-    /// Backspace edits the query; the arrows move the selection through a
-    /// grid of `cols` tiles (Down from its last line, and Right from its
-    /// last tile, go on to the list), then along the list, keeping the
-    /// selected row on screen. Returns whether the key is one of these.
+    /// Backspace edits the query; the arrows move through a grid of `cols`
+    /// tiles, then the list. Whether the key is one of these.
     pub fn key(&mut self, key: Key, cols: usize) -> bool {
         let (n, tiles, s, cols) = (self.count(), self.tiles.len(), self.sel, cols.max(1));
         self.sel = match key {
@@ -145,7 +122,6 @@ impl Search {
         true
     }
 
-    /// The wheel scrolls the list by `dy` px, rows `row_h` px tall.
     pub fn scroll(&mut self, dy: f32, row_h: f32) {
         let rows = (dy / row_h).round();
         let rows = if rows.is_finite() { rows.clamp(-64.0, 64.0) as isize } else { 0 };

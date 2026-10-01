@@ -1,10 +1,8 @@
-//! The text buffer behind Studio's editor: lines and one caret, with the
-//! edits and moves the keyboard maps to. Pure data; Studio draws it.
+//! The text buffer behind Studio's editor: lines and one caret. Pure data.
 
-/// A multi-line text buffer with one caret. Columns count chars, not bytes,
-/// so they match a monospace grid. Text coming in keeps `\n` as line
-/// breaks, turns a tab into two spaces and drops other control chars (`\r`
-/// too). There is always at least one line.
+/// A multi-line buffer with one caret. Columns count chars, so they match a
+/// monospace grid. Inserted text keeps `\n`, turns a tab into two spaces and
+/// drops other control chars (`\r` too). There is always at least one line.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Editor {
     lines: Vec<String>,
@@ -25,23 +23,8 @@ fn byte(s: &str, col: usize) -> usize {
     s.char_indices().nth(col).map_or(s.len(), |(i, _)| i)
 }
 
-/// The length of `s` in chars.
 fn chars(s: &str) -> usize {
     s.chars().count()
-}
-
-/// `text` as the buffer keeps it.
-fn clean(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    for c in text.chars() {
-        match c {
-            '\t' => out.push_str("  "),
-            '\n' => out.push('\n'),
-            c if c.is_control() => {}
-            c => out.push(c),
-        }
-    }
-    out
 }
 
 impl Editor {
@@ -55,17 +38,9 @@ impl Editor {
 
     /// The whole text, lines joined with `\n`.
     pub fn text(&self) -> String {
-        let mut out = String::new();
-        for (i, line) in self.lines.iter().enumerate() {
-            if i > 0 {
-                out.push('\n');
-            }
-            out.push_str(line);
-        }
-        out
+        self.lines.join("\n")
     }
 
-    /// How many lines there are (at least one).
     pub fn line_count(&self) -> usize {
         self.lines.len()
     }
@@ -95,19 +70,24 @@ impl Editor {
 
     /// Inserts `text` at the caret and puts the caret after it.
     pub fn insert(&mut self, text: &str) {
-        let text = clean(text);
+        let mut clean = String::with_capacity(text.len());
+        for c in text.chars() {
+            match c {
+                '\t' => clean.push_str("  "),
+                c if c == '\n' || !c.is_control() => clean.push(c),
+                _ => {}
+            }
+        }
         let cur = &mut self.lines[self.line];
         let tail = cur.split_off(byte(cur, self.col));
-        let mut parts = text.split('\n');
+        let mut parts = clean.split('\n');
         cur.push_str(parts.next().unwrap_or_default());
-        if text.contains('\n') {
+        if clean.contains('\n') {
             // The new lines go between this one and the ones after it.
-            let mut after = self.lines.split_off(self.line + 1);
-            for part in parts {
-                self.lines.push(part.to_string());
-            }
+            let after = self.lines.split_off(self.line + 1);
+            self.lines.extend(parts.map(String::from));
             self.line = self.lines.len() - 1;
-            self.lines.append(&mut after);
+            self.lines.extend(after);
         }
         let last = &mut self.lines[self.line];
         self.col = chars(last);
@@ -115,20 +95,14 @@ impl Editor {
         self.goal = self.col;
     }
 
-    /// Enter: breaks the line at the caret and starts the new one with the
-    /// current line's indentation (its leading spaces up to the caret).
+    /// Enter: breaks the line, the new one indented like the current line
+    /// (its leading spaces up to the caret).
     pub fn newline(&mut self) {
-        let cur = &self.lines[self.line];
-        let indent = cur.chars().take_while(|&c| c == ' ').count().min(self.col);
-        let mut text = String::from("\n");
-        for _ in 0..indent {
-            text.push(' ');
-        }
-        self.insert(&text);
+        let indent = self.lines[self.line].chars().take_while(|&c| c == ' ').count();
+        self.insert(&["\n", &" ".repeat(indent.min(self.col))].concat());
     }
 
-    /// Deletes the char before the caret; at a line's start, joins the line
-    /// to the one above.
+    /// Deletes the char before the caret, or joins the line to the one above.
     pub fn backspace(&mut self) {
         if self.col > 0 {
             let cur = &mut self.lines[self.line];
@@ -144,8 +118,7 @@ impl Editor {
         self.goal = self.col;
     }
 
-    /// Deletes the char after the caret; at a line's end, joins the next
-    /// line to it.
+    /// Deletes the char after the caret, or joins the next line to this one.
     pub fn delete(&mut self) {
         let cur = &mut self.lines[self.line];
         if self.col < chars(cur) {
@@ -157,7 +130,7 @@ impl Editor {
         self.goal = self.col;
     }
 
-    /// One char left, onto the end of the line above at a line's start.
+    /// One char left, wrapping to the end of the line above.
     pub fn left(&mut self) {
         if self.col > 0 {
             self.col -= 1;
@@ -168,7 +141,7 @@ impl Editor {
         self.goal = self.col;
     }
 
-    /// One char right, onto the start of the next line at a line's end.
+    /// One char right, wrapping to the start of the next line.
     pub fn right(&mut self) {
         if self.col < chars(&self.lines[self.line]) {
             self.col += 1;
@@ -191,24 +164,21 @@ impl Editor {
     pub fn down(&mut self) {
         match self.line + 1 < self.lines.len() {
             true => self.move_to_line(self.line + 1),
-            false => self.set_caret(self.line, usize::MAX),
+            false => self.end(),
         }
     }
 
-    /// To the start of the line.
     pub fn home(&mut self) {
         self.set_caret(self.line, 0);
     }
 
-    /// To the end of the line.
     pub fn end(&mut self) {
         self.set_caret(self.line, usize::MAX);
     }
 
     /// Puts the caret at the char boundary nearest `(x, y)`, measured from
-    /// the top left of the first line's first cell on a grid of
-    /// `cell_w` x `row_h` cells. Points above or left of the text land on
-    /// its first line or column, points below it on its last line.
+    /// the first cell's top left on a `cell_w` x `row_h` grid; points
+    /// outside the text land on its nearest line and column.
     pub fn click(&mut self, x: f32, y: f32, cell_w: f32, row_h: f32) {
         // `as` saturates, and NaN (0 / 0, a NaN point) becomes 0.
         let (row, col) = ((y / row_h).max(0.0), (x / cell_w).round().max(0.0));

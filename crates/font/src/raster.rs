@@ -1,21 +1,14 @@
-//! The accumulation-buffer rasterizer: lines add signed area and coverage to
-//! the cells they cross, and a running sum along each row gives coverage.
+use crate::{Bitmap, FontError, Point};
 
-use crate::{Bitmap, FontError, Outline, Point};
-
-/// Curves are flattened until every line is this close to the curve, in px.
+/// How close (in px) flattened lines stay to a curve.
 const TOLERANCE: f32 = 0.2;
-/// Largest bitmap side, in px.
 const MAX_SIDE: f32 = 8192.0;
-/// Largest bitmap area, in px.
 const MAX_AREA: f32 = 16_777_216.0;
 
+/// `acc` rows are `w + 2` cells wide: right-edge spill lands outside the sum.
 struct Raster {
     w: usize,
     h: usize,
-    /// Row pitch of `acc`: two cells wider than the bitmap, so a line on the
-    /// right edge spills into cells that the row sum ignores.
-    stride: usize,
     acc: Vec<f32>,
 }
 
@@ -41,25 +34,21 @@ impl Raster {
         let mut x = p0.x;
         let y_end = (p1.y.ceil() as usize).min(self.h);
         for y in p0.y as usize..y_end {
-            let row = y * self.stride;
+            let row = y * (self.w + 2);
             let dy = ((y + 1) as f32).min(p1.y) - (y as f32).max(p0.y);
             let xnext = (x + dxdy * dy).max(0.0).min(wf);
             let d = dy * dir;
             let (x0, x1) = if x < xnext { (x, xnext) } else { (xnext, x) };
-            let x0floor = x0.floor();
-            let x0i = x0floor as usize;
-            let x1ceil = x1.ceil();
-            let x1i = x1ceil as usize;
+            let (x0floor, x1ceil) = (x0.floor(), x1.ceil());
+            let (x0i, x1i) = (x0floor as usize, x1ceil as usize);
             if x1i <= x0i + 1 {
                 // The line stays in one cell: split its area by the mean x.
                 let xm = 0.5 * (x + xnext) - x0floor;
                 self.add(row + x0i, d - d * xm);
                 self.add(row + x0i + 1, d * xm);
             } else {
-                let s = (x1 - x0).recip();
-                let x0f = x0 - x0floor;
+                let (s, x0f, x1f) = ((x1 - x0).recip(), x0 - x0floor, x1 - x1ceil + 1.0);
                 let a0 = 0.5 * s * (1.0 - x0f) * (1.0 - x0f);
-                let x1f = x1 - x1ceil + 1.0;
                 let am = 0.5 * s * x1f * x1f;
                 self.add(row + x0i, d * a0);
                 if x1i == x0i + 2 {
@@ -79,16 +68,14 @@ impl Raster {
         }
     }
 
-    /// Flattens a quadratic curve into lines within [`TOLERANCE`]: `n` equal
-    /// steps leave at most `|a - 2c + b| / (4 n^2)` between chord and curve.
+    /// Flattens a curve: `n` steps stray at most `|a - 2c + b| / (4 n^2)`.
     fn quad(&mut self, a: Point, c: Point, b: Point) {
         let (ddx, ddy) = (a.x - 2.0 * c.x + b.x, a.y - 2.0 * c.y + b.y);
         let dd = (ddx * ddx + ddy * ddy).sqrt();
         let n = ((dd / (4.0 * TOLERANCE)).sqrt().ceil() as usize).clamp(1, 256);
         let mut prev = a;
         for i in 1..=n {
-            let t = i as f32 / n as f32;
-            let u = 1.0 - t;
+            let (t, u) = (i as f32 / n as f32, 1.0 - i as f32 / n as f32);
             let p = Point {
                 x: u * u * a.x + 2.0 * u * t * c.x + t * t * b.x,
                 y: u * u * a.y + 2.0 * u * t * c.y + t * t * b.y,
@@ -99,8 +86,7 @@ impl Raster {
         }
     }
 
-    /// Walks one closed TrueType contour: two off-curve points in a row imply
-    /// an on-curve point halfway between them.
+    /// Walks one closed contour (two off-curve points imply one on it halfway).
     fn contour(&mut self, pts: &[Point]) {
         let (Some(&first), Some(&last)) = (pts.first(), pts.last()) else {
             return;
@@ -133,17 +119,12 @@ impl Raster {
     }
 }
 
-/// Scales an outline by `scale` px per font unit and fills `out`, which the
-/// caller has already emptied.
-pub(crate) fn render(outline: &Outline, scale: f32, out: &mut Bitmap) -> Result<(), FontError> {
-    let (mut x0, mut y0) = (f32::INFINITY, f32::INFINITY);
-    let (mut x1, mut y1) = (f32::NEG_INFINITY, f32::NEG_INFINITY);
-    for p in outline.contours.iter().flatten() {
-        x0 = x0.min(p.x);
-        x1 = x1.max(p.x);
-        y0 = y0.min(p.y);
-        y1 = y1.max(p.y);
-    }
+/// Scales an outline by `scale` px per font unit into the emptied `out`.
+pub(crate) fn render(o: &[Vec<Point>], scale: f32, out: &mut Bitmap) -> Result<(), FontError> {
+    let inf = f32::INFINITY;
+    let (x0, y0, x1, y1) = o.iter().flatten().fold((inf, inf, -inf, -inf), |b, p| {
+        (b.0.min(p.x), b.1.min(p.y), b.2.max(p.x), b.3.max(p.y))
+    });
     if x0 > x1 {
         return Ok(());
     }
@@ -157,9 +138,9 @@ pub(crate) fn render(outline: &Outline, scale: f32, out: &mut Bitmap) -> Result<
         return Ok(());
     }
     let (wu, hu) = (w as usize, h as usize);
-    let mut r = Raster { w: wu, h: hu, stride: wu + 2, acc: vec![0.0; (wu + 2) * hu] };
+    let mut r = Raster { w: wu, h: hu, acc: vec![0.0; (wu + 2) * hu] };
     let mut pts = Vec::new();
-    for c in &outline.contours {
+    for c in o {
         pts.clear();
         pts.extend(c.iter().map(|p| Point {
             x: (p.x * scale - left).max(0.0).min(w),
@@ -169,7 +150,7 @@ pub(crate) fn render(outline: &Outline, scale: f32, out: &mut Bitmap) -> Result<
         r.contour(&pts);
     }
     out.data.reserve(wu * hu);
-    for row in r.acc.chunks_exact(r.stride) {
+    for row in r.acc.chunks_exact(wu + 2) {
         let mut sum = 0.0f32;
         for &cell in &row[..wu] {
             sum += cell;

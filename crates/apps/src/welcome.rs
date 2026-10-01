@@ -8,33 +8,28 @@ use crate::kit::{self, Scroll};
 const TITLE: &str = "compusophy";
 const SUBTITLE: &str = "a computer in your browser — nothing installed, nothing leaves this tab.";
 const HINT: &str = "Alt+Space opens the launcher · drag windows to the edges to snap";
-/// The cards, widgets 1 to 3: the name [`Cx::open`] takes, the title, what
-/// it is, the icon.
+/// The cards, widgets 1 to 3: the app to open, its title, a line, its icon.
 const CARDS: [(&str, &str, &str, AppIcon); 3] = [
     ("terminal", "Terminal", "a shell and your files", kit::TERMINAL),
     ("studio", "Studio", "build apps in applang", kit::STUDIO),
     ("settings", "Settings", "themes and more", kit::SETTINGS),
 ];
-/// The widest the content gets, and the narrowest card that sits three
-/// across; narrower, the cards stack.
+/// The widest content, and the narrowest card three across (else stacked).
 const MAX_W: f32 = 680.0;
 const CARD_MIN: f32 = 168.0;
-/// Between cards, and the side of a card's icon.
+/// Between cards; a card's icon side.
 const GAP: f32 = 12.0;
 const ICON: f32 = 36.0;
-/// Between a card's icon and its text, and between its name and the line
-/// under it.
+/// Between a card's icon and its text, and its name and line.
 const ICON_GAP: f32 = 14.0;
 const NAME_GAP: f32 = 2.0;
 /// Room kept for the arrow a card shows under the pointer, when stacked.
 const ARROW_ROOM: f32 = 20.0;
 const ARROW: &str = "→";
 
-/// The first screen: a title, one line on what this is, three cards that
-/// open Terminal, Studio and Settings (three across, or stacked when the
-/// window is narrow), and a hint about the launcher and snapping. The
-/// whole sits centered, a little above the middle; a window too short for
-/// it scrolls with the wheel.
+/// The first screen: a title, a line, three cards that open Terminal, Studio
+/// and Settings (stacked when narrow) and a hint, centered a little above the
+/// middle; a window too short scrolls with the wheel.
 #[derive(Debug, Default)]
 pub struct Welcome {
     scroll: Scroll,
@@ -58,10 +53,7 @@ impl App for Welcome {
             (ts.wrap(TITLE, title, w), ts.wrap(SUBTITLE, sub, w), ts.wrap(HINT, small, w));
         // Cards: as tall as the one with the most lines.
         let cw = if three { ((w - 2.0 * GAP) / 3.0).floor() } else { w };
-        let text_w = match three {
-            true => cw - 2.0 * CARD_PAD,
-            false => cw - 2.0 * CARD_PAD - ICON - ICON_GAP - ARROW_ROOM,
-        };
+        let text_w = cw - 2.0 * CARD_PAD - if three { 0.0 } else { ICON + ICON_GAP + ARROW_ROOM };
         let descs: Vec<Vec<&str>> = CARDS.iter().map(|c| ts.wrap(c.2, small, text_w)).collect();
         let most = descs.iter().map(Vec::len).max().unwrap_or(1) as f32;
         let (name_h, small_h) = (ts.line_height(name), ts.line_height(small));
@@ -115,8 +107,7 @@ impl App for Welcome {
 type Card<'c> = (&'c (&'c str, &'c str, &'c str, AppIcon), &'c [&'c str]);
 
 impl Welcome {
-    /// One card in `rect`: its icon above its name and description (`tall`)
-    /// or beside them, and an arrow under the pointer.
+    /// One card: its icon above (`tall`) or beside its text; an arrow on hover.
     fn card(&self, ui: &mut Ui<'_>, id: WidgetId, rect: RectF, card: Card<'_>, tall: bool) {
         let ((_, name, _, icon), desc) = card;
         let t = ui.theme();

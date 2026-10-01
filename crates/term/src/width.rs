@@ -1,16 +1,15 @@
 //! Character widths and the DEC special graphics set.
 
-/// Zero-width ranges, as sorted inclusive `lo, hi` pairs: combining marks,
-/// zero-width spaces and joiners, bidi marks, variation selectors, the BOM,
-/// emoji skin-tone modifiers (so a toned emoji stays two cells) and tags.
+/// Zero-width ranges as sorted inclusive `lo, hi` pairs: combining marks,
+/// ZWSP and joiners, bidi marks, variation selectors, BOM, skin tones, tags.
 const ZERO: &[u32] = &[
     0x0300, 0x036F, 0x1AB0, 0x1AFF, 0x1DC0, 0x1DFF, 0x200B, 0x200F, 0x2060, 0x2064, 0x20D0, 0x20FF,
     0xFE00, 0xFE0F, 0xFE20, 0xFE2F, 0xFEFF, 0xFEFF, 0x1F3FB, 0x1F3FF, 0xE0000, 0xE007F, 0xE0100,
     0xE01EF,
 ];
 
-/// Double-width ranges, as sorted inclusive `lo, hi` pairs: East Asian Wide
-/// and Fullwidth, and the emoji that are wide by default.
+/// Double-width ranges, the same way: East Asian Wide and Fullwidth, and the
+/// emoji that are wide by default.
 const WIDE: &[u32] = &[
     0x1100, 0x115F, 0x231A, 0x231B, 0x2329, 0x232A, 0x23E9, 0x23EC, 0x23F0, 0x23F0, 0x23F3, 0x23F3,
     0x25FD, 0x25FE, 0x2614, 0x2615, 0x2648, 0x2653, 0x267F, 0x267F, 0x2693, 0x2693, 0x26A1, 0x26A1,
@@ -25,20 +24,14 @@ const WIDE: &[u32] = &[
     0x1F7EB, 0x1F900, 0x1F9FF, 0x1FA70, 0x1FAFF, 0x20000, 0x2FFFD, 0x30000, 0x3FFFD,
 ];
 
-/// Whether `u` falls in one of the sorted inclusive pairs of `table`.
+/// Whether `u` is in a pair of `table`: past an odd number of bounds, or on one.
 fn in_table(table: &[u32], u: u32) -> bool {
-    // Past an odd number of bounds means inside a pair; landing on a bound
-    // counts too.
     let i = table.partition_point(|&b| b < u);
     i % 2 == 1 || table.get(i) == Some(&u)
 }
 
-/// The number of cells `c` takes on screen: 2 for East Asian wide and
-/// fullwidth characters and wide emoji, 0 for controls, combining marks,
-/// zero-width spaces and joiners, variation selectors and skin-tone
-/// modifiers, else 1. Terminal and program must agree on these, or text
-/// lays out misaligned; they follow what Ink's `string-width` counts for
-/// single code points.
+/// The cells `c` takes: 2 for wide characters and emoji, 0 for controls and
+/// the zero-width ranges, else 1, as Ink's `string-width` counts code points.
 pub fn char_width(c: char) -> u8 {
     let u = u32::from(c);
     if u < 0x7F {
@@ -62,8 +55,7 @@ const DEC: [char; 32] = [
     '⎼', '⎽', '├', '┤', '┴', '┬', '│', '≤', '≥', 'π', '≠', '£', '·',
 ];
 
-/// `c` in the DEC special graphics set (`ESC ( 0`): line drawing and a few
-/// symbols in place of `_` through `~`.
+/// `c` in the DEC special graphics set (`ESC ( 0`).
 pub(crate) fn dec_graphics(c: char) -> char {
     match u32::from(c) {
         u @ 0x5F..=0x7E => DEC[(u - 0x5F) as usize],

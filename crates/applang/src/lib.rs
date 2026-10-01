@@ -1,115 +1,57 @@
-//! # applang — a total UI-app language on the compusophyOS kit
+//! # applang: a total UI-app language
 //!
-//! The language a code-generating model writes SAFELY: an app is state
-//! declarations plus a widget tree with fuel-bounded event handlers, and the
-//! guarantees are mechanical — no generated program can hang the page, blow
-//! the stack, exhaust memory, corrupt its state, or touch anything outside
-//! its own widgets. Consumer: compusophyOS tier 0 apps (generate → verify →
-//! run, in a browser), and [`REFERENCE`] is the exact language card a
-//! generator is prompted with — one artifact, so prompt and verifier cannot
-//! drift.
+//! An app is state declarations plus a widget tree with event handlers, and
+//! its guarantees are mechanical: [`compile`] type-checks everything nameable
+//! and is the only way to a [`Program`]; every render and event runs on a
+//! fresh fuel tank, so it halts; a faulting handler rolls back atomically;
+//! strings, state and render text are bounded by [`Limits`]; the parser
+//! bounds nesting, so eval stays within a bounded stack. No host calls: the
+//! widgets are the app's whole world. [`REFERENCE`] is the language card a
+//! generator is prompted with, so prompt and verifier cannot drift. Codes
+//! are banded per stage (see [`codes`]); assert on codes, not messages.
 //!
 //! Forked from litelite's applite 0.2.0 (commit 4f5e056), with its front end
-//! (lexer, parser, checker, [`codes`]) split out into [`applang_syntax`] and
-//! re-exported here.
-//!
-//! ## The language
-//!
-//! ```text
-//! state count = 0;                      // literals fix each state's type
-//! state name  = "world";               //   (int, bool, or string)
-//!
-//! label "The counter demo";            // widgets render top to bottom
-//! row {                                 // row/col group horizontally/vertically
-//!   button "-" { count = count - 1; }  // a handler: runs on click
-//!   label count;
-//!   button "+" { count = count + 1; }
-//! }
-//! input name;                           // two-way binding to a string state
-//! if name != "" {                       // conditional UI, re-checked per render
-//!   label "Hello, " + name + "!";     // `+` with a string concatenates
-//! } else { label "Type your name."; }
-//! ```
-//!
-//! Handlers use `let`, assignment, `if`/`else if`/`else`, and `repeat n { }`
-//! — the only loop, its count evaluated once. Arithmetic is CHECKED;
-//! comparisons are int-only except `==`/`!=` (same-type). No functions, no
-//! recursion, no `while`, no host calls: the widget tree is the app's whole
-//! world.
-//!
-//! ## The guarantees (what smallness buys)
-//!
-//! - **Static resolution.** [`compile`] type-checks everything nameable and
-//!   is the only way to get a [`Program`]; the only runtime faults left are
-//!   arithmetic, fuel, and string bounds.
-//! - **Every event AND render halts** — each runs on a fresh fuel tank.
-//! - **Faults are ATOMIC.** A handler runs against a copy of the state; only
-//!   a clean finish commits (the bar-atomicity rule of litelite's stratlite,
-//!   applied to UI events).
-//! - **Bounded memory.** Strings are capped per value ([`Limits::max_str_bytes`],
-//!   a too-long concat is a fault, never a silent clip) and per app
-//!   ([`Limits::max_state_bytes`]) — `s = s + s` in a loop is a diag, not an
-//!   OOM — and so is a render's text ([`Limits::max_render_bytes`]). Host
-//!   input text is clipped at a char boundary, never mid-char.
-//! - **Bounded nesting.** The parser depth-guards widget nesting AND binary
-//!   spines (litelite's prooflite lesson): whatever parses, eval and drop
-//!   glue walk within a bounded stack.
-//!
-//! Codes are banded per stage — lex `E00xx`, parse `E01xx`, runtime `E02xx`,
-//! static check `E03xx` (see [`codes`]) — assert on codes, not messages.
+//! split out into [`applang_syntax`] and re-exported here.
 //!
 //! ```
 //! use applang::{App, Event, Limits, Node, compile};
 //!
-//! let program = compile(
-//!     "state count = 0;
-//!      button \"+\" { count = count + 1; }
-//!      label \"count = \" + count;",
-//! )
-//! .unwrap();
-//! let mut app = App::new(program, Limits::default());
+//! let src = "state n = 0; button \"+\" { n = n + 1; } label \"n = \" + n;";
+//! let mut app = App::new(compile(src).unwrap(), Limits::default());
 //! app.handle(&Event::Click { id: 0 }).unwrap();
-//! app.handle(&Event::Click { id: 0 }).unwrap();
-//! let nodes = app.render().unwrap();
-//! assert_eq!(nodes[1], Node::Label { text: "count = 2".to_string() });
+//! assert_eq!(app.render().unwrap()[1], Node::Label { text: "n = 1".to_string() });
 //!
-//! // The headline guarantee: NO handler can hang the page.
-//! let program = compile("state x = 0; button \"spin\" { repeat 100000000 { x = x + 1; } }")
-//!     .unwrap();
-//! let mut app = App::new(program, Limits::default());
+//! // No handler can hang the page, and a fault leaves the state untouched.
+//! let src = "state x = 0; button \"spin\" { repeat 100000000 { x = x + 1; } }";
+//! let mut app = App::new(compile(src).unwrap(), Limits::default());
 //! let err = app.handle(&Event::Click { id: 0 }).unwrap_err();
 //! assert_eq!(err.code, Some(applang::codes::FUEL_EXHAUSTED));
-//! assert_eq!(app.render().unwrap().len(), 1); // and the state is untouched
 //! ```
 
 #![forbid(unsafe_code)]
 
 mod eval;
 
-pub use applang_syntax::{Program, TokKind, Token, Type, codes, compile, lex};
+pub use applang_syntax::{Program, codes, compile};
 pub use eval::Value;
 pub use lang::{Diag, Span};
 
-/// Hard resource limits for one [`App`]. All four are guarantees, not
-/// hints; each render and each event handler gets a FRESH fuel tank.
+/// Hard resource limits for one [`App`]: guarantees, not hints.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Limits {
-    /// Evaluation steps per render / per event (1 per statement, expression
-    /// node, widget, and `repeat` iteration).
+    /// Steps per render or event: one per statement, expression node,
+    /// widget and `repeat` iteration.
     pub fuel: u64,
-    /// Byte cap on any single string VALUE (a longer concat is a fault).
+    /// Bytes in any one string value; a longer concat faults.
     pub max_str_bytes: usize,
-    /// Byte cap on all string STATE combined, checked at event commit.
+    /// Bytes of all string state together, checked when an event commits.
     pub max_state_bytes: usize,
-    /// Byte cap on one render's text (labels, button texts, inputs' names
-    /// and values), counted as it is built: past it the render faults, so
-    /// many labels of one big state cannot allocate without bound.
+    /// Bytes of one render's text (labels, buttons, inputs' names and values).
     pub max_render_bytes: usize,
 }
 
 impl Default for Limits {
-    /// 100_000 fuel, 4 KiB strings, 64 KiB total string state, 256 KiB of
-    /// text per render.
+    /// 100,000 fuel, 4 KiB strings, 64 KiB of string state, 256 KiB per render.
     fn default() -> Self {
         Limits {
             fuel: 100_000,
@@ -120,8 +62,8 @@ impl Default for Limits {
     }
 }
 
-/// One rendered widget — what a shell draws. `Button::id` is what a click
-/// reports; `Input::state` is what a text change names.
+/// One rendered widget. `Button::id` is what a click reports;
+/// `Input::state` is what a text change names.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Node {
     Label { text: String },
@@ -131,17 +73,15 @@ pub enum Node {
     Col { children: Vec<Node> },
 }
 
-/// One host event. `Click` on a button that exists but is currently hidden
-/// still runs its handler (total either way; visibility races are the
-/// shell's concern, safety is not). `Input` text is clipped to the string
-/// bound at a char boundary before it touches state.
+/// One host event. A click on a hidden button still runs its handler; input
+/// text is clipped to `max_str_bytes` at a char boundary.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Event {
     Click { id: u32 },
     Input { state: String, text: String },
 }
 
-/// A live app: a compiled program plus its current state.
+/// A live app: a compiled program and its current state.
 #[derive(Debug)]
 pub struct App {
     program: Program,
@@ -150,43 +90,30 @@ pub struct App {
 }
 
 impl App {
-    /// Start `program` at its declared initial state. [`compile`] is the only
-    /// way to get a [`Program`], so it has passed the checker:
-    ///
-    /// ```compile_fail,E0425
-    /// use applang::{App, Limits};
-    /// // An unchecked tree would reach the runtime's checked invariants.
-    /// let _ = App::new(applang::parse("label x;").unwrap(), Limits::default());
-    /// ```
+    /// Starts `program` at its declared initial state.
     pub fn new(program: Program, limits: Limits) -> App {
         let state = eval::init_state(&program);
         App { program, state, limits }
     }
 
-    /// Render the current state through the widget tree. Pure and fueled: a
-    /// render neither mutates state nor runs forever.
+    /// Renders the current state: pure and fueled.
     pub fn render(&self) -> Result<Vec<Node>, Diag> {
         eval::render(&self.program, &self.state, &self.limits)
     }
 
-    /// Handle one event ATOMICALLY: on `Ok` the state advanced, on `Err` it
-    /// is exactly as it was (render again either way — nothing is stale).
+    /// Handles one event atomically: on `Err` the state is exactly as it was.
     pub fn handle(&mut self, event: &Event) -> Result<(), Diag> {
         self.state = eval::handle(&self.program, &self.state, event, &self.limits)?;
         Ok(())
     }
 
-    /// The current state, declaration-ordered — for shells that persist or
-    /// inspect it.
+    /// The current state, in declaration order.
     pub fn state(&self) -> impl Iterator<Item = (&str, &Value)> {
         self.state.iter().map(|(n, v)| (n.as_str(), v))
     }
 }
 
-/// The compact, prompt-embeddable language card — hand a generator THIS.
-/// It is the crate's single description of the surface; a shell serves it
-/// verbatim (e.g. behind a "copy prompt" button), so prompt and verifier are
-/// one artifact (the REFERENCE rule of litelite's stratlite).
+/// The compact, prompt-embeddable language card: hand a generator this.
 pub const REFERENCE: &str = "\
 applang: a tiny TOTAL language for small interactive apps. One program = state
 declarations, then a widget tree. Every event handler halts; faults roll back.
@@ -217,6 +144,10 @@ mod tests {
         App::new(compile(src).unwrap(), Limits::default())
     }
 
+    fn click(a: &mut App, id: u32) -> Option<u16> {
+        a.handle(&Event::Click { id }).err().and_then(|e| e.code)
+    }
+
     fn inp(state: &str, text: &str) -> Event {
         Event::Input { state: state.to_string(), text: text.to_string() }
     }
@@ -226,18 +157,12 @@ mod tests {
     }
 
     fn texts(nodes: &[Node]) -> Vec<String> {
-        let mut out = Vec::new();
-        fn walk(ns: &[Node], out: &mut Vec<String>) {
-            for n in ns {
-                match n {
-                    Node::Label { text } => out.push(text.clone()),
-                    Node::Row { children } | Node::Col { children } => walk(children, out),
-                    _ => {}
-                }
-            }
-        }
-        walk(nodes, &mut out);
-        out
+        let each = |n: &Node| match n {
+            Node::Label { text } => vec![text.clone()],
+            Node::Row { children } | Node::Col { children } => texts(children),
+            _ => Vec::new(),
+        };
+        nodes.iter().flat_map(each).collect()
     }
 
     #[test]
@@ -250,12 +175,26 @@ mod tests {
              }
              if count >= 3 { label \"high\"; } else { label \"low\"; }");
         assert_eq!(texts(&a.render().unwrap()), ["0", "low"]);
-        for _ in 0..3 {
-            a.handle(&Event::Click { id: 1 }).unwrap();
+        for id in [1, 1, 1, 0, 1] {
+            assert_eq!(click(&mut a, id), None);
         }
-        a.handle(&Event::Click { id: 0 }).unwrap();
-        a.handle(&Event::Click { id: 1 }).unwrap();
         assert_eq!(texts(&a.render().unwrap()), ["3", "high"]);
+    }
+
+    #[test]
+    fn expressions_short_circuit_and_check_arithmetic() {
+        let mut a = app("state n = 0; state s = \"\";
+             button \"b\" { let t = n; if false && 1 / n == 0 || true { s = \"a\" + t + true; } }
+             button \"neg\" { n = -(0 - 9223372036854775807 - 1); }
+             button \"rep\" { repeat n - 1 { } }
+             button \"mod\" { n = 7 % n; }");
+        assert_eq!(click(&mut a, 0), None);
+        assert_eq!(vals(&a), [Value::Int(0), Value::Str("a0true".into())]);
+        for (id, code) in
+            [(1, codes::OVERFLOW), (2, codes::NEGATIVE_REPEAT), (3, codes::DIV_BY_ZERO)]
+        {
+            assert_eq!(click(&mut a, id), Some(code));
+        }
     }
 
     #[test]
@@ -265,96 +204,59 @@ mod tests {
         let nodes = a.render().unwrap();
         assert_eq!(nodes[0], Node::Input { state: "name".to_string(), value: "Ada".to_string() });
         assert_eq!(texts(&nodes), ["hi Ada"]);
-        // Hostile input: 5000 multi-byte chars clip at the cap, never mid-char.
+        // 5000 multi-byte chars clip at the cap, never mid-char.
         a.handle(&inp("name", &"é".repeat(5000))).unwrap();
-        let [Value::Str(s)] = &vals(&a)[..] else {
-            panic!("state gone");
-        };
-        assert!(s.len() <= Limits::default().max_str_bytes);
-        assert!(s.chars().all(|c| c == 'é')); // no torn char at the cut
+        let [Value::Str(s)] = &vals(&a)[..] else { panic!("state gone") };
+        assert!(s.len() <= Limits::default().max_str_bytes && s.chars().all(|c| c == 'é'));
     }
 
     #[test]
-    fn faulting_handlers_roll_back_atomically() {
-        let mut a = app("state x = 0; state y = 0;
-             button \"boom\" { x = 99; y = 1 / y; }");
-        let e = a.handle(&Event::Click { id: 0 }).unwrap_err();
-        assert_eq!(e.code, Some(codes::DIV_BY_ZERO));
-        // x's write happened BEFORE the fault — and was still rolled back.
+    fn faults_roll_back_and_bad_events_are_coded() {
+        let mut a = app("state x = 0; state y = 0; button \"boom\" { x = 99; y = 1 / y; }");
+        // x's write happened before the fault, and was still rolled back.
+        assert_eq!(click(&mut a, 0), Some(codes::DIV_BY_ZERO));
         assert_eq!(vals(&a), [Value::Int(0), Value::Int(0)]);
+        for ev in [Event::Click { id: 7 }, inp("missing", ""), inp("x", "not a string state")] {
+            assert_eq!(a.handle(&ev).unwrap_err().code, Some(codes::BAD_EVENT));
+        }
+        assert_eq!(vals(&a), [Value::Int(0), Value::Int(0)]);
+        // A click racing a re-render targets a now-hidden button: still runs.
+        let mut a = app("state show = true; state n = 0;
+             if show { button \"inc\" { n = n + 1; show = false; } }");
+        assert_eq!((click(&mut a, 0), click(&mut a, 0)), (None, None));
+        assert_eq!(vals(&a), [Value::Bool(false), Value::Int(2)]);
     }
 
     #[test]
-    fn string_bombs_are_diags_not_ooms() {
-        // Exponential growth by self-concat trips the per-value cap.
+    fn strings_state_render_and_fuel_are_bounded() {
+        // Self-concat trips the per-value cap.
         let mut a = app("state s = \"aaaa\"; button \"grow\" { repeat 60 { s = s + s; } }");
-        let e = a.handle(&Event::Click { id: 0 }).unwrap_err();
-        assert_eq!(e.code, Some(codes::STR_TOO_LONG));
+        assert_eq!(click(&mut a, 0), Some(codes::STR_TOO_LONG));
         // Many states each under the value cap trip the commit total instead.
-        let mut src = String::new();
-        for i in 0..40 {
-            src.push_str(&format!("state s{i} = \"\";\n"));
-        }
-        src.push_str("button \"fill\" {");
-        for i in 0..40 {
-            src.push_str(&format!("s{i} = \"{}\";", "b".repeat(3000)));
-        }
-        src.push('}');
-        let mut a = app(&src);
-        let e = a.handle(&Event::Click { id: 0 }).unwrap_err();
-        assert_eq!(e.code, Some(codes::STATE_TOO_BIG));
-        // Rolled back: nothing grew.
+        let states: String = (0..40).map(|i| format!("state s{i} = \"\";")).collect();
+        let sets: String = (0..40).map(|i| format!("s{i} = \"{}\";", "b".repeat(3000))).collect();
+        let mut a = app(&[states, "button \"fill\" {".into(), sets, "}".into()].concat());
+        assert_eq!(click(&mut a, 0), Some(codes::STATE_TOO_BIG));
         assert!(a.state().all(|(_, v)| *v == Value::Str(String::new())));
-    }
-
-    #[test]
-    fn render_is_fueled_too() {
-        let a = App::new(
-            compile("state x = 1; label x + x + x + x;").unwrap(),
-            Limits { fuel: 3, ..Limits::default() },
-        );
-        assert_eq!(a.render().unwrap_err().code, Some(codes::FUEL_EXHAUSTED));
-    }
-
-    #[test]
-    fn render_text_is_bounded_in_total() {
         // Each label is under the string cap; 70 of them pass the render cap.
         let src = ["state s = \"", &"x".repeat(4000), "\";", &"label s;".repeat(70)].concat();
         let e = app(&src).render().unwrap_err();
         assert_eq!((e.code, e.span.is_some()), (Some(codes::RENDER_TOO_BIG), true));
         let fits = app(&src[..src.len() - 6 * 8]).render().unwrap();
         assert_eq!(texts(&fits).concat().len(), 64 * 4000);
-    }
-
-    #[test]
-    fn bad_events_are_coded_and_harmless() {
-        let mut a = app("state n = 0; button \"b\" { n = n + 1; }");
-        for ev in [Event::Click { id: 7 }, inp("missing", ""), inp("n", "not a string state")] {
-            assert_eq!(a.handle(&ev).unwrap_err().code, Some(codes::BAD_EVENT));
-        }
-        assert_eq!(vals(&a), [Value::Int(0)]);
-    }
-
-    #[test]
-    fn hidden_buttons_still_handle_totally() {
-        // A click racing a re-render targets a now-hidden button: still runs.
-        let mut a = app("state show = true; state n = 0;
-             if show { button \"inc\" { n = n + 1; show = false; } }");
-        a.handle(&Event::Click { id: 0 }).unwrap();
-        a.handle(&Event::Click { id: 0 }).unwrap(); // hidden now — still total
-        assert_eq!(vals(&a), [Value::Bool(false), Value::Int(2)]);
+        let src = "state x = 1; label x + x + x + x;";
+        let a = App::new(compile(src).unwrap(), Limits { fuel: 3, ..Limits::default() });
+        assert_eq!(a.render().unwrap_err().code, Some(codes::FUEL_EXHAUSTED));
     }
 
     #[test]
     fn diags_render_with_carets_and_the_card_is_real() {
         let src = "state x = 1;\nlabel x + true;";
         let r = compile(src).unwrap_err().render(src);
-        assert!(r.contains("E0303"), "{r}");
-        assert!(r.contains("label x + true;"), "{r}");
-        // The card's opening example is real applang — prompt/verifier unity.
+        assert!(r.contains("E0303") && r.contains("label x + true;"), "{r}");
+        // The card's opening example is real applang.
         let src = "state count = 0; state name = \"world\"; state on = false;
                    label count; input name; if on { label 1; }";
-        assert!(compile(src).is_ok());
-        assert!(REFERENCE.contains("state count = 0"));
+        assert!(compile(src).is_ok() && REFERENCE.contains("state count = 0"));
     }
 }

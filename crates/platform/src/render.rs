@@ -9,11 +9,9 @@ use web_sys::{
     WebGlShader, WebGlTexture, WebGlUniformLocation, WebGlVertexArrayObject,
 };
 
-/// The instanced attributes as (location, GL type, normalized, byte offset);
-/// each has 4 components, divisor 1 and stride [`INSTANCE_BYTES`], matching
-/// the `layout(location = N)` declarations in [`gfx::VERTEX_SHADER`]:
-/// `a_rect`, `a_params`, `a_color` (four normalized bytes), `a_clip`, `a_uv`,
-/// `a_color2` (four normalized bytes).
+/// The instance attributes as (location, GL type, normalized, byte offset),
+/// each a vec4 with divisor 1, matching [`gfx::VERTEX_SHADER`]'s `a_rect`,
+/// `a_params`, `a_color` (bytes), `a_clip`, `a_uv`, `a_color2` (bytes).
 pub(crate) const ATTRIBS: [(u32, u32, bool, i32); 6] = [
     (0, Gl::FLOAT, false, 0),
     (1, Gl::FLOAT, false, 16),
@@ -23,14 +21,11 @@ pub(crate) const ATTRIBS: [(u32, u32, bool, i32); 6] = [
     (5, Gl::UNSIGNED_BYTE, true, 68),
 ];
 
-/// The smallest GL instance buffer, in bytes (a power of two; 227 instances).
+/// The smallest GL instance buffer, in bytes.
 pub(crate) const MIN_CAPACITY: usize = 16 * 1024;
 
-/// Draws [`gfx::DrawList`]s into the `<canvas>` with WebGL2.
-///
-/// The platform owns it and lends it to [`crate::App::frame`]; the canvas
-/// size and device pixel ratio it draws at are the ones the last
-/// [`crate::Event::Resize`] reported.
+/// Draws [`gfx::DrawList`]s into the canvas at the size and pixel ratio of
+/// the last [`crate::Event::Resize`]. Lent to [`crate::App::frame`].
 pub struct Renderer {
     gl: Gl,
     canvas: HtmlCanvasElement,
@@ -51,23 +46,21 @@ pub struct Renderer {
 }
 
 impl Renderer {
-    /// Creates the WebGL2 context on `canvas` and the GPU objects; on failure
-    /// the error names the step, with the info log for shader errors.
+    /// Creates the context and GPU objects; an error names the failed step
+    /// (with the info log for shaders).
     pub(crate) fn new(canvas: &HtmlCanvasElement) -> Result<Renderer, String> {
+        // The rest of the attributes keep their defaults (no stencil,
+        // premultiplied alpha, no preserved drawing buffer).
         let attrs = WebGlContextAttributes::new();
         attrs.set_alpha(false);
         attrs.set_antialias(false);
         attrs.set_depth(false);
-        attrs.set_stencil(false);
-        attrs.set_premultiplied_alpha(true);
-        attrs.set_preserve_drawing_buffer(false);
         attrs.set_power_preference(WebGlPowerPreference::LowPower);
         let gl: Gl = canvas
             .get_context_with_context_options("webgl2", &attrs)
             .map_err(|e| ["getContext(\"webgl2\") threw: ", &crate::js_text(&e)].concat())?
             .ok_or("WebGL2 is not available")?
-            .dyn_into()
-            .map_err(|_| "getContext(\"webgl2\") returned a non-WebGL2 context")?;
+            .unchecked_into();
 
         let program = link(&gl)?;
         let uniform = |name| gl.get_uniform_location(&program, name);
@@ -86,8 +79,7 @@ impl Renderer {
         }
         gl.bind_vertex_array(None);
 
-        // The atlas texture. Its storage comes with the first draw, which
-        // knows the atlas size.
+        // The atlas texture; its storage comes with the first draw.
         let texture = gl.create_texture().ok_or("createTexture failed")?;
         gl.bind_texture(Gl::TEXTURE_2D, Some(&texture));
         let params = [
@@ -120,11 +112,6 @@ impl Renderer {
         })
     }
 
-    /// The canvas size in CSS pixels, as last measured.
-    pub fn css_size(&self) -> (f32, f32) {
-        self.css
-    }
-
     /// The device pixel ratio, as last measured.
     pub fn dpr(&self) -> f32 {
         self.dpr
@@ -135,17 +122,11 @@ impl Renderer {
         self.dpr = dpr;
     }
 
-    /// Draws one frame: resizes the canvas backing store to
-    /// `round(css * dpr)` if that changed, clears to `clear` (opaque), then
-    /// draws every instance of `list` in one instanced call. An empty list
-    /// only clears (and leaves the atlas dirty band for the next draw).
-    ///
-    /// Glyphs sample `atlas`, mirrored in an `R8` texture on unit 0
-    /// (`NEAREST`, `CLAMP_TO_EDGE`, `UNPACK_ALIGNMENT` 1). The first draw,
-    /// the first after a context restore and the first after the atlas size
-    /// changes upload the whole atlas; later draws upload only the full-width
-    /// row band [`Atlas::take_dirty`] reports. Pass the same atlas every
-    /// frame: the texture follows its dirty band, not its identity.
+    /// Sizes the backing store to `round(css * dpr)`, clears to `clear`
+    /// (opaque) and draws every instance of `list` in one call. Glyphs sample
+    /// `atlas` through an `R8` texture: uploaded whole at first, after a
+    /// context restore or a size change, else just its dirty row band, so
+    /// pass the same atlas every frame.
     pub fn draw(&mut self, list: &DrawList, clear: Rgba, atlas: &mut Atlas) {
         let gl = &self.gl;
         let size = backing_size(self.css, self.dpr);
@@ -166,8 +147,7 @@ impl Renderer {
         gl.bind_buffer(Gl::ARRAY_BUFFER, Some(&self.buffer));
         let len = self.bytes.len();
         if len > self.capacity {
-            // Grow with headroom: upload the bytes zero-padded to the new
-            // capacity, so later frames fit and take bufferSubData.
+            // Grow with zero-padded headroom, so later frames take bufferSubData.
             self.capacity = grow_capacity(len);
             self.bytes.resize(self.capacity, 0);
             gl.buffer_data_with_u8_array(Gl::ARRAY_BUFFER, &self.bytes, Gl::DYNAMIC_DRAW);
@@ -192,9 +172,7 @@ impl Renderer {
         gl.bind_vertex_array(None);
     }
 
-    /// Binds the atlas texture to unit 0 and brings it up to date: all of it
-    /// when the texture has no storage of the atlas size yet, else the dirty
-    /// row band.
+    /// Binds the atlas texture to unit 0 and uploads what changed.
     fn sync_atlas(&mut self, atlas: &mut Atlas) {
         let gl = &self.gl;
         gl.active_texture(Gl::TEXTURE0);
@@ -235,9 +213,8 @@ impl Renderer {
     }
 }
 
-/// For the dirty band `[y0, y1)` of an atlas `w` pixels wide holding `len`
-/// bytes: the first row, the row count and the byte range to upload. `None`
-/// when the band is empty or reaches past the pixels.
+/// For the dirty rows `[y0, y1)` of an atlas `w` wide holding `len` bytes:
+/// the first row, the row count and the bytes; `None` if empty or past the end.
 pub(crate) fn band_bytes(
     (y0, y1): (u32, u32),
     w: u32,
@@ -248,11 +225,17 @@ pub(crate) fn band_bytes(
     (y0 < y1 && end <= len).then(|| (y0, y1 - y0, start..end))
 }
 
-/// Compiles both gfx shaders and links them. Compile status is read only when
-/// the link fails, so a good program costs no extra round trips.
+/// Compiles and links the gfx shaders, reading compile status only when the
+/// link fails, so a good program costs no extra round trips.
 fn link(gl: &Gl) -> Result<WebGlProgram, String> {
-    let vs = shader(gl, Gl::VERTEX_SHADER, gfx::VERTEX_SHADER)?;
-    let fs = shader(gl, Gl::FRAGMENT_SHADER, gfx::FRAGMENT_SHADER)?;
+    let shader = |ty, src| {
+        let s = gl.create_shader(ty).ok_or("createShader failed")?;
+        gl.shader_source(&s, src);
+        gl.compile_shader(&s);
+        Ok::<_, &str>(s)
+    };
+    let vs = shader(Gl::VERTEX_SHADER, gfx::VERTEX_SHADER)?;
+    let fs = shader(Gl::FRAGMENT_SHADER, gfx::FRAGMENT_SHADER)?;
     let program = gl.create_program().ok_or("createProgram failed")?;
     gl.attach_shader(&program, &vs);
     gl.attach_shader(&program, &fs);
@@ -276,15 +259,7 @@ fn link(gl: &Gl) -> Result<WebGlProgram, String> {
     result
 }
 
-fn shader(gl: &Gl, ty: u32, src: &str) -> Result<WebGlShader, String> {
-    let s = gl.create_shader(ty).ok_or("createShader failed")?;
-    gl.shader_source(&s, src);
-    gl.compile_shader(&s);
-    Ok(s)
-}
-
-/// The canvas backing-store size for a CSS size and pixel ratio:
-/// `round(css * dpr)` per axis, at least 1.
+/// The canvas backing-store size: `round(css * dpr)` per axis, at least 1.
 pub(crate) fn backing_size(css: (f32, f32), dpr: f32) -> (u32, u32) {
     let px = |v: f32| {
         let r = (v * dpr).round();

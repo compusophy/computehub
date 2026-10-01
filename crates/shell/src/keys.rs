@@ -1,13 +1,12 @@
-//! Keys: the desktop's bindings, the launcher's keys, and the rest for the
-//! focused app.
+//! Keys: the desktop's bindings (`mod` is Alt or Meta, without Ctrl), the
+//! launcher's keys while it shows, and the rest for the focused app.
 
 use ui::{AppEvent, Key, Mods};
 use wm::{Cmd, Snap, State};
 
 use crate::{Response, Shell};
 
-/// Ctrl+V, Ctrl+Shift+V, Meta+V and Shift+Insert: the platform leaves them
-/// to the browser, which pastes; the text comes as [`crate::Input::Text`].
+/// The paste keys, left to the browser: the text comes as `Input::Text`.
 fn is_paste(key: Key, m: Mods) -> bool {
     let ctrl = m.ctrl && !m.alt && !m.meta;
     let meta = m.meta && !m.ctrl && !m.alt && !m.shift;
@@ -15,8 +14,7 @@ fn is_paste(key: Key, m: Mods) -> bool {
     (key == Key::Char('v') && (ctrl || meta)) || (key == Key::Insert && shift)
 }
 
-/// F5, F12, Ctrl+R, Ctrl+Shift+R and Ctrl+Shift+I: reload and the developer
-/// tools, left to the browser unless the app wants text input.
+/// Reload and the developer tools, the browser's unless an app wants text.
 fn is_browser(key: Key, m: Mods) -> bool {
     let ctrl = m.ctrl && !m.alt && !m.meta;
     match key {
@@ -28,7 +26,7 @@ fn is_browser(key: Key, m: Mods) -> bool {
 }
 
 impl Shell {
-    /// A binding, else a key for the launcher while it shows, else for the
+    /// A key for the launcher while it shows, else a binding, else for the
     /// focused app.
     pub(crate) fn key(&mut self, key: Key, m: Mods, out: &mut Response) {
         let chord = (m.alt || m.meta) && !m.ctrl;
@@ -54,8 +52,7 @@ impl Shell {
         out.consumed = wants || !is_browser(key, m);
     }
 
-    /// Carries out a binding (Alt or Meta is held, Ctrl is not); returns
-    /// whether the combination is one.
+    /// Carries out the binding of mod+`key`, if it is one.
     fn binding(&mut self, key: Key, shift: bool, out: &mut Response) -> bool {
         let focused = self.host.wm().focused();
         let maximized =

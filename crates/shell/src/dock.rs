@@ -13,64 +13,53 @@ use crate::desktop::Target;
 const RADIUS: f32 = 18.0;
 const DOT: f32 = 4.0;
 const LIFT: f32 = 2.0;
-/// How far above the dock a tooltip floats, and its height.
 const TIP_GAP: f32 = 10.0;
 const TIP_H: f32 = 24.0;
 /// The apps the dock always shows, in order (those the registry knows).
-const PINNED: [&str; 3] = ["terminal", "studio", "settings"];
+pub(crate) const PINNED: [&str; 3] = ["terminal", "studio", "settings"];
 
 /// One app on the dock: its registry name, icon and open windows.
 pub(crate) type Item = (String, AppIcon, Vec<WinId>);
 
 impl Shell {
-    /// Lists the dock's apps: the pinned ones, then those running.
-    pub(crate) fn refresh_dock(&mut self) {
-        self.dock = self.host.dock_apps(&PINNED);
-    }
-
-    /// The dock's shelf.
     pub(crate) fn dock_rect(&self) -> RectF {
         layout::dock(self.dock.len(), self.size)
     }
 
-    /// Where the tile of dock item `i` rests.
     pub(crate) fn dock_tile(&self, i: usize) -> RectF {
         layout::dock_tile(self.dock.len(), self.size, i)
     }
 
-    /// The dock item at `(x, y)`, the bare shelf, or nothing off the dock.
     pub(crate) fn dock_hit(&self, x: f32, y: f32) -> Option<Target> {
         let at = layout::dock_at(self.dock.len(), self.size, x, y)?;
         Some(at.map_or(Target::DockBar, Target::Dock))
     }
 
-    /// The shelf, then each tile (lifted while hovered) and the dots under
-    /// running apps: accent under the focused one's.
+    /// The shelf, the tiles (lifted while hovered) and a dot under running
+    /// apps.
     pub(crate) fn draw_dock(&mut self, list: &mut DrawList, theme: &Theme, now: f64) {
         if self.dock.is_empty() {
             return;
         }
-        let (d, line) = (self.dock_rect(), px(self.host.text(), 1.0));
+        let (d, line) = (self.dock_rect(), px(&self.host.text, 1.0));
         list.shadow_offset(d, RADIUS, 30.0, 10.0, theme.shadow);
         list.fill(d, RADIUS, theme.glass);
         list.border(d, RADIUS, line, theme.border);
         sheen(list, d, RADIUS, line, theme.highlight);
         let focused = self.host.wm().focused();
-        for i in 0..self.dock.len() {
-            let (t, item) = (self.dock_tile(i), &self.dock[i]);
-            let lifted = RectF { y: t.y - LIFT * self.motion.lift(&item.0, now), ..t };
-            let label = app_label(&item.0);
-            draw_icon(list, self.host.text_mut(), lifted, item.1, &label, theme.shadow);
-            if !item.2.is_empty() {
-                let mine = focused.is_some_and(|f| item.2.contains(&f));
+        for (i, (name, icon, wins)) in self.dock.iter().enumerate() {
+            let t = self.dock_tile(i);
+            let lifted = RectF { y: t.y - LIFT * self.motion.lift(name, now), ..t };
+            draw_icon(list, &mut self.host.text, lifted, *icon, &app_label(name), theme.shadow);
+            if !wins.is_empty() {
+                let mine = focused.is_some_and(|f| wins.contains(&f));
                 let dot = RectF::new(t.x + (TILE - DOT) / 2.0, t.y + TILE + 3.0, DOT, DOT);
                 list.fill(dot, DOT / 2.0, if mine { theme.accent } else { theme.text_dim });
             }
         }
     }
 
-    /// The name of the hovered dock app in a pill above its tile,
-    /// fading in with the lift.
+    /// The hovered app's name above its tile, fading in with the lift.
     pub(crate) fn draw_tooltip(&mut self, list: &mut DrawList, theme: &Theme, now: f64) {
         let Some(Target::Dock(i)) = self.hover else {
             return;
@@ -80,7 +69,7 @@ impl Shell {
         };
         let (a, label) = (self.motion.lift(&item.0, now), app_label(&item.0));
         let (t, top, sw) = (self.dock_tile(i), self.dock_rect().y, self.size.0);
-        let text = self.host.text_mut();
+        let text = &mut self.host.text;
         let line = px(text, 1.0);
         let style = TextStyle::new(FontId::Sans, 12.0, faded(theme.text, a));
         let tw = text.measure(&label, style);

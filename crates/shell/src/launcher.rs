@@ -1,6 +1,6 @@
 //! The launcher: a glass panel over a veiled desktop with a search field,
-//! the built-in apps as tiles and the `.app` files as a list. Typing
-//! filters both; the arrows move the selection, Enter or a click opens.
+//! the built-in apps as tiles and the `.app` files as a list. Typing filters
+//! both; the arrows move the selection, Enter or a click opens.
 
 use gfx::{DrawList, RectF};
 use host::layout::{FIELD_H, PANEL_PAD as PAD, Panel, ROW_H};
@@ -16,36 +16,29 @@ use crate::{Response, Shell};
 const BUILTIN: [&str; 5] = ["terminal", "studio", "settings", "welcome", "about"];
 const RADIUS: f32 = 20.0;
 const FIELD_SIZE: f32 = 18.0;
-/// Where the query starts in the field, after the search glyph.
+/// Where the query starts, after the search glyph.
 const QUERY_X: f32 = 44.0;
 const ROW_ICON: f32 = 24.0;
 const OPEN_MS: f32 = 160.0;
 const CLOSE_MS: f32 = 120.0;
-/// The veil's alpha over the desktop, and the panel's scale as it opens.
+/// The veil's alpha, and the panel's scale as it opens.
 const VEIL: f32 = 90.0;
 const FROM_SCALE: f32 = 0.98;
 
-/// The launcher: whether it shows (and takes the keys), how shown it is
-/// (0 to 1, as it fades), and its search.
+/// Whether the launcher shows (and takes the keys), how shown it is (0 to
+/// 1, as it fades), and its search.
+#[derive(Default)]
 pub(crate) struct Launcher {
     pub open: bool,
     pub t: Tween<f32>,
     pub search: Search,
 }
 
-impl Default for Launcher {
-    fn default() -> Launcher {
-        Launcher { open: false, t: Tween::new(0.0), search: Search::default() }
-    }
-}
-
 impl Shell {
-    /// The launcher's panel as it is laid out now.
     pub(crate) fn panel(&self) -> Panel {
         Panel::new(self.size, self.launcher.search.tiles.len())
     }
 
-    /// The result under `(x, y)`, the bare panel, or the veil around it.
     pub(crate) fn launcher_hit(&self, x: f32, y: f32) -> Target {
         let l = &self.launcher.search;
         match self.panel().at(x, y, l.first, l.rows.len()) {
@@ -55,31 +48,25 @@ impl Shell {
         }
     }
 
-    /// Shows the launcher, its query empty: the built-in apps the registry
-    /// knows, then every `.app` file directly in `/apps` and the guest's home.
+    /// Shows the launcher with an empty query.
     pub(crate) fn show_launcher(&mut self) {
         let items = self.host.entries(&BUILTIN);
-        let (now, l) = (self.now(), &mut self.launcher);
+        let (now, l) = (self.host.now_ms, &mut self.launcher);
         (l.search, l.open) = (Search::new(items), true);
         l.t.to(1.0, now, OPEN_MS);
         (self.grab, self.armed) = (None, None);
     }
 
-    /// Hides the launcher, fading.
     pub(crate) fn hide_launcher(&mut self) {
-        let now = self.now();
         self.launcher.open = false;
-        self.launcher.t.to(0.0, now, CLOSE_MS);
+        self.launcher.t.to(0.0, self.host.now_ms, CLOSE_MS);
     }
 
     pub(crate) fn toggle_launcher(&mut self) {
-        match self.launcher.open {
-            true => self.hide_launcher(),
-            false => self.show_launcher(),
-        }
+        if self.launcher.open { self.hide_launcher() } else { self.show_launcher() }
     }
 
-    /// Opens result `k` in a new window and hides the launcher.
+    /// Opens result `k` and hides the launcher.
     pub(crate) fn launch(&mut self, k: usize, out: &mut Response) {
         if let Some(name) = self.launcher.search.get(k).map(|e| e.name.clone()) {
             self.hide_launcher();
@@ -87,7 +74,7 @@ impl Shell {
         }
     }
 
-    /// The veil, then the panel, fading in and growing from 98%.
+    /// The veil, then the panel, fading in and growing.
     pub(crate) fn draw_launcher(&mut self, list: &mut DrawList, theme: &Theme, now: f64) {
         let t = self.launcher.t.value(now);
         if t <= 0.0 {
@@ -107,15 +94,13 @@ impl Shell {
         layer.clear();
         self.draw_panel(&mut layer, theme, p);
         let s = FROM_SCALE + (1.0 - FROM_SCALE) * t;
-        replay(list, &layer, Vis { s, a: t, ..Vis::at(p.rect) }.xform());
+        replay(list, &layer, Vis { s, a: t, ..Vis::at(p.rect) });
         self.scratch = layer;
     }
 
-    /// The panel, the field, then the results or word that there are none.
+    /// The (solid) panel, the field, then the results or word of none.
     fn draw_panel(&mut self, list: &mut DrawList, theme: &Theme, p: Panel) {
-        let (r, line) = (p.rect, px(self.host.text(), 1.0));
-        // Solid: nothing blurs what is under it, so nothing may show
-        // through the results.
+        let (r, line) = (p.rect, px(&self.host.text, 1.0));
         list.shadow_offset(r, RADIUS, 60.0, 24.0, theme.shadow);
         list.fill(r, RADIUS, theme.base);
         list.fill(r, RADIUS, theme.surface);
@@ -132,7 +117,7 @@ impl Shell {
             self.draw_result(list, theme, tiles.len() + n, i, p.row(j));
         }
         let body = TextStyle::new(FontId::Sans, 14.0, theme.text_dim);
-        let text = self.host.text_mut();
+        let text = &mut self.host.text;
         if !tiles.is_empty() && !rows.is_empty() {
             let y = text.snap(p.list_top() - PAD / 2.0);
             list.fill(RectF::new(r.x + PAD, y, r.w - 2.0 * PAD, line), 0.0, theme.border);
@@ -146,10 +131,9 @@ impl Shell {
         list.pop_clip();
     }
 
-    /// The search field: a well with an accent search glyph, the query (or
-    /// a faint placeholder) and an accent caret, the end kept in view.
+    /// The search field: a glyph, the query (or a placeholder) and a caret.
     fn draw_field(&mut self, list: &mut DrawList, theme: &Theme, f: RectF) {
-        let text = self.host.text_mut();
+        let text = &mut self.host.text;
         let line = px(text, 1.0);
         list.fill(f, 12.0, theme.wash(false));
         list.border(f, 12.0, line, theme.border);
@@ -172,13 +156,10 @@ impl Shell {
         list.pop_clip();
     }
 
-    /// Result `k` (item `i`) in `r`: a tile (icon over its label) or a row
-    /// (icon, label, and where the file lives), washed under the pointer and
-    /// ringed in the accent when selected.
+    /// Result `k` (item `i`) in `r`: a tile, or a row with the file's place.
     fn draw_result(&mut self, list: &mut DrawList, theme: &Theme, k: usize, i: usize, r: RectF) {
         let (target, l) = (Some(Target::Item(k)), &self.launcher.search);
-        let e = &l.items[i];
-        let text = self.host.text_mut();
+        let (e, text) = (&l.items[i], &mut self.host.text);
         let radius = if e.place.is_none() { 12.0 } else { 10.0 };
         if self.hover == target {
             list.fill(r, radius, theme.wash(self.armed == target));

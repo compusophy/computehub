@@ -1,48 +1,34 @@
-//! Themes: every color on screen, chosen at runtime.
-//!
-//! A [`Theme`] is plain data (straight sRGB, alpha 255 unless noted): the
-//! desktop's backdrop (a base color, up to four soft [`Glow`]s and a grain
-//! strength), the surfaces windows and controls sit on, the text ramp, one
-//! accent, and a 16-color terminal palette. [`THEMES`] holds the built-in
-//! three and [`theme`] looks one up by name. Widgets in [`crate::Ui`] read
-//! the theme the shell gives them; nothing draws from a color constant.
+//! Themes: every color on screen, as plain data chosen at runtime (straight
+//! sRGB, opaque unless noted). Nothing draws from a color constant.
 
 use gfx::{DrawList, RectF, Rgba};
 use text::{FontId, TextStyle};
 
-/// A soft elliptical light in the backdrop. Its center and radii are
-/// fractions of the screen: `cx` and `rx` of its width, `cy` and `ry` of its
-/// height. `color`'s alpha is its peak, at the center; alpha 0 is an unused
-/// slot.
+/// A soft elliptical light in the backdrop: center and radii as fractions of
+/// the screen (`cx`, `rx` of its width; `cy`, `ry` of its height), `color`'s
+/// alpha its peak at the center (0 is an unused slot).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Glow {
-    /// Center, as a fraction of the screen width.
     pub cx: f32,
-    /// Center, as a fraction of the screen height.
     pub cy: f32,
-    /// Horizontal radius, as a fraction of the screen width.
     pub rx: f32,
-    /// Vertical radius, as a fraction of the screen height.
     pub ry: f32,
-    /// Color and peak alpha.
     pub color: Rgba,
 }
 
-/// The colors of the whole desktop. Translucent fields (`surface`, `glass`,
-/// `border`, `highlight`, `shadow`, `selection`) are meant to be drawn over
-/// what is beneath them.
+/// The colors of the whole desktop; `surface`, `glass`, `border`,
+/// `highlight`, `shadow` and `selection` are translucent.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Theme {
     /// The name [`theme`] finds it by.
     pub name: &'static str,
-    /// Whether it is a dark theme (light text on dark surfaces).
+    /// Light text on dark surfaces.
     pub dark: bool,
     /// The backdrop's flat color: the frame's clear color.
     pub base: Rgba,
     /// Lights over the base (see [`Theme::draw_backdrop`]).
     pub glows: [Glow; 4],
-    /// Film-grain strength over the backdrop: the most alpha (out of 255)
-    /// of the noise ([`DrawList::grain`]); 0 is none.
+    /// Film-grain strength over the backdrop ([`DrawList::grain`]); 0 is none.
     pub grain: u8,
     /// Window bodies.
     pub surface: Rgba,
@@ -72,8 +58,8 @@ pub struct Theme {
     pub shadow: Rgba,
     /// Selected text, drawn over the glyphs' cells.
     pub selection: Rgba,
-    /// The terminal's 16 colors: black, red, green, yellow, blue, magenta,
-    /// cyan, white, then the bright eight; readable on `surface`.
+    /// The terminal's 16 colors (black, red, green, yellow, blue, magenta,
+    /// cyan, white, then bright), readable on `surface`.
     pub ansi: [Rgba; 16],
 }
 
@@ -193,63 +179,40 @@ pub const THEMES: [Theme; 3] = [MIDNIGHT, DAWN, MONO];
 
 static ALL: [Theme; 3] = THEMES;
 
-/// The theme named `name`, ignoring ASCII case; the first of [`THEMES`]
-/// when none is.
+/// The theme named `name`, ignoring ASCII case; else the first of [`THEMES`].
 pub fn theme(name: &str) -> &'static Theme {
     ALL.iter().find(|t| t.name.eq_ignore_ascii_case(name)).unwrap_or(&ALL[0])
 }
 
-impl Default for Theme {
-    /// The first of [`THEMES`].
-    fn default() -> Theme {
-        THEMES[0]
-    }
-}
-
-/// The type scale: (face, size) of title, heading, subheading, body, small
-/// and mono text.
-const TYPE: [(FontId, f32); 6] = [
-    (FontId::SansBold, 24.0),
-    (FontId::SansBold, 18.0),
-    (FontId::SansBold, 14.0),
-    (FontId::Sans, 14.0),
-    (FontId::Sans, 12.0),
-    (FontId::Mono, 13.0),
-];
-
 impl Theme {
-    fn style(&self, i: usize, color: Rgba) -> TextStyle {
-        TextStyle::new(TYPE[i].0, TYPE[i].1, color)
-    }
-
-    /// Window titles inside content: SansBold 24 in `text`.
+    /// Titles: SansBold 24 in `text`.
     pub fn title(&self) -> TextStyle {
-        self.style(0, self.text)
+        TextStyle::new(FontId::SansBold, 24.0, self.text)
     }
 
     /// Section headings: SansBold 18 in `text`.
     pub fn heading(&self) -> TextStyle {
-        self.style(1, self.text)
+        TextStyle::new(FontId::SansBold, 18.0, self.text)
     }
 
     /// Group labels: SansBold 14 in `text`.
     pub fn subheading(&self) -> TextStyle {
-        self.style(2, self.text)
+        TextStyle::new(FontId::SansBold, 14.0, self.text)
     }
 
     /// Body text: Sans 14 in `text`.
     pub fn body(&self) -> TextStyle {
-        self.style(3, self.text)
+        TextStyle::new(FontId::Sans, 14.0, self.text)
     }
 
     /// Small print: Sans 12 in `text_dim`.
     pub fn small(&self) -> TextStyle {
-        self.style(4, self.text_dim)
+        TextStyle::new(FontId::Sans, 12.0, self.text_dim)
     }
 
     /// Code: Mono 13 in `text`.
     pub fn mono(&self) -> TextStyle {
-        self.style(5, self.text)
+        TextStyle::new(FontId::Mono, 13.0, self.text)
     }
 
     /// A neutral fill under the pointer: 8% of the way to `text`.
@@ -262,20 +225,30 @@ impl Theme {
         mix(fill, self.surface_lo, 0.6)
     }
 
-    /// A translucent wash over anything under the pointer (`down` while
-    /// held): `text` at a low alpha.
+    /// A translucent wash over anything under the pointer (or held, `down`).
     pub fn wash(&self, down: bool) -> Rgba {
         self.text.with_alpha(if down { 26 } else { 16 })
     }
 
-    /// The xterm 256-color index `i` in this theme; see [`xterm_color`].
+    /// The xterm 256-color index `i`: 0-15 are [`Theme::ansi`], 16-231 the
+    /// 6 x 6 x 6 cube, 232-255 the gray ramp from 8 to 238.
     pub fn xterm(&self, i: u8) -> Rgba {
-        xterm_color(i, self)
+        const LEVELS: [u8; 6] = [0, 95, 135, 175, 215, 255];
+        match i {
+            0..=15 => self.ansi[usize::from(i)],
+            16..=231 => {
+                let n = usize::from(i - 16);
+                Rgba(LEVELS[n / 36], LEVELS[n / 6 % 6], LEVELS[n % 6], 255)
+            }
+            _ => {
+                let v = 8 + 10 * (i - 232);
+                Rgba(v, v, v, 255)
+            }
+        }
     }
 
-    /// The backdrop over `screen`: the base, each used glow as a
-    /// [`DrawList::glow`] filling its ellipse's bounding box, then the
-    /// grain.
+    /// The backdrop over `screen`: the base, each used glow filling its
+    /// ellipse's bounding box, then the grain.
     pub fn draw_backdrop(&self, list: &mut DrawList, screen: RectF) {
         list.fill(screen, 0.0, self.base);
         for g in self.glows.iter().filter(|g| g.color.3 > 0) {
@@ -294,28 +267,8 @@ pub fn mix(a: Rgba, b: Rgba, t: f32) -> Rgba {
     Rgba(ch(a.0, b.0), ch(a.1, b.1), ch(a.2, b.2), ch(a.3, b.3))
 }
 
-/// An xterm 256-color index: 0-15 are `theme`'s [`Theme::ansi`], 16-231
-/// the 6 x 6 x 6 cube (levels 0, 95, 135, 175, 215, 255), 232-255 the gray
-/// ramp from 8 to 238 in steps of 10.
-pub fn xterm_color(i: u8, theme: &Theme) -> Rgba {
-    const LEVELS: [u8; 6] = [0, 95, 135, 175, 215, 255];
-    match i {
-        0..=15 => theme.ansi[usize::from(i)],
-        16..=231 => {
-            let n = usize::from(i - 16);
-            Rgba(LEVELS[n / 36], LEVELS[n / 6 % 6], LEVELS[n % 6], 255)
-        }
-        _ => {
-            let v = 8 + 10 * (i - 232);
-            Rgba(v, v, v, 255)
-        }
-    }
-}
-
-/// A stable, soft color for `id` (an app icon's default hue, a window's
-/// tint): the hue steps by the golden angle (137.508 degrees) per id at
-/// fixed saturation and value, so neighbors differ and the same id always
-/// gets the same color.
+/// A stable, soft color for `id`: the hue steps by the golden angle
+/// (137.508 degrees) per id at fixed saturation and value.
 pub fn app_tint(id: u32) -> Rgba {
     // Millidegrees in integers, so the hue is exact for every id.
     let h = ((u64::from(id) * 137_508) % 360_000) as f32 / 60_000.0;

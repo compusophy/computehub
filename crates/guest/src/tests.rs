@@ -1,13 +1,16 @@
 use super::*;
 use ui::Request;
 
-/// Runs each `$ ` line of `script` in a guest shell over `fs` and checks
-/// that the transcript (output without escapes, requests in brackets, the
-/// home as `~`) is `script`.
-fn transcript(fs: &mut Vfs, now: f64, script: &str) {
-    let (mut g, mut got) = (Guest::new(), String::new());
+/// Runs each `$ ` line of `script` in a guest shell over a VFS holding three
+/// files, and checks that the transcript (output without escapes, requests in
+/// brackets, the home as `~`) is `script`.
+fn transcript(script: &str) {
+    let (mut g, mut got, mut fs) = (Guest::new(), String::new(), Vfs::new());
+    for path in ["/apps/demo.app", "~/counter.app", "~/notes.txt"] {
+        fs.write(&path.replace('~', Vfs::HOME), b"").unwrap();
+    }
     for cmd in script.lines().filter_map(|l| l.strip_prefix("$ ")) {
-        let mut cx = Cx::new(fs, now);
+        let mut cx = Cx::new(&mut fs, 0.0);
         g.run(cmd, &mut cx);
         got += &format!("$ {cmd}\n{}", plain(&std::mem::take(&mut g.out)));
         for r in cx.take_requests() {
@@ -43,13 +46,7 @@ fn plain(s: &str) -> String {
 
 #[test]
 fn guest_shell_commands_and_errors() {
-    let (mut fs, now) = (Vfs::new(), 1_700_000_000_000.0);
-    for path in ["/apps/demo.app", "~/counter.app", "~/notes.txt"] {
-        fs.write(&path.replace('~', Vfs::HOME), b"").unwrap();
-    }
     transcript(
-        &mut fs,
-        now,
         r#"$ pwd
 ~
 $ mkdir -p a/b c
@@ -142,17 +139,14 @@ fn help_lists_one_command_a_line_at_any_width() {
         for line in out.lines() {
             assert!(width(line) <= usize::from(cols), "{cols} cols: {line:?}\n{out}");
         }
-        for (_, rows) in HELP {
-            for (synopsis, what) in rows {
-                // Each synopsis starts its own line, and its description
-                // follows it, beside it or below it, whole.
-                let at = out.find(&format!("\n  {synopsis}")).expect(synopsis);
-                let flat: String = out[at..].split_whitespace().collect::<Vec<_>>().join(" ");
-                assert!(flat.starts_with(&format!("{synopsis} {what}")), "{cols}: {synopsis}");
-            }
+        // Each synopsis starts a line; its description follows, whole.
+        for &(.., synopsis, what, _) in COMMANDS.iter().filter(|c| !c.5.is_empty()) {
+            let at = out.find(&format!("\n  {synopsis}")).expect(synopsis);
+            let flat: String = out[at..].split_whitespace().collect::<Vec<_>>().join(" ");
+            assert!(flat.starts_with(&format!("{synopsis} {what}")), "{cols}: {synopsis}");
         }
     }
     let mut out = String::new();
-    wrap("  1. one two three four five six seven eight nine ten", 24, &mut out);
-    assert_eq!(out, "  1. one two three four\n     five six seven\n     eight nine ten");
+    wrap("one two three four five six seven eight\nnine ten", 24, &mut out);
+    assert_eq!(out, "one two three four five\nsix seven eight\nnine ten");
 }

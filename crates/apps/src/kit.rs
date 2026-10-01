@@ -1,17 +1,14 @@
-//! What the apps share: their icons, a wheel-scrolled view, and drawing
-//! helpers that keep custom shapes and text on device pixels.
+//! What the apps share: icons, a wheel-scrolled view, and drawing helpers
+//! that keep shapes and text on device pixels.
 
 use gfx::RectF;
 use ui::theme::mix;
 use ui::{AppIcon, FontId, Rgba, TextStyle, Theme, Ui, WidgetId};
 
-/// The Terminal's icon.
+/// The app icons; Studio's as the `studio` crate gives it, for Welcome.
 pub(crate) const TERMINAL: AppIcon = AppIcon { glyph: ">_", hue: Rgba::hex(0x2dd4bf) };
-/// Studio's icon, as the `studio` crate gives it: Welcome shows it on a card.
 pub(crate) const STUDIO: AppIcon = AppIcon { glyph: "{ }", hue: Rgba::hex(0x8b7bff) };
-/// Settings' icon.
 pub(crate) const SETTINGS: AppIcon = AppIcon { glyph: "::", hue: Rgba::hex(0x94a3b8) };
-/// Welcome's icon.
 pub(crate) const WELCOME: AppIcon = AppIcon { glyph: "c", hue: Rgba::hex(0xf472b6) };
 
 const WHITE: Rgba = Rgba(255, 255, 255, 255);
@@ -33,8 +30,7 @@ pub(crate) fn px(ui: &mut Ui<'_>, v: f32) -> f32 {
     (v * d).round().max(1.0) / d
 }
 
-/// The baseline that centers a glyph `ink` ems tall (from the baseline up)
-/// at `size` in a band `h` tall from `top`.
+/// The baseline that centers ink `ink` ems tall at `size` in a band `h` tall.
 pub(crate) fn centered_base(ui: &mut Ui<'_>, top: f32, h: f32, size: f32, ink: f32) -> f32 {
     ui.text_system().snap(top + (h + ink * size) / 2.0)
 }
@@ -44,8 +40,7 @@ pub(crate) fn cap_base(ui: &mut Ui<'_>, top: f32, h: f32, style: TextStyle) -> f
     centered_base(ui, top, h, style.size, CAP)
 }
 
-/// Draws `lines` of `style` down from `top`, each from `x` or, when
-/// `center`, centered in `w` from `x`; returns their height.
+/// Draws `lines` down from `top`, from `x` or centered in `w`; returns their height.
 pub(crate) fn lines(
     ui: &mut Ui<'_>,
     lines: &[&str],
@@ -73,8 +68,7 @@ pub(crate) fn pointer(ui: &Ui<'_>, id: WidgetId) -> (bool, bool) {
     (hover, hover && s.pressed == Some(id))
 }
 
-/// A clickable card's fill and edge: raised, lighter under the pointer,
-/// sunk while held, its edge stronger under the pointer.
+/// A clickable card's fill and edge: lighter under the pointer, sunk when held.
 pub(crate) fn card_colors(t: &Theme, hover: bool, down: bool) -> (Rgba, Rgba) {
     let fill = match (hover, down) {
         (_, true) => t.pressed(t.surface_hi),
@@ -85,8 +79,7 @@ pub(crate) fn card_colors(t: &Theme, hover: bool, down: bool) -> (Rgba, Rgba) {
     (fill, edge)
 }
 
-/// A raised rounded rect: `fill`, a 1 px `edge`, and the theme's light
-/// top edge.
+/// A raised rounded rect: `fill`, a 1 px `edge`, and the theme's light top.
 pub(crate) fn raised(ui: &mut Ui<'_>, r: RectF, radius: f32, fill: Rgba, edge: Rgba) {
     let (t, line) = (ui.theme(), px(ui, 1.0));
     ui.fill(r, radius, fill);
@@ -96,10 +89,9 @@ pub(crate) fn raised(ui: &mut Ui<'_>, r: RectF, radius: f32, fill: Rgba, edge: R
     ui.pop_clip();
 }
 
-/// An app icon filling the square `r`: a soft drop shadow, a rounded
-/// square in a vertical gradient of its hue, a faint white rim, and its
-/// glyph in white (SansBold when it is all ASCII letters and digits, which
-/// the UI fonts hold, else Mono), centered on its ink and shrunk to fit.
+/// An app icon in the square `r`: a shadowed rounded square in a gradient of
+/// its hue, and its glyph in white (SansBold if alphanumeric, else Mono),
+/// centered on its ink and shrunk to fit.
 pub(crate) fn icon(ui: &mut Ui<'_>, r: RectF, icon: AppIcon) {
     let t = ui.theme();
     let radius = (r.w * 0.28).round();
@@ -109,10 +101,8 @@ pub(crate) fn icon(ui: &mut Ui<'_>, r: RectF, icon: AppIcon) {
     let line = px(ui, 1.0);
     ui.border(r, radius, line, WHITE.with_alpha(36));
     let glyph = icon.glyph;
-    let font = match glyph.chars().all(|c| c.is_ascii_alphanumeric()) {
-        true => FontId::SansBold,
-        false => FontId::Mono,
-    };
+    let bold = glyph.chars().all(|c| c.is_ascii_alphanumeric());
+    let font = if bold { FontId::SansBold } else { FontId::Mono };
     let mut style = TextStyle::new(font, (r.w * 1.8).floor() / 4.0, WHITE);
     let room = r.w * 0.64;
     let w = ui.text_system().measure(glyph, style);
@@ -121,10 +111,7 @@ pub(crate) fn icon(ui: &mut Ui<'_>, r: RectF, icon: AppIcon) {
     }
     let w = ui.text_system().measure(glyph, style);
     // Lowercase letters center their x-height, everything else its caps.
-    let ink = match glyph.chars().all(|c| c.is_ascii_lowercase()) {
-        true => X_HEIGHT,
-        false => CAP,
-    };
+    let ink = if glyph.chars().all(|c| c.is_ascii_lowercase()) { X_HEIGHT } else { CAP };
     let base = centered_base(ui, r.y, r.h, style.size, ink);
     let x = r.x + (r.w - w) / 2.0;
     let shade = style.with_color(BLACK.with_alpha(56));
@@ -132,8 +119,7 @@ pub(crate) fn icon(ui: &mut Ui<'_>, r: RectF, icon: AppIcon) {
     ui.text(x, base, glyph, style);
 }
 
-/// A view taller than its window, scrolled by the wheel: the offset, and
-/// its most, measured at each draw.
+/// A view taller than its window, scrolled by the wheel: offset and maximum.
 #[derive(Debug, Default)]
 pub(crate) struct Scroll {
     pub(crate) y: f32,
@@ -141,8 +127,7 @@ pub(crate) struct Scroll {
 }
 
 impl Scroll {
-    /// Records that `content` px of content show in a view `view` px tall,
-    /// and keeps the offset in range.
+    /// Records `content` px shown in `view` px; keeps the offset in range.
     pub(crate) fn measure(&mut self, content: f32, view: f32) {
         self.max = (content - view).max(0.0);
         self.y = self.y.min(self.max);

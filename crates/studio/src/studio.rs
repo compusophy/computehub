@@ -11,77 +11,62 @@ const RUN: WidgetId = WidgetId(1);
 const SAVE: WidgetId = WidgetId(2);
 const NEW: WidgetId = WidgetId(3);
 const EDITOR: WidgetId = WidgetId(4);
-/// The first problem row; row `i` is `PROBLEM + i`.
-const PROBLEM: u32 = 100;
-const MAX_PROBLEMS: usize = 5;
+/// The problem row under the editor.
+const PROBLEM: WidgetId = WidgetId(100);
 const PROBLEM_H: f32 = 24.0;
-
-/// The least room for the toolbar's note beside the buttons; with less it
-/// goes on its own line under them.
+/// The least room for the toolbar's note beside the buttons, else it goes
+/// on its own line under them.
 const NOTE_MIN: f32 = 80.0;
 /// Space between the editor's well and its text.
 const INSET: f32 = 6.0;
-const KEYWORDS: [&str; 12] = [
-    "state", "label", "button", "input", "row", "col", "let", "if", "else", "repeat", "true",
-    "false",
-];
+#[rustfmt::skip]
+const KEYWORDS: [&str; 12] =
+    ["state", "label", "button", "input", "row", "col", "let", "if", "else", "repeat", "true", "false"];
 
 /// Where the last frame put the text, for clicks and scrolling.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Geo {
-    /// The text area, relative to the corner of the [`Ui`] rect (the space
-    /// of [`AppEvent::PointerDown`]): line `top`, column `left` starts at
-    /// its corner.
+    /// The text area relative to the `Ui` rect's corner (the space of
+    /// [`AppEvent::PointerDown`]); line `top`, column `left` starts there.
     pub(crate) text: RectF,
     pub(crate) cell: f32,
     pub(crate) row: f32,
-    /// Whole rows and columns that fit (at least one each).
+    /// Whole rows that fit (at least one).
     pub(crate) rows: usize,
-    cols: usize,
 }
 
-/// The applang editor. Run compiles the text: on success it saves and asks
-/// the shell to open the file (an [`crate::AppHost`] runs it); on failure
-/// it lists the problems, and clicking one moves the caret there.
-///
-/// It draws in the frame's theme: a sunken well, the current line raised,
-/// faint line numbers, keywords in the accent, strings and numbers in the
-/// theme's terminal green and yellow, comments faint.
-///
-/// Keys: Enter keeps indentation, Tab inserts two spaces, Backspace,
-/// Delete, arrows, Home, End, PageUp and PageDown edit and move; Ctrl+S (or
-/// Cmd+S) saves and Ctrl+Enter runs. The wheel scrolls, taking the caret
-/// along so it stays in view.
+/// The applang editor. Run (or Ctrl+Enter) compiles: on success it saves and
+/// asks the shell to open the file; on failure it shows the problem, and a
+/// click on it moves the caret there. Ctrl+S (or Cmd+S) saves; the wheel
+/// scrolls whole rows, taking the caret along.
 #[derive(Debug, Default)]
 pub struct Studio {
     pub(crate) path: String,
     pub(crate) ed: Editor,
     loaded: bool,
     dirty: bool,
-    pub(crate) problems: Vec<Problem>,
+    pub(crate) problem: Option<Problem>,
     status: String,
     /// The first line and column in view.
     pub(crate) top: usize,
     left: usize,
     /// Wheel pixels not yet a whole row.
     wheel: f32,
-    /// The key of the event just before this one, to drop the `\n` or `\t`
-    /// text a browser may send after Enter or Tab.
+    /// The previous event's key, to drop the `\n` or `\t` text a browser
+    /// may send after Enter or Tab.
     last_key: Option<Key>,
     /// None until the first frame.
     pub(crate) geo: Option<Geo>,
 }
 
 impl Studio {
-    /// Studio on `path`, not read yet: it loads on its first event or on
-    /// [`Studio::load`].
+    /// Studio on `path`, read on its first event or by [`Studio::load`].
     pub fn new(path: &str) -> Studio {
-        let path = path.to_string();
-        Studio { path, ..Studio::default() }
+        Studio { path: path.to_string(), ..Studio::default() }
     }
 
-    /// Reads the file into the editor. A missing sample starts as the
-    /// sample; any other missing file starts empty.
+    /// Reads the file. A missing sample starts as the sample, any other
+    /// missing file empty.
     pub fn load(&mut self, vfs: &Vfs) {
         let text = match vfs.read(&self.path) {
             Ok(bytes) => String::from_utf8_lossy(bytes).into_owned(),
@@ -111,11 +96,11 @@ impl Studio {
     fn run(&mut self, cx: &mut Cx<'_>) {
         let src = self.ed.text();
         if let Err(d) = applang::compile(&src) {
-            self.problems = vec![Problem::new(&d, &src)];
+            self.problem = Some(Problem::new(&d, &src));
             self.status = "did not compile".to_string();
             return;
         }
-        self.problems.clear();
+        self.problem = None;
         self.save(cx);
         if !self.dirty {
             cx.open(&self.path);
@@ -132,8 +117,7 @@ impl Studio {
                 path.push('-');
                 push_num(&mut path, n, 1);
             }
-            path.push_str(".app");
-            path
+            path + ".app"
         };
         let Some(path) = (1..100).map(name).find(|p| !cx.vfs.exists(p)) else {
             self.status = "too many untitled apps".to_string();
@@ -147,16 +131,6 @@ impl Studio {
             }
             Err(e) => join(&["new failed: ", &e.to_string()]),
         };
-    }
-
-    /// Scrolls so the caret is in view; each frame does this.
-    pub(crate) fn reveal(&mut self) {
-        let Some(Geo { rows, cols, .. }) = self.geo else {
-            return;
-        };
-        let (l, c) = self.ed.caret();
-        self.top = self.top.clamp((l + 1).saturating_sub(rows), l);
-        self.left = self.left.clamp((c + 1).saturating_sub(cols), c);
     }
 
     /// The wheel: whole rows, the caret kept on a row in view.
@@ -205,35 +179,6 @@ impl Studio {
         true
     }
 
-    /// Typed or pasted text, unless it echoes the Enter or Tab just handled.
-    fn text(&mut self, t: &str, last: Option<Key>) {
-        let echo = matches!(
-            (last, t),
-            (Some(Key::Enter), "\n" | "\r\n") | (Some(Key::Tab), "\t") | (_, "")
-        );
-        if !echo {
-            self.ed.insert(t);
-            self.dirty = true;
-        }
-    }
-
-    /// Moves the caret to problem `i`.
-    fn jump(&mut self, i: usize) {
-        if let Some(&(l, c)) = self.problems.get(i).and_then(|p| p.pos.as_ref()) {
-            self.ed.set_caret(l.saturating_sub(1), c.saturating_sub(1));
-        }
-    }
-
-    /// A press at `(x, y)` in the editor, relative to the content's corner
-    /// as the shell sends it.
-    fn click(&mut self, x: f32, y: f32) {
-        if let Some(g) = self.geo {
-            let x = x - g.text.x + self.left as f32 * g.cell;
-            let y = y - g.text.y + self.top as f32 * g.row;
-            self.ed.click(x, y, g.cell, g.row);
-        }
-    }
-
     /// The editor: gutter, highlighted text and caret, clipped to `well`.
     fn draw_text(&mut self, ui: &mut Ui<'_>, well: RectF, (row, asc): (f32, f32)) {
         let (t, line_px) = (ui.theme(), px(ui, 1.0));
@@ -245,18 +190,14 @@ impl Studio {
         let gutter = (num.len() + 2) as f32 * cell;
         let (w, h) = (well.w - gutter - INSET, well.h - 2.0 * INSET);
         let text = RectF::new(well.x + gutter, well.y + INSET, w.max(cell), h.max(row));
-        let (rows, cols) = ((text.h / row) as usize, (text.w / cell) as usize);
-        let (rows, cols) = (rows.max(1), cols.max(1));
+        let (rows, cols) = (((text.h / row) as usize).max(1), ((text.w / cell) as usize).max(1));
         let r = ui.rect();
-        self.geo = Some(Geo {
-            text: RectF::new(text.x - r.x, text.y - r.y, text.w, text.h),
-            cell,
-            row,
-            rows,
-            cols,
-        });
-        self.reveal();
+        let rel = RectF::new(text.x - r.x, text.y - r.y, text.w, text.h);
+        self.geo = Some(Geo { text: rel, cell, row, rows });
+        // Scroll so the caret is in view.
         let (cl, cc) = self.ed.caret();
+        self.top = self.top.clamp((cl + 1).saturating_sub(rows), cl);
+        self.left = self.left.clamp((cc + 1).saturating_sub(cols), cc);
         ui.push_clip(well);
         let sep = ui.text_system().snap(well.x + gutter - 0.625 * cell);
         ui.fill(RectF::new(sep, well.y, line_px, well.h), 0.0, t.border);
@@ -296,17 +237,11 @@ impl Studio {
 
 /// What a char of applang is, for its color.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Tok {
-    Plain,
-    Keyword,
-    Str,
-    Number,
-    Comment,
-}
+#[rustfmt::skip]
+pub(crate) enum Tok { Plain, Keyword, Str, Number, Comment }
 
-/// The color of a [`Tok`] in `t`. Plain code is a shade softer than body
-/// text, so keywords in the accent stand out even where the accent is
-/// white.
+/// A [`Tok`]'s color. Plain code is a shade softer than body text, so
+/// keywords stand out even where the accent is white.
 fn ink(tok: Tok, t: &Theme) -> Rgba {
     match tok {
         Tok::Plain => mix(t.text, t.text_dim, 0.2),
@@ -330,9 +265,9 @@ pub(crate) fn snapped(ui: &mut Ui<'_>, r: RectF) -> RectF {
     RectF::new(x, y, ts.snap(r.x + r.w) - x, ts.snap(r.y + r.h) - y)
 }
 
-/// Fills `out` with a [`Tok`] for each byte of one line of applang (a char
-/// takes its first byte's): keywords, strings, numbers and `//` comments.
-/// Everything that starts or ends a token is ASCII, so bytes will do.
+/// Fills `out` with a [`Tok`] per byte of one line (a char takes its first
+/// byte's): keywords, strings, numbers and `//` comments. Every token
+/// starts and ends on ASCII, so bytes will do.
 pub(crate) fn paint(line: &str, out: &mut Vec<Tok>) {
     let (b, n) = (line.as_bytes(), line.len());
     out.clear();
@@ -398,10 +333,30 @@ impl App for Studio {
             AppEvent::Click(RUN) => self.run(cx),
             AppEvent::Click(SAVE) => self.save(cx),
             AppEvent::Click(NEW) => self.new_file(cx),
-            AppEvent::Click(WidgetId(n)) if n >= PROBLEM => self.jump((n - PROBLEM) as usize),
-            AppEvent::PointerDown { x, y, id } if id == Some(EDITOR) => self.click(x, y),
+            AppEvent::Click(PROBLEM) => {
+                if let Some((l, c)) = self.problem.as_ref().and_then(|p| p.pos) {
+                    self.ed.set_caret(l.saturating_sub(1), c.saturating_sub(1));
+                }
+            }
+            AppEvent::PointerDown { x, y, id } if id == Some(EDITOR) => {
+                if let Some(g) = self.geo {
+                    let x = x - g.text.x + self.left as f32 * g.cell;
+                    let y = y - g.text.y + self.top as f32 * g.row;
+                    self.ed.click(x, y, g.cell, g.row);
+                }
+            }
             AppEvent::Key { key, mods } => return self.key(key, mods, cx) || fresh,
-            AppEvent::Text(t) => self.text(&t, last),
+            // Typed or pasted text, unless it echoes the Enter or Tab just handled.
+            AppEvent::Text(t) => {
+                let echo = matches!(
+                    (last, t.as_str()),
+                    (Some(Key::Enter), "\n" | "\r\n") | (Some(Key::Tab), "\t") | (_, "")
+                );
+                if !echo {
+                    self.ed.insert(&t);
+                    self.dirty = true;
+                }
+            }
             AppEvent::Wheel { dy, .. } => return self.scroll(dy) || fresh,
             AppEvent::Resized { .. } | AppEvent::Focus(_) => {}
             _ => return fresh,
@@ -415,7 +370,7 @@ impl App for Studio {
         let note = join(&[&self.path, dirty, sep, &self.status]);
         let (r, t, line_px) = (ui.rect(), ui.theme(), px(ui, 1.0));
         let (mono, small) = (t.mono(), t.small());
-        // One line right of the buttons, or under them if too little fits.
+        // The note goes right of the buttons, or under them if too little fits.
         let mut room = 0.0;
         ui.row(|ui| {
             ui.button_primary(RUN, "Run");
@@ -439,36 +394,34 @@ impl App for Studio {
         let y0 = ui.cursor().1;
         let ts = ui.text_system();
         let (row, asc) = (ts.line_height(mono), ts.ascent(mono));
-        let shown = self.problems.len().min(MAX_PROBLEMS);
-        // The problem rows, and a gap above them when there are any.
-        let panel = shown.min(1) as f32 * SPACING + shown as f32 * PROBLEM_H;
+        // The problem row, and a gap above it, when there is one.
+        let panel = if self.problem.is_some() { SPACING + PROBLEM_H } else { 0.0 };
         let well_h = (r.y + r.h - PAD - panel - y0).max(row + 2.0 * INSET);
         let well = snapped(ui, RectF::new(r.x + PAD, y0, ui.width(), well_h));
         ui.fill(well, RADIUS_SM, t.surface_lo);
         self.draw_text(ui, well, (row, asc));
         ui.border(well, RADIUS_SM, line_px, t.border);
 
-        let mut y = well.y + well.h + SPACING;
-        for (i, p) in self.problems.iter().take(shown).enumerate() {
-            let id = WidgetId(PROBLEM + i as u32);
-            let rect = RectF::new(well.x, y, well.w, PROBLEM_H);
-            let (hover, down) = (ui.state().hover == Some(id), ui.state().pressed == Some(id));
-            if hover {
-                ui.fill(rect, 6.0, t.wash(down));
-            }
-            let base = ui.text_system().snap(y + (PROBLEM_H - row) / 2.0 + asc);
-            let (code, pos) = p.head();
-            ui.push_clip(rect);
-            let mut x = rect.x + 8.0;
-            for (part, color) in [(&code, t.danger), (&pos, t.text_dim), (&p.message, t.text)] {
-                if !part.is_empty() {
-                    x += ui.text(x, base, part, mono.with_color(color)) + 8.0;
-                }
-            }
-            ui.pop_clip();
-            ui.hit(id, rect, Sense::Click);
-            y += PROBLEM_H;
+        let y = well.y + well.h + SPACING;
+        let Some(p) = &self.problem else {
+            ui.advance_to(y);
+            return;
+        };
+        let rect = RectF::new(well.x, y, well.w, PROBLEM_H);
+        if ui.state().hover == Some(PROBLEM) {
+            ui.fill(rect, 6.0, t.wash(ui.state().pressed == Some(PROBLEM)));
         }
-        ui.advance_to(y);
+        let base = ui.text_system().snap(y + (PROBLEM_H - row) / 2.0 + asc);
+        let (code, pos) = p.head();
+        ui.push_clip(rect);
+        let mut x = rect.x + 8.0;
+        for (part, color) in [(&code, t.danger), (&pos, t.text_dim), (&p.message, t.text)] {
+            if !part.is_empty() {
+                x += ui.text(x, base, part, mono.with_color(color)) + 8.0;
+            }
+        }
+        ui.pop_clip();
+        ui.hit(PROBLEM, rect, Sense::Click);
+        ui.advance_to(y + PROBLEM_H);
     }
 }

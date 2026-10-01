@@ -1,9 +1,7 @@
-//! The guest shell: what the Terminal runs. A line editor and a few
-//! Unix-like commands over the VFS, answering with ANSI text into an
-//! xterm-compatible screen. Lines end in `\n`; the Terminal makes that CR LF.
-//! Commands are rows of a table; what they do to paths is an `Op`. Output is
-//! built with `push_str`, not `format!`: smaller wasm. Split from `apps`,
-//! whose Terminal runs it.
+//! The guest shell the Terminal runs: a line editor and Unix-like commands
+//! over the VFS, answering in ANSI text (lines end in `\n`; the Terminal
+//! makes that CR LF). Commands are rows of a table; what they do to paths is
+//! an `Op`. Output is built with `push_str`, not `format!`: smaller wasm.
 
 #![forbid(unsafe_code)]
 
@@ -14,43 +12,6 @@ use vfs::VfsError::{self, IsADir, NotADir, NotFound};
 
 /// The apps `open` knows by name.
 const BUILTIN: [&str; 4] = ["terminal", "studio", "welcome", "settings"];
-/// `help`: sections of (synopsis, what it does), one command a line.
-const HELP: [(&str, &[(&str, &str)]); 3] = [
-    (
-        "Files",
-        &[
-            ("ls [-a] [path]", "list a directory; -a shows dot files"),
-            ("cd [dir]", "change directory; ~ is home"),
-            ("pwd", "print the working directory"),
-            ("cat <file>...", "print files"),
-            ("echo <text>", "print text; > file writes it, >> file appends"),
-            ("mkdir [-p] <dir>...", "make directories; -p makes parents too"),
-            ("touch <file>...", "make empty files"),
-            ("rm [-r] <path>...", "remove files; -r removes directories"),
-            ("mv <from> <to>", "move or rename"),
-        ],
-    ),
-    (
-        "Apps",
-        &[
-            ("apps", "list the apps you can open"),
-            ("open <app|file.app>", "open one in a new window"),
-            ("run <file.app>", "run an applang app"),
-            ("edit <file>", "edit a file in Studio"),
-        ],
-    ),
-    (
-        "Shell",
-        &[
-            ("history", "list past commands"),
-            ("theme [name]", "list the themes, or switch to one"),
-            ("clear", "clear the screen"),
-            ("whoami", "print your user name"),
-            ("uname [-a]", "print the system's name"),
-            ("exit", "close this terminal"),
-        ],
-    ),
-];
 const KEYS: &str = "Up and Down recall history, Ctrl+C cancels the line, Ctrl+L clears the \
 screen. Quotes group words: \"a b\" or 'a b'.";
 /// `uname`, then `uname -a`.
@@ -62,74 +23,90 @@ type Cmd = fn(&mut Guest, &[&str], u32, &mut Io<'_>, &mut Cx<'_>);
 /// Any number of operands.
 const ANY: usize = usize::MAX;
 
-/// Every command: its name, the flag letters it takes, its fewest and most
-/// operands (flags included), the synopsis a usage error prints for another
-/// count, and what it runs.
+/// Every command: its name, flag letters, fewest and most operands (flags
+/// included), synopsis (for `help` and usage errors), what it does (for
+/// `help`, which leaves out an empty one) and what it runs.
 #[rustfmt::skip]
-const COMMANDS: [(&str, &str, usize, usize, &str, Cmd); 20] = [
-    ("help", "", 0, ANY, "", |g, _, _, io, _| help(io, g.cols)),
-    ("ls", "a", 0, ANY, "", ls),
-    ("cd", "", 0, 1, "cd [dir]", |g, a, _, io, cx| {
+const COMMANDS: [(&str, &str, usize, usize, &str, &str, Cmd); 20] = [
+    ("ls", "a", 0, ANY, "ls [-a] [path]", "list a directory; -a shows dot files", ls),
+    ("cd", "", 0, 1, "cd [dir]", "change directory; ~ is home", |g, a, _, io, cx| {
         g.each(if a.is_empty() { &["~"][..] } else { a }, io, cx, Op::Cd);
     }),
-    ("pwd", "", 0, ANY, "", |g, _, _, io, _| io.line(&[&g.cwd], "")),
-    ("cat", "", 1, ANY, "cat <file>...", |g, a, _, io, cx| g.each(a, io, cx, Op::Cat)),
-    ("echo", "", 0, ANY, "", |_, a, _, io, _| io.line(a, " ")),
-    ("mkdir", "p", 1, ANY, "mkdir [-p] <dir>...",
+    ("pwd", "", 0, ANY, "pwd", "print the working directory",
+        |g, _, _, io, _| io.line(&[&g.cwd], "")),
+    ("cat", "", 1, ANY, "cat <file>...", "print files",
+        |g, a, _, io, cx| g.each(a, io, cx, Op::Cat)),
+    ("echo", "", 0, ANY, "echo <text>", "print text; > file writes it, >> file appends",
+        |_, a, _, io, _| io.line(a, " ")),
+    ("mkdir", "p", 1, ANY, "mkdir [-p] <dir>...", "make directories; -p makes parents too",
         |g, a, f, io, cx| g.each(a, io, cx, Op::Mkdir(f))),
-    ("touch", "", 1, ANY, "touch <file>...", |g, a, _, io, cx| g.each(a, io, cx, Op::Touch)),
-    ("rm", "rRf", 1, ANY, "rm [-r] <path>...", |g, a, f, io, cx| g.each(a, io, cx, Op::Rm(f))),
-    ("mv", "", 2, 2, "mv <from> <to>", |g, a, _, io, cx| g.each(&a[..1], io, cx, Op::Mv(a[1]))),
-    ("open", "", 1, 1, "open <app|file.app>", open),
-    ("edit", "", 1, 1, "edit <file>", |g, a, _, io, cx| g.each(a, io, cx, Op::Edit)),
-    ("run", "", 1, 1, "run <file.app>", |g, a, _, io, cx| g.each(a, io, cx, Op::Run(a[0]))),
-    ("apps", "", 0, ANY, "", |_, _, _, io, cx| {
+    ("touch", "", 1, ANY, "touch <file>...", "make empty files",
+        |g, a, _, io, cx| g.each(a, io, cx, Op::Touch)),
+    ("rm", "rRf", 1, ANY, "rm [-r] <path>...", "remove files; -r removes directories",
+        |g, a, f, io, cx| g.each(a, io, cx, Op::Rm(f))),
+    ("mv", "", 2, 2, "mv <from> <to>", "move or rename",
+        |g, a, _, io, cx| g.each(&a[..1], io, cx, Op::Mv(a[1]))),
+    ("apps", "", 0, ANY, "apps", "list the apps you can open", |_, _, _, io, cx| {
         io.line(&BUILTIN, "  ");
-        crate::app_files(cx.vfs).iter().for_each(|p| io.line(&[p], ""));
+        for dir in ["/apps", Vfs::HOME] {
+            for e in cx.vfs.list(dir).unwrap_or_default() {
+                if !e.is_dir && e.name.ends_with(".app") {
+                    io.line(&[dir, "/", &e.name], "");
+                }
+            }
+        }
     }),
-    ("history", "", 0, ANY, "", |g, _, _, io, _| {
+    ("open", "", 1, 1, "open <app|file.app>", "open one in a new window", open),
+    ("run", "", 1, 1, "run <file.app>", "run an applang app",
+        |g, a, _, io, cx| g.each(a, io, cx, Op::Run(a[0]))),
+    ("edit", "", 1, 1, "edit <file>", "edit a file in Studio",
+        |g, a, _, io, cx| g.each(a, io, cx, Op::Edit)),
+    ("history", "", 0, ANY, "history", "list past commands", |g, _, _, io, _| {
         for (i, h) in g.history.iter().enumerate() {
             let mut n = String::new();
-            push_int(&mut n, i as u64 + 1, 4, ' ');
+            push_int(&mut n, i as u64 + 1, 4);
             io.line(&[&n, h], "  ");
         }
     }),
-    ("theme", "", 0, 1, "theme [name]", theme),
-    ("clear", "", 0, ANY, "", |_, _, _, io, _| io.out("\x1b[3J\x1b[H\x1b[2J")),
-    ("exit", "", 0, ANY, "", |_, _, _, _, cx| cx.close_self()),
-    ("whoami", "", 0, ANY, "", |_, _, _, io, _| io.out("guest\n")),
-    ("uname", "", 0, ANY, "", |_, a, _, io, _| io.out(UNAME[usize::from(matches!(a, ["-a"]))])),
+    ("theme", "", 0, 1, "theme [name]", "list the themes, or switch to one", theme),
+    ("clear", "", 0, ANY, "clear", "clear the screen",
+        |_, _, _, io, _| io.out("\x1b[3J\x1b[H\x1b[2J")),
+    ("whoami", "", 0, ANY, "whoami", "print your user name", |_, _, _, io, _| io.out("guest\n")),
+    ("uname", "", 0, ANY, "uname [-a]", "print the system's name",
+        |_, a, _, io, _| io.out(UNAME[usize::from(matches!(a, ["-a"]))])),
+    ("exit", "", 0, ANY, "exit", "close this terminal", |_, _, _, _, cx| cx.close_self()),
+    ("help", "", 0, ANY, "", "", |g, _, _, io, _| help(io, g.cols)),
 ];
+/// `help`'s sections: a title and the row of [`COMMANDS`] it starts at.
+const SECTIONS: [(&str, usize); 3] = [("Files", 0), ("Apps", 9), ("Shell", 13)];
 
 /// Writes the command list for a terminal `cols` wide: synopses in a column
-/// with descriptions beside them when there is room for both, otherwise
-/// each description on the line below, indented.
+/// with descriptions beside them, or below them, indented, when narrow.
 fn help(io: &mut Io<'_>, cols: u16) {
     let color = io.file.is_none();
+    let [bold, cyan, end] = if color { ["\x1b[1m", "\x1b[36m", "\x1b[m"] } else { [""; 3] };
     let cols = usize::from(cols);
-    let syn = HELP.iter().flat_map(|s| s.1).map(|r| r.0.len()).max().unwrap_or(0);
+    let syn = COMMANDS.iter().map(|r| r.4.len()).max().unwrap_or(0);
     // Two columns need room for a description of a few words.
     let lead = if cols >= syn + 4 + 24 { syn + 4 } else { 6 };
     let mut s = String::new();
-    for (title, rows) in HELP {
-        s.push_str(if color { "\x1b[1m" } else { "" });
-        s.push_str(title);
-        s.push_str(if color { "\x1b[m\n" } else { "\n" });
-        for (synopsis, what) in rows {
-            let mut line = String::from(if color { "  \x1b[36m" } else { "  " });
-            line.push_str(synopsis);
-            line.push_str(if color { "\x1b[m" } else { "" });
-            if lead > 6 {
-                line.extend(std::iter::repeat_n(' ', lead - 2 - synopsis.len()));
-            } else {
-                s.push_str(&line);
-                s.push('\n');
-                line = " ".repeat(lead);
-            }
-            line.push_str(what);
-            wrap_line(&line, cols, lead, &mut s);
-            s.push('\n');
+    for (i, &(.., synopsis, what, _)) in COMMANDS.iter().enumerate() {
+        if let Some(&(title, _)) = SECTIONS.iter().find(|t| t.1 == i) {
+            push_all(&mut s, &[bold, title, end, "\n"]);
         }
+        if what.is_empty() {
+            continue;
+        }
+        let mut line = ["  ", cyan, synopsis, end].concat();
+        if lead > 6 {
+            line.extend(std::iter::repeat_n(' ', lead - 2 - synopsis.len()));
+        } else {
+            push_all(&mut s, &[&line, "\n"]);
+            line = " ".repeat(lead);
+        }
+        line.push_str(what);
+        wrap_line(&line, cols, lead, &mut s);
+        s.push('\n');
     }
     s.push('\n');
     wrap_line(KEYS, cols, 0, &mut s);
@@ -137,26 +114,15 @@ fn help(io: &mut Io<'_>, cols: u16) {
     io.out(&s);
 }
 
-/// Word-wraps `text` to `cols` columns into `out`, line by line. A line's
-/// continuations keep its indentation, plus the width of a "1. " or "- "
-/// marker after it, so list items hang. Escape sequences take no width.
+/// Word-wraps `text` to `cols` columns into `out`, line by line.
 pub fn wrap(text: &str, cols: usize, out: &mut String) {
     for (i, line) in text.split('\n').enumerate() {
         out.push_str(if i > 0 { "\n" } else { "" });
-        let indent = line.len() - line.trim_start_matches(' ').len();
-        let body = &line[indent..];
-        let digits = body.len() - body.trim_start_matches(|c: char| c.is_ascii_digit()).len();
-        let marker = if digits > 0 && body[digits..].starts_with(". ") {
-            digits + 2
-        } else {
-            usize::from(body.starts_with("- ")) * 2
-        };
-        wrap_line(line, cols, indent + marker, out);
+        wrap_line(line, cols, 0, out);
     }
 }
 
-/// Word-wraps one line, continuing at column `hang`. Words wider than the
-/// room are left whole for the terminal to break.
+/// Word-wraps one line, continuing at column `hang`; long words stay whole.
 fn wrap_line(line: &str, cols: usize, hang: usize, out: &mut String) {
     if cols < hang + 12 {
         return out.push_str(line);
@@ -192,8 +158,9 @@ fn width(s: &str) -> usize {
     w
 }
 
-/// What a command does to each path it names, made absolute. `Mkdir` and
-/// `Rm` hold their flags; `Run` its operand, for an error.
+type Res = Result<(), VfsError>;
+
+/// What a command does to each (absolute) path it names.
 #[derive(Clone, Copy)]
 enum Op<'a> {
     Cd,
@@ -207,15 +174,13 @@ enum Op<'a> {
     Edit,
     Run(&'a str),
 }
-/// What [`Guest::apply`] returns.
-type Res = Result<(), VfsError>;
 
 /// A shell: the working directory, the line being edited, the history.
 #[derive(Debug, Default)]
 pub struct Guest {
-    /// What to show next: the Terminal takes it after each call.
+    /// What to show next; the Terminal takes it after each call.
     pub out: String,
-    /// The terminal's width, for wrapping the line.
+    /// The terminal's width.
     pub cols: u16,
     cwd: String,
     line: Vec<char>,
@@ -225,8 +190,7 @@ pub struct Guest {
     /// The history entry shown while browsing, and the line typed before.
     browse: Option<usize>,
     draft: Vec<char>,
-    /// The caret's row below the prompt's first row, and its column, as
-    /// last drawn.
+    /// The caret's row (below the prompt's first) and column, as last drawn.
     caret: (usize, usize),
 }
 
@@ -263,7 +227,7 @@ impl Io<'_> {
 /// Pushes `ESC [ n c`.
 fn csi(out: &mut String, n: usize, c: char) {
     out.push_str("\x1b[");
-    push_int(out, n as u64, 0, '0');
+    push_int(out, n as u64, 0);
     out.push(c);
 }
 
@@ -275,7 +239,7 @@ impl Guest {
         g
     }
 
-    /// Handles a key. Printable keys come as [`Guest::text`] instead.
+    /// Handles a key; printable ones come as [`Guest::text`].
     pub fn key(&mut self, key: Key, mods: Mods, cx: &mut Cx<'_>) {
         let n = self.line.len();
         match (key, mods.ctrl) {
@@ -306,8 +270,7 @@ impl Guest {
         self.redraw();
     }
 
-    /// Inserts typed or pasted text at the caret; a line break runs the line
-    /// so far, as Enter would.
+    /// Inserts typed or pasted text at the caret; a line break acts as Enter.
     pub fn text(&mut self, s: &str, cx: &mut Cx<'_>) {
         for c in s.chars() {
             if c == '\n' {
@@ -324,8 +287,7 @@ impl Guest {
     fn enter(&mut self, cx: &mut Cx<'_>) {
         self.pos = self.line.len();
         self.redraw();
-        // Down a row, unless the line filled its last row and the caret is
-        // at the start of the next already.
+        // Down a row, unless a full last row left the caret at the next.
         if self.caret.1 > 0 || self.caret.0 == 0 {
             self.out.push('\n');
         }
@@ -343,8 +305,7 @@ impl Guest {
         self.render();
     }
 
-    /// Up (`back`) or Down through the history; past the newest entry comes
-    /// back the line that was being typed.
+    /// Up (`back`) or Down the history; past the newest is the typed line.
     fn recall(&mut self, back: bool) {
         let n = self.history.len();
         let next = match (self.browse, back) {
@@ -374,9 +335,8 @@ impl Guest {
         self.render();
     }
 
-    /// Draws the prompt and the line from column 0 of the cursor's row, then
-    /// moves the cursor to the caret. Positions follow the terminal's
-    /// wrapping: a char that does not fit starts the next row.
+    /// Draws the prompt and the line from column 0, then moves to the caret,
+    /// wrapping as the terminal does (a char that does not fit starts a row).
     pub fn render(&mut self) {
         const USER: &str = "guest@compusophy:";
         const GREEN: &str = "\x1b[1;32mguest@compusophy\x1b[m:\x1b[1;34m";
@@ -406,8 +366,7 @@ impl Guest {
             s.chars().for_each(&mut step);
         }
         self.line.iter().for_each(|&c| step(c));
-        // A position at the right edge is the start of the next row; the
-        // terminal waits there to wrap, so go down first.
+        // The right edge is the next row's start (the terminal waits to wrap).
         let norm = |(r, c): (usize, usize)| if c >= cols { (r + 1, 0) } else { (r, c) };
         if end.1 >= cols {
             out.push_str("\r\n");
@@ -423,8 +382,7 @@ impl Guest {
         self.caret = at;
     }
 
-    /// Runs one command line. Its stdout goes to the file a `>` or `>>`
-    /// names, if any.
+    /// Runs one command line; `>` or `>>` sends its stdout to a file.
     pub fn run(&mut self, line: &str, cx: &mut Cx<'_>) {
         let (words, redirect) = match parse(line) {
             Ok(parsed) => parsed,
@@ -435,12 +393,12 @@ impl Guest {
         let mut io = Io { cmd, screen, file };
         let args: Vec<&str> = words.iter().skip(1).map(String::as_str).collect();
         match COMMANDS.iter().find(|c| c.0 == cmd) {
-            Some(&(_, ok, min, max, _, run)) if (min..=max).contains(&args.len()) => {
+            Some(&(_, ok, min, max, .., run)) if (min..=max).contains(&args.len()) => {
                 if let Some((f, operands)) = flags(&args, ok, &mut io) {
                     run(self, operands, f, &mut io, cx);
                 }
             }
-            Some(&(.., synopsis, _)) => io.err(&["usage: ", synopsis]),
+            Some(&(.., synopsis, _, _)) => io.err(&["usage: ", synopsis]),
             None if words.is_empty() => {}
             None => io.err(&[cmd, ": command not found"]),
         }
@@ -531,8 +489,7 @@ fn open(g: &mut Guest, args: &[&str], _: u32, io: &mut Io<'_>, cx: &mut Cx<'_>) 
     }
 }
 
-/// `theme`: the themes' names, one a line; `theme <name>` switches the
-/// desktop to one (any case).
+/// `theme`: lists the themes; `theme <name>` switches to one (any case).
 fn theme(_: &mut Guest, args: &[&str], _: u32, io: &mut Io<'_>, cx: &mut Cx<'_>) {
     let Some(&want) = args.first() else {
         return THEMES.iter().for_each(|t| io.line(&[t.name], ""));
@@ -543,9 +500,8 @@ fn theme(_: &mut Guest, args: &[&str], _: u32, io: &mut Io<'_>, cx: &mut Cx<'_>)
     }
 }
 
-/// Splits leading `-xyz` flags, each a char of `ok` (none when it is empty),
-/// from the operands: the flags as bits (bit `i` for the `i`th char of `ok`)
-/// and the operands, or `None` (after reporting it) for an unknown flag.
+/// Splits leading `-xyz` flags (chars of `ok`, as bits) from the operands;
+/// `None`, after reporting it, for an unknown flag.
 fn flags<'a, 'b>(args: &'a [&'b str], ok: &str, io: &mut Io<'_>) -> Option<(u32, &'a [&'b str])> {
     let mut set = 0;
     for (n, arg) in args.iter().enumerate() {
@@ -564,12 +520,10 @@ fn flags<'a, 'b>(args: &'a [&'b str], ok: &str, io: &mut Io<'_>) -> Option<(u32,
     Some((set, &[]))
 }
 
-/// A command line's words and its redirect (path, append).
 type Parsed = (Vec<String>, Option<(String, bool)>);
 
-/// Splits a command line into words and a `>` or `>>` redirect. Quotes
-/// group: `'…'` is literal, `"…"` takes `\"` and `\\`, and a bare `\`
-/// escapes the next char.
+/// Splits a command line into words and a `>` or `>>` redirect (path,
+/// append). `'…'` is literal, `"…"` takes `\"` and `\\`, a bare `\` escapes.
 fn parse(line: &str) -> Result<Parsed, &'static str> {
     let (mut words, mut redirect, mut to) = (Vec::new(), None, None);
     let mut word: Option<String> = None;
@@ -611,31 +565,17 @@ fn parse(line: &str) -> Result<Parsed, &'static str> {
     }
 }
 
-/// Every `*.app` file directly in `/apps` and the guest's home, by path.
-pub fn app_files(fs: &vfs::Vfs) -> Vec<String> {
-    let mut out = Vec::new();
-    for &dir in &["/apps", vfs::Vfs::HOME] {
-        for e in fs.list(dir).unwrap_or_default() {
-            if !e.is_dir && e.name.ends_with(".app") {
-                out.push(dir.to_string() + "/" + &e.name);
-            }
-        }
-    }
-    out
-}
-
-/// Pushes each of `parts`: a slice, so every caller shares one loop.
+/// Pushes each of `parts` (one loop for every caller).
 fn push_all(out: &mut String, parts: &[&str]) {
     parts.iter().for_each(|p| out.push_str(p));
 }
 
-/// Pushes `n` in decimal, `fill` first up to `width` chars (as `{:0width$}`
-/// or `{:>width$}` would), without `core::fmt`.
-pub fn push_int(out: &mut String, n: u64, width: usize, fill: char) {
+/// Pushes `n` in decimal, right-aligned in `width` chars, without `core::fmt`.
+fn push_int(out: &mut String, n: u64, width: usize) {
     let len = n.checked_ilog10().unwrap_or(0) as usize + 1;
-    (len..width).for_each(|_| out.push(fill));
+    (len..width).for_each(|_| out.push(' '));
     if n >= 10 {
-        push_int(out, n / 10, 0, fill);
+        push_int(out, n / 10, 0);
     }
     out.push(char::from(b'0' + (n % 10) as u8));
 }
