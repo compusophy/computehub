@@ -8,12 +8,14 @@
 //! - Glyphs are rasterized at `size * dpr`, cached, and placed on device
 //!   pixels (the atlas samples 1:1). A full atlas is cleared and
 //!   [`TextSystem::take_atlas_reset`] asks for the frame again.
+//! - Vector shapes ([`TextSystem::draw_vector`]: icons) share the cache and atlas.
 //! - [`Editor`] is the text buffer behind `ui`'s code editor.
 
 #![forbid(unsafe_code)]
 
 mod edit;
 pub use edit::Editor;
+pub use font::Point;
 
 use font::{Bitmap, Font};
 use gfx::{Atlas, DrawList, RectF, Rgba};
@@ -22,9 +24,11 @@ use gfx::{Atlas, DrawList, RectF, Rgba};
 pub const ATLAS_SIZE: u32 = 1024;
 /// Most fallback fonts [`TextSystem::add_fallback`] takes.
 pub const MAX_FALLBACKS: usize = 8;
-/// Glyphs above this many device pixels per em are not drawn.
+/// Glyphs above this many device pixels per em (and vector shapes wider) are not drawn.
 const MAX_PX: f32 = 1000.0;
 const BUILTIN: usize = 3;
+/// The cache's face index for vector shapes: past any font slot.
+const VECTOR: u64 = 0xffff;
 /// JetBrains Mono's metrics and advance, for an empty Mono.
 const MONO_METRICS: [i32; 4] = [1000, 1020, -300, 0];
 const MONO_ADVANCE: i32 = 600;
@@ -64,7 +68,8 @@ struct Slot {
 }
 
 /// The faces (slots in [`FontId`] order, then fallbacks), a glyph cache
-/// sorted by face, glyph and px per em in 64ths, and its atlas.
+/// sorted by face, glyph and px per em in 64ths (vectors: face `0xffff`, id
+/// and side in px), and its atlas.
 pub struct TextSystem {
     faces: Vec<Option<Font>>,
     cache: Vec<(u64, Option<Slot>)>,
@@ -367,6 +372,36 @@ impl TextSystem {
         (g, adv)
     }
 
+    /// Draws a vector shape in `color`: `outline` fills a 1000 x 1000 box (x right, y up, origin
+    /// bottom-left), fitted to the square of side `min(r.w, r.h)` centered in `r`. It is
+    /// rasterized at that side in whole device pixels (at most 1000) and cached under `id`, so
+    /// one id must always name one shape.
+    pub fn draw_vector(
+        &mut self,
+        list: &mut DrawList,
+        r: RectF,
+        id: u16,
+        outline: fn(&mut Vec<Vec<Point>>),
+        color: Rgba,
+    ) {
+        let (d, side) = (self.dpr, (r.w.min(r.h) * self.dpr).round());
+        if !(1.0..=MAX_PX).contains(&side) {
+            return;
+        }
+        let key = (VECTOR << 48) | (u64::from(id) << 32) | side as u64;
+        let slot = self.cached(key, |t| {
+            let mut o = Vec::new();
+            outline(&mut o);
+            font::render_outline(&o, side / 1000.0, &mut t.bitmap).ok()?;
+            t.pack()
+        });
+        let Some(s) = slot else { return };
+        // The box's bottom-left corner, on a device pixel, is the outline's origin.
+        let x = ((r.x + r.w / 2.0) * d - side / 2.0).round() + s.left as f32;
+        let y = ((r.y + r.h / 2.0) * d + side / 2.0).round() + s.top as f32;
+        list.glyph(RectF::new(x / d, y / d, s.uv.w / d, s.uv.h / d), s.uv, color);
+    }
+
     /// Pushes glyph `g` (face, glyph, px per em) with pen and baseline at `at`.
     fn put(&mut self, list: &mut DrawList, g: (usize, u16, f32), at: (f32, f32), color: Rgba) {
         let Some(s) = self.glyph(g.0, g.1, g.2) else { return };
@@ -384,18 +419,26 @@ impl TextSystem {
         }
         let px64 = u64::from((px * 64.0).round() as u32);
         let key = ((face as u64) << 48) | (u64::from(gid) << 32) | px64;
+        self.cached(key, |t| {
+            t.faces[face].as_ref()?.rasterize(gid, px, &mut t.bitmap).ok()?;
+            t.pack()
+        })
+    }
+
+    /// The slot cached under `key`, made on a miss.
+    fn cached(&mut self, key: u64, make: impl FnOnce(&mut Self) -> Option<Slot>) -> Option<Slot> {
         let at = |cache: &[(u64, Option<Slot>)]| cache.partition_point(|e| e.0 < key);
         if let Some(e) = self.cache.get(at(&self.cache)).filter(|e| e.0 == key) {
             return e.1;
         }
-        // Rasterizing may clear the cache, so find the spot afterwards.
-        let slot = self.rasterize(face, gid, px);
+        // Making may clear the cache, so find the spot afterwards.
+        let slot = make(self);
         self.cache.insert(at(&self.cache), (key, slot));
         slot
     }
 
-    fn rasterize(&mut self, face: usize, gid: u16, px: f32) -> Option<Slot> {
-        self.faces[face].as_ref()?.rasterize(gid, px, &mut self.bitmap).ok()?;
+    /// Copies the bitmap into the atlas, clearing a full one.
+    fn pack(&mut self) -> Option<Slot> {
         let Bitmap { w, h, left, top, .. } = self.bitmap;
         if w == 0 || h == 0 {
             return None;

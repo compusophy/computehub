@@ -7,8 +7,9 @@
 //!   is preferred over format 4; no hinting, kerning or variations. Composites apply offsets,
 //!   scales and 2x2 matrices (point-matched parts sit at offset 0), at most 8 levels deep, 1,024
 //!   components and 262,144 points.
-//! - [`Font::rasterize`] flattens curves to within 0.2 px and accumulates signed area per cell
-//!   (the font-rs technique): coverage is `min(1, |winding|)`, so holes cancel and overlaps clamp.
+//! - [`Font::rasterize`] (and [`render_outline`], for any outline) flattens curves to within 0.2 px
+//!   and accumulates signed area per cell (the font-rs technique): coverage is `min(1, |winding|)`,
+//!   so holes cancel and overlaps clamp.
 
 #![forbid(unsafe_code)]
 
@@ -329,15 +330,26 @@ impl Font {
 
     /// Draws a glyph into `out`; an empty glyph or an error leaves `w = h = 0`.
     pub fn rasterize(&self, glyph: u16, px_per_em: f32, out: &mut Bitmap) -> Result<(), FontError> {
-        (out.w, out.h, out.left, out.top) = (0, 0, 0, 0);
-        out.data.clear();
-        if !(px_per_em.is_finite() && px_per_em > 0.0) {
-            return Err(FontError::BadSize);
-        }
         let mut outline = Vec::new();
-        self.outline(glyph, &mut outline)?;
-        raster::render(&outline, px_per_em / self.metrics[0] as f32, out)
+        let found = self.outline(glyph, &mut outline);
+        render_outline(&outline, px_per_em / self.metrics[0] as f32, out)?;
+        found
     }
+}
+
+/// Draws any outline (contours as [`Font::outline`] gives them, y up) at `scale` px per unit,
+/// as [`Font::rasterize`] draws a glyph: `out`'s corner is relative to the origin.
+pub fn render_outline(
+    contours: &[Vec<Point>],
+    scale: f32,
+    out: &mut Bitmap,
+) -> Result<(), FontError> {
+    (out.w, out.h, out.left, out.top) = (0, 0, 0, 0);
+    out.data.clear();
+    if !(scale.is_finite() && scale > 0.0) {
+        return Err(FontError::BadSize);
+    }
+    raster::render(contours, scale, out)
 }
 
 /// Per-point deltas: `short` is a byte signed by `same`, else `same` repeats.

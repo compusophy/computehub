@@ -6,11 +6,12 @@
 //! [`Hit`] regions and instances (and builds it again if [`TextSystem::take_atlas_reset`] says the
 //! atlas was cleared midway). Input comes back as [`AppEvent`]s routed by last frame's hits
 //! ([`hit_test`]); [`App::event`] returns whether to redraw, and an app asks for anything outside
-//! itself through its [`Cx`]. [`Code`] is the code editor widget.
+//! itself through its [`Cx`]. [`Code`] is the code editor widget; [`icon`] draws vector icons.
 
 #![forbid(unsafe_code)]
 
 mod code;
+pub mod icon;
 pub mod theme;
 mod widgets;
 
@@ -18,7 +19,7 @@ pub use code::{CODE_MAX, Code, Span, push_num};
 pub use gfx::Rgba;
 pub use kernel;
 pub use text::{ATLAS_SIZE, Editor, FontId, MAX_FALLBACKS, TextStyle, TextSystem};
-pub use theme::{Glow, THEMES, Theme, theme};
+pub use theme::{Glow, IconStyle, THEMES, Theme, theme};
 pub use widgets::{BUTTON_H, CARD_PAD, FIELD_H, PAD, RADIUS_LG, RADIUS_SM};
 pub use widgets::{Hit, Sense, Ui, UiState, WidgetId, button_width, hit_test};
 pub use widgets::{SPACING, SPACING_LG, SPACING_MD, TILE_H, TILE_ICON, TILE_W};

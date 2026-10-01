@@ -172,7 +172,7 @@ pub fn replay(dst: &mut DrawList, src: &DrawList, v: Vis) {
 }
 
 /// `a` crossfaded `t` of the way to `b`: colors mixed, lights moved (or, on
-/// one side only, faded in place); the name and darkness are `b`'s.
+/// one side only, faded in place); the name, darkness and icon style are `b`'s.
 #[rustfmt::skip]
 pub fn blend(a: &Theme, b: &Theme, t: f32) -> Theme {
     let m = |x: Rgba, y: Rgba| mix(x, y, t);
@@ -198,6 +198,7 @@ pub fn blend(a: &Theme, b: &Theme, t: f32) -> Theme {
         accent_text: m(a.accent_text, b.accent_text), danger: m(a.danger, b.danger),
         shadow: m(a.shadow, b.shadow), selection: m(a.selection, b.selection),
         ansi: std::array::from_fn(|i| m(a.ansi[i], b.ansi[i])),
+        icon: b.icon,
     }
 }
 

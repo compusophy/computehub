@@ -93,6 +93,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "compusophy-icons"
+version = "0.1.0"
+dependencies = [
+ "compusophy-font",
+]
+
+[[package]]
 name = "compusophy-kernel"
 version = "0.1.0"
 dependencies = [
@@ -173,6 +180,7 @@ name = "compusophy-ui"
 version = "0.1.0"
 dependencies = [
  "compusophy-gfx",
+ "compusophy-icons",
  "compusophy-kernel",
  "compusophy-text",
  "compusophy-vfs",

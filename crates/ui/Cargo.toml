@@ -13,6 +13,7 @@ name = "ui"
 
 [dependencies]
 compusophy-text.workspace = true
+compusophy-icons.workspace = true
 compusophy-gfx.workspace = true
 compusophy-vfs.workspace = true
 compusophy-kernel.workspace = true

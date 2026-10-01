@@ -438,6 +438,44 @@ fn themes_are_complete_readable_and_glow() {
 }
 
 #[test]
+fn icon_tiles_are_readable_and_crisp() {
+    // Every theme's glyph ink reads on both ends of its tile (3:1) for any hue.
+    let hues = [0xff0000, 0xffff00, 0x00ff00, 0x00ffff, 0x0000ff, 0xff00ff, 0xffffff, 0x000000];
+    let more = [0x808080, 0x2dd4bf, 0x8b7bff, 0xf59e0b, 0x64748b].map(Rgba::hex);
+    let all: Vec<Rgba> =
+        hues.map(Rgba::hex).into_iter().chain(more).chain((0..12).map(theme::app_tint)).collect();
+    for th in &THEMES {
+        for &hue in &all {
+            let [top, bottom, ink] = th.icon_colors(hue);
+            let (a, b) = (contrast(ink, top), contrast(ink, bottom));
+            assert!(a >= 3.0 && b >= 3.0, "{} {hue:?}: {a} {b}", th.name);
+        }
+    }
+    // Mono is monochrome and flat; Midnight casts a shadow and fades its tiles.
+    let (mono, hue, mut t) = (&THEMES[2], Rgba::hex(0x2dd4bf), ts());
+    assert_eq!(mono.icon_colors(hue), [mono.surface_hi, mono.surface_hi, mono.text]);
+    t.set_dpr(1.5);
+    let tile = |t: &mut TextSystem, th: &Theme| {
+        let mut list = DrawList::new();
+        icon::tile(&mut list, t, RectF::new(10.2, 20.1, 50.0, 44.0), icon::Glyph::Cog, hue, th);
+        list
+    };
+    let kinds = |l: &DrawList| l.instances().iter().map(|i| i.kind).collect::<Vec<_>>();
+    let (list, lit) = (tile(&mut t, mono), tile(&mut t, MIDNIGHT));
+    assert_eq!((kinds(&list), kinds(&lit)), (vec![0.0, 1.0, 4.0], vec![2.0, 5.0, 1.0, 4.0]));
+    // The tile: a 44 px square on device pixels, centered; the glyph inside, in ink.
+    let (i, d) = (list.instances(), |v: f32| (v * 1.5 - (v * 1.5).round()).abs() < 1e-3);
+    let ([x, y, w, h], [gx, gy, gw, gh]) = (i[0].rect, i[2].rect);
+    assert!(d(x) && d(y) && w == 44.0 && h == 44.0 && (x - 13.2).abs() <= 0.5, "{:?}", i[0].rect);
+    assert!(gx > x && gy > y && gx + gw < x + w && gy + gh < y + h && i[2].color == mono.text);
+    // A second tile of the glyph rasterizes nothing new.
+    t.atlas_mut().take_dirty();
+    assert!(
+        tile(&mut t, mono).instances()[2].uv == i[2].uv && t.atlas_mut().take_dirty().is_none()
+    );
+}
+
+#[test]
 fn palettes_and_keys() {
     let th = &THEMES[1];
     assert_eq!((th.xterm(1), th.xterm(15), th.xterm(4)), (th.ansi[1], th.ansi[15], th.ansi[4]));

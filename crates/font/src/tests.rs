@@ -102,6 +102,18 @@ fn rasterizes_real_glyphs() {
         assert!(b.data.is_empty());
     }
     assert_eq!(inter.rasterize(121, 12.0, &mut b), Err(FontError::NoGlyph(121)));
+    // Any outline: a 4-unit square with a reversed 2-unit hole, and an overlapping
+    // same-way square that clamps instead of cancelling; at 2 px a unit.
+    let sq = |x: f32, y: f32, s: f32| {
+        let p = |x, y| Point { x, y, on: true };
+        vec![p(x, y), p(x + s, y), p(x + s, y + s), p(x, y + s)]
+    };
+    let hole: Vec<Point> = sq(1.0, 1.0, 2.0).into_iter().rev().collect();
+    render_outline(&[sq(0.0, 0.0, 4.0), hole, sq(2.0, 0.0, 4.0)], 2.0, &mut b).unwrap();
+    assert_eq!((b.left, b.top, b.w, b.h), (0, -8, 12, 8));
+    let row: Vec<u8> = (0..12).map(|x| at(&b, x, 3)).collect();
+    assert_eq!(row, [255, 255, 0, 0, 255, 255, 255, 255, 255, 255, 255, 255]);
+    assert_eq!(render_outline(&[], f32::NAN, &mut b), Err(FontError::BadSize));
 }
 
 /// Big-endian words, for a tiny synthetic font that covers what the real
