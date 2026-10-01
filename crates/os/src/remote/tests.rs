@@ -132,10 +132,13 @@ fn names_open_studio_and_the_first_size_starts_it() {
     let config = Event::Config { model: ai::DEFAULT_MODEL.into() };
     let sized = [Event::Resize { w: 640, h: 65_535 }, config, Event::Resize { w: 500, h: 400 }];
     assert_eq!(s.events(), sized);
-    // Frames of other pids, and frames that do not decode, are dropped.
+    // Frames of other pids are dropped. A first frame that does not decode is from a program
+    // newer than the desktop, which says so; one after a frame is dropped.
     let f = Frame { title: "Mine".into(), ..Frame::default() }.encode();
-    assert!(!s.cx(|r, cx| r.frame(3, &f, cx)) && !s.cx(|r, cx| r.frame(2, &f[1..], cx)));
+    assert!(!s.cx(|r, cx| r.frame(3, &f, cx)) && s.r.note.is_empty());
+    assert!(s.cx(|r, cx| r.frame(2, &f[1..], cx)) && s.r.note == NEWER && s.r.frame.is_none());
     assert!(s.cx(|r, cx| r.frame(2, &f, cx)) && s.r.title() == "Mine");
+    assert!(!s.cx(|r, cx| r.frame(2, &f[1..], cx)) && s.r.title() == "Mine");
     // A missing program says so and none starts; a failed one says why.
     let mut s = Sys::new(false);
     s.fs.remove(STUDIO, false).unwrap();

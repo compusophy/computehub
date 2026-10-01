@@ -1,11 +1,13 @@
-//! Making with the AI: the prompt (with the program it changes) goes out as a chat request, the
-//! reply streams in, then is checked; a program that does not compile, or a reply without one,
-//! goes back with why at most [`RETRIES`] times (then E0906), and one that compiles is saved, run
-//! and added to the corpus.
+//! Making with the AI: the prompt (with the program it changes) goes out as a chat request (at
+//! most [`MAX_BODY`] bytes), the reply streams in, then is checked; a program that does not
+//! compile or faults when it first renders, or a reply without one, goes back with why at most
+//! [`RETRIES`] times (then E0906), and one that runs is saved, run and added to the corpus, unless
+//! the code was edited meanwhile.
 
 use crate::{Disk, Studio};
-use assistant::ai::{self, CORPUS, EXAMPLE, HOME, MAX_REPLY, RETRIES};
-use assistant::ai::{app_block, corpus_line, failure, problem, slug};
+use applang::{App, Limits};
+use assistant::ai::{self, CORPUS, EXAMPLE, MAX_BODY, MAX_REPLY, RETRIES};
+use assistant::ai::{app_block, corpus_line, failure, free_path, problem, slug};
 use assistant::json::Stream;
 use uiwire::{Request, Style};
 
@@ -66,13 +68,25 @@ impl Studio {
         self.ask();
     }
 
-    /// Sends the make's conversation as a new request.
+    /// Sends the make's conversation as a new request: a fix too big to send goes without the
+    /// program it changes (the reply holds the new one); still too big, the make ends.
     fn ask(&mut self) {
         self.last_id = self.last_id.wrapping_add(1).max(1);
         let system = [&SYSTEM.join(applang::REFERENCE), EXAMPLE].concat();
         let model = self.model().to_string();
         let Some(m) = &mut self.make else { return };
-        let body = ai::chat(&model, OPTIONS, &system, &m.messages);
+        let mut body = ai::chat(&model, OPTIONS, &system, &m.messages);
+        if body.len() > MAX_BODY && m.messages.len() > 1 {
+            m.messages[0].1.clone_from(&m.prompt);
+            body = ai::chat(&model, OPTIONS, &system, &m.messages);
+        }
+        if body.len() > MAX_BODY {
+            self.make = None;
+            let why =
+                format!("Not made: too big to send to the AI ({} KiB at most)", MAX_BODY >> 10);
+            self.status = (Style::Error, why);
+            return;
+        }
         (m.id, m.stream, m.reply, m.done) = (self.last_id, Stream::default(), String::new(), false);
         self.requests.push(Request::Ai { id: m.id, body });
         self.status = (Style::Dim, self.progress());
@@ -102,30 +116,30 @@ impl Studio {
         }
     }
 
-    /// Checks a reply that is all in: a program that compiles is the app now; one that does not,
-    /// or none, goes back to the AI with why. Whether there was a reply to check.
+    /// Checks a reply that is all in: a program that compiles and renders is the app now; one
+    /// that does not, or none, goes back to the AI with why. Whether there was a reply to check.
     pub(crate) fn verify(&mut self, disk: &mut dyn Disk) -> bool {
         let Some(mut m) = self.make.take_if(|m| m.done) else { return false };
-        let why = match app_block(&m.reply).map(|src| (src, applang::compile(src))) {
-            Some((src, Ok(_))) => {
+        let why = match app_block(&m.reply).map(|src| (src, fault(src))) {
+            Some((src, None)) => {
                 self.made(src.to_string(), &m, disk);
                 return true;
             }
-            Some((src, Err(d))) => Some(problem(&d, src)),
+            Some((_, why)) => why,
             None => None,
         };
         if m.attempt > RETRIES {
             let why = why.map_or_else(
                 || "the AI replied without a program".into(),
-                |p| format!("still not compiling after {RETRIES} fixes: {p}"),
+                |([_, still], p)| format!("still {still} after {RETRIES} fixes: {p}"),
             );
             self.status = (Style::Error, ["E0906 ", &why].concat());
             return true;
         }
         let fix = match why {
-            Some(p) => format!(
-                "The program did not compile: {p}. Reply with the corrected complete program in \
-                 one app block."
+            Some(([what, _], p)) => format!(
+                "The program {what}: {p}. Reply with the corrected complete program in one app \
+                 block."
             ),
             None => "Your reply held no app block. Reply with the complete program in one app \
                      block."
@@ -140,21 +154,30 @@ impl Studio {
         true
     }
 
-    /// `src`, which compiles, is the app now: saved (a first make names the file), run, its
-    /// prompt kept and the pair added to the corpus.
+    /// `src`, which runs, is the app now: saved (a first make names the file), run, its prompt
+    /// kept (and cleared from the prompt, unless another was typed) and the pair added to the
+    /// corpus. Unless the code was edited since the make began: then the edits stay.
     fn made(&mut self, src: String, m: &Make, disk: &mut dyn Disk) {
+        let blank = m.base.is_empty() && self.text.trim().is_empty();
+        if !self.path.is_empty() && self.text != m.base && !blank {
+            let kept = "Not applied: the code was edited while it was made; Make again to apply it";
+            self.status = (Style::Small, kept.into());
+            return;
+        }
         if self.path.is_empty() {
-            let slug = slug(&src);
-            let name = |n: u32| match n {
-                1 => format!("{HOME}/apps/{slug}.app"),
-                n => format!("{HOME}/apps/{slug}-{n}.app"),
+            let Some(path) = free_path(&slug(&src), |p| disk.exists(p)) else {
+                self.status =
+                    (Style::Error, "Not saved: every name for it in ~/apps is taken".into());
+                return;
             };
-            self.path = (1..1000).map(name).find(|p| !disk.exists(p)).unwrap_or_else(|| name(1));
+            self.path = path;
         }
         self.replace(src);
         self.made.push(m.prompt.clone());
         self.made.drain(..self.made.len().saturating_sub(5));
-        self.set_prompt("");
+        if self.prompt.trim() == m.prompt {
+            self.set_prompt("");
+        }
         let (style, mut said) = self.save(disk, "Ready \u{2713} \u{2014} saved ");
         let line = corpus_line(&m.prompt, &self.text, &m.base, m.attempt, self.model());
         if let Err(e) = disk.append(CORPUS, &line) {
@@ -180,6 +203,16 @@ impl Studio {
                 format!("Fixing ({} of {RETRIES}) \u{2014} {word}\u{2026}{n}", a - 1)
             }
         }
+    }
+}
+
+/// What is wrong with `src`, if anything: that it does not compile, or faults when it first
+/// renders (as a fix asks and as E0906 says it), and its problem.
+fn fault(src: &str) -> Option<([&'static str; 2], String)> {
+    match applang::compile(src).map(|p| App::new(p, Limits::default()).render()) {
+        Ok(Ok(_)) => None,
+        Ok(Err(d)) => Some((["faults when it first renders", "faulting"], problem(&d, src))),
+        Err(d) => Some((["did not compile", "not compiling"], problem(&d, src))),
     }
 }
 

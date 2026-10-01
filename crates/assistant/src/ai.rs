@@ -16,6 +16,9 @@ pub const DEFAULT_MODEL: &str = "zai/glm-5.3";
 pub const RETRIES: u32 = 2;
 /// The most bytes of a reply kept.
 pub const MAX_REPLY: usize = 64 * 1024;
+/// The most bytes a request's body takes: the free AI (`api/ai.mjs`) takes 96 KiB at most, so
+/// this leaves room.
+pub const MAX_BODY: usize = 80 * 1024;
 /// A program in the form replies give it, for system prompts.
 pub const EXAMPLE: &str = "```app\nstate count = 0;\nlabel \"Counter\";\nrow {\n  button \"-\" { \
                            count = count - 1; }\n  label count;\n  button \"+\" { count = count + \
@@ -85,6 +88,16 @@ pub fn slug(src: &str) -> String {
     let slug = words.split_whitespace().collect::<Vec<_>>().join("-");
     let slug = slug[..slug.len().min(32)].trim_end_matches('-');
     if slug.is_empty() { "app".into() } else { slug.into() }
+}
+
+/// Where a made app named `slug` goes: the first of `~/apps/<slug>.app`, `<slug>-2.app`, ... (to
+/// `-999`) that nothing is at, by `exists`, so a made app never replaces a file.
+pub fn free_path(slug: &str, mut exists: impl FnMut(&str) -> bool) -> Option<String> {
+    let name = |n: u32| match n {
+        1 => format!("{HOME}/apps/{slug}.app"),
+        n => format!("{HOME}/apps/{slug}-{n}.app"),
+    };
+    (1..1000).map(name).find(|p| !exists(p))
 }
 
 /// A diagnostic as `E0101 3:5 message`: line and column (in chars) from 1.

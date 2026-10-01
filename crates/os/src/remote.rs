@@ -1,10 +1,11 @@
 //! Remote: the window of a GUI program, a kernel process that describes it as a [`uiwire`] tree,
 //! drawn here with `ui` in the frame's theme; the window's input goes back as uiwire events. The
 //! program starts at the first size ([`Event::Resize`]) with the roots `/`; until its first frame
-//! the window shows a note, or why it failed. A frame's title is the window's and its requests are
-//! honored (Size in the first only; Focus when the frame holds that Input or Code); a clean exit
-//! closes the window, and closing it sends [`Event::Close`]. A prompt from the everything bar goes
-//! to the program as [`Event::Ask`], held until it starts. Edited text is owned as uiwire says, one
+//! the window shows a note, or why it failed (a first frame that does not decode: the program is
+//! newer than the desktop). A frame's title is the window's and its requests are honored (Size in
+//! the first only; Focus when the frame holds that Input or Code); a clean exit closes the window,
+//! and closing it sends [`Event::Close`]. A prompt from the everything bar goes to the program as
+//! [`Event::Ask`], held until it starts. Edited text is owned as uiwire says, one
 //! [`Event::Change`] out at a time: the next waits for a frame, or goes before any other event.
 //! Nodes stack [`PAD`] inside the content rect, the wheel scrolling what does not fit.
 
@@ -33,6 +34,8 @@ const CHIP_H: f32 = 28.0;
 const CHIP_PAD: f32 = 12.0;
 /// Studio's size: room for the app beside its prompt.
 const STUDIO_SIZE: Option<(f32, f32)> = Some((880.0, 560.0));
+/// Shown in place of a first frame that does not decode.
+const NEWER: &str = "This program is newer than the desktop; reload the page";
 
 /// The app for a window name: the Assistant for `"assistant"`, Studio with nothing open for
 /// `"studio"` or on `<path>` for `"studio:<path>"`, or running a `.app` path (relative: in `/apps`).
@@ -366,8 +369,16 @@ impl App for Remote {
     }
 
     fn frame(&mut self, pid: u32, frame: &[u8], cx: &mut Cx<'_>) -> bool {
-        let frame = Frame::decode(frame).filter(|_| self.pid == Some(pid));
-        frame.map(|f| self.take(f, cx)).is_some()
+        if self.pid != Some(pid) {
+            return false;
+        }
+        match Frame::decode(frame) {
+            Some(f) => self.take(f, cx),
+            // A first frame this desktop cannot read: the program is newer (a stale tab).
+            None if self.frame.is_none() => self.note = NEWER.into(),
+            None => return false,
+        }
+        true
     }
 
     fn closing(&mut self, cx: &mut Cx<'_>) {

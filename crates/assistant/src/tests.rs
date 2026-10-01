@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 
 use super::*;
+use ai::HOME;
 use json::{Json, quote};
 
 /// A disk in memory; a full one fails every write.
@@ -13,6 +14,10 @@ impl Disk for Mem {
         let file = self.0.entry(path.into()).or_default();
         *file = if append { [file.as_str(), text].concat() } else { text.into() };
         Ok(())
+    }
+
+    fn exists(&mut self, path: &str) -> bool {
+        self.0.contains_key(path)
     }
 }
 
@@ -89,10 +94,13 @@ fn chunk(text: &str) -> String {
     format!("data: {{\"choices\":[{{\"delta\":{{\"content\":{}}}}}]}}\r\n\n", quote(text))
 }
 
-/// The Ai request a frame makes.
+/// The Ai request a frame makes, which the free AI takes.
 fn ai(f: &Frame) -> (u32, Json) {
     let ai = |r: &Request| match r {
-        Request::Ai { id, body } => Some((*id, Json::parse(body).expect("a JSON body"))),
+        Request::Ai { id, body } if body.len() <= MAX_BODY => {
+            Some((*id, Json::parse(body).expect("a JSON body")))
+        }
+        Request::Ai { body, .. } => panic!("a body of {} bytes", body.len()),
         _ => None,
     };
     f.requests.iter().find_map(ai).expect("an Ai request")
@@ -186,6 +194,17 @@ fn builds_an_app_and_feeds_the_corpus() {
     let row = format!("{{\"prompt\":\"make me a counter app\",\"program\":{},", quote(COUNTER));
     let corpus = &w.disk.0[CORPUS];
     assert_eq!(*corpus, row + "\"attempts\":1,\"model\":\"m/x\"}\n");
+    // Another counter (here, or one made in Studio) is never saved over: it takes the next name.
+    w.disk.0.insert(path.clone(), "label \"Studio's\";".into());
+    let (id, _) = w.ask("a counter again");
+    let f = w.answer(id, &format!("```app\n{COUNTER}```"), "", 64);
+    let two = [HOME, "/apps/counter-2.app"].concat();
+    assert_eq!(
+        (w.disk.0[&path].as_str(), w.disk.0[&two].as_str()),
+        ("label \"Studio's\";", COUNTER)
+    );
+    assert_eq!(f.requests, [Request::Open { name: ["studio:", &two].concat() }]);
+    assert!(has(&f, "Built counter-2.app \u{2713}"));
 }
 
 #[test]
@@ -267,10 +286,14 @@ fn asks_from_the_everything_bar_are_sent_in_turn() {
     // One asked while a reply streams waits for it, then goes as if typed.
     let f = w.last(&[ask("second")]);
     assert!(f.requests.is_empty() && has(&f, "Stop"));
+    // A draft typed meanwhile stays, in the same Input: an ask never goes through it.
+    w.send(&[Event::Change { id: INPUT, version: 1, text: "my draft".into() }]);
     let f = w.answer(id, "One.", "", 64);
     let (_, body) = ai(&f);
     assert_eq!((messages(&body), message(&body, 3)), (4, ("user", "second")));
     assert!(has(&f, "second") && has(&f, "Stop"));
+    let input = f.nodes.last().map(|row| row.children()[0].clone());
+    assert!(matches!(input, Some(Node::Input { id: INPUT, value, .. }) if value == "my draft"));
 }
 
 #[test]
@@ -283,6 +306,25 @@ fn history_keeps_the_last_twelve_messages() {
     let (_, body) = w.ask("last");
     assert_eq!(messages(&body), 13);
     assert_eq!((message(&body, 1), message(&body, 12)), (("assistant", "a3"), ("user", "last")));
+}
+
+#[test]
+fn requests_fit_what_the_free_ai_takes() {
+    // Long prompts: each request (checked by `ai`) keeps the newest history that fits.
+    let mut w = Win::new();
+    for i in 0..7 {
+        let prompt = format!("{i}{}", "x".repeat(16_000));
+        let (id, body) = w.ask(&prompt);
+        assert_eq!(message(&body, messages(&body) - 1), ("user", prompt.as_str()));
+        w.answer(id, "ok", "", 64);
+    }
+    // One too long to send even alone is noted, not sent, and leaves the history.
+    let long = Event::Change { id: w.a.input_id(), version: 1, text: "\u{1}".repeat(16 << 10) };
+    let f = w.last(&[long, Event::Submit { id: w.a.input_id() }]);
+    assert!(!f.requests.iter().any(|r| matches!(r, Request::Ai { .. })) && has(&f, "Send"));
+    assert!(has(&f, "Not sent: too long for the AI (80 KiB at most)"));
+    let (_, body) = w.ask("short");
+    assert_eq!(message(&body, messages(&body) - 2), ("assistant", "ok"));
 }
 
 #[test]
