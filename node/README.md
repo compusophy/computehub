@@ -65,6 +65,13 @@ from an ordinary terminal instead.)
    The page should remove it from the address bar once it has read it.
 3. The OS opens `ws://127.0.0.1:<port>/` and sends HELLO with the token. It
    gets READY back, then a live shell.
+   The first time, Chrome asks whether the site may access apps and services
+   on this device (Local Network Access): a public HTTPS page reaching
+   `127.0.0.1` needs that permission. Allow it once for the site. If it was
+   denied, re-enable it from the site settings (the icon left of the address
+   bar); embedded browsers that deny it outright cannot pair from the public
+   site, but can from the local preview (`http://localhost:8080` with
+   `--url http://localhost:8080`).
 4. Stopping the node (Ctrl+C) ends every session and invalidates the token.
    To pair again, restart the node and open the new link.
 

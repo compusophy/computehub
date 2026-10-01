@@ -357,6 +357,13 @@ grows from the same pattern.
     (to change its fragment and pair it with a port of its choosing) or
     frames it. A pairing always shows its port in the terminal's title.
   - Out of scope: other programs already running as you.
+- **Browser permission:** a public HTTPS page reaching `127.0.0.1` falls under
+  Chrome's Local Network Access, which asks the user once per site. Until it
+  is allowed, the WebSocket fails before reaching the node, and the terminal
+  says so. Browsers that deny it outright (some embedded ones) can only pair
+  from a loopback page, such as the local preview. Open question: let the
+  node serve the OS itself at `http://127.0.0.1:<port>/`, so page and node
+  share a loopback origin and no prompt is needed.
 - **Constitution:** the node is its own workspace with its own lockfile, so
   its native dependencies never enter the browser graph. It keeps the line
   cap and the license, and CI builds, tests and lints it in its own job.

@@ -31,7 +31,10 @@ const AGAIN: &str = "Press Enter to reconnect, or Ctrl+D for the guest shell.";
 /// Around the port: the node could not be reached.
 const UNREACHABLE: [&str; 2] = [
     "[could not reach computehub-node on 127.0.0.1:",
-    ". Is it running? Ctrl+D, then 'node', shows how to start it.]",
+    ". Is it running? Ctrl+D, then 'node', shows how to start it. If it is, \
+     the browser may be blocking this site from reaching your device: allow \
+     local network access for this site (the icon left of the address bar), \
+     then press Enter.]",
 ];
 const REFUSED: &str = "[the node refused this page's token: open the pairing link it printed \
 when it last started]";
