@@ -27,6 +27,10 @@ pub struct Files {
     entries: Vec<Entry>,
     seen: Option<(u64, String)>,
     scroll: Scroll,
+    /// The entries' paths as last drawn (row `i` is `ENTRY + i`), and the one the last press
+    /// landed on: a click opens what was under it, though the folder was listed again since.
+    shown: Vec<String>,
+    pressed: Option<String>,
 }
 
 impl Default for Files {
@@ -39,7 +43,8 @@ impl Files {
     /// Files at `dir` (`~` is home, relative is under home; one that is not a folder shows home).
     pub fn new(dir: &str) -> Files {
         let dir = Vfs::normalize(Vfs::HOME, dir).unwrap_or_else(|_| Vfs::HOME.to_string());
-        Files { dir, entries: Vec::new(), seen: None, scroll: Scroll::default() }
+        let (entries, shown, scroll) = (Vec::new(), Vec::new(), Scroll::default());
+        Files { dir, entries, seen: None, scroll, shown, pressed: None }
     }
 
     /// Lists the folder again if it or the filesystem changed; whether it did.
@@ -96,10 +101,13 @@ impl Files {
         out
     }
 
-    /// A click on entry `i`: into a folder, or open a file.
-    fn open(&mut self, i: usize, cx: &mut Cx<'_>) -> bool {
-        let Some(e) = self.entries.get(i) else { return false };
-        let (path, dir) = (self.path(&e.name), e.is_dir);
+    /// A click on the entry drawn at `path`: into a folder, or open a file; nothing if it is no
+    /// longer in the folder shown.
+    fn open(&mut self, path: String, cx: &mut Cx<'_>) -> bool {
+        let Some(e) = self.entries.iter().find(|e| self.path(&e.name) == path) else {
+            return false;
+        };
+        let dir = e.is_dir;
         match (dir, path.ends_with(".app")) {
             (true, _) => self.go(path),
             (false, true) => cx.open(&path),
@@ -176,6 +184,7 @@ impl App for Files {
         if self.seen.is_some() && self.entries.is_empty() {
             kit::para(ui, EMPTY, t.small(), (x, w), view.y + 34.0, true);
         }
+        self.shown = self.entries.iter().map(|e| self.path(&e.name)).collect();
         for (i, e) in self.entries.iter().enumerate() {
             let at = RectF::new(x, y + i as f32 * ROW_H, w, ROW_H);
             if at.y + at.h < view.y || at.y > view.y + view.h {
@@ -200,6 +209,11 @@ impl App for Files {
     }
 
     fn event(&mut self, ev: AppEvent, cx: &mut Cx<'_>) -> bool {
+        // What a press landed on, as drawn, before the folder is listed again.
+        if let AppEvent::PointerDown { id, .. } = ev {
+            let row = id.and_then(|id| id.0.checked_sub(ENTRY));
+            self.pressed = row.and_then(|i| self.shown.get(i as usize)).cloned();
+        }
         let fresh = self.refresh(cx.vfs);
         let changed = match ev {
             AppEvent::Click(WidgetId(UP)) => {
@@ -215,7 +229,10 @@ impl App for Files {
                     new
                 })
             }
-            AppEvent::Click(WidgetId(id @ ENTRY..)) => self.open((id - ENTRY) as usize, cx),
+            AppEvent::Click(WidgetId(id @ ENTRY..)) => {
+                let drawn = self.shown.get((id - ENTRY) as usize).cloned();
+                self.pressed.take().or(drawn).is_some_and(|path| self.open(path, cx))
+            }
             AppEvent::Wheel { dy, .. } => self.scroll.wheel(dy),
             AppEvent::Resized { .. } => true,
             _ => false,

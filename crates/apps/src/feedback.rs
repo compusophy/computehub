@@ -14,8 +14,9 @@ const CONTEXT: &str = "Include what\u{2019}s open and recent events";
 const CONTEXT_NOTE: &str = "The build, your browser and screen size, the theme, the apps open \
 and the last 50 events. Never your files.";
 const SEND: &str = "Send";
-pub(crate) const SENT: &str = "Sent \u{2014} thank you";
-pub(crate) const SAVED: &str = "Saved \u{2014} will send when online";
+/// What Send says: true whether the report goes at once or waits in the page's outbox, as the app
+/// cannot know which.
+pub(crate) const THANKS: &str = "Thank you \u{2014} it goes when it can";
 /// The most text kept, in bytes.
 const MAX: usize = 8000;
 /// Widget ids: kind `i` is `KIND + i`; the text, the context box, Send.
@@ -31,8 +32,8 @@ const INSET: f32 = 13.0;
 const CHECK_X: f32 = 8.0;
 
 /// Feedback: chips for the kind (Bug, Idea, Love), a text that wraps and grows, a box to include
-/// the desktop's context, and Send, which hands it all to the page ([`Cx::feedback`]) and says
-/// whether it went or waits to; the page scrolls, following the caret.
+/// the desktop's context, and Send, which hands it all to the page ([`Cx::feedback`]) and thanks;
+/// the page scrolls, following the caret.
 #[derive(Debug)]
 pub struct Feedback {
     /// An index into [`KINDS`]: Idea at first.
@@ -131,7 +132,7 @@ impl Feedback {
             return false;
         }
         cx.feedback(KINDS[self.kind].1, text, self.context);
-        self.status = Some(if cx.ai.held { SAVED } else { SENT });
+        self.status = Some(THANKS);
         (self.text, self.at) = (String::new(), 0);
         true
     }

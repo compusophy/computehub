@@ -1,6 +1,7 @@
 use super::*;
 use crate::{Desktop, apply};
 use platform::{App as _, Effect as Fx, Event};
+use shell::{Input, Key, Mods};
 
 /// A context as a phone would give it.
 fn phone() -> Context {
@@ -23,6 +24,11 @@ fn streamed(ctl: &Ctl) -> Vec<(u32, String)> {
 /// The outbox as `ctl` last stored it.
 fn stored(ctl: &Ctl) -> Option<String> {
     ctl.storage_get(OUTBOX)
+}
+
+/// The sig of report `json`.
+fn sig_of(json: &str) -> &str {
+    json[json.rfind(r#""sig":""#).expect("a sig") + 7..].trim_end_matches("\"}")
 }
 
 #[test]
@@ -51,6 +57,11 @@ fn a_report_is_json_with_a_context_block_and_nothing_else() {
     let mut c = phone();
     (c.screen.0, c.screen.2, c.device.touch) = (1280.4, 1.25, false);
     assert!(super::body("", Some(&c)).contains("screen   1280x844 @1.25\ntouch    no\n"));
+    // Windows and the dock's favorites by app, never a file: Studio on one, a .app.
+    let names = ["studio:/d/diary.txt", "files:~/a", "/d/x.app", "x.app", "/a:b.app", "about"];
+    assert_eq!(names.map(app), ["studio", "files", "app", "app", "app", "about"]);
+    Reports::default().pref(&mut Ctl::default(), "dock", "studio,/d/x.app,files");
+    assert_eq!(notes(1), "pref dock studio,app,files\n");
     // JSON: quotes, backslashes, newlines and control chars escaped; the rest as is.
     let json = report("feedback", "Bug: \"it\" \\ broke", "a\nb\u{1}\u{2014}", "");
     assert_eq!(
@@ -74,9 +85,8 @@ fn reports_wait_in_the_outbox_until_the_inbox_takes_them() {
     let (mut r, mut ctl) = (Reports::default(), Ctl::default());
     // Boot: nothing waits; nothing goes.
     r.pump(&mut ctl, phone);
-    assert!(streamed(&ctl).is_empty() && r.retell());
-    assert!(!r.status(Default::default()).held);
-    // Feedback goes at the next pump, with its context, kept until answered.
+    assert!(streamed(&ctl).is_empty() && r.retell() && !r.status(Default::default()).held);
+    // Feedback goes at the next pump, with its context and own id, kept until answered.
     r.feedback("idea", "Dark mode for the dock\nplease", true);
     r.pump(&mut ctl, phone);
     let sent = streamed(&ctl);
@@ -85,9 +95,9 @@ fn reports_wait_in_the_outbox_until_the_inbox_takes_them() {
     assert!(json.starts_with(
         r#"{"kind":"feedback","title":"Idea: Dark mode for the dock","body":"Dark mode"#
     ));
-    assert!(json.contains("windows  2 open") && json.ends_with(r#","sig":""}"#), "{json}");
+    assert!(json.contains("windows  2 open") && sig_of(json).len() == 16, "{json}");
     assert_eq!(stored(&ctl).as_deref(), Some(json.as_str()));
-    // No inbox yet (503): it stays, held; the next report sends both.
+    // No inbox yet (503): it stays, held; the next report sends both, the first as it was.
     assert!(r.ended(&mut ctl, *id, 503));
     assert!(r.retell() && r.status(Default::default()).held);
     assert!(!r.ended(&mut ctl, 7, 200), "not a report's stream");
@@ -95,12 +105,11 @@ fn reports_wait_in_the_outbox_until_the_inbox_takes_them() {
     r.feedback("bug", "It froze", false);
     r.pump(&mut ctl, phone);
     let again = streamed(&ctl);
-    assert_eq!(again.len(), 2);
+    assert!(again.len() == 2 && again[0].1 == *json && sig_of(&again[1].1) != sig_of(json));
     assert!(again[1].1.contains(r#""title":"Bug: It froze""#) && !again[1].1.contains("agent"));
     // Taken (201): gone from the outbox, and no longer held.
     assert!(r.ended(&mut ctl, again[0].0, 201));
-    assert_eq!(r.outbox().len(), 1);
-    assert!(!r.status(Default::default()).held);
+    assert!(r.outbox().len() == 1 && !r.status(Default::default()).held);
     // Refused for good (400): dropped.
     assert!(r.ended(&mut ctl, again[1].0, 400));
     assert!(r.outbox().is_empty() && stored(&ctl).as_deref() == Some(""));
@@ -112,11 +121,13 @@ fn reports_wait_in_the_outbox_until_the_inbox_takes_them() {
     r.pump(&mut ctl, || unreachable!("nothing new to build"));
     assert_eq!(streamed(&ctl).len(), 25, "all of them, once");
     assert!(r.status(Default::default()).held, "until one gets through");
-    r.feedback("love", "Beautiful", true);
+    r.feedback("love", "Beautiful", false);
+    r.feedback("love", "Beautiful", false);
     r.pump(&mut ctl, phone);
     assert_eq!(r.outbox().len(), KEEP);
-    assert!(r.outbox()[0].contains(r#""title":"6""#) && r.outbox()[19].contains("Love: Beautiful"));
-    assert_eq!(streamed(&ctl).len(), 26, "only the new one is sent again");
+    assert!(r.outbox()[0].contains(r#""title":"7""#) && r.outbox()[19].contains("Love: Beautiful"));
+    assert_eq!(streamed(&ctl).len(), 27, "only the new ones are sent again");
+    assert!(sig_of(&r.outbox()[18]) != sig_of(&r.outbox()[19]), "the same words, two reports");
 }
 
 #[test]
@@ -126,11 +137,9 @@ fn errors_are_reported_once_a_session_unless_reports_are_off() {
     // A program that fails twice is one report; AI: 429 only noted, 503 and no answer reported.
     r.proc_failed(7, "/bin/hello");
     r.proc_failed(9, "/bin/hello");
-    r.ai_ended(200, "");
-    r.ai_ended(429, "");
-    r.ai_ended(503, "");
-    r.ai_ended(0, "network");
-    r.ai_ended(0, "network");
+    for (status, error) in [(200, ""), (429, ""), (503, ""), (0, "network"), (0, "network")] {
+        r.ai_ended(status, error);
+    }
     r.pump(&mut ctl, phone);
     let titles: Vec<String> = streamed(&ctl).iter().map(|s| s.1.clone()).collect();
     let has = |t: &str| titles.iter().any(|j| j.contains(&["\"title\":\"", t, "\""].concat()));
@@ -142,10 +151,13 @@ fn errors_are_reported_once_a_session_unless_reports_are_off() {
     );
     let recent = notes(6).lines().collect::<Vec<_>>().join(" | ");
     assert!(recent.ends_with("proc 7 hello failed | proc 9 hello failed | ai 429 | ai 503 | ai 0 network | ai 0 network"), "{recent}");
-    // The switch: stored, told to apps, and honored; typed feedback still goes.
+    // Unanswered, they wait; the switch, stored and told, drops them; typed feedback still goes.
+    streamed(&ctl).iter().for_each(|s| _ = r.ended(&mut ctl, s.0, 0));
+    assert!(r.outbox().len() == 3 && r.status(Default::default()).held);
     r.pref(&mut ctl, ui::REPORTS, "off");
     assert_eq!(ctl.storage_get(REPORTS).as_deref(), Some("off"));
     assert!(r.retell() && r.status(Default::default()).reports_off);
+    assert!(r.outbox().is_empty() && stored(&ctl).as_deref() == Some(""));
     let mut ctl = Ctl::default();
     r.proc_failed(8, "studio");
     r.feedback("bug", "Saw an error", true);
@@ -154,22 +166,30 @@ fn errors_are_reported_once_a_session_unless_reports_are_off() {
     assert!(sent.iter().all(|s| !s.1.starts_with(r#"{"kind":"error""#)), "no error report");
     assert!(sent.iter().any(|s| s.1.contains("Saw an error")));
     assert!(notes(3).lines().any(|n| n == "proc 8 studio failed"), "still noted");
-    // Off as stored, from the first pump of a new page.
+    // Off as stored, from the first pump of a new page: of what waited, only feedback goes.
     let mut ctl = Ctl::default();
     ctl.storage_set(REPORTS, "off");
+    let love = report("feedback", "F", "b", "2");
+    ctl.storage_set(OUTBOX, &[&report("error", "E", "b", "1"), "\n", &love].concat());
     let mut r = Reports::default();
+    r.ai_ended(500, "");
     r.pump(&mut ctl, phone);
     r.ai_ended(502, "");
     r.pump(&mut ctl, phone);
-    assert!(streamed(&ctl).is_empty() && r.status(Default::default()).reports_off);
+    assert_eq!(streamed(&ctl), [(FIRST_ID | 1, love.clone())]);
+    assert!(stored(&ctl) == Some(love) && r.status(Default::default()).reports_off);
 }
 
 #[test]
 fn the_desktop_sends_feedback_and_reports_failures_and_tells_apps() {
     let mut desk = Desktop::new().expect("the boot font loads");
-    let mut ctl = Ctl::default();
-    desk.event(Event::Resize { w: 1280.0, h: 800.0, dpr: 2.0 }, &mut ctl);
-    // Feedback an app asked for leaves at the flush after it, with what is open.
+    desk.event(Event::Resize { w: 1280.0, h: 800.0, dpr: 2.0 }, &mut Ctl::default());
+    // A terminal opens a file in Studio.
+    let sh = desk.shell.as_mut().expect("made");
+    sh.input(Input::Key { key: Key::Enter, mods: Mods { alt: true, ..Mods::default() } });
+    sh.input(Input::Text("edit diary-2026.txt".into()));
+    sh.input(Input::Key { key: Key::Enter, mods: Mods::default() });
+    // Feedback an app asked for leaves at the flush after it, with what is open: apps, no files.
     let mut ctl = Ctl::default();
     let fx =
         shell::Effect::Feedback { kind: "bug".into(), text: "Dock flickers".into(), context: true };
@@ -177,12 +197,12 @@ fn the_desktop_sends_feedback_and_reports_failures_and_tells_apps() {
     desk.flush(&mut ctl);
     let sent = streamed(&ctl);
     assert_eq!(sent.len(), 1);
-    assert!(sent[0].1.contains("Bug: Dock flickers") && sent[0].1.contains("windows  welcome"));
+    assert!(sent[0].1.contains(r"windows  welcome, terminal, studio\n"), "{sent:?}");
+    assert!(sent[0].1.contains("Bug: Dock flickers") && !sent[0].1.contains("diary"));
     // Its answer is the report's, not the AI's; a 503 holds it, and apps hear so.
     let mut ctl = Ctl::default();
     desk.event(Event::StreamEnd { id: sent[0].0, status: 503, error: String::new() }, &mut ctl);
-    assert_eq!(desk.report.outbox().len(), 1);
-    assert!(desk.report.status(Default::default()).held);
+    assert!(desk.report.outbox().len() == 1 && desk.report.status(Default::default()).held);
     // A worker that fails is noted with its program and reported.
     let mut ctl = Ctl::default();
     desk.event(Event::ProcError { pid: 5 }, &mut ctl);

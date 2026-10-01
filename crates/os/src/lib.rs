@@ -332,9 +332,10 @@ fn context(shell: &Shell) -> report::Context {
     }
 }
 
-/// The windows open as a report says them: their apps' names.
+/// The windows open as a report says them: their apps ([`report::app`]), never a file's path.
 fn windows(shell: &Shell) -> String {
-    shell.open_apps().join(", ")
+    let apps: Vec<&str> = shell.open_apps().into_iter().map(report::app).collect();
+    apps.join(", ")
 }
 
 /// A Start's program as the platform takes it.
