@@ -128,7 +128,7 @@ fn names_open_studio_and_the_first_size_starts_it() {
     // a new one is.
     s.ev(AppEvent::Resized { w: 640.0, h: 1e9 });
     s.ev(AppEvent::Resized { w: 500.0, h: 400.0 });
-    let config = Event::Config { provider: "gateway".into(), model: "".into(), has_key: 0 };
+    let config = Event::Config { model: ai::DEFAULT_MODEL.into() };
     let sized = [Event::Resize { w: 640, h: 65_535 }, config, Event::Resize { w: 500, h: 400 }];
     assert_eq!(s.events(), sized);
     // Frames of other pids, and frames that do not decode, are dropped.
@@ -286,42 +286,33 @@ fn ai_requests_stream_back_to_the_program_that_asked() {
         (ctl.effects().to_vec(), s.events())
     };
     let ai = |id| Request::Ai { id, body: "{}".into() };
-    let config =
-        |p: &str, m: &str| Event::Config { provider: p.into(), model: m.into(), has_key: 1 };
-    // No key: the gateway is not asked. Saved settings (an empty model is the default) go to
-    // storage and to the program.
-    assert_eq!(ask(&mut s, vec![ai(1)]), (vec![], vec![end(1, 0, "no key")]));
+    let config = |m: &str| Event::Config { model: m.into() };
+    // A model saved goes to storage and to the program; one not on offer is the default.
     let mut ctl = Ctl::default();
-    s.r.ai.configure(&mut ctl, "openrouter", Some("sk-or-1234".into()), "");
-    let stored =
-        [(ai::PROVIDER, "openrouter"), (ai::MODEL, ai::DEFAULT_MODEL), (ai::KEY, "sk-or-1234")];
-    assert_eq!(ctl.effects(), stored.map(|(k, v)| Fx::Store { key: k.into(), value: v.into() }));
-    let told = (vec![], vec![config("openrouter", ai::DEFAULT_MODEL)]);
-    assert_eq!((ask(&mut s, vec![]), s.r.ai.status().0.key_hint), (told, "1234".into()));
-    // Two at a time, the key in a header; the body back in pieces, then the end.
-    let auth = [("Authorization", "Bearer sk-or-1234"), ("Content-Type", "application/json")];
-    let url = "https://openrouter.ai/api/v1/chat/completions";
-    let headers: Vec<_> = auth.map(|(k, v)| (k, v.into())).into();
+    s.r.ai.set_model(&mut ctl, "zai/glm-5.3-flash");
+    let stored = Fx::Store { key: ai::MODEL.into(), value: "zai/glm-5.3-flash".into() };
+    assert_eq!(ctl.effects(), [stored]);
+    let told = (vec![], vec![config("zai/glm-5.3-flash")]);
+    assert_eq!((ask(&mut s, vec![]), s.r.ai.status().model), (told, ai::MODELS[1].into()));
+    s.r.ai.set_model(&mut Ctl::default(), "openai/gpt-x");
+    assert_eq!(ask(&mut s, vec![]).1, [config(ai::DEFAULT_MODEL)]);
+    // Two at a time, to the one endpoint with no key; the body back in pieces, then the end.
+    let headers = vec![("Content-Type", "application/json".to_string())];
     let stream =
-        |id| Fx::Stream { id, url: url.into(), headers: headers.clone(), body: b"{}".into() };
-    let busy = (vec![stream(1), stream(2)], vec![end(4, 0, "busy")]);
-    assert_eq!(ask(&mut s, vec![ai(2), ai(3), ai(4)]), busy);
+        |id| Fx::Stream { id, url: ai::URL.into(), headers: headers.clone(), body: b"{}".into() };
+    let busy = (vec![stream(1), stream(2)], vec![end(3, 0, "busy")]);
+    assert_eq!(ask(&mut s, vec![ai(1), ai(2), ai(3)]), busy);
     let big = [vec![b'x'; CHUNK - 1], "\u{e9}".into()].concat();
     let ended = platform::Event::StreamEnd { id: 1, status: 429, error: "".into() };
     let chunk = platform::Event::Chunk { id: 1, data: big.clone() };
     [chunk, ended.clone(), ended].into_iter().for_each(|ev| s.r.ai.heard(&mut s.k, ev));
-    let data = |data: &[u8]| Event::AiData { id: 2, data: data.to_vec() };
-    assert_eq!(ask(&mut s, vec![]).1, [data(&big[..CHUNK]), data(&big[CHUNK..]), end(2, 429, "")]);
+    let data = |data: &[u8]| Event::AiData { id: 1, data: data.to_vec() };
+    assert_eq!(ask(&mut s, vec![]).1, [data(&big[..CHUNK]), data(&big[CHUNK..]), end(1, 429, "")]);
     // A cancel aborts the stream and ends the request at once.
-    let cancel = vec![Request::AiCancel { id: 3 }, Request::AiCancel { id: 2 }];
-    assert_eq!(ask(&mut s, cancel), (vec![Fx::Abort(2)], vec![end(3, 0, "cancelled")]));
-    // The mock is for localhost only, and takes no headers; closing aborts unanswered.
-    s.r.ai.configure(&mut Ctl::default(), "mock", None, "m");
-    assert_eq!(s.r.ai.status().0.provider, "gateway");
-    s.r.ai.0.borrow_mut().localhost = true;
-    s.r.ai.configure(&mut Ctl::default(), "mock", None, "m");
-    let mock = Fx::Stream { id: 3, url: "/mock/chat".into(), headers: vec![], body: b"{}".into() };
-    assert_eq!(ask(&mut s, vec![ai(5)]), (vec![mock], vec![config("mock", "m")]));
+    let cancel = vec![Request::AiCancel { id: 4 }, Request::AiCancel { id: 2 }];
+    assert_eq!(ask(&mut s, cancel), (vec![Fx::Abort(2)], vec![end(2, 0, "cancelled")]));
+    // Closing aborts the rest, unanswered.
+    assert_eq!(ask(&mut s, vec![ai(5)]), (vec![stream(3)], vec![]));
     s.cx(|r, cx| r.closing(cx));
     assert_eq!(ask(&mut s, vec![]), (vec![Fx::Abort(3)], vec![Event::Close]));
 }

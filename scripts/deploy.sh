@@ -22,6 +22,24 @@ if [ -d .vercel/output ]; then
 fi
 mkdir -p .vercel/output/static
 cp -R dist/. .vercel/output/static/
+# The server functions (api/*.mjs: the free AI, the feedback inbox), each a
+# Node function served at /api/<name>, streaming its response as it goes.
+for f in api/*.mjs; do
+  name=$(basename "$f" .mjs)
+  dir=".vercel/output/functions/api/$name.func"
+  mkdir -p "$dir"
+  cp "$f" "$dir/index.mjs"
+  cat > "$dir/.vc-config.json" <<'EOF'
+{
+  "runtime": "nodejs22.x",
+  "handler": "index.mjs",
+  "launcherType": "Nodejs",
+  "shouldAddHelpers": false,
+  "supportsResponseStreaming": true,
+  "maxDuration": 300
+}
+EOF
+done
 # Every response: no other site keeps a handle on the page's window or
 # frames it, and the page is cross-origin isolated (COOP plus COEP
 # require-corp; Safari has no credentialless), which programs need for

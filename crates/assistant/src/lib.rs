@@ -1,7 +1,8 @@
 //! The Assistant: talk with a model, and have it build applang apps. A wasm32-wasip1 GUI program
 //! (`dist/bin/assistant.wasm`) on the [`uiwire`] protocol. It writes OpenAI-compatible chat
-//! requests ([`Request::Ai`]); the desktop adds the key, which the program never sees, and streams
-//! the body back as [`Event::AiData`] until [`Event::AiEnd`].
+//! requests ([`Request::Ai`]) for the model the desktop names ([`Event::Config`]); the desktop
+//! sends them to compusophy's free AI, which needs no key, and streams the body back as
+//! [`Event::AiData`] until [`Event::AiEnd`].
 //!
 //! A reply holding a fenced block whose info string is `app` is compiled with [`applang`]: a
 //! program that compiles is saved to `~/apps/<slug>.app`, opened, and appended to the fine-tuning
@@ -40,7 +41,6 @@ const MAX_BLOCKS: usize = 32;
 
 const SEND: u32 = 1;
 const STOP: u32 = 2;
-const SETTINGS: u32 = 3;
 /// The prompt Input is this plus the prompts sent: a fresh id starts it empty.
 const INPUT: u32 = 100;
 
@@ -82,11 +82,8 @@ impl Disk for Fs {
 /// The Assistant's window: the transcript, the prompt and the request in flight.
 #[derive(Debug, Default)]
 pub struct Assistant {
-    /// As the desktop's last Config said; `configured` once one came.
-    provider: String,
+    /// The model, as the desktop's last Config said.
     model: String,
-    has_key: bool,
-    configured: bool,
     /// The prompt being typed, and how many were sent.
     input: String,
     sent: u32,
@@ -123,10 +120,7 @@ impl Assistant {
         let live = self.run.as_ref().map(|r| r.id);
         match ev {
             Event::Resize { .. } => return !self.framed,
-            Event::Config { provider, model, has_key } => {
-                (self.provider, self.model) = (provider.clone(), model.clone());
-                (self.has_key, self.configured) = (*has_key != 0, true);
-            }
+            Event::Config { model } => self.model = model.clone(),
             Event::Change { id, text, .. } if *id == self.input_id() => {
                 self.input = clip(text, MAX_PROMPT);
             }
@@ -136,9 +130,6 @@ impl Assistant {
             Event::Click { id: STOP } => {
                 self.requests.extend(live.map(|id| Request::AiCancel { id }));
                 self.finish(0, "cancelled", disk);
-            }
-            Event::Click { id: SETTINGS } => {
-                self.requests.push(Request::Open { name: "settings".into() });
             }
             Event::AiData { id, data } if live == Some(*id) => {
                 if let (Some(run), Some(turn)) = (&mut self.run, self.turns.last_mut()) {
@@ -260,11 +251,6 @@ impl Assistant {
         let button = |id, variant, label: &str| Node::Button { id, variant, label: label.into() };
         let head = vec![text(Style::Title, "Assistant"), text(Style::Dim, self.model())];
         let mut nodes = vec![Node::Row { id: 0, gap: 12, children: head }, Node::Separator];
-        if self.configured && !self.has_key && self.provider != "mock" {
-            let say = text(Style::Body, "Add your API key in Settings \u{2192} AI to start.");
-            let open = button(SETTINGS, Variant::Primary, "Open Settings");
-            nodes.push(Node::Card { id: 0, children: vec![say, open] });
-        }
         let size = |t: &Turn| t.prompt.len() + t.reply.len() + 1024;
         let first = self.turns.len() - fit(&self.turns, MAX_TEXT, size);
         for (i, t) in self.turns.iter().enumerate().skip(first) {
@@ -322,18 +308,19 @@ fn fit<T>(items: &[T], mut room: usize, len: impl Fn(&T) -> usize) -> usize {
 }
 
 /// What went wrong with a request that ended with HTTP `status` (0: none
-/// made), the host's `error` and the provider's own message `said`.
+/// made), the host's `error` and the AI service's own message `said`.
 fn failure(status: u16, error: &str, said: &str) -> Option<(Style, String)> {
     let (code, what) = match status {
         _ if error == "cancelled" => return Some((Style::Dim, "Stopped.".into())),
         200..=299 if error.is_empty() && said.is_empty() => return None,
-        200..=299 if error.is_empty() => (5, "the provider stopped with an error"),
-        401 | 403 => (1, "the provider rejected this key"),
-        402 => (2, "out of credit or over this key's limit"),
-        429 => (3, "rate limited, try again in a moment"),
+        200..=299 if error.is_empty() => (5, "the AI stopped with an error"),
+        401 | 403 => (1, "the AI service refused the request"),
+        402 => (2, "the free AI is out of credit for now, try again later"),
+        429 => (3, "the free AI is busy, try again in a minute"),
         400 | 404 => (4, "the model was not found or refused the request"),
+        503 => (5, "the AI is not available right now"),
         _ if !error.is_empty() => (5, error),
-        _ => (5, "couldn't reach the provider"),
+        _ => (5, "couldn't reach the AI service"),
     };
     let said = if said.is_empty() { String::new() } else { [": ", &clip(said, 300)].concat() };
     Some((Style::Error, format!("E090{code} {what}{said}")))

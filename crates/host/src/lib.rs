@@ -86,12 +86,12 @@ impl LocalTime {
 
 /// Something only the platform can do: fetch `url` (page-relative) for
 /// [`Host::fetched`] with `id`, what the kernel asked for (workers, timer), or
-/// save the AI settings ([`ui::Request::AiConfig`]) in the page's storage.
+/// store a preference ([`ui::Request::Pref`]) in the page's storage.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Effect {
     Fetch { id: u32, url: String },
     Kernel(kernel::Effect),
-    AiConfig { provider: String, key: Option<String>, model: String },
+    Pref { key: String, value: String },
 }
 
 /// For the kernel: a worker's message or failure, the one-shot timer, the page hidden.
@@ -167,9 +167,8 @@ pub struct Host {
     focus: Option<WinId>,
     /// Icons of apps by name, as the registry made them.
     icons: Vec<(String, Option<AppIcon>)>,
-    /// What apps see in [`Cx::ai`] and [`Cx::localhost`]: os sets them; saves update `ai`.
+    /// What apps see in [`Cx::ai`]: os sets it; an [`ui::AI_MODEL`] preference updates it.
     pub ai: AiStatus,
-    pub localhost: bool,
 }
 
 impl Host {
@@ -179,7 +178,7 @@ impl Host {
         let (now_ms, launcher, themes, focus) = (0.0, false, Vec::new(), None);
         let ai = AiStatus::default();
         Host { generation: vfs.generation(), kernel: Kernel::new(), wm, text, vfs, registry, wins,
-            now_ms, theme, launcher, themes, fonts, focus, icons, ai, localhost: false }
+            now_ms, theme, launcher, themes, fonts, focus, icons, ai }
     }
 
     pub fn wm(&self) -> &Wm {
@@ -285,7 +284,7 @@ impl Host {
         let Some(w) = self.wins.iter_mut().find(|w| w.id == win && rect.is_some()) else { return };
         self.kernel.set_owner(win.0);
         let mut cx = Cx::new(&mut self.vfs, &mut self.kernel, self.now_ms);
-        (cx.ai, cx.localhost) = (self.ai.clone(), self.localhost);
+        cx.ai = self.ai.clone();
         let redraw = match call {
             Call::Event(ev) => w.app.event(ev, &mut cx),
             Call::Frame(pid, frame) => w.app.frame(pid, frame, &mut cx),
@@ -306,9 +305,11 @@ impl Host {
                 Request::CloseSelf => out.redraw |= self.close_then(Cmd::Close(win), out),
                 Request::LoadFallbackFonts => self.load_fonts(out),
                 Request::SetTheme(name) => self.themes.push(name),
-                Request::AiConfig { provider, key, model } => {
-                    self.ai = self.ai.saved(&provider, key.as_deref(), &model);
-                    out.effects.push(Effect::AiConfig { provider, key, model });
+                Request::Pref { key, value } => {
+                    if key == ui::AI_MODEL {
+                        self.ai.model = value.clone();
+                    }
+                    out.effects.push(Effect::Pref { key, value });
                 }
                 Request::Size(w, h) => {
                     let (r, size) = (rect.unwrap_or_default(), window_size((w.into(), h.into())));

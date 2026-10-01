@@ -1,4 +1,4 @@
-//! Just enough JSON: a strict reader for the provider's chunks and a string
+//! Just enough JSON: a strict reader for the AI service's chunks and a string
 //! quoter for the requests; and [`Stream`], the SSE body read as it arrives.
 
 /// A JSON value; a number keeps its text.
@@ -165,7 +165,7 @@ pub struct Stream {
     rest: Vec<u8>,
     /// Lines that are not SSE (an error's JSON body), up to [`MAX_OTHER`] bytes.
     other: String,
-    /// The provider's error message, if it sent one.
+    /// The AI service's error message, if it sent one.
     pub error: String,
     /// The tokens in and out, once the usage chunk came.
     pub usage: Option<(String, String)>,

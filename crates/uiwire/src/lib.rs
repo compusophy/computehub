@@ -154,8 +154,9 @@ pub enum Event {
     Close,
     /// Enter in an Input.
     Submit { id: u32 },
-    /// The AI settings (never the key): after the first Resize and on every change.
-    Config { provider: String, model: String, has_key: u8 },
+    /// The AI settings, the model the AI answers with: after the first Resize and on every
+    /// change.
+    Config { model: String },
     /// More of AI request `id`'s response body (SSE text), at most 32 KiB.
     AiData { id: u32, data: Vec<u8> },
     /// AI request `id` ended: the HTTP status (0: none) and the host's error, if any.
@@ -342,7 +343,7 @@ impl Event {
             Self::Resize { w, h } => o.u8(4).u16(*w).u16(*h),
             Self::Close => o.u8(5),
             Self::Submit { id } => o.u8(6).u32(*id),
-            Self::Config { provider: p, model: m, has_key: k } => o.u8(7).str(p).str(m).u8(*k),
+            Self::Config { model } => o.u8(7).str(model),
             Self::AiData { id, data } => o.u8(8).u32(*id).bytes(data),
             Self::AiEnd { id, status, error } => o.u8(9).u32(*id).u16(*status).str(error),
         }
@@ -361,7 +362,7 @@ impl Event {
             4 => Self::Resize { w: r.u16()?, h: r.u16()? },
             5 => Self::Close,
             6 => Self::Submit { id: r.u32()? },
-            7 => Self::Config { provider: r.str()?, model: r.str()?, has_key: r.u8()? },
+            7 => Self::Config { model: r.str()? },
             8 => Self::AiData { id: r.u32()?, data: r.bytes()?.to_vec() },
             9 => Self::AiEnd { id: r.u32()?, status: r.u16()?, error: r.str()? },
             _ => return None,

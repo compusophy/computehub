@@ -500,15 +500,15 @@ fn apps_and_their_context() {
     cx.close_self();
     cx.load_fallback_fonts();
     cx.set_theme("Mono");
-    // AI settings: the status keeps only the key's last 4 chars, at once.
-    cx.ai_config("mock", Some("sk-1éxyz"), "m");
+    // Preferences: the AI model's shows in the status at once, others only leave.
+    cx.pref(AI_MODEL, "m");
+    cx.pref("dock", "left");
     let want = "[Open { name: \"about\", floating: false }, CloseSelf, LoadFallbackFonts, \
-        SetTheme(\"Mono\"), AiConfig { provider: \"mock\", key: Some(\"sk-1éxyz\"), model: \"m\" }]";
+        SetTheme(\"Mono\"), Pref { key: \"ai.model\", value: \"m\" }, \
+        Pref { key: \"dock\", value: \"left\" }]";
     assert_eq!(format!("{:?}", cx.take_requests()), want);
-    assert!(cx.take_requests().is_empty() && cx.now_ms == 5.0 && !cx.localhost);
-    let hints = [None, Some("ab"), Some("")].map(|k| cx.ai.saved("gateway", k, "x").key_hint);
-    assert_eq!(hints, ["éxyz", "ab", ""]);
-    assert_eq!((cx.ai.provider.as_str(), cx.ai.model.as_str()), ("mock", "m"));
+    assert!(cx.take_requests().is_empty() && cx.now_ms == 5.0);
+    assert_eq!(cx.ai, AiStatus { model: "m".into() });
     assert_eq!(fs.read("/tmp/clicks"), Ok(&[1][..]));
     assert_eq!(app.title(), "Echo 1");
 }

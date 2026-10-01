@@ -37,10 +37,10 @@ struct Win {
 }
 
 impl Win {
-    /// A window that has a key and has drawn once.
+    /// A window that has drawn once and heard the model.
     fn new() -> Win {
         let mut w = Win::default();
-        w.send(&[Event::Resize { w: 600, h: 600 }, config("gateway", 1)]);
+        w.send(&[Event::Resize { w: 600, h: 600 }, config()]);
         w
     }
 
@@ -76,8 +76,8 @@ impl Win {
     }
 }
 
-fn config(provider: &str, has_key: u8) -> Event {
-    Event::Config { provider: provider.into(), model: "m/x".into(), has_key }
+fn config() -> Event {
+    Event::Config { model: "m/x".into() }
 }
 
 fn data(id: u32, bytes: &[u8]) -> Event {
@@ -124,17 +124,16 @@ fn messages(body: &Json) -> usize {
 const COUNTER: &str = "state count = 0;\nlabel \"Counter\";\nbutton \"+\" { count = count + 1; }\n";
 
 #[test]
-fn opens_and_asks_for_a_key() {
+fn opens_ready_and_shows_the_model() {
     let mut w = Win::default();
     let f = w.last(&[Event::Resize { w: 600, h: 600 }]);
     assert_eq!(f.requests, [Request::Size { w: 560, h: 640 }]);
     assert!(f.title == "Assistant" && has(&f, DEFAULT_MODEL) && has(&f, "Send"));
     assert!(w.send(&[Event::Resize { w: 700, h: 700 }]).is_empty());
-    let f = w.last(&[config("gateway", 0)]);
-    assert!(has(&f, "Add your API key in Settings \u{2192} AI to start.") && has(&f, "m/x"));
-    let f = w.last(&[Event::Click { id: SETTINGS }]);
-    assert_eq!(f.requests, [Request::Open { name: "settings".into() }]);
-    assert!(!has(&w.last(&[config("mock", 0)]), "Open Settings"));
+    // No key to ask for: the model the desktop names, and nothing else above the prompt.
+    let f = w.last(&[config()]);
+    assert!(has(&f, "m/x") && !has(&f, DEFAULT_MODEL) && f.requests.is_empty());
+    assert_eq!(words(&f.nodes), ["Assistant", "m/x", "Send"]);
     // A blank prompt sends nothing.
     assert!(w.last(&[Event::Click { id: SEND }]).requests.is_empty());
 }
@@ -213,14 +212,17 @@ fn a_program_that_does_not_compile_goes_back_twice() {
 
 #[test]
 fn failures_are_coded() {
+    let no = "{\n\"error\":{\"message\":\"no\"}}";
     let cases = [
-        (401, "", "{\n\"error\":{\"message\":\"no\"}}", "E0901 the provider rejected this key: no"),
-        (402, "", "", "E0902 out of credit or over this key's limit"),
-        (429, "", "", "E0903 rate limited, try again in a moment"),
+        (401, "", no, "E0901 the AI service refused the request: no"),
+        (403, "", "", "E0901 the AI service refused the request"),
+        (402, "", "", "E0902 the free AI is out of credit for now, try again later"),
+        (429, "", "", "E0903 the free AI is busy, try again in a minute"),
         (404, "", "", "E0904 the model was not found or refused the request"),
-        (503, "", "", "E0905 couldn't reach the provider"),
+        (503, "", "", "E0905 the AI is not available right now"),
+        (502, "", "", "E0905 couldn't reach the AI service"),
         (0, "network", "", "E0905 network"),
-        (200, "", "data: {\"error\":\"busy\"}\n", "E0905 the provider stopped with an error: busy"),
+        (200, "", "data: {\"error\":\"busy\"}\n", "E0905 the AI stopped with an error: busy"),
     ];
     let mut w = Win::new();
     for (status, error, body, want) in cases {

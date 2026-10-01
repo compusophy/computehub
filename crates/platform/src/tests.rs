@@ -110,12 +110,12 @@ fn ctl_queues_requests_in_order() {
         Effect::Stream { id: 3, url: "https://h/p".into(), headers: vec![], body: vec![1] }];
     assert_eq!(ctl.effects(), want);
     // A queued write reads back, the newest first; natively nothing else is
-    // stored, the clocks are neutral, the page is not isolated and has no host.
+    // stored, the clocks are neutral and the page is not isolated.
     let got = ["theme", "dock", "Theme"].map(|k| ctl.storage_get(k));
     assert_eq!(got, [Some("dawn".into()), Some("left".into()), None]);
     assert_eq!(Ctl::default().storage_get("theme"), None);
-    let neutral = (ctl.monotonic_ms(), ctl.local_time(), ctl.isolated(), ctl.hostname());
-    assert_eq!(neutral, (0.0, LocalTime::EPOCH, false, None));
+    let neutral = (ctl.monotonic_ms(), ctl.local_time(), ctl.isolated());
+    assert_eq!(neutral, (0.0, LocalTime::EPOCH, false));
 }
 
 #[test]

@@ -366,17 +366,17 @@ fn programs_reach_the_kernel_and_its_effects_the_page() {
         Fx::Reply { pid: 2, errno: 44, data: vec![7] }, Fx::Word { pid: 2, index: 5, value: 1 },
         Fx::Kill(2), Fx::Wake(1000), Fx::Store { key: HOME_KEY.into(), value: "1".into() }];
     assert_eq!(ctl.effects(), want);
-    // The AI settings load with the shell and change as apps save them; streams nobody
-    // asked for are dropped.
-    ctl.storage_set(ai::KEY, "sk-abcd");
+    // The AI model loads with the shell (one not on offer is the default) and changes as apps
+    // set it; other preferences are ignored; streams nobody asked for are dropped.
+    ctl.storage_set(ai::MODEL, "openai/gpt-x");
     desk.event(resize(1280.0, 800.0), &mut ctl);
-    effect(
-        Effect::AiConfig { provider: "x".into(), key: None, model: "m".into() },
-        &mut ctl,
-        &desk.ai,
-    );
-    let (ai, local) = desk.ai.status();
-    assert!(!local && [ai.provider, ai.model, ai.key_hint] == ["gateway", "m", "abcd"]);
+    assert_eq!(desk.ai.status().model, ai::DEFAULT_MODEL);
+    let pref = |key: &str, value: &str| Effect::Pref { key: key.into(), value: value.into() };
+    let mut ctl = Ctl::default();
+    effect(pref("ai.model", "zai/glm-5.3-flash"), &mut ctl, &desk.ai);
+    effect(pref("ai.nope", "x"), &mut ctl, &desk.ai);
+    let stored = Fx::Store { key: ai::MODEL.into(), value: "zai/glm-5.3-flash".into() };
+    assert_eq!((ctl.effects(), desk.ai.status().model.as_str()), (&[stored][..], ai::MODELS[1]));
     let end = Event::StreamEnd { id: 1, status: 0, error: "".into() };
     for ev in [Event::Chunk { id: 1, data: vec![1] }, end] {
         assert_eq!((send(&mut desk, ev.clone()), input_of(ev)), ((NOTHING, vec![]), None));

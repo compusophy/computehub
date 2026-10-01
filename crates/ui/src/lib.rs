@@ -159,32 +159,22 @@ pub enum Request {
     SetTheme(String),
     /// Resize the asking app's window to this content size, in logical px.
     Size(u16, u16),
-    /// Save the AI settings in the page's storage (never the VFS): `key`
-    /// `None` keeps the stored key, `Some("")` clears it.
-    AiConfig { provider: String, key: Option<String>, model: String },
+    /// Set the preference `key` to `value` in the page's storage (never the VFS), such as
+    /// [`AI_MODEL`]; the page ignores keys it does not know.
+    Pref { key: String, value: String },
 }
 
-/// The AI settings as apps see them, never the key: `provider` is `"gateway"`, `"openrouter"` or
-/// `"mock"`; `key_hint` is `""` (no key) or the key's last 4 chars.
+/// The preference naming the model the AI answers with ([`AiStatus::model`]).
+pub const AI_MODEL: &str = "ai.model";
+
+/// The AI settings as apps see them: the model the AI answers with.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct AiStatus {
-    pub provider: String,
     pub model: String,
-    pub key_hint: String,
-}
-
-impl AiStatus {
-    /// The status once `provider`, `key` (`None` keeps it) and `model` are saved.
-    pub fn saved(&self, provider: &str, key: Option<&str>, model: &str) -> AiStatus {
-        let last4 = |k: &str| k[k.char_indices().rev().nth(3).map_or(0, |c| c.0)..].to_string();
-        let key_hint = key.map_or_else(|| self.key_hint.clone(), last4);
-        AiStatus { provider: provider.to_string(), model: model.to_string(), key_hint }
-    }
 }
 
 /// What an app can reach while handling an event: the filesystem, the kernel (processes it spawns
-/// are owned by its window), the clock (milliseconds on the page clock), the AI settings, whether
-/// the page is served from localhost (dev-only choices such as the mock AI provider show), and
+/// are owned by its window), the clock (milliseconds on the page clock), the AI settings, and
 /// requests to the shell.
 #[derive(Debug)]
 pub struct Cx<'a> {
@@ -192,21 +182,20 @@ pub struct Cx<'a> {
     pub kernel: &'a mut kernel::Kernel,
     pub now_ms: f64,
     pub ai: AiStatus,
-    pub localhost: bool,
     requests: Vec<Request>,
 }
 
 impl<'a> Cx<'a> {
     pub fn new(vfs: &'a mut vfs::Vfs, kernel: &'a mut kernel::Kernel, now_ms: f64) -> Cx<'a> {
-        let (ai, localhost, requests) = (AiStatus::default(), false, Vec::new());
-        Cx { vfs, kernel, now_ms, ai, localhost, requests }
+        Cx { vfs, kernel, now_ms, ai: AiStatus::default(), requests: Vec::new() }
     }
 
-    /// Saves the AI settings ([`Request::AiConfig`]); [`Cx::ai`] follows at once.
-    pub fn ai_config(&mut self, provider: &str, key: Option<&str>, model: &str) {
-        self.ai = self.ai.saved(provider, key, model);
-        let (provider, model, key) = (provider.to_string(), model.to_string(), key.map(Into::into));
-        self.requests.push(Request::AiConfig { provider, key, model });
+    /// Sets a preference ([`Request::Pref`]); for [`AI_MODEL`], [`Cx::ai`] follows at once.
+    pub fn pref(&mut self, key: &str, value: &str) {
+        if key == AI_MODEL {
+            self.ai.model = value.to_string();
+        }
+        self.requests.push(Request::Pref { key: key.to_string(), value: value.to_string() });
     }
 
     /// Opens an app (a registry name or a `.app` path) in a new tiled window.

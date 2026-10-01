@@ -2,7 +2,8 @@
 //! [`Vfs`] holding the `/bin` markers and Studio's samples, and a [`Registry`] of [`apps::open`]
 //! then [`remote::open`]. The [`Shell`] is made at the first Resize that leaves a work area; until
 //! then input is dropped (a missed Tick is replayed) and frames clear to the default theme's base.
-//! The theme is kept in `localStorage` ([`THEME_KEY`]), as are the AI settings ([`ai`]).
+//! The theme is kept in `localStorage` ([`THEME_KEY`]), as are the preferences apps set
+//! ([`ui::Request::Pref`]: the AI model, see [`ai`]).
 //!
 //! Fonts: boot (Inter Regular, in the wasm); deferred (Inter SemiBold and JetBrains Mono, fetched
 //! after the first frame under the top two fetch ids, which the shell never reaches; a failure
@@ -157,8 +158,7 @@ impl Desktop {
         let Some(shell) = &mut self.shell else { return };
         for _ in 0..2 {
             if self.ai.pump(ctl, shell.kernel_mut()) {
-                let (ai, localhost) = self.ai.status();
-                shell.set_ai(ai, localhost);
+                shell.set_ai(self.ai.status());
             }
             shell.take_effects().into_iter().for_each(|fx| effect(fx, ctl, &self.ai));
         }
@@ -258,9 +258,19 @@ fn effect(fx: Effect, ctl: &mut Ctl, ai: &ai::Ai) {
         Effect::Kernel(K::Kill { pid }) => ctl.kill(pid),
         Effect::Kernel(K::Wake { ms }) => ctl.wake_in(ms),
         Effect::Kernel(K::Saved) => ctl.storage_set(HOME_KEY, "1"),
-        Effect::AiConfig { provider, key, model } => ai.configure(ctl, &provider, key, &model),
+        Effect::Pref { key, value } => pref(&key, &value, ctl, ai),
         // The host hands frames to the apps; none reach here.
         Effect::Kernel(K::Draw { .. }) => {}
+    }
+}
+
+/// Stores a preference an app set, each key where it belongs; a key this page does not know
+/// (yet) is ignored. A new key is a new arm (and then the `expect` goes).
+#[expect(clippy::single_match, reason = "the one key so far; more come as arms")]
+fn pref(key: &str, value: &str, ctl: &mut Ctl, ai: &ai::Ai) {
+    match key {
+        ui::AI_MODEL => ai.set_model(ctl, value),
+        _ => {}
     }
 }
 

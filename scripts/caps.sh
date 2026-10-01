@@ -5,7 +5,9 @@ set -uo pipefail
 cd "$(dirname "$0")/.."
 
 CRATE_CAP=2000
+CRATE_TEST_CAP=1000
 REPO_CAP=25000
+TEST_CAP=12500
 CLAUDE_CAP=8000
 # Only these crates may touch the browser, so only they may take the
 # wasm-bindgen family.
@@ -28,25 +30,36 @@ for c in crates/*/ tools/*/; do
   if [ -d "$c" ]; then crate_dirs+=("$c"); fi
 done
 
-# 1. Lines of Rust per crate and in total (tests count: they ship in the repo).
+# 1. Lines of Rust per crate and in total. Product code and test code (files
+#    named tests.rs, and tests/ directories) have caps of their own: tests
+#    guard the product, so they are capped, not traded against it.
+lines() { # lines of the .rs files under $1..., tests ($T=1) or the rest
+  if [ "$T" = 1 ]; then
+    find "$@" -name '*.rs' \( -name tests.rs -o -path '*/tests/*' \) -print0
+  else
+    find "$@" -name '*.rs' ! -name tests.rs ! -path '*/tests/*' -print0
+  fi | xargs -0 cat 2>/dev/null | wc -l
+}
 for c in "${crate_dirs[@]}"; do
-  n=$(find "$c" -name '*.rs' -print0 | xargs -0 cat | wc -l)
-  printf '%-26s %6d LOC (cap %d)\n' "$c" "$n" "$CRATE_CAP"
-  if [ "$n" -gt "$CRATE_CAP" ]; then
-    echo "FAIL: $c exceeds the per-crate cap"
+  n=$(T=0 lines "$c")
+  t=$(T=1 lines "$c")
+  printf '%-26s %6d LOC + %5d test (caps %d + %d)\n' "$c" "$n" "$t" "$CRATE_CAP" "$CRATE_TEST_CAP"
+  if [ "$n" -gt "$CRATE_CAP" ] || [ "$t" -gt "$CRATE_TEST_CAP" ]; then
+    echo "FAIL: $c exceeds a per-crate cap"
     fail=1
   fi
 done
-total=$(find "${crate_dirs[@]}" -name '*.rs' -print0 | xargs -0 cat | wc -l)
-printf '%-26s %6d LOC (cap %d)\n' "total" "$total" "$REPO_CAP"
-if [ "$total" -gt "$REPO_CAP" ]; then
-  echo "FAIL: repo exceeds the total cap"
+total=$(T=0 lines "${crate_dirs[@]}")
+tests=$(T=1 lines "${crate_dirs[@]}")
+printf '%-26s %6d LOC + %5d test (caps %d + %d)\n' "total" "$total" "$tests" "$REPO_CAP" "$TEST_CAP"
+if [ "$total" -gt "$REPO_CAP" ] || [ "$tests" -gt "$TEST_CAP" ]; then
+  echo "FAIL: repo exceeds a total cap"
   fail=1
 fi
 
 # 2. CLAUDE.md stays a map, not a novel.
 if [ -f CLAUDE.md ]; then
-  chars=$(wc -m < CLAUDE.md)
+  chars=$(LC_ALL=C.UTF-8 wc -m < CLAUDE.md)
   printf '%-26s %6d chars (cap %d)\n' "CLAUDE.md" "$chars" "$CLAUDE_CAP"
   if [ "$chars" -gt "$CLAUDE_CAP" ]; then
     echo "FAIL: CLAUDE.md exceeds its cap"

@@ -23,7 +23,7 @@ struct Sim<A> {
     app: A,
     fs: Vfs,
     kernel: ui::kernel::Kernel,
-    ai: (ui::AiStatus, bool),
+    ai: ui::AiStatus,
 }
 
 impl<A: App> Sim<A> {
@@ -33,9 +33,9 @@ impl<A: App> Sim<A> {
     /// Sends `ev`; returns whether the app redraws and its requests.
     fn both(&mut self, ev: AppEvent) -> (bool, String) {
         let mut cx = Cx::new(&mut self.fs, &mut self.kernel, 0.0);
-        (cx.ai, cx.localhost) = self.ai.clone();
+        cx.ai = self.ai.clone();
         let redraw = self.app.event(ev, &mut cx);
-        self.ai.0 = cx.ai.clone();
+        self.ai = cx.ai.clone();
         let reqs: Vec<String> = cx.take_requests().iter().map(show).collect();
         (redraw, reqs.join("; "))
     }
@@ -100,6 +100,7 @@ fn show(r: &Request) -> String {
         Request::Open { name, floating: false } => format!("open {name}"),
         Request::LoadFallbackFonts => "fonts".into(),
         Request::SetTheme(name) => format!("theme {name}"),
+        Request::Pref { key, value } => format!("pref {key}={value}"),
         other => format!("{other:?}"),
     }
 }
@@ -400,39 +401,36 @@ fn welcome_cards_open_apps_and_wrap_and_settings_switches_pages_and_themes() {
 }
 
 #[test]
-fn settings_saves_the_ai_provider_key_and_model_and_never_shows_a_stored_key() {
+fn settings_offers_the_free_ai_models_and_marks_the_one_in_use() {
     let (mut ts, mut s) = (text_system(), Sim::new(Settings::default()));
-    let status = |p, k| ui::AiStatus::default().saved(p, Some(k), "zai/glm-5.3");
-    let cfg = |p: &str, k: &str| {
-        format!("AiConfig {{ provider: \"{p}\", key: {k}, model: \"zai/glm-5.3\" }}")
-    };
-    s.ai.0 = status("openrouter", "");
     assert!(s.both(AppEvent::Click(WidgetId(2))).0 && s.app.page == 1);
-    let mut ids = |s: &mut Sim<Settings>, w| {
-        let hits = draw(&mut s.app, &mut ts, RectF::new(0.0, 36.0, w, 520.0), MIDNIGHT).1;
-        hits.iter().map(|h| h.id.0).collect::<Vec<u32>>()
+    // The nav, then a row per model: no fields, so no text input. The ring marks the model in
+    // use (none named yet: the default).
+    let mut look = |s: &mut Sim<Settings>, w| {
+        let (list, hits) = draw(&mut s.app, &mut ts, RectF::new(0.0, 36.0, w, 520.0), MIDNIGHT);
+        let ids: Vec<u32> = hits.iter().map(|h| h.id.0).collect();
+        let ring = |b: &&Instance| b.color == MIDNIGHT.accent && b.p0 == 2.0;
+        let rings: Vec<[f32; 4]> = of(&list, Kind::Border).filter(ring).map(|b| b.rect).collect();
+        let around = |id| {
+            let r = hit(&hits, id).rect;
+            [r.x - 3.0, r.y - 3.0, r.w + 6.0, r.h + 6.0]
+        };
+        let on = (20..22).filter(|&id| rings == [around(id)]).collect::<Vec<u32>>();
+        (ids, on, hits)
     };
-    assert_eq!(ids(&mut s, 720.0), [1, 2, 3, 20, 21, 30, 31, 32], "no mock, no key to clear");
-    // The key field takes text but control chars, shown in bullets but its last 4.
-    let focus = |id| AppEvent::PointerDown { x: 0.0, y: 0.0, id: Some(WidgetId(id)) };
-    s.ev(focus(30));
-    s.text(" sk-é\n12345");
-    s.key(Key::Backspace, NO);
-    assert_eq!((s.app.wants_text_input(), s.app.masked()), (true, "\u{2022}".repeat(5) + "1234"));
-    // Enter saves it, trimmed; the field empties and the status keeps its last 4.
-    assert_eq!(s.key(Key::Enter, NO), cfg("openrouter", "Some(\"sk-é1234\")"));
-    let after = (s.app.key.len(), s.app.wants_text_input(), s.app.ai.key_hint.as_str());
-    assert_eq!(after, (0, false, "1234"));
-    // On localhost the mock shows; Clear empties the key; an empty model is the default.
-    s.ai.1 = true;
-    s.click(22);
-    s.ev(focus(31));
-    (0..20).for_each(|_| _ = s.key(Key::Backspace, NO));
-    assert_eq!(ids(&mut s, 360.0), [1, 2, 3, 20, 21, 22, 30, 31, 32, 33]);
-    assert_eq!((s.click(33), s.app.ai.clone()), (cfg("mock", "Some(\"\")"), status("mock", "")));
-    // A new status from the host resets what was picked; Escape leaves a field.
-    s.ai.0 = status("gateway", "wxyz");
-    s.ev(focus(30));
-    assert!(s.both(AppEvent::Key { key: Key::Escape, mods: NO }).0 && !s.app.wants_text_input());
-    assert_eq!(s.click(32), cfg("gateway", "None"));
+    let (ids, on, hits) = look(&mut s, 720.0);
+    assert_eq!((ids, on), (vec![1, 2, 3, 20, 21], vec![20]));
+    assert!(!s.app.wants_text_input());
+    let (a, b) = (hit(&hits, 20).rect, hit(&hits, 21).rect);
+    assert!(a.x == b.x && a.w == b.w && b.y >= a.y + a.h && a.w <= 440.0, "{a:?} {b:?}");
+    // A click sets the preference; the status follows at once, and the ring.
+    assert_eq!(s.click(21), "pref ai.model=zai/glm-5.3-flash");
+    assert!(s.ai.model == "zai/glm-5.3-flash" && s.app.model == s.ai.model);
+    assert_eq!(look(&mut s, 720.0).1, [21]);
+    // A model from the host shows at the app's next event; narrow, the rows fill the width.
+    s.ai.model = "zai/glm-5.3".into();
+    assert!(s.both(AppEvent::Focus(true)).0, "a new status redraws");
+    assert!(!s.both(AppEvent::Focus(true)).0);
+    let (_, on, hits) = look(&mut s, 360.0);
+    assert!(on == [20] && hit(&hits, 20).rect.w == 320.0, "{hits:?}");
 }

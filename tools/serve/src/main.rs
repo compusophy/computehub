@@ -4,8 +4,10 @@
 //! cached, and unless `--plain` the page is cross-origin isolated, as
 //! deploy.sh makes it (programs need that). A path that could leave `<dir>`
 //! (a `.`, `..` or empty segment, a backslash or a drive colon) is a 404;
-//! paths are not percent-decoded, so `%2e` hides none. `POST /mock/chat` is
-//! a mock AI provider for tests ([`sse`]).
+//! paths are not percent-decoded, so `%2e` hides none. Two POSTs stand in for
+//! the site's server functions: `/api/ai` streams a mock model's answer
+//! ([`sse`]); `/api/feedback` prints the body to stdout, prefixed with
+//! `feedback: `, and answers 201 with `{"url":"local"}`.
 
 #![forbid(unsafe_code)]
 
@@ -62,13 +64,23 @@ fn handle(mut stream: TcpStream, root: &Path, extra: &str) -> io::Result<()> {
     }
     let mut parts = line.split_whitespace();
     let (method, target) = (parts.next().unwrap_or(""), parts.next().unwrap_or(""));
-    if (method, target) == ("POST", "/mock/chat") {
+    if method == "POST" && matches!(target, "/api/ai" | "/api/feedback") {
         let mut body = vec![0; len];
         reader.read_exact(&mut body)?;
+        let body = String::from_utf8_lossy(&body);
+        if target == "/api/feedback" {
+            println!("feedback: {body}");
+            let (json, close) = (r#"{"url":"local"}"#, "Connection: close");
+            let head = "HTTP/1.1 201 Created\r\nContent-Type: application/json\r\n";
+            let n = json.len();
+            write!(stream, "{head}Content-Length: {n}\r\n{close}\r\n{extra}\r\n{json}")?;
+            return stream.flush();
+        }
+        println!("{method} {target}");
         let head = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n";
         write!(stream, "{head}{extra}\r\n")?;
         // Uneven parts, apart in time: lines and characters split across reads.
-        for part in sse(&String::from_utf8_lossy(&body)).as_bytes().chunks(77) {
+        for part in sse(&body).as_bytes().chunks(77) {
             stream.write_all(part)?;
             stream.flush()?;
             thread::sleep(Duration::from_millis(20));
@@ -110,7 +122,7 @@ fn resolve(root: &Path, target: &str) -> Option<PathBuf> {
 /// The mock's answer to a chat request `body`: chat.completion.chunk lines, a
 /// usage chunk and `[DONE]`. When the last message's content (else the body) says
 /// "app", a sentence and a fenced `app` block of Studio's counter, a line a
-/// chunk; else "Hello from the mock provider.", a word a chunk.
+/// chunk; else "Hello from the mock model.", a word a chunk.
 fn sse(body: &str) -> String {
     let last = body.rfind("\"content\"").map_or(body, |i| &body[i..]);
     let pieces: Vec<&str> = if last.contains("app") {
@@ -118,7 +130,7 @@ fn sse(body: &str) -> String {
         let lines = program.split_inclusive('\n');
         ["Here is a counter.\n\n", "```app\n"].into_iter().chain(lines).chain(["```\n"]).collect()
     } else {
-        "Hello from the mock provider.".split_inclusive(' ').collect()
+        "Hello from the mock model.".split_inclusive(' ').collect()
     };
     let head = r#"data: {"id":"mock","object":"chat.completion.chunk","created":0,"model":"mock","#;
     let mut out = String::new();
@@ -174,4 +186,18 @@ fn the_mock_streams_hello_or_an_app() {
     assert!(lines.len() == 7 && lines[5].contains(r#""usage":{"#) && lines[6] == "data: [DONE]");
     let app = sse(r#"[{"role":"user","content":"a counter app"}]"#);
     assert!(app.contains(r#":"```app\n"}"#) && app.contains(r#":"label \"Counter\";\n"}"#));
+}
+
+#[test]
+fn feedback_is_printed_and_acknowledged() {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let mut client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+    let body = r#"{"text":"hi"}"#;
+    let len = body.len();
+    write!(client, "POST /api/feedback HTTP/1.1\r\nContent-Length: {len}\r\n\r\n{body}").unwrap();
+    handle(listener.accept().unwrap().0, Path::new("dist"), "").unwrap();
+    let mut got = String::new();
+    client.read_to_string(&mut got).unwrap();
+    assert!(got.starts_with("HTTP/1.1 201 Created\r\n"), "{got}");
+    assert!(got.contains("Content-Length: 15\r\n") && got.ends_with("\r\n\r\n{\"url\":\"local\"}"));
 }

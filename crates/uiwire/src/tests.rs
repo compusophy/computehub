@@ -56,7 +56,7 @@ fn events() -> Vec<Event> {
         Event::Resize { w: 800, h: 600 },
         Event::Close,
         Event::Submit { id: 4 },
-        Event::Config { provider: "gateway".into(), model: "zai/glm-5.3".into(), has_key: 1 },
+        Event::Config { model: "zai/glm-5.3".into() },
         Event::AiData { id: 3, data: vec![b'd', 0xC3, 0xFF] },
         Event::AiEnd { id: 3, status: 429, error: "".into() },
     ]

@@ -166,12 +166,6 @@ impl Ctl {
         LocalTime::of(&js_sys::Date::new_0())
     }
 
-    /// The page's `location.hostname`; `None` natively.
-    pub fn hostname(&self) -> Option<String> {
-        let w = cfg!(target_arch = "wasm32").then(crate::window).flatten();
-        w.and_then(|w| js_sys::Reflect::get(&w.location(), &"hostname".into()).ok()?.as_string())
-    }
-
     /// Whether the page is cross-origin isolated, so workers can share
     /// memory (`crossOriginIsolated`); false natively.
     pub fn isolated(&self) -> bool {

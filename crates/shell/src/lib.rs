@@ -132,10 +132,9 @@ impl Shell {
         self.host.theme.current().base
     }
 
-    /// The AI settings apps see (from the page's storage; never the key), and
-    /// whether the page is served from localhost (the mock provider shows).
-    pub fn set_ai(&mut self, ai: ui::AiStatus, localhost: bool) {
-        (self.host.ai, self.host.localhost) = (ai, localhost);
+    /// The AI settings apps see (from the page's storage).
+    pub fn set_ai(&mut self, ai: ui::AiStatus) {
+        self.host.ai = ai;
     }
 
     /// The kernel, for os to set up; its effects leave by [`Shell::take_effects`].

@@ -236,10 +236,11 @@ only the theme persists. OPFS persistence comes with the kernel.
   another device just as well.
 - **R3, AI.** An agent app whose tools are the OS's capabilities (open,
   read and write files, run programs, press widgets) and whose eyes are the
-  UI tree (windows, titles, widget hits and labels). Cloud models through
-  the user's own key, straight from the browser: Vercel AI Gateway (GLM
-  5.3), OpenRouter and Anthropic allow browser CORS, and the key stays in
-  the tab. Local models on WebGPU, downloaded on first use, cached in OPFS,
+  UI tree (windows, titles, widget hits and labels). Cloud AI is free for
+  every visitor: `api/ai.mjs`, a thin same-origin function, forwards
+  chat-completions to the Vercel AI Gateway (GLM 5.3) with the project's
+  own OIDC identity, so no key ever reaches the browser; bring-your-own-key
+  can come back later. Local models on WebGPU, downloaded on first use, cached in OPFS,
   never part of the boot budget. Every call returns a receipt: model,
   tokens, cost.
 - **R4, the OS as a fabric.** Apps load as separate wasm modules (a hello
