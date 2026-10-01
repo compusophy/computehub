@@ -167,6 +167,30 @@ fn apps_open_placed_for_the_screen() {
 }
 
 #[test]
+fn windows_a_narrow_area_maximized_come_back_as_they_were_when_it_widens() {
+    // Welcome free, the terminal snapped, a third maximized by the person.
+    let (mut h, _, _) = host();
+    let (mut out, wide) = (Response::default(), h.wm().area());
+    h.apply(Cmd::SnapTo { win: WinId(2), snap: wm::Snap::Left });
+    h.say(2, "open sized");
+    h.apply(Cmd::Maximize(WinId(3)));
+    let before = h.wm().layout();
+    for area in [Rect::new(0, 44, 600, 500), Rect::new(0, 44, 390, 600)] {
+        h.apply(Cmd::SetArea(area));
+        h.apply(Cmd::Restore(WinId(1)));
+        h.settle(&mut out);
+        assert!(h.wm().layout().iter().all(|p| p.state == wm::State::Maximized));
+    }
+    h.apply(Cmd::SetArea(wide));
+    h.settle(&mut out);
+    assert_eq!(h.wm().layout(), before);
+    // Put back once: maximized again on a wide area, it stays so.
+    h.apply(Cmd::Maximize(WinId(1)));
+    h.settle(&mut out);
+    assert_eq!(h.wm().layout()[0].state, wm::State::Maximized);
+}
+
+#[test]
 fn the_desktop_lists_home_and_the_persons_apps_and_asks_reach_the_assistant() {
     let (mut h, log, _) = host();
     let mine = [Vfs::HOME, "/apps"].concat();

@@ -24,18 +24,25 @@ mkdir -p .vercel/output/static
 cp -R dist/. .vercel/output/static/
 # The server functions (api/*.mjs: the free AI, the feedback inbox), each a
 # Node function served at /api/<name>, streaming its response as it goes.
+# The AI ends when its caller goes (Stop, a closed tab), and so does its call
+# to the gateway; the inbox does not, so a report sent as the page unloads is
+# still filed. (`vercel build` writes supportsCancellation here from
+# vercel.json's functions config; --prebuilt reads only this file.)
 for f in api/*.mjs; do
   name=$(basename "$f" .mjs)
   dir=".vercel/output/functions/api/$name.func"
   mkdir -p "$dir"
   cp "$f" "$dir/index.mjs"
-  cat > "$dir/.vc-config.json" <<'EOF'
+  cancel=false
+  if [ "$name" = ai ]; then cancel=true; fi
+  cat > "$dir/.vc-config.json" <<EOF
 {
   "runtime": "nodejs22.x",
   "handler": "index.mjs",
   "launcherType": "Nodejs",
   "shouldAddHelpers": false,
   "supportsResponseStreaming": true,
+  "supportsCancellation": $cancel,
   "maxDuration": 300
 }
 EOF

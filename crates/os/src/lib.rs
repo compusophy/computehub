@@ -164,8 +164,10 @@ impl Desktop {
             ctl.set_cursor(CURSORS[c as usize]);
         }
         // A tap on the focused window while typing asks for text input again,
-        // inside its user activation: that brings back a dismissed keyboard.
-        if release.is_some_and(|(x, y)| !asked && self.typing && self.over_focus(x, y)) {
+        // inside its user activation: that brings back a dismissed keyboard. A
+        // finger's scroll, wander or long press does not.
+        let tap = release.filter(|_| !r.gesture);
+        if tap.is_some_and(|(x, y)| !asked && self.typing && self.over_focus(x, y)) {
             ctl.set_text_input(true);
         }
         let prevent_default = r.consumed && !(types && self.typing);

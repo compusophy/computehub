@@ -322,6 +322,10 @@ fn desktop_routes_events_through_the_shell() {
     assert_eq!((h.1, fx), (true, vec![Fx::Cursor("text")]));
     assert_eq!(up(&mut desk, at, 0), [Fx::TextInput(true)]);
     assert_eq!(up(&mut desk, at, 2), []);
+    // A finger's scroll there is no tap: its lift asks for nothing.
+    send(&mut desk, Event::PointerDown { x: at.0, y: at.1, button: 0, touch: true });
+    send(&mut desk, Event::PointerMove { x: at.0, y: at.1 + 40.0 });
+    assert_eq!(up(&mut desk, (at.0, at.1 + 40.0), 0), []);
     let bare = (4.0, 796.0);
     let r = |p: &wm::Placement| RectF::from_i32(p.rect.x, p.rect.y, p.rect.w, p.rect.h);
     assert!(shell(&desk).wm().layout().iter().all(|p| !r(p).contains(bare.0, bare.1)));

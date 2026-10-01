@@ -50,6 +50,9 @@ pub const BAR_H: f32 = 44.0;
 pub const DOCK_CLEAR: f32 = home::CLEAR;
 
 type Widget = (WinId, WidgetId);
+/// The screen before a keyboard shortened it; each free window then, its rect then, and where
+/// the last squeeze left it.
+type Kept = ((f32, f32), Vec<(WinId, Rect, Rect)>);
 
 /// What the page keeps for the shell between visits: the theme's name (else the default, Mono),
 /// the dock's favorites as stored (the `dock` preference; `None` for the default) and whether
@@ -88,6 +91,8 @@ pub struct Shell {
     armed: Option<Target>,
     app_hover: Option<Widget>,
     app_press: Option<Widget>,
+    /// A finger's press into content, delivered when it lifts as a tap.
+    down: Option<(WinId, AppEvent)>,
     grab: Option<Grab>,
     last_title: Option<(WinId, f64)>,
     /// The focus and its want of text input, and the cursor, as last told.
@@ -112,6 +117,7 @@ pub struct Shell {
     instant: bool,
     /// Whether Welcome still waits for a work area (on a first visit).
     startup: bool,
+    kept: Option<Kept>,
     /// A layer drawn, then replayed scaled and faded.
     scratch: DrawList,
 }
@@ -124,11 +130,11 @@ impl Shell {
         let host = Host::new(Wm::new(work_area(size)), text, vfs, reg, &prefs.theme);
         let favs = home::dock::favorites(prefs.dock.as_deref());
         let mut shell = Shell { host, pending: Vec::new(), size, pointer: None, hover: None,
-            armed: None, app_hover: None, app_press: None, grab: None, last_title: None, ime: None,
-            cursor: Cursor::Default, clock: None, favs, dock: Vec::new(), shelf: Shelf::default(),
-            icons: Vec::new(), listed: None, launcher: Default::default(), menu: None, touch: None,
-            fling: None, motion: Default::default(), instant: false, startup: !prefs.seen,
-            scratch: DrawList::new() };
+            armed: None, app_hover: None, app_press: None, down: None, grab: None, last_title: None,
+            ime: None, cursor: Cursor::Default, clock: None, favs, dock: Vec::new(),
+            shelf: Shelf::default(), icons: Vec::new(), listed: None, launcher: Default::default(),
+            menu: None, touch: None, fling: None, motion: Default::default(), instant: false,
+            startup: !prefs.seen, kept: None, scratch: DrawList::new() };
         let mut out = Response::default();
         shell.start(&mut out);
         shell.settle(&mut out);
@@ -253,8 +259,7 @@ impl Shell {
             Input::PointerLeave => self.touch = None,
             Input::Wheel { x, y, dy } => self.wheel(coord(x), coord(y), dy, &mut out),
             Input::Resize { w, h } => {
-                self.size = (coord(w).max(0.0), coord(h).max(0.0));
-                self.host.apply(Cmd::SetArea(work_area(self.size)));
+                self.resize((coord(w).max(0.0), coord(h).max(0.0)));
                 self.start(&mut out);
                 (self.instant, out.redraw) = (true, true);
             }
@@ -265,6 +270,41 @@ impl Shell {
         }
         self.finish(before, &mut out);
         out
+    }
+
+    /// A new screen size. A keyboard that shortens the page (the width kept, while typing)
+    /// squeezes the free windows only until the page is that tall again: they come back then,
+    /// but for those the person moved or resized meanwhile, which stay where they put them.
+    fn resize(&mut self, size: (f32, f32)) {
+        let free = |p: &wm::Placement| p.state == wm::State::Normal && p.snap.is_none();
+        let typing = matches!(self.ime, Some((_, true)));
+        if self.kept.is_none() && typing && size.0 == self.size.0 && size.1 < self.size.1 {
+            let wins = self.host.wm().layout().into_iter().filter(free).map(|p| (p.win, p.rect));
+            self.kept = Some((self.size, wins.map(|(w, r)| (w, r, r)).collect()));
+        }
+        // Each kept window must still be free and where the last squeeze left it.
+        let layout = self.host.wm().layout();
+        let left = |&(win, _, at): &(WinId, Rect, Rect)| {
+            layout.iter().any(|p| p.win == win && free(p) && p.rect == at)
+        };
+        if let Some((_, wins)) = &mut self.kept {
+            wins.retain(left);
+        }
+        self.size = size;
+        self.host.apply(Cmd::SetArea(work_area(size)));
+        let Some((full, mut wins)) = self.kept.take() else { return };
+        if size.0 != full.0 || size.1 < full.1 {
+            // Still short, it waits (noting where each window is now); a new width (a phone
+            // turned) forgets them.
+            for w in &mut wins {
+                w.2 = self.placement(w.0).map_or(w.2, |p| p.rect);
+            }
+            self.kept = (size.0 == full.0).then_some((full, wins));
+            return;
+        }
+        for (win, rect, _) in wins {
+            self.host.apply(Cmd::Resize { win, rect });
+        }
     }
 
     /// Opens Welcome on a first visit once there is a work area, and remembers it was shown.

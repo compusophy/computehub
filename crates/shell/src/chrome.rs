@@ -2,7 +2,7 @@
 //! layers), and the snap preview.
 
 use gfx::{DrawList, RectF};
-use host::frame::{CTL, controls};
+use host::frame::CTL;
 use host::motion::replay;
 use host::paint::{cap_baseline, control_glyph, faded, px, sheen};
 use host::{TITLEBAR_H, content_rect};
@@ -73,9 +73,9 @@ impl Shell {
         if r.h < TITLEBAR_H {
             return;
         }
-        let ctl = controls(r, self.ctl_step());
+        let ctl = self.controls(r);
         // The title, cut with an ellipsis before the controls.
-        let end = ctl.map_or(r.x + r.w - TITLE_X, |c| c[0].x - TITLE_GAP);
+        let end = ctl.first().map_or(r.x + r.w - TITLE_X, |c| c.1.x - TITLE_GAP);
         let room = RectF::new(r.x + TITLE_X, r.y, end - r.x - TITLE_X, TITLEBAR_H);
         let color = if focused { theme.text } else { theme.text_dim };
         let style = TextStyle::new(FontId::SansBold, TITLE_SIZE, color);
@@ -89,7 +89,7 @@ impl Shell {
         }
         let hot = matches!(self.hover, Some(Target::Ctl(w, _)) if w == win);
         let ink = theme.surface.with_alpha(255);
-        for (i, c) in ctl.into_iter().flatten().enumerate() {
+        for (i, c) in ctl {
             let fill = if hot && i == 2 { theme.danger } else { theme.text_faint };
             list.fill(c, CTL / 2.0, fill);
             if hot {

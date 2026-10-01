@@ -27,7 +27,7 @@ use kernel::Kernel;
 use motion::Themes;
 use ui::{AiStatus, AppEvent, AppIcon, Cx, Key, Mods, Request, TextSystem, Theme, Ui, UiState};
 use vfs::Vfs;
-use wm::{Cmd, Outcome, Rect, State, WinId, Wm};
+use wm::{Cmd, Outcome, Rect, Snap, State, WinId, Wm};
 
 /// Makes the app for a window by name (`"terminal"`, a `.app` path, ...).
 pub type Registry = Box<dyn Fn(&str) -> Option<Box<dyn ui::App>>>;
@@ -119,7 +119,8 @@ pub enum Cursor {
     #[default] Default, Text, Grab, Grabbing, EwResize, NsResize, NwseResize, NeswResize,
 }
 
-/// After an input: draw, `preventDefault`, text input and cursor (if changed), effects, animate.
+/// After an input: draw, `preventDefault`, text input and cursor (if changed), effects, animate,
+/// and whether a finger lifted from a gesture (a scroll, a wander or a long press), not a tap.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Response {
     pub redraw: bool,
@@ -128,6 +129,7 @@ pub struct Response {
     pub effects: Vec<Effect>,
     pub cursor: Option<Cursor>,
     pub animating: bool,
+    pub gesture: bool,
 }
 
 /// An app in a window, its name and its hit regions from the last frame.
@@ -180,6 +182,9 @@ pub struct Host {
     icons: Vec<(String, Option<AppIcon>)>,
     /// What apps see in [`Cx::ai`]: os sets it; an [`ui::AI_MODEL`] preference updates it.
     pub ai: AiStatus,
+    /// The windows maximized only because the work area is narrow, with their snap and normal
+    /// rect from before, put back when it widens.
+    forced: Vec<(WinId, Option<Snap>, Rect)>,
 }
 
 impl Host {
@@ -187,9 +192,9 @@ impl Host {
     pub fn new(wm: Wm, text: TextSystem, vfs: Vfs, registry: Registry, theme: &str) -> Host {
         let (wins, fonts, icons, theme) = (Vec::new(), Vec::new(), Vec::new(), Themes::new(theme));
         let (now_ms, launcher, themes, focus) = (0.0, false, Vec::new(), None);
-        let ai = AiStatus::default();
+        let (ai, forced) = (AiStatus::default(), Vec::new());
         Host { generation: vfs.generation(), kernel: Kernel::new(), wm, text, vfs, registry, wins,
-            now_ms, theme, launcher, themes, fonts, focus, icons, ai }
+            now_ms, theme, launcher, themes, fonts, focus, icons, ai, forced }
     }
 
     pub fn wm(&self) -> &Wm {
@@ -197,8 +202,22 @@ impl Host {
     }
 
     /// Applies `cmd` to the wm (a stale id changes nothing); a closing window's app hears first.
+    /// A work area turning narrow first notes the windows it will maximize, as they are.
     pub fn apply(&mut self, cmd: Cmd) {
+        if matches!(cmd, Cmd::SetArea(a) if a.w < NARROW) && !self.narrow() {
+            self.force();
+        }
         _ = self.close_then(cmd, &mut Response::default());
+    }
+
+    /// Notes each shown window not maximized (once): its snap and normal rect.
+    fn force(&mut self) {
+        for p in self.wm.layout().into_iter().filter(|p| p.state != State::Maximized) {
+            if !self.forced.iter().any(|f| f.0 == p.win) {
+                let normal = self.wm.normal_rect(p.win).unwrap_or(p.rect);
+                self.forced.push((p.win, p.snap, normal));
+            }
+        }
     }
 
     fn close_then(&mut self, cmd: Cmd, out: &mut Response) -> bool {
@@ -400,12 +419,24 @@ impl Host {
         }
     }
 
-    /// Maximizes what shows on a narrow work area, tells apps focus changes and new content
-    /// sizes, then switches to themes they asked for.
+    /// Maximizes what shows on a narrow work area (once it widens, puts back those it did and
+    /// that are still maximized), tells apps focus changes and new content sizes, then switches
+    /// to themes they asked for.
     pub fn settle(&mut self, out: &mut Response) {
         if self.narrow() {
+            self.force();
             for p in self.wm.layout().into_iter().filter(|p| p.state != State::Maximized) {
                 _ = self.wm.apply(Cmd::Maximize(p.win));
+            }
+        } else {
+            for (win, snap, rect) in mem::take(&mut self.forced) {
+                if self.wm.layout().iter().any(|p| p.win == win && p.state == State::Maximized) {
+                    _ = self.wm.apply(Cmd::Restore(win));
+                    _ = self.wm.apply(Cmd::Resize { win, rect });
+                    if let Some(snap) = snap {
+                        _ = self.wm.apply(Cmd::SnapTo { win, snap });
+                    }
+                }
             }
         }
         for _ in 0..8 {

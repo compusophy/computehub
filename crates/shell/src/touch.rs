@@ -41,22 +41,25 @@ impl Shell {
         let Some((finger, s)) = &mut self.touch else { return };
         let (dy, s) = (finger.moved(at, now), *s);
         if finger.scrolling {
-            (self.armed, self.app_press) = (None, None);
+            (self.armed, self.app_press, self.down) = (None, None, None);
         }
         if let Some(dy) = dy {
             self.scroll(s, dy, out);
         }
     }
 
-    /// A finger held still long enough is a secondary press where it went down (its own press
-    /// then does nothing).
+    /// A finger held still long enough is a secondary press where it went down: its press into
+    /// content is over, and if that opens a menu, so is the button it holds.
     pub(crate) fn hold(&mut self, out: &mut Response) {
         let now = self.host.now_ms;
         let Some((finger, _)) = &mut self.touch else { return };
         if finger.held(now) {
-            let at = finger.at;
-            (self.armed, self.app_press, self.grab) = (None, None, None);
+            let (at, menu) = (finger.at, self.menu.is_some());
+            (self.app_press, self.down, self.grab) = (None, None, None);
             self.secondary(at, true, out);
+            if !menu && self.menu.is_some() {
+                self.armed = None;
+            }
         }
     }
 

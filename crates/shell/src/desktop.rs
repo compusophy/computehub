@@ -1,6 +1,7 @@
 //! The pointer: what lies under it; pressing, dragging, resizing, snapping,
 //! double clicks, buttons (which act on release), clicks into apps and secondary presses.
 
+use gfx::RectF;
 use host::frame::{
     CTL_STEP, TOUCH_STEP, Zone, controls, edge, edge_cursor, hit_box, resized, zone,
 };
@@ -110,8 +111,8 @@ impl Shell {
         let step = self.ctl_step();
         for p in self.host.wm().layout().iter().rev() {
             let r = rectf(p.rect);
-            let mut ctl = controls(r, step).into_iter().flatten();
-            if let Some(i) = ctl.position(|c| hit_box(c, step).contains(x, y)) {
+            let ctl = self.controls(r).into_iter().find(|c| hit_box(c.1, step).contains(x, y));
+            if let Some((i, _)) = ctl {
                 return Some(Target::Ctl(p.win, i));
             }
             if let Some((dx, dy)) = edge(r, x, y).filter(|_| p.state != State::Maximized) {
@@ -130,6 +131,16 @@ impl Shell {
     /// The window controls' reach: wide enough for a finger on a narrow screen.
     pub(crate) fn ctl_step(&self) -> f32 {
         if self.host.narrow() { TOUCH_STEP } else { CTL_STEP }
+    }
+
+    /// The controls of a window at `r`, by index (minimize, maximize, close); on a narrow
+    /// screen, where every window stays maximized, no maximize: minimize takes its place.
+    pub(crate) fn controls(&self, r: RectF) -> Vec<(usize, RectF)> {
+        let Some([min, max, close]) = controls(r, self.ctl_step()) else { return Vec::new() };
+        match self.host.narrow() {
+            true => vec![(0, max), (2, close)],
+            false => vec![(0, min), (1, max), (2, close)],
+        }
     }
 
     /// The topmost hit of `win`'s last frame at `(x, y)`, inside its content.
@@ -157,11 +168,12 @@ impl Shell {
     /// Button 0 down (a finger's if `touch`): closes a menu pressed outside (and does nothing
     /// else), arms a button, follows a finger, takes the keys from the everything bar, focuses a
     /// window, grabs it (not on a narrow screen), toggles maximize on a double click, or presses
-    /// into content.
+    /// into content (a finger's press waits to be a tap: a scroll is no press).
     pub(crate) fn press(&mut self, touch: bool, out: &mut Response) {
         let ((x, y), now) = (self.pointer.unwrap_or_default(), self.host.now_ms);
         let hit = self.hit(x, y);
         (self.grab, self.app_press, self.armed, self.fling) = (None, None, None, None);
+        self.down = None;
         if hit == Some(Target::Off) {
             self.menu = None;
             return;
@@ -208,7 +220,11 @@ impl Shell {
                 self.host.fresh_hits(win, c, &theme, state);
                 let id = self.widget_at(win, x, y).map(|h| h.id);
                 self.app_press = id.map(|id| (win, id));
-                self.host.deliver(win, AppEvent::PointerDown { x: x - c.x, y: y - c.y, id }, out);
+                let down = AppEvent::PointerDown { x: x - c.x, y: y - c.y, id };
+                match touch {
+                    true => self.down = Some((win, down)),
+                    false => self.host.deliver(win, down, out),
+                }
             }
             _ => {}
         }
@@ -246,12 +262,14 @@ impl Shell {
         }
     }
 
-    /// Lifts a finger (it may fling) and drops a held window (snapping it); button 0 fires the
-    /// armed button, or clicks the pressed widget, if still over it.
+    /// Lifts a finger (it may fling; a gesture's lift says so) and drops a held window (snapping
+    /// it); button 0 fires the armed button, or presses into content if a finger's tap, then
+    /// clicks the pressed widget, if still over it.
     pub(crate) fn release(&mut self, primary: bool, out: &mut Response) {
         let ((x, y), now) = (self.pointer.unwrap_or_default(), self.host.now_ms);
         if let Some((finger, scroll)) = self.touch.take() {
             self.fling = finger.lift(now).map(|f| (scroll, f));
+            out.gesture = finger.done;
         }
         if let Some(Grab::Move { win, zone: Some(zone), .. }) = self.grab.take() {
             self.host.apply(match zone {
@@ -260,9 +278,12 @@ impl Shell {
             });
         }
         let over = self.pointer.and_then(|_| self.hit(x, y));
-        let press = self.app_press.take();
+        let (press, down) = (self.app_press.take(), self.down.take());
         if let Some(target) = self.armed.take().filter(|&a| primary && over == Some(a)) {
             self.activate(target, out);
+        }
+        if let (true, Some((win, down))) = (primary, down) {
+            self.host.deliver(win, down, out);
         }
         if let (true, Some((win, id))) = (primary, press) {
             let hit = self.widget_at(win, x, y);

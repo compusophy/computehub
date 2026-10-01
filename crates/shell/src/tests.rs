@@ -220,6 +220,31 @@ fn resizes_set_the_work_area_and_windows_follow_at_once() {
 }
 
 #[test]
+fn a_keyboard_that_shortens_the_page_squeezes_free_windows_until_it_goes() {
+    // Welcome and a terminal free, the terminal typing: its keyboard takes half the page, then
+    // grows a bar, then goes.
+    let (mut s, _) = desk();
+    s.k(Enter, "a");
+    let before = s.wm().layout();
+    for h in [450.0, 420.0] {
+        s.input(Input::Resize { w: 1280.0, h });
+        assert_ne!(s.wm().layout(), before);
+    }
+    s.input(Input::Resize { w: 1280.0, h: 800.0 });
+    assert_eq!(s.wm().layout(), before);
+    // A window moved while the keyboard is up stays where it was put; the others come back.
+    s.input(Input::Resize { w: 1280.0, h: 450.0 });
+    let term = s.host.focused_app().expect("the terminal");
+    s.host.apply(Cmd::Move { win: term, x: 40, y: 60 });
+    let moved = s.placement(term).map(|p| p.rect);
+    s.input(Input::Resize { w: 1280.0, h: 800.0 });
+    assert_eq!(s.placement(term).map(|p| p.rect), moved);
+    let others =
+        |l: Vec<wm::Placement>| l.into_iter().filter(|p| p.win != term).collect::<Vec<_>>();
+    assert_eq!(others(s.wm().layout()), others(before));
+}
+
+#[test]
 fn windows_open_placed_for_the_screen_and_stay_full_on_a_phone() {
     let (mut s, _) = desk();
     // Among other windows a main app opens large, cascaded from the area's corner.
@@ -246,12 +271,19 @@ fn windows_open_placed_for_the_screen_and_stay_full_on_a_phone() {
     s.drag((100.0, 60.0), (200.0, 300.0));
     s.k(Left, "a");
     assert_eq!(s.wm().layout()[1].rect, Rect::new(0, 44, 390, 619));
+    // No maximize there: minimize takes its place, beside close.
     assert_eq!(
-        [(350.0, 80.0), (330.0, 50.0)].map(|(x, y)| s.hit(x, y)),
-        [Some(Target::Ctl(WinId(4), 2)), Some(Target::Ctl(WinId(4), 1)),]
+        [(350.0, 80.0), (330.0, 50.0), (280.0, 50.0)].map(|(x, y)| s.hit(x, y)),
+        [
+            Some(Target::Ctl(WinId(4), 2)),
+            Some(Target::Ctl(WinId(4), 0)),
+            Some(Target::Title(WinId(4)))
+        ]
     );
     let r = rectf(s.rect(4).unwrap());
     assert_eq!(controls(r, s.ctl_step()).unwrap()[2].x, 362.0);
+    let ctl: Vec<_> = s.controls(r).iter().map(|c| (c.0, c.1.x)).collect();
+    assert_eq!(ctl, [(0, 318.0), (2, 362.0)]);
     // The window menu has no Maximize there.
     s.right((100.0, 60.0));
     assert_eq!(s.labels(), ["Minimize", "Close"]);
@@ -504,12 +536,11 @@ fn a_finger_held_still_long_presses_and_its_press_does_nothing_more() {
     let (mut s, log) = desk();
     let c = content_rect(rectf(s.rect(1).unwrap()));
     // On a button in a window: frames come while it waits (and only then); at 500 ms its
-    // press is over, so lifting it clicks nothing.
+    // press is over, so lifting it presses and clicks nothing, a gesture's lift.
     s.set_now(2000.0);
     assert!(s.push((c.x + 10.0, c.y + 10.0), 0, true).animating);
     assert!(s.at(2100.0) && s.at(2499.0) && !s.at(2500.0));
-    s.up((c.x + 10.0, c.y + 10.0));
-    assert!(matches!(log.take()[..], [("welcome", E::PointerDown { .. })]));
+    assert!(s.up((c.x + 10.0, c.y + 10.0)).gesture && log.take().is_empty());
     // On the desktop: its menu, where the finger is, with touch-high items; lifting keeps it.
     s.set_now(3000.0);
     s.push((600.0, 640.0), 0, true);
@@ -517,17 +548,22 @@ fn a_finger_held_still_long_presses_and_its_press_does_nothing_more() {
     s.up((600.0, 640.0));
     let m = &s.menu.as_ref().expect("a menu").0;
     assert_eq!((m.row, m.items.len()), (44.0, 6));
-    // A finger that wanders, or lifts early, is no long press.
+    // A finger that wanders, or lifts early, is no long press; only the early one a tap.
     s.k(Escape, "");
     s.push((600.0, 640.0), 0, true);
     s.to((600.0, 652.0));
     assert!(!s.animating());
     s.set_now(5000.0);
-    s.up((600.0, 652.0));
+    assert!(s.up((600.0, 652.0)).gesture);
     s.push((600.0, 640.0), 0, true);
-    s.up((600.0, 640.0));
+    assert!(!s.up((600.0, 640.0)).gesture);
     s.set_now(9000.0);
     assert!(!s.at(9000.0) && s.menu.is_none());
+    // Held on what has no menu (the everything bar), it still acts when it lifts.
+    s.push(BAR, 0, true);
+    s.at(9600.0);
+    let r = s.up(BAR);
+    assert_eq!((s.menu.is_none(), r.text_input, s.launcher.focus), (true, Some(true), true));
 }
 
 #[test]
@@ -541,7 +577,11 @@ fn fingers_scroll_what_they_hold_and_fling_it_on() {
             .filter_map(|e| if let E::Wheel { dy, .. } = e.1 { Some(dy) } else { None })
             .collect()
     };
-    // Past 8 px the press is no longer a click, and the content follows the finger.
+    // A tap presses into the content as it lifts, then clicks.
+    s.push(at, 0, true);
+    assert!(log.take().is_empty() && !s.up(at).gesture);
+    assert!(matches!(log.take()[..], [(_, E::PointerDown { .. }), (_, E::Click(W(1)))]));
+    // Past 8 px the finger presses nothing, and the content follows it.
     s.set_now(1000.0);
     s.push(at, 0, true);
     for (t, dy) in [(1010.0, 5.0), (1020.0, 10.0), (1036.0, 26.0)] {
@@ -552,7 +592,7 @@ fn fingers_scroll_what_they_hold_and_fling_it_on() {
     s.set_now(1040.0);
     let r = s.up((at.0, at.1 - 26.0));
     // Let go moving, it flings: a frame's step each frame, slowing, until it stops.
-    assert!(r.animating && log.take().iter().all(|e| !matches!(e.1, E::Click(_))));
+    assert!(r.animating && r.gesture && log.take().is_empty());
     let mut t = 1040.0;
     while s.at(t + 16.0) {
         t += 16.0;
