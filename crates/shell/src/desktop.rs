@@ -203,7 +203,10 @@ impl Shell {
                 self.grab = Some(Grab::Size { win, edge: (dx, dy), at: (x, y), from: p.rect });
             }
             Target::Body(_) => {
-                let (c, id) = (content_rect(r), self.widget_at(win, x, y).map(|h| h.id));
+                let (c, theme) = (content_rect(r), self.host.theme.at(now));
+                let state = ui::UiState { focused: true, now_ms: now, ..ui::UiState::default() };
+                self.host.fresh_hits(win, c, &theme, state);
+                let id = self.widget_at(win, x, y).map(|h| h.id);
                 self.app_press = id.map(|id| (win, id));
                 self.host.deliver(win, AppEvent::PointerDown { x: x - c.x, y: y - c.y, id }, out);
             }

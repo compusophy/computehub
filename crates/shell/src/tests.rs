@@ -786,3 +786,31 @@ fn degenerate_sizes_never_panic() {
         s.rest(1000.0);
     }
 }
+
+#[test]
+fn a_finger_taps_into_a_window_it_just_opened() {
+    // However few frames it drew (mid-motion, or none), a tap finds what is there now.
+    for frames in [vec![], vec![16.0], vec![16.0, 90.0], vec![16.0, 90.0, 400.0, 3000.0]] {
+        let (mut s, log) = desk_with(390.0, 844.0, Prefs { seen: true, ..Prefs::default() });
+        s.rest(1000.0);
+        let t0 = s.host.now_ms + 100.0;
+        // The cog, tapped: Settings opens (maximized on a phone).
+        let cog = (390.0 - 22.0, BAR_H / 2.0);
+        s.set_now(t0);
+        s.push(cog, 0, true);
+        s.up(cog);
+        for dt in &frames {
+            s.at(t0 + dt);
+        }
+        let win = s.host.wins.last().map(|w| w.id).expect("settings opened");
+        let c = content_rect(rectf(s.placement(win).unwrap().rect));
+        let at = (c.x + 10.0, c.y + 10.0);
+        log.take();
+        s.set_now(t0 + 3500.0);
+        s.push(at, 0, true);
+        s.set_now(t0 + 3560.0);
+        s.up(at);
+        let got = log.take();
+        assert!(got.iter().any(|e| e == &("settings", E::Click(W(1)))), "{frames:?}: {got:?}");
+    }
+}

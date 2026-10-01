@@ -136,6 +136,8 @@ pub struct Win {
     pub app: Box<dyn ui::App>,
     pub name: String,
     pub hits: Vec<ui::Hit>,
+    /// The content rect `hits` were laid out in.
+    hits_at: RectF,
     /// The content size it was last told, and the one it last drew at.
     sizes: [Option<(f32, f32)>; 2],
 }
@@ -249,7 +251,7 @@ impl Host {
             _ = self.wm.apply(Cmd::Move { win: id, x, y });
         }
         let (name, hits) = (name.to_string(), Vec::new());
-        self.wins.push(Win { id, app, name, hits, sizes: [None; 2] });
+        self.wins.push(Win { id, app, name, hits, hits_at: RectF::default(), sizes: [None; 2] });
         out.redraw = true;
     }
 
@@ -456,11 +458,19 @@ impl Host {
         state: UiState,
     ) {
         let Some(w) = self.wins.iter_mut().find(|w| w.id == win) else { return };
-        w.hits.clear();
+        (w.hits_at, _) = (layout, w.hits.clear());
         if layout.w > 0.0 && layout.h > 0.0 {
             list.push_clip(clip);
             w.app.draw(&mut Ui::new(list, &mut self.text, layout, &mut w.hits, state, theme));
             list.pop_clip();
+        }
+    }
+
+    /// Lays `win`'s hits out at `layout` (drawing nowhere) unless the last frame did: a press
+    /// during a window's motion, or before its first frame at rest, finds what is there now.
+    pub fn fresh_hits(&mut self, win: WinId, layout: RectF, theme: &Theme, state: UiState) {
+        if self.win(win).is_some_and(|w| w.hits_at != layout) {
+            self.draw_content(&mut DrawList::new(), win, [layout; 2], theme, state);
         }
     }
 

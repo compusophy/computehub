@@ -62,10 +62,11 @@ fn shell(desk: &Desktop) -> &Shell {
 }
 
 /// The middle of the focused window.
+/// A bare spot in the focused window's content, just under its titlebar.
 fn focused_middle(desk: &Desktop) -> (f32, f32) {
     let layout = shell(desk).wm().layout();
     let r = layout.iter().find(|p| p.focused).expect("focused").rect;
-    ((r.x + r.w / 2) as f32, (r.y + r.h / 2) as f32)
+    ((r.x + r.w / 2) as f32, (r.y + wm::TITLE_H + 6) as f32)
 }
 
 #[test]
@@ -318,7 +319,7 @@ fn desktop_routes_events_through_the_shell() {
     // off it (on the bare desktop).
     let at = focused_middle(&desk);
     let (h, fx) = down(&mut desk, at);
-    assert_eq!((h.1, fx), (true, vec![]));
+    assert_eq!((h.1, fx), (true, vec![Fx::Cursor("text")]));
     assert_eq!(up(&mut desk, at, 0), [Fx::TextInput(true)]);
     assert_eq!(up(&mut desk, at, 2), []);
     let bare = (4.0, 796.0);
