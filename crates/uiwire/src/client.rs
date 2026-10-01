@@ -61,10 +61,9 @@ impl<R: Read, W: Write> Client<R, W> {
     /// Sends `frame` in one write. One that would not decode (over a cap, bad spans) is
     /// `InvalidInput` and sends nothing; a partial write is `WriteZero`.
     pub fn show(&mut self, frame: &Frame) -> io::Result<()> {
-        let bytes = frame.encode();
-        if Frame::decode(&bytes).is_none() {
+        let Some(bytes) = frame.encode_checked() else {
             return Err(io::Error::new(ErrorKind::InvalidInput, "frame breaks the protocol"));
-        }
+        };
         loop {
             match self.draw.write(&bytes) {
                 Ok(n) if n == bytes.len() => return self.draw.flush(),

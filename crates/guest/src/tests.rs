@@ -92,6 +92,8 @@ $ open terminal
 [open terminal]
 $ open /apps/demo.app
 [open /apps/demo.app]
+$ open files
+[open files]
 $ open launcher
 open: launcher: no such app (see 'apps')
 $ run counter.app
@@ -101,7 +103,7 @@ run: notes.txt: not an .app file
 $ edit notes.txt
 [open studio:~/notes.txt]
 $ apps
-terminal  studio  welcome  settings
+studio  assistant  terminal  files  settings  feedback  about  welcome
 /apps/demo.app
 ~/counter.app
 $ uname -a

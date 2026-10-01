@@ -172,8 +172,8 @@ dependencies = [
 name = "compusophy-system"
 version = "0.1.0"
 dependencies = [
+ "compusophy-host",
  "compusophy-icons",
- "compusophy-ui",
  "compusophy-uiwire",
  "compusophy-vfs",
 ]

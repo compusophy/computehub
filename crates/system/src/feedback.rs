@@ -2,7 +2,7 @@
 
 use uiwire::{Event, Frame, Key, Node, Request, Style, Variant, mods};
 
-use crate::{Disk, View, center, space, text};
+use crate::{Disk, View, center, group, space, text};
 
 /// The kinds as (chip, what is sent).
 pub(crate) const KINDS: [(&str, &str); 3] = [("Bug", "bug"), ("Idea", "idea"), ("Love", "love")];
@@ -15,8 +15,10 @@ const SEND: &str = "Send";
 /// What Send says: true whether the report goes at once or waits in the page's outbox, as the app
 /// cannot know which.
 pub(crate) const THANKS: &str = "Thank you \u{2014} it goes when it can";
-/// The most text sent, in bytes.
+/// The most text sent, in bytes, and from how many on the count shows (past the most, in the
+/// error color, and Send waits for less).
 pub(crate) const MAX: usize = 8000;
+pub(crate) const NEAR: usize = 7000;
 /// Node ids: kind `i` is `KIND + i`; the context switch, Send; the text is `AREA` plus the
 /// reports sent, so a fresh one starts empty.
 pub(crate) const KIND: u32 = 1;
@@ -28,7 +30,8 @@ const MAX_W: u16 = 610;
 
 /// Feedback: chips for the kind (Bug, Idea, Love), a text that wraps and grows, a switch to
 /// include the desktop's context, and Send, which hands it all to the page
-/// ([`Request::Feedback`]) and thanks; Ctrl+Enter sends too.
+/// ([`Request::Feedback`]) and thanks; Ctrl+Enter sends too. Near 8,000 bytes a count shows
+/// beside Send; past it, nothing is cut: Send waits for a shorter text.
 #[derive(Debug)]
 pub struct Feedback {
     /// An index into [`KINDS`]: Idea at first.
@@ -58,15 +61,11 @@ impl Feedback {
         AREA.wrapping_add(self.sent)
     }
 
-    /// Sends the text, if there is any, and starts a fresh one; whether it went.
+    /// Sends the text, if there is any and not too much, and starts a fresh one; whether it went.
     fn send(&mut self) -> bool {
-        let mut text = self.text.trim();
-        if text.is_empty() {
+        let text = self.text.trim();
+        if text.is_empty() || text.len() > MAX {
             return false;
-        }
-        if text.len() > MAX {
-            let cut = (0..=MAX).rev().find(|&i| text.is_char_boundary(i)).unwrap_or(0);
-            text = &text[..cut];
         }
         let (kind, context) = (KINDS[self.kind].1.to_string(), self.context);
         self.requests.push(Request::Feedback { kind, text: text.to_string(), context });
@@ -116,10 +115,18 @@ impl View for Feedback {
             Node::Toggle { id: BOX, on: self.context, label: CONTEXT.into() },
             Node::Row { id: 0, gap: 0, children: note },
         ];
-        // Send at the right, in the accent once there is something to send; what the last one
-        // did in the rest of the row, its first line level with Send's label.
-        let variant = if self.text.trim().is_empty() { Variant::Normal } else { Variant::Primary };
-        let said = self.status.iter().flat_map(|s| [space(7), text(Style::Body, s)]).collect();
+        // Send at the right, in the accent once there is something to send; in the rest of the
+        // row the count near the most, else what the last one did, its first line level with
+        // Send's label.
+        let n = self.text.trim().len();
+        let variant = if n == 0 || n > MAX { Variant::Normal } else { Variant::Primary };
+        let count = [&group(n), " of ", &group(MAX), " bytes"].concat();
+        let said = match (n >= NEAR, self.status) {
+            _ if n > MAX => Some(text(Style::Error, &["Too long to send: ", &count].concat())),
+            (true, _) => Some(text(Style::Small, &count)),
+            (false, s) => s.map(|s| text(Style::Body, s)),
+        };
+        let said = said.into_iter().flat_map(|said| [space(7), said]).collect();
         let end = vec![
             Node::Col { id: 0, gap: 0, children: said },
             Node::Button { id: GO, variant, label: SEND.into() },

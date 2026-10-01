@@ -14,7 +14,8 @@ use vfs::Vfs;
 use vfs::VfsError::{self, IsADir, NotADir, NotFound};
 
 /// The apps `open` knows by name.
-const BUILTIN: [&str; 4] = ["terminal", "studio", "welcome", "settings"];
+const BUILTIN: [&str; 8] =
+    ["studio", "assistant", "terminal", "files", "settings", "feedback", "about", "welcome"];
 const KEYS: &str = "Up and Down recall history, Ctrl+C cancels the line, Ctrl+L clears the \
 screen. Quotes group words: \"a b\" or 'a b'.";
 /// `uname`, then `uname -a`.

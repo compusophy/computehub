@@ -59,7 +59,9 @@ type Kept = ((f32, f32), Vec<(WinId, Rect, Rect)>);
 /// What the page keeps for the shell between visits: the theme's name (else the default, Mono),
 /// the dock's favorites and the home screen's order as stored (the `dock` and `home`
 /// preferences; `None` for none), whether Welcome was shown on a first visit (the `seen`
-/// preference) and whether the grain is still (the `grain` preference `"off"`).
+/// preference) and whether the grain is still (the `grain` preference `"off"`); and whether the
+/// page is cross-origin isolated, which programs need: the kernel knows before Welcome, a
+/// program, opens.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Prefs {
     pub theme: String,
@@ -67,6 +69,7 @@ pub struct Prefs {
     pub home: Option<String>,
     pub seen: bool,
     pub grain_off: bool,
+    pub isolated: bool,
 }
 
 /// Everything whose change means a new frame, but the clock.
@@ -151,6 +154,7 @@ impl Shell {
             touch: None, fling: None, motion: Default::default(), instant: false,
             startup: !prefs.seen, kept: None, scratch: DrawList::new() };
         shell.host.grain = !prefs.grain_off;
+        shell.host.kernel.set_isolated(prefs.isolated);
         let mut out = Response::default();
         shell.start(&mut out);
         shell.settle(&mut out);

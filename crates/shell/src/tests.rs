@@ -201,6 +201,39 @@ fn welcome_opens_on_a_first_visit_once_there_is_a_work_area() {
     assert!(s.names().is_empty() && s.take_effects().is_empty() && s.theme_name() == "Mono");
 }
 
+/// Welcome as a program's window: it starts its process at its first size.
+struct Program1(Rc<RefCell<Option<bool>>>);
+
+impl App for Program1 {
+    fn title(&self) -> String {
+        "Welcome".into()
+    }
+
+    fn draw(&mut self, _: &mut Ui<'_>) {}
+
+    fn event(&mut self, ev: E, cx: &mut Cx<'_>) -> bool {
+        if let E::Resized { .. } = ev {
+            let (argv, roots, program) = (vec!["welcome".into()], vec![], Program::Url("x".into()));
+            let s = Spawn { argv, program, cwd: "/".into(), tty: None, stdout: Console, roots };
+            *self.0.borrow_mut() = Some(cx.kernel.spawn(s).is_ok());
+        }
+        false
+    }
+}
+
+#[test]
+fn the_first_visits_welcome_runs_as_a_program_on_an_isolated_page() {
+    // The kernel knows the page is isolated before Welcome opens, at the shell's start.
+    for isolated in [true, false] {
+        let started = Rc::new(RefCell::new(None));
+        let s = started.clone();
+        let reg: Registry = Box::new(move |_| Some(Box::new(Program1(s.clone())) as Box<dyn App>));
+        let text = TextSystem::new(SANS.to_vec()).unwrap();
+        Shell::new(1280.0, 800.0, text, Vfs::new(), reg, Prefs { isolated, ..Prefs::default() });
+        assert_eq!(*started.borrow(), Some(isolated));
+    }
+}
+
 #[test]
 fn resizes_set_the_work_area_and_windows_follow_at_once() {
     // Welcome free, a terminal snapped, studio maximized.

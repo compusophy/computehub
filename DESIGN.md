@@ -87,8 +87,8 @@ frame: os → shell::draw → gfx::DrawList → platform::Renderer: one draw cal
 | `ui` | immediate-mode widgets, the themes, the `App` trait and `Cx` |
 | `vt`, `term` | VT/xterm escape parser; terminal screen model |
 | `guest` | the shell the Terminal runs over the VFS |
-| `apps` | Terminal, Welcome, Settings |
-| `system` | About, Feedback and Files: one wasip1 GUI program (`dist/bin/system.wasm`), off the boot download |
+| `apps` | Terminal, Settings |
+| `system` | About, Feedback, Files and Welcome: one wasip1 GUI program (`dist/bin/system.wasm`), off the boot download |
 | `studio` | the applang editor, and `AppHost`, which runs `.app` files |
 | `uiwire`, `uiview` | the remote UI protocol GUI programs speak; the desktop's half, which draws their trees |
 | `host` | the wm plus one app per window, the home screen's apps; motion, frame geometry |
@@ -203,8 +203,8 @@ one. Forked crates keep their Apache-2.0 license and note their origin.
 - Apps reach outside themselves only through the `ui::Cx` of an event: the
   VFS, the page clock, and requests (open or close a window, load the
   fallback fonts, switch the theme). `os` owns the registry: `apps::open`
-  makes `welcome`, `terminal` and `settings`; `remote::open` makes the GUI
-  programs' windows: `about`, `feedback`, `files` and `files:<dir>` (the
+  makes `terminal` and `settings`; `remote::open` makes the GUI programs'
+  windows: `about`, `feedback`, `files`, `files:<dir>` and `welcome` (the
   `system` program), `assistant`, `studio`, `studio:<path>` and any `*.app`
   path.
 - **Terminal**: `vt` + `term` + a cell renderer, running the `guest` shell
@@ -212,7 +212,8 @@ one. Forked crates keep their Apache-2.0 license and note their origin.
   `theme`, ...). `term` already speaks xterm, keys and replies included, for
   the programs the kernel will run.
 - **Studio** edits applang; `studio::AppHost` runs a `.app` in its own
-  window. **Welcome** is the first screen; **Settings** picks the theme and
+  window. **Welcome** (a program, its mark revealed by the desktop's clock)
+  is the first screen; **Settings** picks the theme and
   lists what compusophyOS is made of.
 - Two tiers:
 

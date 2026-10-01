@@ -1,8 +1,9 @@
 //! compusophyOS's wasm entry: `start` runs a desktop on [`platform::run`] with the boot font, a
 //! [`Vfs`] holding the `/bin` markers and Studio's samples, and a [`Registry`] of [`apps::open`]
-//! then [`remote::open`] (the GUI programs: About, Feedback, Files, Studio, the Assistant, `.app`
-//! files). The [`Shell`] is made at the first Resize that leaves a work area; until
-//! then input is dropped (a missed Tick is replayed) and frames clear to the default theme's base.
+//! then [`remote::open`] (the GUI programs: About, Feedback, Files, Welcome, Studio, the
+//! Assistant, `.app` files). The [`Shell`] is made at the first Resize that leaves a work area;
+//! until then input is dropped (a missed Tick is replayed) and frames clear to the default theme's
+//! base.
 //! The theme is kept in `localStorage` ([`THEME_KEY`]), as are the preferences of [`PREFS`]
 //! (`compusophy.<key>`), which apps and the shell set ([`shell::Effect::Pref`]) and the shell
 //! reads when it is made ([`shell::Prefs`]).
@@ -102,7 +103,6 @@ impl Desktop {
                 let prefs = prefs(ctl);
                 let shell = Shell::new(w, h, text, vfs, registry(self.ai.clone()), prefs);
                 let shell = self.shell.insert(shell);
-                shell.kernel_mut().set_isolated(ctl.isolated());
                 self.ai.load(ctl);
                 self.saved = shell.theme_name();
                 shell.set_now(ctl.monotonic_ms());
@@ -326,12 +326,12 @@ fn pref(key: &str, value: &str, ctl: &mut Ctl, ai: &ai::Ai) {
 }
 
 /// What the shell starts from: the stored theme, favorites, home screen order, first-visit
-/// mark and grain.
+/// mark and grain; whether programs can run (before the first-visit Welcome, one, opens).
 fn prefs(ctl: &Ctl) -> shell::Prefs {
     let get = |key: &str| ctl.storage_get(&["compusophy.", key].concat());
     let (theme, seen) = (ctl.storage_get(THEME_KEY).unwrap_or_default(), get("seen").is_some());
-    let grain_off = get(ui::GRAIN).as_deref() == Some("off");
-    shell::Prefs { theme, dock: get("dock"), home: get("home.order"), seen, grain_off }
+    let (grain_off, isolated) = (get(ui::GRAIN).as_deref() == Some("off"), ctl.isolated());
+    shell::Prefs { theme, dock: get("dock"), home: get("home.order"), seen, grain_off, isolated }
 }
 
 /// Where a report comes from: the device, the theme, the windows open.

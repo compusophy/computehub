@@ -5,7 +5,7 @@ use platform::{Ctl, Effect as Fx};
 use ui::UiState;
 use ui::kernel::{Effect as K, Kernel, wire};
 use ui::{BUTTON_H, CARD_PAD, FIELD_H, FontId, Hit, PAD, Request as R, Sense, THEMES, TextSystem};
-use uiwire::{Class, Span, Style, Variant, mods};
+use uiwire::{Class, Node, Span, Style, Variant, mods};
 
 const MONO: &[u8] = include_bytes!("../../../../assets/fonts/deferred/JetBrainsMono-Regular.ttf");
 
