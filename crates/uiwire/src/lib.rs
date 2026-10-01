@@ -13,7 +13,7 @@
 //! malformed, trailing, unknown or over a cap is `None`. Codes are only ever added, after the
 //! last, so a desktop reads the frames of every program older than it.
 //!
-//! While the user edits an Input or Code the host keeps its text, sending [`Event::Change`]
+//! While the user edits an Input, Code or Area the host keeps its text, sending [`Event::Change`]
 //! with its edit count as the version; a Code at that version takes its spans, above it its text.
 
 #![forbid(unsafe_code)]
@@ -53,12 +53,14 @@ macro_rules! codes {
 }
 
 codes! {
-    /// How a [`Node::Text`] is set (Dim is secondary text). Text wraps to the width.
+    /// How a [`Node::Text`] is set (Dim is secondary text, Accent is body text in the accent).
+    /// Text wraps to the width.
     Style { Body = 0, Title = 1, Heading = 2, Subheading = 3, Small = 4, Mono = 5, Dim = 6,
-        Error = 7, Success = 8, }
-    /// How a [`Node::Button`] looks: an ordinary, the main or a destructive action, or a chip
-    /// (a small, quiet suggestion).
-    Variant { Normal = 0, Primary = 1, Danger = 2, Chip = 3, }
+        Error = 7, Success = 8, Accent = 9, }
+    /// How a [`Node::Button`] looks: an ordinary, the main or a destructive action, a chip
+    /// (a small, quiet suggestion), a chip that is on (the chosen one of a set), or quiet (its
+    /// label alone, dim until the pointer is over it: a crumb, a toolbar's).
+    Variant { Normal = 0, Primary = 1, Danger = 2, Chip = 3, On = 4, Quiet = 5, }
     /// The highlight class of a [`Span`]; Error is drawn underlined.
     Class { Plain = 0, Keyword = 1, String = 2, Number = 3, Comment = 4, Name = 5, Punct = 6,
         Error = 7, }
@@ -92,7 +94,7 @@ pub struct Span {
     pub class: Class,
 }
 
-/// One widget of a window and, for the five containers, its children. Ids
+/// One widget of a window and, for the six containers, its children. Ids
 /// name the nodes events come from; 0 means none.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Node {
@@ -122,6 +124,22 @@ pub enum Node {
     /// Children laid out top to bottom in a column `w` logical px wide, or the width it is
     /// given if less; in a Row it takes `w` and its flexible siblings share the rest.
     Pane { id: u32, w: u16, children: Vec<Node> },
+    /// A vector icon `size` logical px square in the text color: `glyph` is an `icons::Glyph`
+    /// (its index in `Glyph::ALL`); one the desktop does not know is empty space.
+    Glyph { glyph: u8, size: u16 },
+    /// A list row: `glyph` on an app tile of `hue` (0xRRGGBB), `text`, `detail` dim at the
+    /// right and, when `more` (it leads somewhere, as a folder does), a chevron; a click sends
+    /// [`Event::Click`].
+    Entry { id: u32, glyph: u8, hue: u32, text: String, detail: String, more: bool },
+    /// A row saying `label`, with a switch at the right that is `on`; a click sends
+    /// [`Event::Click`] (the program flips it).
+    Toggle { id: u32, on: bool, label: String },
+    /// A multi-line input whose text wraps and grows it: [`Event::Change`] per edit; Enter is a
+    /// new line (Ctrl or Meta with it is an [`Event::Key`]).
+    Area { id: u32, value: String, placeholder: String },
+    /// Children laid out top to bottom, `gap` logical px apart, each centered across the width
+    /// (a Text line by line).
+    Center { id: u32, gap: u8, children: Vec<Node> },
 }
 
 /// One complete picture of a window, program to host: the program's frame
@@ -148,8 +166,11 @@ pub enum Request {
     Ai { id: u32, body: String },
     /// Stop AI request `id`.
     AiCancel { id: u32 },
-    /// Put the keyboard in the Input or Code `id` of this frame.
+    /// Put the keyboard in the Input, Code or Area `id` of this frame.
     Focus { id: u32 },
+    /// Send feedback the person wrote to compusophy: `kind` ("bug", "idea" or "love"), the
+    /// `text`, and with `context` the desktop's (build, device, windows, recent events).
+    Feedback { kind: String, text: String, context: bool },
 }
 
 /// Something that happened in the window, host to program.
@@ -177,6 +198,9 @@ pub enum Event {
     AiEnd { id: u32, status: u16, error: String },
     /// A prompt from the desktop's everything bar, as if typed in the window and sent.
     Ask { text: String },
+    /// The window gained (`on`) or lost the keyboard focus: a time to look again at what it
+    /// shows (Files lists its folder anew).
+    Focus { on: bool },
 }
 
 /// The public `encode` and `decode` of each message, from its `put` and `get`.
@@ -209,7 +233,8 @@ impl Node {
             | Self::Row { children, .. }
             | Self::Card { children, .. }
             | Self::Fill { children, .. }
-            | Self::Pane { children, .. } => children,
+            | Self::Pane { children, .. }
+            | Self::Center { children, .. } => children,
             _ => &[],
         }
     }
@@ -240,6 +265,14 @@ impl Node {
             }
             Self::Fill { id, .. } => o.head(11, *id, n),
             Self::Pane { id, w, .. } => o.head(12, *id, n).u16(*w),
+            Self::Glyph { glyph, size } => o.head(13, 0, n).u8(*glyph).u16(*size),
+            Self::Entry { id, glyph, hue, text, detail, more } => {
+                let o = o.head(14, *id, n).u8(*glyph).u32(*hue);
+                o.str(text).str(detail).u8((*more).into())
+            }
+            Self::Toggle { id, on, label } => o.head(15, *id, n).u8((*on).into()).str(label),
+            Self::Area { id, value, placeholder } => o.head(16, *id, n).str(value).str(placeholder),
+            Self::Center { id, gap, .. } => o.head(17, *id, n).u8(*gap),
         };
         self.children().iter().for_each(|child| child.put(o));
     }
@@ -249,7 +282,7 @@ impl Node {
     }
 
     /// One node at `depth` and its children, each taken from `budget`; a
-    /// leaf with children, or an id on a Separator or Spacer, is malformed.
+    /// leaf with children, or an id on a Separator, Spacer or Glyph, is malformed.
     fn read(r: &mut Reader<'_>, depth: usize, budget: &mut usize) -> Option<Self> {
         *budget = budget.checked_sub(1).filter(|_| depth <= MAX_DEPTH)?;
         let (kind, id, count) = (r.u8()?, r.u32()?, r.u16()?);
@@ -266,6 +299,14 @@ impl Node {
             10 => Self::Item { id, text: r.str()?, detail: r.str()?, selected: r.bool()? },
             11 => Self::Fill { id, children: Vec::new() },
             12 => Self::Pane { id, w: r.u16()?, children: Vec::new() },
+            13 if id == 0 => Self::Glyph { glyph: r.u8()?, size: r.u16()? },
+            14 => {
+                let (glyph, hue, text) = (r.u8()?, r.u32()?, r.str()?);
+                Self::Entry { id, glyph, hue, text, detail: r.str()?, more: r.bool()? }
+            }
+            15 => Self::Toggle { id, on: r.bool()?, label: r.str()? },
+            16 => Self::Area { id, value: r.str()?, placeholder: r.str()? },
+            17 => Self::Center { id, gap: r.u8()?, children: Vec::new() },
             _ => return None,
         };
         match &mut node {
@@ -273,7 +314,8 @@ impl Node {
             | Self::Row { children, .. }
             | Self::Card { children, .. }
             | Self::Fill { children, .. }
-            | Self::Pane { children, .. } => {
+            | Self::Pane { children, .. }
+            | Self::Center { children, .. } => {
                 children.reserve(usize::from(count).min(*budget));
                 for _ in 0..count {
                     children.push(Self::read(r, depth + 1, budget)?);
@@ -338,6 +380,9 @@ impl Request {
             Self::Ai { id, body } => o.u8(4).u32(*id).str(body),
             Self::AiCancel { id } => o.u8(5).u32(*id),
             Self::Focus { id } => o.u8(6).u32(*id),
+            Self::Feedback { kind, text, context } => {
+                o.u8(7).str(kind).str(text).u8((*context).into())
+            }
         }
     }
 
@@ -349,6 +394,7 @@ impl Request {
             4 => Self::Ai { id: r.u32()?, body: r.str()? },
             5 => Self::AiCancel { id: r.u32()? },
             6 => Self::Focus { id: r.u32()? },
+            7 => Self::Feedback { kind: r.str()?, text: r.str()?, context: r.bool()? },
             _ => return None,
         })
     }
@@ -369,6 +415,7 @@ impl Event {
             Self::AiData { id, data } => o.u8(8).u32(*id).bytes(data),
             Self::AiEnd { id, status, error } => o.u8(9).u32(*id).u16(*status).str(error),
             Self::Ask { text } => o.u8(10).str(text),
+            Self::Focus { on } => o.u8(11).u8((*on).into()),
         }
     }
 
@@ -389,6 +436,7 @@ impl Event {
             8 => Self::AiData { id: r.u32()?, data: r.bytes()?.to_vec() },
             9 => Self::AiEnd { id: r.u32()?, status: r.u16()?, error: r.str()? },
             10 => Self::Ask { text: r.str()? },
+            11 => Self::Focus { on: r.bool()? },
             _ => return None,
         })
     }

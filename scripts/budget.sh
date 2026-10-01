@@ -7,8 +7,9 @@
 #             font inside): everything a visitor downloads before the first
 #             frame. Cap 180 KB (150 KB until R4, the desktop compusophy
 #             asked for: vector icons, menus, the everything bar, touch,
-#             About, Feedback, Files, telemetry). Next: those apps move to
-#             lazily fetched modules, and the cap comes back down.
+#             About, Feedback, Files, telemetry). R5 moved About, Feedback
+#             and Files to a program (system.wasm); the cap comes back down
+#             as more leaves the boot.
 #   deferred  dist/fonts/deferred/: Inter SemiBold and JetBrains Mono, which
 #             the page fetches right after its first frame. Cap 30 KB.
 #   lazy      the other files in dist/fonts/: the symbol fonts a terminal
@@ -17,8 +18,9 @@
 #             worker.js), fetched when a program first runs or /home is
 #             restored. Cap 40 KB.
 #   programs  dist/bin/: the programs (toolbox.wasm, the test programs,
-#             studio.wasm and assistant.wasm), each fetched when it first
-#             runs. Cap 64 KB per file: a program is downloaded on its own.
+#             studio.wasm, assistant.wasm and system.wasm: About, Feedback,
+#             Files), each fetched when it first runs. Cap 64 KB per file: a
+#             program is downloaded on its own.
 #   licenses  dist/licenses/: the font licenses, shipped but never fetched by
 #             the page. Not counted.
 #

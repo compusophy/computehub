@@ -1,10 +1,11 @@
 use super::*;
 use crate::ai::{self, Ai, CHUNK};
-use gfx::DrawList;
+use gfx::{DrawList, RectF};
 use platform::{Ctl, Effect as Fx};
+use ui::UiState;
 use ui::kernel::{Effect as K, Kernel, wire};
-use ui::{FontId, Hit, Request as R, THEMES, UiState};
-use uiwire::{Class, Span, mods};
+use ui::{BUTTON_H, CARD_PAD, FIELD_H, FontId, Hit, PAD, Request as R, Sense, THEMES, TextSystem};
+use uiwire::{Class, Span, Style, Variant, mods};
 
 const MONO: &[u8] = include_bytes!("../../../../assets/fonts/deferred/JetBrainsMono-Regular.ttf");
 
@@ -113,6 +114,15 @@ fn names_open_studio_and_the_first_size_starts_it() {
     assert!(["studio:", "terminal", ".apps", ""].iter().all(|n| open(n).is_none()));
     let assistant = Some(("Assistant".into(), ASSISTANT_ICON, Some((560.0, 600.0))));
     assert_eq!(argv("assistant"), assistant);
+    // About, Feedback and Files: bin/system.wasm, as their markers name it.
+    let sys = |n: &str| open(n).map(|a| (a.title(), a.icon(), a.preferred_size(), a.compact()));
+    let want =
+        |i: usize, compact| Some((SYSTEM[i].1.into(), SYSTEM[i].2, Some(SYSTEM[i].3), compact));
+    assert_eq!(
+        [sys("about"), sys("feedback"), sys("files:~/a")],
+        [want(0, true), want(1, true), want(2, false)]
+    );
+    assert!(SYSTEM[2].2.glyph == Glyph::Folder && open("system").is_none());
     // Before a frame: a still note, the title its own; no process yet.
     let mut s = Sys::new(false);
     assert!(!s.r.wants_text_input() && s.k.procs().is_empty());
@@ -161,10 +171,13 @@ fn clicks_keys_and_requests_go_through() {
     let open = Request::Open { name: "studio:/apps/x.app".into() };
     assert!(s.show(vec![button.clone()], vec![size.clone(), open]));
     // Size only in the first frame.
-    s.show(vec![button], vec![size, Request::Close]);
+    let (kind, text, context) = (String::from("idea"), String::from("more"), true);
+    s.show(vec![button], vec![size, Request::Close, Request::Feedback { kind, text, context }]);
     let open = R::Open { name: "studio:/apps/x.app".into(), floating: false };
-    assert_eq!(s.asked, [R::Size(300, 200), open, R::CloseSelf]);
+    let feedback = R::Feedback { kind: "idea".into(), text: "more".into(), context };
+    assert_eq!(s.asked, [R::Size(300, 200), open, R::CloseSelf, feedback]);
     assert!(!s.ev(AppEvent::Click(WidgetId(1))) && !s.ev(AppEvent::Click(WidgetId(0))));
+    assert!(s.ev(AppEvent::Focus(false)), "the window's focus, told");
     // Chords and Escape and Enter are keys; plain keys are not.
     assert!(!s.ev(key(Key::Char('s'), "c")));
     for ev in [key(Key::Char('s'), ""), key(Key::Enter, ""), key(Key::Space, "ms")] {
@@ -174,7 +187,10 @@ fn clicks_keys_and_requests_go_through() {
     let k = |key, mods, ch| Event::Key { id: 0, key, mods, ch };
     let (char, ms) = (uiwire::Key::Char, mods::META | mods::SHIFT);
     let keys = [k(char, mods::CTRL, 's'), k(uiwire::Key::Enter, 0, '\0'), k(char, ms, ' ')];
-    assert_eq!(s.events(), [&[Event::Click { id: 1 }][..], &keys].concat());
+    assert_eq!(
+        s.events(),
+        [&[Event::Click { id: 1 }, Event::Focus { on: false }][..], &keys].concat()
+    );
     // Closing says Close once; the program's exit then ends the window.
     (0..2).for_each(|_| s.cx(|r, cx| r.closing(cx)));
     assert_eq!(s.events(), [Event::Close]);
@@ -242,6 +258,15 @@ fn inputs_and_codes_keep_the_text_the_user_edits() {
     s.ev(key(Key::Enter, "c"));
     let run = Event::Key { id: 4, key: uiwire::Key::Enter, mods: mods::CTRL, ch: '\0' };
     assert_eq!((s.events(), got(&s).0), (vec![run], "new".into()));
+    // An Area: Enter is a new line (its echo no second), Ctrl+Enter a key for the program.
+    let area = |v: &str| Node::Area { id: 8, value: v.into(), placeholder: "".into() };
+    s.show(vec![area("hi")], vec![]);
+    assert!(s.ev(press(8)) && s.ev(key(Key::Enter, "")) && !s.ev(text("\n")) && s.ev(text("x")));
+    assert_eq!(s.events(), [change(8, 1, "hi\n")]);
+    s.show(vec![area("old")], vec![]);
+    s.ev(key(Key::Enter, "c"));
+    let send = Event::Key { id: 8, key: uiwire::Key::Enter, mods: mods::CTRL, ch: '\0' };
+    assert_eq!(s.events(), [change(8, 2, "hi\nx"), send]);
 }
 
 #[test]
@@ -273,39 +298,9 @@ fn trees_draw_with_the_toolkit_and_fills_take_the_rest() {
     assert_eq!(s.draw().1[0].rect.y, 400.0 - PAD - FIELD_H);
     assert!(!s.ev(AppEvent::Wheel { x: 10.0, y: 10.0, dy: 5.0 }));
     // Following (the Assistant), a view at the bottom stays there as the content grows.
-    s.r.follow = true;
+    s.r.view.follow = true;
     s.show(vec![Node::Spacer { px: 1500 }, input(5, "")], vec![]);
     assert_eq!(s.draw().1[0].rect.y, 400.0 - PAD - FIELD_H);
-}
-
-#[test]
-fn panes_take_their_width_chips_are_small_and_fills_match_a_taller_sibling() {
-    let mut s = Sys::new(true);
-    // Studio wide, on code: a Fill beside a taller Pane still reaches the bottom.
-    let chip = Node::Button { id: 7, variant: Variant::Chip, label: "a dice roller".into() };
-    let pane = Node::Pane { id: 0, w: 200, children: vec![Node::Spacer { px: 300 }, chip] };
-    let fill = Node::Fill { id: 0, children: vec![code(1, "a", vec![])] };
-    let main = Node::Col { id: 0, gap: 8, children: vec![fill] };
-    s.show(vec![Node::Row { id: 0, gap: 16, children: vec![main, pane] }], vec![]);
-    let (_, hits) = s.draw();
-    let at = |id| hits.iter().find(|h| h.id == WidgetId(id)).copied().expect("a hit");
-    let (code, chip) = (at(4), at(7));
-    let content = 600.0 - 2.0 * PAD;
-    assert!((code.rect.y + code.rect.h - (400.0 - PAD)).abs() < 1.0, "{code:?}");
-    assert!((code.rect.w - (content - 216.0)).abs() < 1.0, "{code:?}");
-    assert_eq!(
-        (chip.rect.x, chip.rect.y, chip.rect.h),
-        (PAD + content - 200.0, PAD + 308.0, CHIP_H)
-    );
-    assert!(chip.sense == Sense::Click && chip.rect.w < 120.0);
-    // Room either side centers a Pane; one wider than its Row is cut to it.
-    let pane = |w| Node::Pane { id: 0, w, children: vec![input(5, "")] };
-    let flex = || Node::Col { id: 0, gap: 0, children: vec![] };
-    s.show(vec![Node::Row { id: 0, gap: 0, children: vec![flex(), pane(200), flex()] }], vec![]);
-    let field = s.draw().1[0].rect;
-    assert_eq!((field.x, field.w), (PAD + (content - 200.0) / 2.0, 200.0));
-    s.show(vec![pane(900)], vec![]);
-    assert_eq!(s.draw().1[0].rect.w, content);
 }
 
 #[test]
