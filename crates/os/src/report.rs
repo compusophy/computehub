@@ -7,12 +7,13 @@
 //!   preference is `"off"`, an error the page saw ([`Reports::failed`]: a program that would not
 //!   run, the AI's server failing or out of reach), once a session per signature ([`sig`]), and
 //!   a panic, by beacon ([`install`]). Each is JSON, `{kind, title, body, sig}`: the body is the
-//!   text and a context block (build, browser, screen, touch, theme, windows, notes), never a
-//!   file, a prompt or anything typed but the feedback itself.
+//!   text and a context block (build, browser, screen, touch, theme, windows by [`app`], notes),
+//!   never a file, a prompt or anything typed but the feedback itself; feedback's sig is its own
+//!   id, made once, so the inbox can tell a retry from new feedback.
 //! - **Outbox**: every report waits in `localStorage` ([`OUTBOX`], at most [`KEEP`], oldest
 //!   dropped) until a 2xx; it is sent at once, and again after boot and with each new report.
 //!   A 400 or 413 drops it (it will never go); anything else (503 when the inbox is not set up,
-//!   429, no network) keeps it.
+//!   429, no network) keeps it. While reports are off, only feedback waits there.
 
 use platform::{Ctl, Device};
 use std::cell::RefCell;
@@ -80,17 +81,24 @@ pub fn notes(n: usize) -> String {
     ring(None, n)
 }
 
-/// The lines of `s`: split at each `\n` by byte (a char pattern costs boot bytes).
-fn lines(s: &str) -> Vec<&str> {
+/// The parts of `s` between each byte `at` (a char pattern costs boot bytes).
+fn split(s: &str, at: u8) -> Vec<&str> {
     let (mut out, mut start) = (Vec::new(), 0);
     for (i, b) in s.bytes().enumerate() {
-        if b == b'\n' {
+        if b == at {
             out.push(&s[start..i]);
             start = i + 1;
         }
     }
     out.push(&s[start..]);
     out
+}
+
+/// The window or favorite `name` as a report says it: its app, never a file it shows (a file
+/// open in Studio, `studio:<path>`, is `studio`); an app that is a file (a `.app`) is `app`.
+pub fn app(name: &str) -> &str {
+    let head = split(name, b':')[0];
+    if head.bytes().any(|b| b == b'/' || b == b'.') { "app" } else { head }
 }
 
 /// Where a report came from: the device, its screen (CSS width, height, pixel ratio; zero if
@@ -125,7 +133,7 @@ fn hex(n: u32) -> char {
 /// A title: `text`'s first non-empty line, at most [`TITLE_MAX`] chars (an ellipsis if cut).
 pub fn title(text: &str) -> String {
     let mut line = "";
-    for l in &lines(text) {
+    for l in &split(text, b'\n') {
         line = l.trim();
         if !line.is_empty() {
             break;
@@ -229,12 +237,13 @@ pub struct Reports {
     off: bool,
     held: bool,
     told: Option<(bool, bool)>,
-    /// Feedback and errors to build and send.
+    /// Feedback and errors to build and send, and how many were built ([`Reports::id`]).
     asked: Vec<Asked>,
+    made: u32,
 }
 
 /// A report to build at the next pump: its kind, title, text, whether the context goes with it,
-/// and its signature (none for feedback).
+/// and its signature (none for feedback, which gets its own id when built).
 #[derive(Debug)]
 struct Asked {
     kind: &'static str,
@@ -250,11 +259,14 @@ impl Reports {
     pub fn pump(&mut self, ctl: &mut Ctl, ctx: impl FnOnce() -> Context) {
         if !std::mem::replace(&mut self.loaded, true) {
             let stored = ctl.storage_get(OUTBOX).unwrap_or_default();
-            for r in lines(&stored).into_iter().filter(|l| !l.is_empty()) {
+            for r in split(&stored, b'\n').into_iter().filter(|l| !l.is_empty()) {
                 self.outbox.push(r.to_string());
             }
             self.off = ctl.storage_get(REPORTS).as_deref() == Some("off");
             self.held = !self.outbox.is_empty();
+            if self.off {
+                self.drop_automatic(ctl);
+            }
             note(&["boot ", BUILD].concat());
             self.send(ctl);
         }
@@ -263,9 +275,10 @@ impl Reports {
         }
         let (mut c, asked) = (ctx(), std::mem::take(&mut self.asked));
         c.screen = self.screen;
-        for a in &asked {
+        for a in asked {
             let body = body(&a.text, a.context.then_some(&c));
-            self.outbox.push(report(a.kind, &a.title, &body, &a.sig));
+            let sig = if a.sig.is_empty() { self.id(ctl, &body) } else { a.sig };
+            self.outbox.push(report(a.kind, &a.title, &body, &sig));
         }
         while self.outbox.len() > KEEP {
             self.outbox.remove(0);
@@ -328,13 +341,48 @@ impl Reports {
         ui::AiStatus { reports_off: self.off, held: self.held, ..base }
     }
 
-    /// A preference an app set: the reports switch is stored and followed; each is noted.
+    /// A preference an app set: the reports switch is stored and followed (off, the automatic
+    /// reports still held are dropped); each is noted, the dock's favorites by their [`app`].
     pub fn pref(&mut self, ctl: &mut Ctl, key: &str, value: &str) {
-        note(&["pref ", key, " ", value].concat());
+        let mut said = value.to_string();
+        if key == "dock" {
+            said = split(value, b',').into_iter().map(app).collect::<Vec<_>>().join(",");
+        }
+        note(&["pref ", key, " ", &said].concat());
         if key == ui::REPORTS {
             self.off = value == "off";
             ctl.storage_set(REPORTS, value);
+            if self.off {
+                self.drop_automatic(ctl);
+            }
         }
+    }
+
+    /// Reports are off: the error reports waiting to be built or sent are dropped (a report's kind
+    /// is its first field); feedback stays.
+    fn drop_automatic(&mut self, ctl: &mut Ctl) {
+        let n = self.outbox.len();
+        self.outbox.retain(|r| r.starts_with(r#"{"kind":"feedback""#));
+        self.asked.retain(|a| a.kind == "feedback");
+        if self.outbox.len() != n {
+            self.store(ctl);
+        }
+        self.held &= !self.outbox.is_empty();
+    }
+
+    /// A new report's own id, which its retries keep, so the inbox files it once: FNV-1a (64
+    /// bits, 16 hex digits) of the moment (page clock, local time, a count) and its `body`.
+    fn id(&mut self, ctl: &Ctl, body: &str) -> String {
+        self.made = self.made.wrapping_add(1);
+        let t = ctl.local_time();
+        let mut seed = ctl.monotonic_ms().to_bits().to_le_bytes().to_vec();
+        seed.extend(self.made.to_le_bytes().into_iter().chain(t.year.to_le_bytes()));
+        seed.extend([t.month, t.day, t.hour, t.minute]);
+        let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+        for b in seed.into_iter().chain(body.bytes()) {
+            h = (h ^ u64::from(b)).wrapping_mul(0x100_0000_01b3);
+        }
+        (0..16).rev().map(|i| hex((h >> (4 * i)) as u32)).collect()
     }
 
     /// Stream `id` ended with `status`; whether it was a report's. Delivered (or refused for

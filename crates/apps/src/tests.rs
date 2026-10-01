@@ -513,24 +513,25 @@ fn feedback_composes_and_sends_with_its_kind_and_context() {
     assert!(s.both(AppEvent::PointerDown { x: 1.0, y: 1.0, id: None }).0);
     assert!(!s.app.wants_text_input() && s.text("ignored").is_empty());
     s.ev(AppEvent::PointerDown { x, y, id: Some(WidgetId(10)) });
-    // The kind and the context; then Send, which clears and says it went.
+    // The kind and the context; then Send, which clears and thanks.
     assert_eq!([s.click(1), s.click(11)].concat(), "");
     assert!(s.app.kind == 0 && !s.app.context && s.app.focus);
     let hits = draw(&mut s.app, &mut ts, r, MIDNIGHT).1;
     assert_eq!(ids(&hits), [1, 2, 3, 10, 11, 12]);
     let sent = s.click(12);
     assert_eq!(sent, "feedback bug false Hello world\necond");
-    assert!(s.app.text.is_empty() && s.app.status == Some(feedback::SENT));
+    assert!(s.app.text.is_empty() && s.app.status == Some(feedback::THANKS));
     let list = draw(&mut s.app, &mut ts, r, MIDNIGHT).0;
     assert!(inks(&list).len() > 100);
     assert!(s.click(12).is_empty(), "nothing to send");
-    // Typing hides the note; while reports wait, the next is saved for later. Ctrl+Enter sends.
+    // Typing hides the note. Ctrl+Enter sends; what it says does not hang on how an earlier
+    // report fared (the page builds and sends this one later).
     s.text("  Love the mono theme  ");
     assert!(s.app.status.is_none());
     s.ai.held = true;
     let sent = s.key(Key::Enter, CTRL);
     assert_eq!(sent, "feedback bug false Love the mono theme");
-    assert_eq!(s.app.status, Some(feedback::SAVED));
+    assert_eq!(s.app.status, Some(feedback::THANKS));
     // A long text grows the box and the page follows the caret down.
     for _ in 0..40 {
         s.text("line\n");
@@ -565,6 +566,7 @@ fn files_walks_folders_and_opens_what_it_finds() {
     assert_eq!(ids(&draw(&mut s.app, &mut ts, r, MIDNIGHT).1), [1, 10, 11, 1000]);
     assert_eq!(s.click(1000), ["open ", &home, "/apps/clock.app"].concat());
     assert!(s.both(AppEvent::Click(WidgetId(10))).0 && s.app.dir == home);
+    draw(&mut s.app, &mut ts, r, MIDNIGHT);
     assert_eq!(s.click(1002), ["open studio:", &home, "/notes.txt"].concat());
     // Up, out of home: crumbs from /, home's own tile; at the root no Up.
     assert!(s.both(AppEvent::Click(WidgetId(1))).0 && s.app.dir == "/home");
@@ -599,6 +601,34 @@ fn files_walks_folders_and_opens_what_it_finds() {
     let hits = draw(&mut f.app, &mut ts, RectF::new(0.0, 0.0, 240.0, 400.0), MIDNIGHT).1;
     let crumbs: Vec<u32> = ids(&hits).into_iter().filter(|&i| (10..1000).contains(&i)).collect();
     assert!(crumbs.last() == Some(&16) && crumbs[0] > 10, "{crumbs:?}");
+}
+
+#[test]
+fn files_opens_the_entry_drawn_under_a_press_though_the_folder_changed() {
+    let (mut ts, mut s) = (text_system(), Sim::new(Files::default()));
+    let (home, r) = (Vfs::HOME.to_string(), RectF::new(0.0, 0.0, 390.0, 700.0));
+    s.fs.write(&[&home, "/notes.txt"].concat(), b"hello").unwrap();
+    s.both(AppEvent::Focus(true));
+    assert_eq!(ids(&draw(&mut s.app, &mut ts, r, MIDNIGHT).1), [1, 10, 1000]);
+    // A folder made elsewhere comes first at the next listing, which the press brings (its
+    // focus, or the press itself); the row still opens what was under the press, even with a
+    // frame of the new listing before the release.
+    s.fs.mkdir(&[&home, "/b"].concat()).unwrap();
+    let press = AppEvent::PointerDown { x: 50.0, y: 70.0, id: Some(WidgetId(1000)) };
+    assert!(s.both(press.clone()).0, "listed again");
+    assert_eq!(s.click(1000), ["open studio:", &home, "/notes.txt"].concat());
+    s.fs.mkdir(&[&home, "/c"].concat()).unwrap();
+    s.both(press);
+    assert_eq!(ids(&draw(&mut s.app, &mut ts, r, MIDNIGHT).1), [1, 10, 1000, 1001, 1002]);
+    assert_eq!(s.click(1000), ["open studio:", &home, "/notes.txt"].concat());
+    assert_eq!(s.app.dir, home);
+    // Without a press first, the row as drawn too; a row whose entry went opens nothing.
+    s.fs.mkdir(&[&home, "/a"].concat()).unwrap();
+    assert_eq!(s.click(1002), ["open studio:", &home, "/notes.txt"].concat());
+    assert_eq!(ids(&draw(&mut s.app, &mut ts, r, MIDNIGHT).1)[2..], [1000, 1001, 1002, 1003]);
+    s.fs.remove(&[&home, "/notes.txt"].concat(), false).unwrap();
+    s.ev(AppEvent::PointerDown { x: 50.0, y: 202.0, id: Some(WidgetId(1003)) });
+    assert!(!s.both(AppEvent::Click(WidgetId(1003))).0 && s.app.dir == home);
 }
 
 #[test]
