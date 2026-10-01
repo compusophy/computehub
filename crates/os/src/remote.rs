@@ -2,10 +2,11 @@
 //! drawn here with `ui` in the frame's theme; the window's input goes back as uiwire events. The
 //! program starts at the first size ([`Event::Resize`]) with the roots `/`; until its first frame
 //! the window shows a note, or why it failed. A frame's title is the window's and its requests are
-//! honored (Size in the first only); a clean exit closes the window, and closing it sends
-//! [`Event::Close`]. Edited text is owned as uiwire says, one [`Event::Change`] out at a time: the
-//! next waits for a frame, or goes before any other event. Nodes stack [`PAD`] inside the content
-//! rect, the wheel scrolling what does not fit.
+//! honored (Size in the first only; Focus when the frame holds that Input or Code); a clean exit
+//! closes the window, and closing it sends [`Event::Close`]. A prompt from the everything bar goes
+//! to the program as [`Event::Ask`], held until it starts. Edited text is owned as uiwire says, one
+//! [`Event::Change`] out at a time: the next waits for a frame, or goes before any other event.
+//! Nodes stack [`PAD`] inside the content rect, the wheel scrolling what does not fit.
 
 use std::mem;
 
@@ -18,46 +19,44 @@ use vfs::Vfs;
 
 use crate::ai::Ai;
 
-/// The Studio and Assistant programs, and the file `"studio"` edits.
+/// The Studio and Assistant programs.
 pub const STUDIO: &str = "/bin/studio";
 pub const ASSISTANT: &str = "/bin/assistant";
-pub const DEFAULT_FILE: &str = "/apps/counter.app";
 /// Studio's icon (braces on violet), and that of every `.app` it runs.
 pub const STUDIO_ICON: AppIcon = AppIcon { glyph: "{ }", hue: Rgba::hex(0x8b7bff) };
 pub const APP_ICON: AppIcon = AppIcon { glyph: "<>", hue: Rgba::hex(0xf59e0b) };
 pub const ASSISTANT_ICON: AppIcon = AppIcon { glyph: "AI", hue: Rgba::hex(0xa78bfa) };
-/// Studio's sample apps, from its `samples/`, as `(path, source)`.
-pub const SAMPLES: [(&str, &str); 3] = [
-    (DEFAULT_FILE, include_str!("../../studio/samples/counter.app")),
-    ("/apps/greeter.app", include_str!("../../studio/samples/greeter.app")),
-    ("/apps/clicker.app", include_str!("../../studio/samples/clicker.app")),
-];
-/// An Item's height.
+/// An Item's height, a chip's, and a chip's padding either side of its label.
 const ITEM_H: f32 = 36.0;
+const CHIP_H: f32 = 28.0;
+const CHIP_PAD: f32 = 12.0;
+/// Studio's size: room for the app beside its prompt.
+const STUDIO_SIZE: Option<(f32, f32)> = Some((880.0, 560.0));
 
-/// The app for a window name: the Assistant for `"assistant"`, Studio editing [`DEFAULT_FILE`] for
-/// `"studio"` or `<path>` for `"studio:<path>"`, or running a `.app` path (relative: in `/apps`).
+/// The app for a window name: the Assistant for `"assistant"`, Studio with nothing open for
+/// `"studio"` or on `<path>` for `"studio:<path>"`, or running a `.app` path (relative: in `/apps`).
 pub fn open(name: &str, ai: &Ai) -> Option<Box<dyn App>> {
     let abs = |p: &str| Vfs::normalize("/apps", p).ok().filter(|_| !p.is_empty());
-    if name == "assistant" {
-        let mut r = Remote::new(ASSISTANT, vec![name.into()], ai);
-        (r.title, r.icon, r.size) = ("Assistant".into(), ASSISTANT_ICON, Some((560.0, 600.0)));
-        r.follow = true;
-        return Some(Box::new(r));
-    }
-    let (edit, path) = match name.strip_prefix("studio:") {
-        Some(p) => (true, abs(p)?),
-        None if name == "studio" => (true, DEFAULT_FILE.to_string()),
-        None if name.ends_with(".app") => (false, abs(name)?),
+    let file = |p: &str| p.rsplit('/').next().unwrap_or_default().to_string();
+    let (argv, title, icon, size) = match name.strip_prefix("studio:") {
+        _ if name == "assistant" => {
+            (vec![name.into()], "Assistant".into(), ASSISTANT_ICON, Some((560.0, 600.0)))
+        }
+        _ if name == "studio" => (vec![name.into()], "Studio".into(), STUDIO_ICON, STUDIO_SIZE),
+        Some(p) => {
+            let path = abs(p)?;
+            let title = ["Studio \u{2014} ", &file(&path)].concat();
+            (["studio", "edit", &path].map(String::from).into(), title, STUDIO_ICON, STUDIO_SIZE)
+        }
+        None if name.ends_with(".app") => {
+            let path = abs(name)?;
+            (["studio", "run", &path].map(String::from).into(), file(&path), APP_ICON, None)
+        }
         None => return None,
     };
-    let file = path.rsplit('/').next().unwrap_or_default().to_string();
-    let mode = if edit { "edit" } else { "run" };
-    let mut r = Remote::new(STUDIO, ["studio", mode, &path].map(String::from).into(), ai);
-    (r.title, r.icon, r.size) = match edit {
-        true => (["Studio \u{2014} ", &file].concat(), STUDIO_ICON, Some((760.0, 540.0))),
-        false => (file, APP_ICON, None),
-    };
+    let program = if name == "assistant" { ASSISTANT } else { STUDIO };
+    let mut r = Remote::new(program, argv, ai);
+    (r.title, r.icon, r.size, r.follow) = (title, icon, size, name == "assistant");
     Some(Box::new(r))
 }
 
@@ -95,6 +94,8 @@ pub struct Remote {
     told: Option<(u16, u16)>,
     closed: bool,
     last_key: Option<Key>,
+    /// Prompts from the everything bar that wait for the program to start.
+    asks: Vec<String>,
     /// As last drawn: pixels scrolled, content and view height, content corner.
     scroll: f32,
     heights: (f32, f32),
@@ -285,6 +286,12 @@ impl Remote {
                 Request::Close => cx.close_self(),
                 Request::Size { w, h } if self.frame.is_none() => cx.set_size(w, h),
                 Request::Size { .. } => {}
+                Request::Focus { id } => {
+                    let t = &mut self.texts;
+                    if t.inputs.iter().any(|i| i.0 == id) || t.codes.iter().any(|c| c.0 == id) {
+                        t.focus = id;
+                    }
+                }
                 r => self.ai.ask(self.pid.unwrap_or_default(), r),
             }
         }
@@ -334,9 +341,18 @@ impl App for Remote {
                 }
                 if let Some(pid) = self.pid.filter(|_| first) {
                     self.post(self.ai.hello(pid), cx);
+                    mem::take(&mut self.asks)
+                        .into_iter()
+                        .for_each(|text| self.post(Event::Ask { text }, cx));
                 }
                 true
             }
+            // A prompt waits for the program's first size, which starts it.
+            AppEvent::Ask(text) if self.told.is_none() => {
+                self.asks.push(text);
+                false
+            }
+            AppEvent::Ask(text) => self.send(Event::Ask { text }, cx),
             AppEvent::Click(WidgetId(id)) if id != 0 => self.send(Event::Click { id }, cx),
             AppEvent::PointerDown { x, y, id } => self.press(x, y, id),
             AppEvent::Key { key, mods } => self.key(key, mods, cx),
@@ -374,11 +390,16 @@ impl App for Remote {
             return;
         };
         let (w, view, texts) = ((r.w - 2.0 * PAD).max(0.0), r.h - 2.0 * PAD, &mut self.texts);
-        let mut lay = Lay { t: ui.theme(), texts, sizes: Vec::new(), extra: 0.0, fills: 0, i: 0 };
+        let (t, sizes, slack) = (ui.theme(), Vec::new(), Vec::new());
+        let mut lay = Lay { t, texts, sizes, extra: 0.0, fills: 0, slack, again: false, i: 0 };
         let ts = ui.text_system();
         let mut h = lay.stack(ts, &frame.nodes, w, SPACING, None);
-        if lay.fills > 0 && h < view {
-            (lay.extra, lay.sizes) = ((view - h) / lay.fills as f32, Vec::new());
+        // Again with the room left shared by the Fills, each also taking what it is short of a
+        // taller sibling in a Row.
+        let fills = mem::take(&mut lay.fills);
+        if fills > 0 && (h < view || lay.slack.iter().any(|s| *s > 0.0)) {
+            (lay.extra, lay.sizes, lay.again) =
+                ((view - h).max(0.0) / fills as f32, Vec::new(), true);
             h = lay.stack(ts, &frame.nodes, w, SPACING, None);
         }
         let end = self.follow && self.scroll >= self.heights.0 - self.heights.1;
@@ -405,13 +426,16 @@ fn style_of(style: Style, t: &Theme) -> TextStyle {
 }
 
 /// One frame's layout in theme `t` over the host's text: each node's size in
-/// pre-order, the height each Fill adds, the Fill count, the next size to draw.
+/// pre-order, the height each Fill adds, the Fills so far, each Fill's shortfall
+/// beside a taller sibling, whether this is the second pass, the next size to draw.
 struct Lay<'t> {
     t: &'t Theme,
     texts: &'t mut Texts,
     sizes: Vec<(f32, f32)>,
     extra: f32,
     fills: usize,
+    slack: Vec<f32>,
+    again: bool,
     i: usize,
 }
 
@@ -433,16 +457,24 @@ impl Lay<'_> {
                 (w, self.stack(ts, children, w - 2.0 * CARD_PAD, SPACING, None) + 2.0 * CARD_PAD)
             }
             Node::Fill { children, .. } => {
+                if self.slack.len() <= self.fills {
+                    self.slack.push(0.0);
+                }
+                let extra = self.extra + self.slack[self.fills];
                 self.fills += 1;
                 let codes = children.iter().filter(|c| matches!(c, Node::Code { .. })).count();
-                let grow = Some(self.extra / codes.max(1) as f32);
-                (w, self.stack(ts, children, w, SPACING, grow) + [self.extra, 0.0][codes.min(1)])
+                let grow = Some(extra / codes.max(1) as f32);
+                (w, self.stack(ts, children, w, SPACING, grow) + [extra, 0.0][codes.min(1)])
+            }
+            Node::Pane { w: pw, children, .. } => {
+                let w = w.min(f32::from(*pw));
+                (w, self.stack(ts, children, w, SPACING, None))
             }
             // Buttons and Spacers take their width, each Text its own up to
             // an even share of the rest, the others share what is left.
             Node::Row { gap, children, .. } => {
                 let (gap, mut x, mut h) = (f32::from(*gap), 0.0, 0.0f32);
-                let mut own: Vec<_> = children.iter().map(|c| own_width(ts, t, c)).collect();
+                let mut own: Vec<_> = children.iter().map(|c| own_width(ts, t, c, w)).collect();
                 let gaps = gap * children.len().saturating_sub(1) as f32;
                 let mut room = (w - own.iter().flatten().sum::<f32>() - gaps).max(0.0);
                 let mut flex = own.iter().filter(|o| o.is_none()).count();
@@ -458,9 +490,16 @@ impl Lay<'_> {
                     }
                 }
                 let share = room / flex.max(1) as f32;
+                let mut fills = Vec::new();
                 for (c, o) in children.iter().zip(own) {
+                    let first = self.fills;
                     let s = self.measure(ts, c, o.unwrap_or(share), None);
                     (x, h) = (x + s.0 + gap, h.max(s.1));
+                    fills.extend((self.fills > first).then_some((first, s.1)));
+                }
+                // A child's first Fill grows by what the child is short of the Row's height.
+                for (fill, ch) in fills.into_iter().filter(|_| !self.again) {
+                    self.slack[fill] += h - ch;
                 }
                 (x - if children.is_empty() { 0.0 } else { gap }, h)
             }
@@ -473,6 +512,9 @@ impl Lay<'_> {
             Node::Text { style, text, .. } => {
                 let style = style_of(*style, t);
                 (w, ts.wrap(text, style, w).len() as f32 * ts.line_height(style))
+            }
+            Node::Button { variant: Variant::Chip, label, .. } => {
+                (chip_width(ts, t, label), CHIP_H)
             }
             Node::Button { label, .. } => (ui::button_width(ts, t, label), BUTTON_H),
             Node::Spacer { px } => (f32::from(*px), f32::from(*px)),
@@ -506,7 +548,9 @@ impl Lay<'_> {
         let at = |ui: &mut Ui<'_>, f: &mut dyn FnMut(&mut Ui<'_>)| ui.within(r, |ui| f(ui));
         match n {
             Node::Col { gap, children: c, .. } => self.draw_stack(ui, c, (x, y), f32::from(*gap)),
-            Node::Fill { children, .. } => self.draw_stack(ui, children, (x, y), SPACING),
+            Node::Fill { children, .. } | Node::Pane { children, .. } => {
+                self.draw_stack(ui, children, (x, y), SPACING)
+            }
             Node::Card { children, .. } => {
                 ui.raised(r);
                 self.draw_stack(ui, children, (x + CARD_PAD, y + CARD_PAD), SPACING);
@@ -530,6 +574,7 @@ impl Lay<'_> {
                     Variant::Normal => ui.button(WidgetId(*id), label),
                     Variant::Primary => ui.button_primary(WidgetId(*id), label),
                     Variant::Danger => ui.button_danger(WidgetId(*id), label),
+                    Variant::Chip => chip(ui, WidgetId(*id), r, label),
                 }
             }),
             Node::Input { id, placeholder, .. } => {
@@ -553,13 +598,41 @@ impl Lay<'_> {
     }
 }
 
-/// The width a Button or Spacer takes; `None` for the others.
-fn own_width(ts: &mut TextSystem, t: &Theme, n: &Node) -> Option<f32> {
+/// The width a Button, Spacer or Pane takes in a Row `w` wide; `None` for the others.
+fn own_width(ts: &mut TextSystem, t: &Theme, n: &Node, w: f32) -> Option<f32> {
     match n {
+        Node::Button { variant: Variant::Chip, label, .. } => Some(chip_width(ts, t, label)),
         Node::Button { label, .. } => Some(ui::button_width(ts, t, label)),
         Node::Spacer { px } => Some(f32::from(*px)),
+        Node::Pane { w: pw, .. } => Some(f32::from(*pw).min(w)),
         _ => None,
     }
+}
+
+/// The width of a chip labeled `label`, on device pixels.
+fn chip_width(ts: &mut TextSystem, t: &Theme, label: &str) -> f32 {
+    let d = ts.dpr();
+    ((ts.measure(label, t.small()) + 2.0 * CHIP_PAD) * d).ceil() / d
+}
+
+/// A chip in `r`: `label` small on a pill, brightening under the pointer; a [`Sense::Click`] hit.
+fn chip(ui: &mut Ui<'_>, id: WidgetId, r: RectF, label: &str) -> RectF {
+    let (t, s) = (ui.theme(), ui.state());
+    let hover = s.hover == Some(id);
+    ui.fill(r, r.h / 2.0, t.surface_lo);
+    if hover {
+        ui.fill(r, r.h / 2.0, t.wash(s.pressed == Some(id)));
+    }
+    let edge = ui.px(1.0);
+    ui.border(r, r.h / 2.0, edge, t.border);
+    let style = t.small().with_color(if hover { t.text } else { t.text_dim });
+    let ts = ui.text_system();
+    let base = ts.snap(r.y + (r.h + 0.727 * style.size) / 2.0);
+    let lw = ts.measure(label, style);
+    let x = ts.snap(r.x + (r.w - lw) / 2.0);
+    ui.text(x, base, label, style);
+    ui.hit(id, r, Sense::Click);
+    r
 }
 
 /// A list row in `r`: `text`, then `detail` dim at the right; washed under

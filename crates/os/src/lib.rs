@@ -72,9 +72,6 @@ impl Desktop {
         }
         let _ = vfs.write(remote::STUDIO, b"#!wasm bin/studio.wasm\n");
         let _ = vfs.write(remote::ASSISTANT, b"#!wasm bin/assistant.wasm\n");
-        for (path, src) in remote::SAMPLES {
-            let _ = vfs.write(path, src.as_bytes());
-        }
         Ok(Desktop { parts: Some((text, vfs)), ..Desktop::default() })
     }
 

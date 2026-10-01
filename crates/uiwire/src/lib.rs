@@ -10,7 +10,8 @@
 //! children. Request, Event: `u8` kind, fields. Kinds and [`Key`]s number the
 //! variants from 1 in order; [`Style`], [`Variant`] and [`Class`] from 0.
 //! Decoding never panics and is strict, so the encoding is canonical: anything
-//! malformed, trailing, unknown or over a cap is `None`.
+//! malformed, trailing, unknown or over a cap is `None`. Codes are only ever added, after the
+//! last, so a desktop reads the frames of every program older than it.
 //!
 //! While the user edits an Input or Code the host keeps its text, sending [`Event::Change`]
 //! with its edit count as the version; a Code at that version takes its spans, above it its text.
@@ -55,14 +56,22 @@ codes! {
     /// How a [`Node::Text`] is set (Dim is secondary text). Text wraps to the width.
     Style { Body = 0, Title = 1, Heading = 2, Subheading = 3, Small = 4, Mono = 5, Dim = 6,
         Error = 7, Success = 8, }
-    /// How a [`Node::Button`] looks: an ordinary, the main or a destructive action.
-    Variant { Normal = 0, Primary = 1, Danger = 2, }
+    /// How a [`Node::Button`] looks: an ordinary, the main or a destructive action, or a chip
+    /// (a small, quiet suggestion).
+    Variant { Normal = 0, Primary = 1, Danger = 2, Chip = 3, }
     /// The highlight class of a [`Span`]; Error is drawn underlined.
     Class { Plain = 0, Keyword = 1, String = 2, Number = 3, Comment = 4, Name = 5, Punct = 6,
         Error = 7, }
     /// The key of an [`Event::Key`]: the four arrows are Up to Right, and Char is a
     /// character key (the event's `ch` says which).
     Key { Enter = 1, Escape = 2, Tab = 3, Up = 4, Down = 5, Left = 6, Right = 7, Char = 8, }
+}
+
+impl Default for Style {
+    /// Body text.
+    fn default() -> Style {
+        Style::Body
+    }
 }
 
 /// The modifier bits of an [`Event::Key`]: Shift, Control, Alt (Option) and
@@ -83,7 +92,7 @@ pub struct Span {
     pub class: Class,
 }
 
-/// One widget of a window and, for the four containers, its children. Ids
+/// One widget of a window and, for the five containers, its children. Ids
 /// name the nodes events come from; 0 means none.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Node {
@@ -110,6 +119,9 @@ pub enum Node {
     Item { id: u32, text: String, detail: String, selected: bool },
     /// Its children take the parent's remaining height (around a Code, say).
     Fill { id: u32, children: Vec<Node> },
+    /// Children laid out top to bottom in a column `w` logical px wide, or the width it is
+    /// given if less; in a Row it takes `w` and its flexible siblings share the rest.
+    Pane { id: u32, w: u16, children: Vec<Node> },
 }
 
 /// One complete picture of a window, program to host: the program's frame
@@ -136,6 +148,8 @@ pub enum Request {
     Ai { id: u32, body: String },
     /// Stop AI request `id`.
     AiCancel { id: u32 },
+    /// Put the keyboard in the Input or Code `id` of this frame.
+    Focus { id: u32 },
 }
 
 /// Something that happened in the window, host to program.
@@ -161,6 +175,8 @@ pub enum Event {
     AiData { id: u32, data: Vec<u8> },
     /// AI request `id` ended: the HTTP status (0: none) and the host's error, if any.
     AiEnd { id: u32, status: u16, error: String },
+    /// A prompt from the desktop's everything bar, as if typed in the window and sent.
+    Ask { text: String },
 }
 
 /// The public `encode` and `decode` of each message, from its `put` and `get`.
@@ -192,7 +208,8 @@ impl Node {
             Self::Col { children, .. }
             | Self::Row { children, .. }
             | Self::Card { children, .. }
-            | Self::Fill { children, .. } => children,
+            | Self::Fill { children, .. }
+            | Self::Pane { children, .. } => children,
             _ => &[],
         }
     }
@@ -222,6 +239,7 @@ impl Node {
                 o.head(10, *id, n).str(text).str(detail).u8((*selected).into())
             }
             Self::Fill { id, .. } => o.head(11, *id, n),
+            Self::Pane { id, w, .. } => o.head(12, *id, n).u16(*w),
         };
         self.children().iter().for_each(|child| child.put(o));
     }
@@ -247,13 +265,15 @@ impl Node {
             9 => Self::Card { id, children: Vec::new() },
             10 => Self::Item { id, text: r.str()?, detail: r.str()?, selected: r.bool()? },
             11 => Self::Fill { id, children: Vec::new() },
+            12 => Self::Pane { id, w: r.u16()?, children: Vec::new() },
             _ => return None,
         };
         match &mut node {
             Self::Col { children, .. }
             | Self::Row { children, .. }
             | Self::Card { children, .. }
-            | Self::Fill { children, .. } => {
+            | Self::Fill { children, .. }
+            | Self::Pane { children, .. } => {
                 children.reserve(usize::from(count).min(*budget));
                 for _ in 0..count {
                     children.push(Self::read(r, depth + 1, budget)?);
@@ -317,6 +337,7 @@ impl Request {
             Self::Size { w, h } => o.u8(3).u16(*w).u16(*h),
             Self::Ai { id, body } => o.u8(4).u32(*id).str(body),
             Self::AiCancel { id } => o.u8(5).u32(*id),
+            Self::Focus { id } => o.u8(6).u32(*id),
         }
     }
 
@@ -327,6 +348,7 @@ impl Request {
             3 => Self::Size { w: r.u16()?, h: r.u16()? },
             4 => Self::Ai { id: r.u32()?, body: r.str()? },
             5 => Self::AiCancel { id: r.u32()? },
+            6 => Self::Focus { id: r.u32()? },
             _ => return None,
         })
     }
@@ -346,6 +368,7 @@ impl Event {
             Self::Config { model } => o.u8(7).str(model),
             Self::AiData { id, data } => o.u8(8).u32(*id).bytes(data),
             Self::AiEnd { id, status, error } => o.u8(9).u32(*id).u16(*status).str(error),
+            Self::Ask { text } => o.u8(10).str(text),
         }
     }
 
@@ -365,6 +388,7 @@ impl Event {
             7 => Self::Config { model: r.str()? },
             8 => Self::AiData { id: r.u32()?, data: r.bytes()?.to_vec() },
             9 => Self::AiEnd { id: r.u32()?, status: r.u16()?, error: r.str()? },
+            10 => Self::Ask { text: r.str()? },
             _ => return None,
         })
     }

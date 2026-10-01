@@ -93,6 +93,8 @@ pub enum AppEvent {
     /// A process this window owns has console output, exited or changed
     /// mode, or homed has a new note: see [`Cx::kernel`].
     Io,
+    /// A prompt from the desktop's everything bar, as if typed and sent.
+    Ask(String),
 }
 
 /// A key by its physical position (`KeyboardEvent.code`); text comes

@@ -1,6 +1,6 @@
 [package]
 name = "compusophy-studio"
-description = "compusophyOS Studio: write applang apps, check them, and run them in their own windows. A wasm32-wasip1 GUI program on the remote UI protocol; built into dist/bin/, never committed."
+description = "compusophyOS Studio: make applang apps by describing them; the AI writes them, Studio checks, fixes, saves and runs them live. A wasm32-wasip1 GUI program on the remote UI protocol; built into dist/bin/, never committed."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -17,5 +17,6 @@ path = "src/main.rs"
 
 [dependencies]
 compusophy-applang.workspace = true
+compusophy-assistant.workspace = true
 compusophy-lang.workspace = true
 compusophy-uiwire.workspace = true
