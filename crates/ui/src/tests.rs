@@ -493,7 +493,8 @@ fn apps_and_their_context() {
     let rect = RectF::new(0.0, 0.0, 300.0, 200.0);
     let (_, _, hits) = frame(&mut t, rect, REST, |ui| app.draw(ui));
     let mut fs = vfs::Vfs::new();
-    let mut cx = Cx::new(&mut fs, 5.0);
+    let mut kernel = kernel::Kernel::new();
+    let mut cx = Cx::new(&mut fs, &mut kernel, 5.0);
     assert!(!app.event(AppEvent::Focus(true), &mut cx));
     assert!(app.event(AppEvent::Click(hits[0].id), &mut cx));
     cx.close_self();

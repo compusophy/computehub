@@ -20,6 +20,9 @@ members = [
     "crates/studio",
     "crates/vt",
     "crates/term",
+    "crates/kernel",
+    "crates/cpu",
+    "crates/toolbox",
     "tools/serve",
 ]
 
@@ -54,8 +57,10 @@ compusophy-apps = { path = "crates/apps", version = "0.1.0" }
 compusophy-studio = { path = "crates/studio", version = "0.1.0" }
 compusophy-vt = { path = "crates/vt", version = "0.1.0" }
 compusophy-term = { path = "crates/term", version = "0.1.0" }
+compusophy-kernel = { path = "crates/kernel", version = "0.1.0" }
 
-# The browser boundary. Only `platform` and `os` may use these (scripts/caps.sh).
+# The browser boundary. Only `platform`, `os` and `cpu` may use these
+# (scripts/caps.sh).
 # wasm-bindgen is pinned to the exact version of the wasm-bindgen CLI that
 # scripts/build-web.sh runs; the two must match byte for byte.
 wasm-bindgen = "=0.2.121"

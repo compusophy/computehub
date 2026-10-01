@@ -18,7 +18,8 @@
 
 use gfx::{DrawList, RectF, Rgba};
 use platform::{App, Ctl, Event, Handled, Renderer};
-use shell::{Cursor, Effect, Input, Key, LocalTime, Mods, Registry, Response, Shell};
+use shell::{Cursor, Effect, Input, KernelIn, Key, LocalTime, Mods, Registry, Response, Shell};
+use ui::kernel::{self, Effect as K};
 use ui::{FontId, TextSystem};
 use vfs::Vfs;
 use wasm_bindgen::prelude::*;
@@ -33,6 +34,11 @@ const DEFERRED: [(u32, FontId, &str); 2] = [
 
 /// The `localStorage` key that keeps the theme's name.
 pub const THEME_KEY: &str = "compusophy.theme";
+/// The `localStorage` key that is `"1"` once /home was saved.
+pub const HOME_KEY: &str = "compusophy.home";
+/// The applets of `bin/toolbox.wasm`, each a `/bin` marker file.
+const APPLETS: [&str; 9] =
+    ["hello", "rev", "wc", "spin", "nap", "fstest", "keys", "bench", "selftest"];
 
 // The wasm entry point. A plain comment: a doc comment would ship in os.js.
 #[wasm_bindgen(start)]
@@ -60,6 +66,10 @@ impl Desktop {
         let text = TextSystem::new(SANS.to_vec())?;
         let mut vfs = Vfs::new();
         studio::install_samples(&mut vfs);
+        let _ = vfs.mkdir_all("/bin"); // Not mkdir: Vfs::new ships mkdir_all already.
+        for name in APPLETS {
+            let _ = vfs.write(&["/bin/", name].concat(), b"#!wasm bin/toolbox.wasm\n");
+        }
         Ok(Desktop {
             parts: Some((text, vfs)),
             shell: None,
@@ -83,6 +93,7 @@ impl Desktop {
                 let theme = ctl.storage_get(THEME_KEY).unwrap_or_default();
                 let shell = Shell::new(w, h, text, vfs, registry(), &theme);
                 let shell = self.shell.insert(shell);
+                shell.kernel_mut().set_isolated(ctl.isolated());
                 self.saved = shell.theme_name();
                 shell.set_now(ctl.monotonic_ms());
                 let mut r = shell.input(input);
@@ -109,6 +120,10 @@ impl Desktop {
                 Some(slot) => return self.set_font(slot, result),
                 None => self.shell.as_mut().map(|s| s.fetched(id, result)),
             },
+            Event::Proc { pid, msg } => self.kernel(KernelIn::Msg { pid, msg }),
+            Event::ProcError { pid } => self.kernel(KernelIn::Error { pid }),
+            Event::Wake => self.kernel(KernelIn::Wake),
+            Event::Hidden => self.kernel(KernelIn::Hidden),
             ev => input_of(ev).and_then(|input| self.input(input, ctl)),
         };
         let Some(r) = r else {
@@ -130,6 +145,10 @@ impl Desktop {
         }
         let prevent_default = r.consumed && !(types && self.typing);
         Handled { redraw: r.redraw || r.animating, prevent_default }
+    }
+
+    fn kernel(&mut self, ev: KernelIn) -> Option<Response> {
+        self.shell.as_mut().map(|s| s.kernel(ev))
     }
 
     /// Passes on what the shell queued outside a response, and stores a
@@ -159,7 +178,9 @@ impl Desktop {
     }
 
     /// After a frame: the next while animating, the deferred fonts after the
-    /// first, and what the shell queued while drawing.
+    /// first, and what the shell queued. (Kernel::boot_home with the
+    /// [`HOME_KEY`] flag comes with step 4's homed: until then it does
+    /// nothing, and the call would cost boot bytes.)
     fn drawn(&mut self, animating: bool, ctl: &mut Ctl) {
         if animating {
             ctl.request_frame();
@@ -225,8 +246,26 @@ fn text_of<'a>(shell: &'a mut Option<Shell>, parts: &'a mut Parts) -> Option<&'a
 }
 
 fn effect(fx: Effect, ctl: &mut Ctl) {
-    let Effect::Fetch { id, url } = fx;
-    ctl.fetch(id, &url);
+    match fx {
+        Effect::Fetch { id, url } => ctl.fetch(id, &url),
+        Effect::Kernel(K::Spawn { pid, sab }) => ctl.spawn(pid, sab),
+        Effect::Kernel(K::Start { pid, msg, program }) => ctl.start(pid, msg, load(program)),
+        Effect::Kernel(K::Send { pid, msg }) => ctl.send(pid, msg),
+        Effect::Kernel(K::Reply { pid, errno, data }) => ctl.reply(pid, errno, data),
+        Effect::Kernel(K::Word { pid, index, value }) => ctl.word(pid, index, value),
+        Effect::Kernel(K::Kill { pid }) => ctl.kill(pid),
+        Effect::Kernel(K::Wake { ms }) => ctl.wake_in(ms),
+        Effect::Kernel(K::Saved) => ctl.storage_set(HOME_KEY, "1"),
+    }
+}
+
+/// A Start's program as the platform takes it.
+fn load(program: kernel::Load) -> platform::Load {
+    match program {
+        kernel::Load::None => platform::Load::None,
+        kernel::Load::Bytes(b) => platform::Load::Bytes(b),
+        kernel::Load::Url(u) => platform::Load::Url(u),
+    }
 }
 
 /// The CSS `cursor` keyword for the shell's cursor.
@@ -264,10 +303,12 @@ fn merge(mut a: Response, b: Response) -> Response {
     a
 }
 
-/// The shell input for an event; `None` for key-ups and fetch results.
+/// The shell input for an event; `None` for key-ups, fetch results and the
+/// kernel's events.
 fn input_of(ev: Event) -> Option<Input> {
     Some(match ev {
         Event::Key { down: false, .. } | Event::Fetched { .. } => return None,
+        Event::Proc { .. } | Event::ProcError { .. } | Event::Wake | Event::Hidden => return None,
         Event::Key { code, key, shift, ctrl, alt, meta, altgr, .. } => {
             let (ctrl, alt) = without_altgr(ctrl, alt, altgr);
             let mods = Mods { shift, ctrl, alt, meta };

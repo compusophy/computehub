@@ -10,7 +10,7 @@ use web_sys::{
 };
 
 use crate::ctl::{Effect, is_relative_url};
-use crate::{Event, Shared, dispatch, has, js_text, request_frame};
+use crate::{Event, Shared, arm, dispatch, has, js_text, proc, request_frame};
 
 /// Invisible and out of the way; 16 px so iOS does not zoom when it focuses.
 const SINK_STYLE: &str = "position:fixed;left:0;top:0;width:1px;height:1px;margin:0;\
@@ -47,11 +47,14 @@ pub(crate) fn apply(s: &Rc<Shared>, effects: Vec<Effect>) {
                     let _ = s.canvas.style().set_property("cursor", c);
                 }
             }
-            Effect::Store { key, value } => {
-                if let Some(st) = storage() {
-                    let _ = st.set_item(&key, &value);
-                }
-            }
+            Effect::Store { key, value } => _ = storage().map(|st| st.set_item(&key, &value)),
+            Effect::Spawn { pid, sab } => proc::spawn(s, pid, sab),
+            Effect::Start { pid, msg, program } => proc::post(s, pid, &msg, Some(program)),
+            Effect::Send { pid, msg } => proc::post(s, pid, &msg, None),
+            Effect::Reply { pid, errno, data } => proc::reply(s, pid, errno, &data),
+            Effect::Word { pid, index, value } => proc::store(s, pid, &[], &[(index, value)]),
+            Effect::Kill(pid) => proc::kill(s, pid),
+            Effect::Wake(ms) => arm(s, &s.wake_timer, &s.wake_fn, ms),
         }
     }
 }
@@ -74,9 +77,7 @@ fn text_input(s: &Shared, on: bool) {
 /// Sends an `input` event's inserted text (not while an IME composes: that
 /// text comes with `compositionend`), then empties the sink.
 pub(crate) fn on_input(s: &Rc<Shared>, e: &DomEvent) {
-    let Some(ie) = e.dyn_ref::<InputEvent>() else {
-        return;
-    };
+    let Some(ie) = e.dyn_ref::<InputEvent>() else { return };
     if ie.is_composing() {
         return;
     }
@@ -148,17 +149,23 @@ fn on_body(s: &Rc<Shared>, id: u32, buf: JsValue) {
     fetched(s, id, Ok(Uint8Array::new(&buf).to_vec()));
 }
 
-/// `"HTTP <status>"` in decimal, without the formatting machinery.
+/// `"HTTP <status>"`.
 pub(crate) fn http_error(status: u16) -> String {
-    let (mut out, mut p) = (String::from("HTTP "), 10_000);
-    while p > 1 && status < p {
+    let mut out = String::from("HTTP ");
+    push_num(&mut out, status.into());
+    out
+}
+
+/// Appends `n` in decimal, without the formatting machinery.
+pub(crate) fn push_num(out: &mut String, n: u32) {
+    let mut p = 1_000_000_000;
+    while p > 1 && n < p {
         p /= 10;
     }
     while p > 0 {
-        out.push(char::from(b'0' + (status / p % 10) as u8));
+        out.push(char::from(b'0' + (n / p % 10) as u8));
         p /= 10;
     }
-    out
 }
 
 fn fetched(s: &Rc<Shared>, id: u32, result: Result<Vec<u8>, String>) {
@@ -176,7 +183,7 @@ fn later(s: &Shared, ev: Event) {
 }
 
 /// The microtask of [`later`].
-pub(crate) fn flush_later(s: &Rc<Shared>, _: &DomEvent) {
+pub(crate) fn flush_later(s: &Rc<Shared>) {
     let evs = core::mem::take(&mut *s.later.borrow_mut());
     for ev in evs {
         dispatch(s, ev);

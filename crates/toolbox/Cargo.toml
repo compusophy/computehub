@@ -1,0 +1,16 @@
+[package]
+name = "compusophy-toolbox"
+description = "compusophyOS's test programs: one std multicall binary for wasm32-wasip1 (hello, rev, wc, spin, nap, fstest, keys, bench, selftest). Built into dist/bin/, never committed."
+publish = false
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "toolbox"
+path = "src/main.rs"
+
+[dependencies]

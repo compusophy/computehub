@@ -2,6 +2,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use gfx::{Kind, Rgba};
+use kernel::wire::{Msg, Stdout, VERSION};
 use ui::{App, AppEvent as E, THEMES, Ui};
 
 use super::motion::{Lerp, Themes, Tween, Vis, blend, ease, replay};
@@ -26,8 +27,7 @@ impl App for Probe {
     }
 
     fn draw(&mut self, ui: &mut Ui<'_>) {
-        let r = ui.rect();
-        ui.hit(ui::WidgetId(1), r, ui::Sense::Click);
+        ui.hit(ui::WidgetId(1), ui.rect(), ui::Sense::Click);
     }
 
     fn event(&mut self, ev: E, cx: &mut Cx<'_>) -> bool {
@@ -41,6 +41,7 @@ impl App for Probe {
                 ("close", _) => cx.close_self(),
                 ("fonts", _) => cx.load_fallback_fonts(),
                 ("theme", arg) => cx.set_theme(arg),
+                ("spawn", _) => _ = cx.kernel.spawn(spin()),
                 _ => {}
             }
         }
@@ -67,15 +68,21 @@ fn host() -> (Host, Log, Rc<RefCell<u32>>) {
         *n.borrow_mut() += 1;
         Some(Box::new(Probe(*n.borrow(), k, l.clone())) as Box<dyn App>)
     });
-    let wm = Wm::new(Rect::new(0, 32, 1280, 684));
-    let text = TextSystem::new(SANS.to_vec()).unwrap();
-    let mut h = Host::new(wm, text, Vfs::new(), registry, "Midnight");
+    let (wm, text) = (Wm::new(Rect::new(0, 32, 1280, 684)), TextSystem::new(SANS.to_vec()));
+    let mut h = Host::new(wm, text.unwrap(), Vfs::new(), registry, "Midnight");
     let mut out = Response::default();
     h.open("welcome", Some((680, 480)), &mut out);
     h.open("terminal", None, &mut out);
     h.settle(&mut out);
     log.take();
     (h, log, made)
+}
+
+/// What a Probe's `spawn` starts: `spin`, on no console.
+fn spin() -> kernel::Spawn {
+    let (argv, cwd, roots) = (vec!["spin".into()], "/".into(), vec!["/".into()]);
+    let program = kernel::Program::Url("bin/toolbox.wasm".into());
+    kernel::Spawn { argv, program, cwd, tty: None, stdout: Stdout::Console, roots }
 }
 
 impl Host {
@@ -139,10 +146,26 @@ fn closed_apps_wait_to_be_reaped() {
     h.reap(WinId(2));
     h.reap(WinId(9));
     assert_eq!(h.names(), [(1, "welcome", true)]);
-    // Reaping a live app does nothing.
-    let (mut h, _, _) = host();
-    h.reap(WinId(1));
-    assert_eq!(h.wins.len(), 2);
+}
+
+#[test]
+fn processes_wake_their_window_and_die_with_it() {
+    let (mut h, log, _) = host();
+    h.kernel.set_isolated(true);
+    let spawned = |pid| Effect::Kernel(kernel::Effect::Spawn { pid, sab: true });
+    assert_eq!(h.say(2, "spawn;spawn").effects, [spawned(2), spawned(3)]);
+    // What pid 2 sends wakes window 2 alone.
+    let mut out = Response::default();
+    for msg in [Msg::Ready { version: VERSION }, Msg::Exit { status: 3 }] {
+        h.kernel_in(KernelIn::Msg { pid: 2, msg: msg.encode() }, &mut out);
+    }
+    assert_eq!((&log.take()[1..], h.kernel.reap(2)), (&[(2, E::Io)][..], Some(3)));
+    // Reaping a live window does nothing; reaped once closed, it kills pid 3.
+    h.reap(WinId(2));
+    assert!(h.say(2, "close").effects.is_empty() && h.wins.len() == 2);
+    h.reap(WinId(2));
+    h.pump(&mut out);
+    assert!(out.effects.contains(&Effect::Kernel(kernel::Effect::Kill { pid: 3 })));
 }
 
 #[test]
@@ -155,11 +178,9 @@ fn apps_get_icons_and_labels_and_switch_the_theme() {
     assert!(h.theme.is_running(0.0));
     // Icons come from running apps, else from the registry, once.
     let icon = |glyph| Some(AppIcon { glyph, hue: Rgba::hex(0x123456) });
-    assert_eq!(h.icon("terminal"), icon("terminal"));
-    assert_eq!(*made.borrow(), 2);
+    assert_eq!((h.icon("terminal"), *made.borrow()), (icon("terminal"), 2));
     assert_eq!((h.icon("sized"), h.icon("sized")), (icon("sized"), icon("sized")));
-    assert_eq!((h.icon("nope"), h.icon("nope")), (None, None));
-    assert_eq!(*made.borrow(), 3);
+    assert_eq!((h.icon("nope"), h.icon("nope"), *made.borrow()), (None, None, 3));
     let labels = ["terminal", "/apps/counter.app", "/tmp/éclair.app", ""].map(app_label);
     assert_eq!(labels, ["Terminal", "Counter", "Éclair", ""]);
 }
@@ -172,8 +193,7 @@ fn fonts_are_fetched_once_and_added_in_order() {
     assert!(h.say(1, "fonts").effects.is_empty());
     // b waits for a; repeats and unknown ids do nothing.
     assert!(!h.fetch(2, Ok(SYM_B.to_vec())).redraw);
-    assert!(h.fetch(1, Ok(SYM_A.to_vec())).redraw);
-    assert_eq!(h.text.fallback_count(), 2);
+    assert!(h.fetch(1, Ok(SYM_A.to_vec())).redraw && h.text.fallback_count() == 2);
     for id in [0, 1, 2, 3] {
         assert_eq!(h.fetch(id, Ok(SYM_A.to_vec())), Response::default());
     }
@@ -191,8 +211,7 @@ fn fonts_are_fetched_once_and_added_in_order() {
 #[test]
 fn content_is_laid_out_then_clipped() {
     let (mut h, _, _) = host();
-    let mut list = DrawList::new();
-    let layout = RectF::new(10.0, 50.0, 400.0, 300.0);
+    let (mut list, layout) = (DrawList::new(), RectF::new(10.0, 50.0, 400.0, 300.0));
     let (clip, st) = (RectF::new(0.0, 0.0, 200.0, 100.0), UiState::default());
     h.draw_content(&mut list, WinId(1), [layout, clip], &THEMES[1], st);
     assert_eq!(h.win(WinId(1)).unwrap().hits[0].rect, RectF::new(10.0, 50.0, 190.0, 50.0));
@@ -203,8 +222,7 @@ fn content_is_laid_out_then_clipped() {
 
 #[test]
 fn tweens_ease_out_from_their_first_frame() {
-    let ends = [ease(-1.0), ease(f32::NAN), ease(0.0), ease(1.0), ease(9.0)];
-    assert_eq!(ends, [0.0, 0.0, 0.0, 1.0, 1.0]);
+    assert_eq!([-1.0, f32::NAN, 0.0, 1.0, 9.0].map(ease), [0.0, 0.0, 0.0, 1.0, 1.0]);
     let samples: Vec<f32> = (1..10).map(|i| ease(i as f32 / 10.0)).collect();
     assert!(samples.windows(2).all(|w| w[0] < w[1]));
     assert!(samples[1] > 0.5 && samples[4] > 0.85 && samples[8] < 1.0);
@@ -340,11 +358,9 @@ fn layout_places_the_dock_and_the_launcher() {
     assert_eq!(p.field(), RectF::new(356.0, 196.0, 568.0, 48.0));
     assert_eq!((p.tile(0), p.tile(4).y), (RectF::new(387.0, 260.0, 80.0, 84.0), 352.0));
     assert_eq!((p.list_top(), p.row(1).y, p.fit()), (452.0, 492.0, 3));
-    assert_eq!(
-        (p.at(400.0, 300.0, 0, 9), p.at(400.0, 500.0, 2, 9)),
-        (Some(Some(0)), Some(Some(8)))
-    );
-    assert_eq!((p.at(345.0, 300.0, 0, 9), p.at(10.0, 10.0, 0, 9)), (Some(None), None));
+    let at = |x, y, first| p.at(x, y, first, 9);
+    assert_eq!((at(400.0, 300.0, 0), at(400.0, 500.0, 2)), (Some(Some(0)), Some(Some(8))));
+    assert_eq!((at(345.0, 300.0, 0), at(10.0, 10.0, 0)), (Some(None), None));
     let tiny = Panel::new((40.0, 30.0), 3);
     assert_eq!((tiny.rect.w, tiny.rect.h, tiny.cols(), tiny.fit()), (0.0, 0.0, 1, 0));
     assert_eq!(Panel::new((300.0, 800.0), 0).cols(), 2);
@@ -352,11 +368,9 @@ fn layout_places_the_dock_and_the_launcher() {
 
 /// A search over apps, then files, by label.
 fn search(apps: &[&str], files: &[&str]) -> Search {
-    let entry = |(label, file): (&&str, bool)| Entry {
-        name: label.to_lowercase(),
-        label: label.to_string(),
-        icon: AppIcon::default(),
-        place: file.then(|| "/apps".to_string()),
+    let entry = |(label, file): (&&str, bool)| {
+        let (name, place) = (label.to_lowercase(), file.then(|| "/apps".to_string()));
+        Entry { name, label: label.to_string(), icon: AppIcon::default(), place }
     };
     let all = apps.iter().map(|l| (l, false)).chain(files.iter().map(|l| (l, true)));
     Search::new(all.map(entry).collect())
@@ -415,8 +429,7 @@ fn searches_rank_then_move_through_the_grid_then_the_list() {
 #[test]
 fn glyphs_draw_on_whole_pixels() {
     use paint::*;
-    let text = TextSystem::new(SANS.to_vec()).unwrap();
-    let mut list = DrawList::new();
+    let (text, mut list) = (TextSystem::new(SANS.to_vec()).unwrap(), DrawList::new());
     let c = RectF::new(100.0, 14.0, 12.0, 12.0);
     let [fill, ink] = [Rgba(1, 1, 1, 255), Rgba(2, 2, 2, 255)];
     for (i, maximized) in [(0, false), (1, false), (1, true), (2, false)] {

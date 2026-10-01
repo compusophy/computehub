@@ -6,6 +6,7 @@ use host::frame::controls;
 use host::motion::Vis;
 use host::{content_rect, rectf};
 use ui::Key::*;
+use ui::kernel::{Effect as K, Program, Spawn, wire::Stdout::Console};
 use ui::{App, AppEvent as E, Cx, Sense, THEMES, Ui, WidgetId as W};
 use wm::{Snap, State};
 
@@ -117,8 +118,7 @@ impl Shell {
         self.host.wins.iter().filter(|w| self.host.live(w.id)).map(|w| &*w.name).collect()
     }
     fn tile_at(&self, i: usize) -> (f32, f32) {
-        let r = self.dock_tile(i);
-        (r.x + 22.0, r.y + 22.0)
+        (self.dock_tile(i).x + 22.0, self.dock_tile(i).y + 22.0)
     }
 }
 
@@ -138,11 +138,8 @@ fn welcome_opens_centered_once_there_is_a_work_area() {
     assert_eq!(s.input(Input::PointerLeave), Response::default());
     // Made before the screen has a size, it opens at the first size that
     // leaves a work area, as it would have from the start; clamped to it.
-    let sizes = [
-        (1280.0, 800.0, Rect::new(300, 134, 680, 480)),
-        (600.0, 400.0, Rect::new(0, 32, 600, 284)),
-    ];
-    for (w, h, want) in sizes {
+    let (big, small) = (Rect::new(300, 134, 680, 480), Rect::new(0, 32, 600, 284));
+    for (w, h, want) in [(1280.0, 800.0, big), (600.0, 400.0, small)] {
         let (mut s, _) = desk_of(0.0, 0.0);
         for (w, h) in [(0.0, 0.0), (1280.0, 100.0), (0.4, 800.0)] {
             s.input(Input::Resize { w, h });
@@ -193,9 +190,8 @@ fn titlebars_drag_and_double_click() {
     assert_eq!(s.up((500.0, 250.0)).cursor, Some(Cursor::Grab));
     // Two presses within 350 ms maximize, two more restore; further apart
     // they are two clicks.
-    let (max, normal) = (State::Maximized, State::Normal);
-    for (t, gap, state) in [(2000.0, 300.0, max), (3000.0, 300.0, normal), (4000.0, 400.0, normal)]
-    {
+    let (max, up) = (State::Maximized, State::Normal);
+    for (t, gap, state) in [(2000.0, 300.0, max), (3000.0, 300.0, up), (4000.0, 400.0, up)] {
         let r = s.rect(1).unwrap();
         let at = (r.x as f32 + 100.0, r.y as f32 + 10.0);
         s.set_now(t);
@@ -276,6 +272,13 @@ fn edges_resize_with_their_cursors() {
 #[test]
 fn controls_minimize_maximize_and_close() {
     let (mut s, log) = desk();
+    // Welcome runs a process; the kernel's effects leave with the shell's.
+    let k = s.kernel_mut();
+    k.set_isolated(true);
+    k.set_owner(1);
+    let (argv, roots, program) = (vec!["spin".into()], vec!["/".into()], Program::Url("x".into()));
+    _ = k.spawn(Spawn { argv, program, cwd: "/".into(), tty: None, stdout: Console, roots });
+    assert_eq!(s.take_effects(), [Effect::Kernel(K::Spawn { pid: 2, sab: true })]);
     let [min, max, close] =
         controls(rectf(s.rect(1).unwrap())).unwrap().map(|c| (c.x + 6.0, c.y + 6.0));
     // Hovering them shows their glyphs and the close button's danger.
@@ -300,11 +303,12 @@ fn controls_minimize_maximize_and_close() {
     s.click(s.tile_at(3));
     assert_eq!(s.wm().focused(), Some(WinId(1)));
     s.rest(1000.0);
-    // Closing fades it out, then drops the app.
+    // Closing fades it out, then drops the app and kills what it ran.
     assert!(s.click(close).animating);
     assert_eq!((s.names().len(), s.host.wins.len()), (0, 1));
     s.rest(1000.0);
     assert_eq!(s.host.wins.len(), 0);
+    assert_eq!(s.take_effects(), [Effect::Kernel(K::Kill { pid: 2 })]);
     assert_eq!(log.take().last(), Some(&("welcome", E::Focus(true))));
 }
 
@@ -314,14 +318,8 @@ fn dock_tiles_open_minimize_and_focus() {
     assert!(s.to(s.tile_at(0)).redraw && s.animating());
     // Terminal opens, minimizes and comes back; then welcome is focused and
     // minimized.
-    let (min, up) = (State::Minimized, State::Normal);
-    let steps = [
-        (0, [up, up], 2),
-        (0, [up, min], 1),
-        (0, [up, up], 2),
-        (3, [up, up], 1),
-        (3, [min, up], 2),
-    ];
+    let (m, n) = (State::Minimized, State::Normal);
+    let steps = [(0, [n, n], 2), (0, [n, m], 1), (0, [n, n], 2), (3, [n, n], 1), (3, [m, n], 2)];
     for (tile, states, focus) in steps {
         s.click(s.tile_at(tile));
         let got: Vec<State> = s.wm().windows().iter().map(|w| w.1).collect();

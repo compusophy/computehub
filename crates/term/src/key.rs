@@ -39,15 +39,18 @@ pub struct KeyMods {
 /// (m = 1 + shift + 2 alt + 4 ctrl); ctrl makes C0 controls, alt prefixes ESC.
 pub fn encode_key(key: Key, mods: KeyMods, app_cursor: bool) -> Vec<u8> {
     let m = 1 + u8::from(mods.shift) + 2 * u8::from(mods.alt) + 4 * u8::from(mods.ctrl);
-    let letter = |ss3: bool, x: u8| match (m, ss3) {
-        (1, true) => vec![0x1B, b'O', x],
-        (1, false) => vec![0x1B, b'[', x],
-        _ => format!("\x1b[1;{m}{}", char::from(x)).into_bytes(),
+    // CSI n ; m x without `; m` for m = 1 and n for 0. Not `format!`: this
+    // ships in the boot download, which has no room for `core::fmt`.
+    let csi = |n: u8, x: u8| {
+        let n = [n / 10, n % 10].into_iter().skip_while(|&d| d == 0).map(|d| b'0' + d);
+        let with = [b';', b'0' + m].into_iter().filter(|_| m > 1);
+        [0x1B, b'['].into_iter().chain(n).chain(with).chain([x]).collect()
     };
-    let tilde = |n: u8| match m {
-        1 => format!("\x1b[{n}~").into_bytes(),
-        _ => format!("\x1b[{n};{m}~").into_bytes(),
+    let letter = |ss3: bool, x: u8| match m == 1 && ss3 {
+        true => vec![0x1B, b'O', x],
+        false => csi(u8::from(m > 1), x),
     };
+    let tilde = |n: u8| csi(n, b'~');
     let alt = |bytes: &[u8]| [&b"\x1b"[..usize::from(mods.alt)], bytes].concat();
     match key {
         Key::Char(c) if mods.ctrl && matches!(c, '@'..='_' | 'a'..='z' | ' ' | '?') => {

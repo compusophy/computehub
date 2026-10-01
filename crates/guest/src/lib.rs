@@ -1,11 +1,14 @@
 //! The guest shell the Terminal runs: a line editor and Unix-like commands
 //! over the VFS, answering in ANSI text (lines end in `\n`; the Terminal
 //! makes that CR LF). Commands are rows of a table; what they do to paths is
-//! an `Op`. Output is built with `push_str`, not `format!`: smaller wasm.
+//! an `Op`; any other word starts a [`program`], whose input the editor then
+//! edits. Output is built with `push_str`, not `format!`: smaller wasm.
 
 #![forbid(unsafe_code)]
 
 use term::char_width;
+use ui::kernel::wire::{self, Stdout};
+use ui::kernel::{Program, Spawn};
 use ui::{Cx, Key, Mods, THEMES};
 use vfs::Vfs;
 use vfs::VfsError::{self, IsADir, NotADir, NotFound};
@@ -180,8 +183,9 @@ enum Op<'a> {
 pub struct Guest {
     /// What to show next; the Terminal takes it after each call.
     pub out: String,
-    /// The terminal's width.
+    /// The terminal's width and height.
     pub cols: u16,
+    pub rows: u16,
     cwd: String,
     line: Vec<char>,
     /// The caret, as an index into `line`.
@@ -192,6 +196,12 @@ pub struct Guest {
     draft: Vec<char>,
     /// The caret's row (below the prompt's first) and column, as last drawn.
     caret: (usize, usize),
+    /// The foreground program: the line is its input, from column `base`,
+    /// with the `other` history. A nonzero exit status `mark`s the prompt.
+    pid: Option<u32>,
+    base: usize,
+    other: Vec<String>,
+    mark: String,
 }
 
 /// A command's output: to the screen, or its stdout to a redirect's file.
@@ -224,47 +234,88 @@ impl Io<'_> {
     }
 }
 
-/// Pushes `ESC [ n c`.
+/// Pushes `ESC [ n c`; nothing for 0, which would mean 1.
 fn csi(out: &mut String, n: usize, c: char) {
-    out.push_str("\x1b[");
-    push_int(out, n as u64, 0);
-    out.push(c);
+    if n > 0 {
+        out.push_str("\x1b[");
+        push_int(out, n as u64, 0);
+        out.push(c);
+    }
 }
 
 impl Guest {
-    /// A shell in the guest's home, 80 columns wide.
+    /// A shell in the guest's home, 80 columns by 24 rows.
     pub fn new() -> Guest {
         let mut g = Guest::default();
-        (g.cwd, g.cols) = (Vfs::HOME.to_string(), 80);
+        (g.cwd, g.cols, g.rows) = (Vfs::HOME.to_string(), 80, 24);
         g
     }
 
-    /// Handles a key; printable ones come as [`Guest::text`].
+    /// The pid of the program running in the foreground, if any.
+    pub fn running(&self) -> Option<u32> {
+        self.pid
+    }
+
+    /// Erases the program's input line typed so far, before its output.
+    pub fn hide(&mut self) {
+        if !self.line.is_empty() {
+            self.erase();
+        }
+    }
+
+    /// Draws the input line again from column `col`, after a program's output.
+    pub fn show(&mut self, col: u16) {
+        (self.base, self.caret) = (usize::from(col), (0, usize::from(col)));
+        if !self.line.is_empty() {
+            self.render();
+        }
+    }
+
+    /// The foreground program ended with `status`: a line break unless the
+    /// cursor is at column 0 (`col`), then the prompt, which shows a status
+    /// that is not 0. Typed-ahead text stays, as the shell's line.
+    pub fn finished(&mut self, status: i32, col: u16) {
+        self.out.push_str(if col > 0 { "\n" } else { "" });
+        self.mark.clear();
+        if status != 0 {
+            push_int(&mut self.mark, u64::from(status as u32), 0);
+            self.mark.push(' ');
+        }
+        std::mem::swap(&mut self.history, &mut self.other);
+        (self.pid, self.base, self.browse) = (None, 0, None);
+        self.render();
+    }
+
+    /// Handles a key; printable ones come as [`Guest::text`]. While a
+    /// program runs, Ctrl+C ends it (status 130) and Ctrl+L does nothing.
     pub fn key(&mut self, key: Key, mods: Mods, cx: &mut Cx<'_>) {
         let n = self.line.len();
-        match (key, mods.ctrl) {
-            (Key::Enter, _) => return self.enter(cx),
-            (Key::Char('c'), true) => {
+        match (key, mods.ctrl, self.pid) {
+            (Key::Enter, ..) => return self.enter(cx),
+            (Key::Char('c'), true, pid) => {
                 self.pos = n;
                 self.redraw();
                 self.out.push_str("^C\n");
-                (self.line, self.pos, self.browse) = (Vec::new(), 0, None);
+                (self.line, self.pos, self.browse, self.base) = (Vec::new(), 0, None, 0);
+                if let Some(pid) = pid {
+                    cx.kernel.kill(pid, wire::INTERRUPTED);
+                }
                 return self.render();
             }
-            (Key::Char('l'), true) => {
+            (Key::Char('l'), true, None) => {
                 self.out.push_str("\x1b[H\x1b[2J");
                 return self.render();
             }
-            (Key::Home, _) | (Key::Char('a'), true) => self.pos = 0,
-            (Key::End, _) | (Key::Char('e'), true) => self.pos = n,
-            (Key::Left, _) => self.pos = self.pos.saturating_sub(1),
-            (Key::Right, _) => self.pos = (self.pos + 1).min(n),
-            (Key::Backspace, _) if self.pos > 0 => {
+            (Key::Home, ..) | (Key::Char('a'), true, _) => self.pos = 0,
+            (Key::End, ..) | (Key::Char('e'), true, _) => self.pos = n,
+            (Key::Left, ..) => self.pos = self.pos.saturating_sub(1),
+            (Key::Right, ..) => self.pos = (self.pos + 1).min(n),
+            (Key::Backspace, ..) if self.pos > 0 => {
                 self.pos -= 1;
                 self.line.remove(self.pos);
             }
-            (Key::Delete, _) if self.pos < n => _ = self.line.remove(self.pos),
-            (Key::Up | Key::Down, _) => self.recall(key == Key::Up),
+            (Key::Delete, ..) if self.pos < n => _ = self.line.remove(self.pos),
+            (Key::Up | Key::Down, ..) => self.recall(key == Key::Up),
             _ => return,
         }
         self.redraw();
@@ -283,7 +334,8 @@ impl Guest {
         self.redraw();
     }
 
-    /// Runs the line; the next prompt follows.
+    /// Runs the line, and the next prompt follows; or, while a program runs,
+    /// sends it the line and a newline (ICRNL).
     fn enter(&mut self, cx: &mut Cx<'_>) {
         self.pos = self.line.len();
         self.redraw();
@@ -292,10 +344,15 @@ impl Guest {
             self.out.push('\n');
         }
         let line: String = self.line.drain(..).collect();
-        (self.pos, self.browse) = (0, None);
+        (self.pos, self.browse, self.base) = (0, None, 0);
         if !line.trim().is_empty() && self.history.last() != Some(&line) {
             self.history.push(line.clone());
         }
+        if let Some(pid) = self.pid {
+            cx.kernel.input(pid, (line + "\n").as_bytes());
+            return self.render();
+        }
+        self.mark.clear();
         let start = self.out.len();
         self.run(&line, cx);
         let printed = &self.out[start..];
@@ -325,18 +382,23 @@ impl Guest {
         (self.browse, self.pos) = (next, self.line.len());
     }
 
-    /// Moves back to the prompt's start, erases below and draws it again.
-    fn redraw(&mut self) {
+    /// Moves back to where the line starts (the prompt's start, or column
+    /// `base` of a program's input) and erases from there down.
+    fn erase(&mut self) {
         self.out.push('\r');
-        if self.caret.0 > 0 {
-            csi(&mut self.out, self.caret.0, 'A');
-        }
+        csi(&mut self.out, self.caret.0, 'A');
+        csi(&mut self.out, self.base, 'C');
         self.out.push_str("\x1b[J");
+    }
+
+    fn redraw(&mut self) {
+        self.erase();
         self.render();
     }
 
-    /// Draws the prompt and the line from column 0, then moves to the caret,
-    /// wrapping as the terminal does (a char that does not fit starts a row).
+    /// Draws the prompt and the line from column 0 (a program's input line
+    /// from column `base`, no prompt), then moves to the caret, wrapping as
+    /// the terminal does (a char that does not fit starts a row).
     pub fn render(&mut self) {
         const USER: &str = "guest@compusophy:";
         const GREEN: &str = "\x1b[1;32mguest@compusophy\x1b[m:\x1b[1;34m";
@@ -346,11 +408,15 @@ impl Guest {
             Some(rest) if rest.is_empty() || rest.starts_with('/') => ("~", rest),
             _ => ("", &self.cwd[..]),
         };
+        let prompt = [&self.mark[..], USER, tilde, dir, "$ "];
+        let prompt = if self.pid.is_some() { [""; 5] } else { prompt };
         let out = &mut self.out;
-        push_all(out, &[GREEN, tilde, dir, "\x1b[m$ "]);
+        if self.pid.is_none() {
+            push_all(out, &["\x1b[31m", &self.mark, GREEN, tilde, dir, "\x1b[m$ "]);
+        }
         out.extend(self.line.iter());
-        let caret = USER.len() + tilde.len() + dir.chars().count() + 2 + self.pos;
-        let (mut i, mut end, mut at) = (0, (0, 0), None);
+        let caret = prompt.iter().map(|s| s.chars().count()).sum::<usize>() + self.pos;
+        let (mut i, mut end, mut at) = (0, (0, self.base), None);
         let mut step = |c: char| {
             if i == caret {
                 at = Some(end);
@@ -362,7 +428,7 @@ impl Guest {
             end.1 += w;
             i += 1;
         };
-        for s in &[USER, tilde, dir, "$ "] {
+        for s in &prompt {
             s.chars().for_each(&mut step);
         }
         self.line.iter().for_each(|&c| step(c));
@@ -372,17 +438,14 @@ impl Guest {
             out.push_str("\r\n");
         }
         let (end, at) = (norm(end), norm(at.unwrap_or(end)));
-        if end.0 > at.0 {
-            csi(out, end.0 - at.0, 'A');
-        }
+        csi(out, end.0.saturating_sub(at.0), 'A');
         out.push('\r');
-        if at.1 > 0 {
-            csi(out, at.1, 'C');
-        }
+        csi(out, at.1, 'C');
         self.caret = at;
     }
 
-    /// Runs one command line; `>` or `>>` sends its stdout to a file.
+    /// Runs one command line; `>` or `>>` sends its stdout to a file. A word
+    /// that is no command starts a [`program`].
     pub fn run(&mut self, line: &str, cx: &mut Cx<'_>) {
         let (words, redirect) = match parse(line) {
             Ok(parsed) => parsed,
@@ -400,13 +463,37 @@ impl Guest {
             }
             Some(&(.., synopsis, _, _)) => io.err(&["usage: ", synopsis]),
             None if words.is_empty() => {}
-            None => io.err(&[cmd, ": command not found"]),
+            None => return self.exec(words, redirect, cx),
         }
         if let (Some((path, append)), Some(data)) = (redirect, io.file.take()) {
             io.cmd = "sh";
             self.each(&[&path], &mut io, cx, Op::Write(data.as_bytes(), append));
         }
         self.out.push_str(&io.screen);
+    }
+
+    /// Starts the [`program`] `argv[0]` names in the foreground, its stdout
+    /// to the redirect's file if any (a bad path fails as the program opens
+    /// it); [`Guest::finished`] follows its end.
+    fn exec(&mut self, argv: Vec<String>, to: To, cx: &mut Cx<'_>) {
+        let name = argv[0].clone();
+        let program = match program(cx.vfs, &self.cwd, &name) {
+            Ok(program) => program,
+            Err(true) => return push_all(&mut self.out, &[&name, ": command not found\n"]),
+            Err(false) => return push_all(&mut self.out, &["sh: ", &name, ": cannot execute\n"]),
+        };
+        let stdout = match to {
+            Some((p, append)) => Stdout::File { path: self.abs(&p).unwrap_or(p), append },
+            None => Stdout::Console,
+        };
+        let (cwd, tty, roots) = (self.cwd.clone(), Some((self.cols, self.rows)), vec!["/".into()]);
+        match cx.kernel.spawn(Spawn { argv, program, cwd, tty, stdout, roots }) {
+            Ok(pid) => {
+                self.pid = Some(pid);
+                std::mem::swap(&mut self.history, &mut self.other);
+            }
+            Err(e) => push_all(&mut self.out, &["sh: ", &name, ": ", e, "\n"]),
+        }
     }
 
     fn abs(&self, path: &str) -> Result<String, VfsError> {
@@ -489,6 +576,35 @@ fn open(g: &mut Guest, args: &[&str], _: u32, io: &mut Io<'_>, cx: &mut Cx<'_>) 
     }
 }
 
+/// The program the word `w` names: the file `w` if it has a `/`, else the
+/// first of `/bin/w`, `/bin/w.wasm`, `~/.local/bin/w`, `~/.local/bin/w.wasm`,
+/// holding wasm or a marker `#!wasm <target> [<sha256>]` (an absolute VFS
+/// path or a URL `[A-Za-z0-9._/-]+` without `..`). Err: whether none is found.
+pub fn program(fs: &Vfs, cwd: &str, w: &str) -> Result<Program, bool> {
+    const BIN: [(&str, &str); 4] =
+        [("/bin/", ""), ("/bin/", ".wasm"), ("~/.local/bin/", ""), ("~/.local/bin/", ".wasm")];
+    let tries = if w.contains('/') { &[("", "")][..] } else { &BIN };
+    let mut paths = tries.iter().filter_map(|(d, x)| Vfs::normalize(cwd, &[d, w, x].concat()).ok());
+    let path = paths.find(|p| fs.is_file(p)).ok_or(true)?;
+    let data = fs.read(&path).unwrap_or_default();
+    if data.starts_with(b"\0asm") {
+        return Ok(Program::Vfs(path));
+    }
+    let line = data.strip_prefix(b"#!wasm ").ok_or(false)?.split(|&b| b == b'\n').next();
+    let t = line.unwrap_or_default().split(u8::is_ascii_whitespace).find(|t| !t.is_empty());
+    // Lossy, as `cat` already is: `str::from_utf8` would add 0.3 KB of boot
+    // wasm. Bad UTF-8 fails the URL check, and a VFS path with it is not found.
+    let t = String::from_utf8_lossy(t.ok_or(false)?);
+    let ok = |&b: &u8| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'/' | b'-');
+    // Not `contains("..")`: a substring search costs 2 KB of wasm.
+    let url = t.as_bytes().iter().all(ok) && !t.as_bytes().windows(2).any(|p| p == b"..");
+    match t.starts_with('/') {
+        true => Ok(Program::Vfs(t.into_owned())),
+        false if url => Ok(Program::Url(t.into_owned())),
+        false => Err(false),
+    }
+}
+
 /// `theme`: lists the themes; `theme <name>` switches to one (any case).
 fn theme(_: &mut Guest, args: &[&str], _: u32, io: &mut Io<'_>, cx: &mut Cx<'_>) {
     let Some(&want) = args.first() else {
@@ -520,7 +636,9 @@ fn flags<'a, 'b>(args: &'a [&'b str], ok: &str, io: &mut Io<'_>) -> Option<(u32,
     Some((set, &[]))
 }
 
-type Parsed = (Vec<String>, Option<(String, bool)>);
+/// A redirect: its path, and whether it appends (`>>`).
+type To = Option<(String, bool)>;
+type Parsed = (Vec<String>, To);
 
 /// Splits a command line into words and a `>` or `>>` redirect (path,
 /// append). `'…'` is literal, `"…"` takes `\"` and `\\`, a bare `\` escapes.

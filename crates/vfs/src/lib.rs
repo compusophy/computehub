@@ -5,8 +5,8 @@
 //! collections, no I/O. A directory is a vector of its entries kept sorted by
 //! name (byte order) and searched by binary search, so listings are sorted
 //! and the same operations on a fresh [`Vfs::new`] always build the same tree
-//! (`Vfs` is `Eq`, so a replay can be checked). Persistence (OPFS) belongs to
-//! the platform layer, which snapshots this value.
+//! (`Vfs` is `Eq`, change count included, so a replay can be checked). The
+//! kernel's homed saves /home when that count, [`Vfs::generation`], moves.
 //!
 //! # Paths
 //!
@@ -145,6 +145,7 @@ pub struct Vfs {
     bytes: u64,
     /// Files and directories, the root not counted.
     entries: usize,
+    generation: u64,
 }
 
 impl Default for Vfs {
@@ -169,12 +170,12 @@ impl Vfs {
     /// A filesystem holding the empty directories `/apps`, `/home`,
     /// [`Vfs::HOME`] and `/tmp`.
     pub fn new() -> Vfs {
-        let mut fs = Vfs { root: Node::Dir(Dir::default()), bytes: 0, entries: 0 };
+        let mut fs = Vfs { root: Node::Dir(Dir::default()), bytes: 0, entries: 0, generation: 0 };
         for dir in ["/apps", Vfs::HOME, "/tmp"] {
             let made = fs.mkdir_all(dir);
             debug_assert!(made.is_ok());
         }
-        fs
+        Vfs { generation: 0, ..fs }
     }
 
     /// Resolves `path` against the working directory `cwd` into an absolute
@@ -262,6 +263,7 @@ impl Vfs {
             dir.insert(name, Node::Dir(Dir::default()));
             self.entries += 1;
         }
+        self.generation += 1;
         Ok(())
     }
 
@@ -321,6 +323,7 @@ impl Vfs {
         dir.0.remove(i);
         self.bytes -= bytes;
         self.entries -= entries;
+        self.generation += 1;
         Ok(())
     }
 
@@ -366,12 +369,53 @@ impl Vfs {
         walk_dir_mut(&mut self.root, dst_parent)?.insert(dst_name, node);
         self.bytes -= bytes;
         self.entries -= entries;
+        self.generation += 1;
         Ok(())
     }
 
     /// Bytes held by all files together; at most [`Vfs::MAX_BYTES`].
     pub fn total_bytes(&self) -> u64 {
         self.bytes
+    }
+
+    /// Moved by every change (maybe by a no-op), never by a failure; 0 when new.
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    /// Writes `data` into the existing file `path` at `off` (`u64::MAX`
+    /// appends), in place, zero-filling a gap; its new length. Writing nothing
+    /// changes nothing. Fails as [`Vfs::read`] does, or with `NoSpace`.
+    pub fn write_at(&mut self, path: &str, off: u64, data: &[u8]) -> Result<u64, VfsError> {
+        let old = self.read(path)?.len() as u64;
+        if data.is_empty() {
+            return Ok(old);
+        }
+        let off = if off == u64::MAX { old } else { off };
+        let end = off.saturating_add(data.len() as u64);
+        // Once resized, `end` is at most MAX_BYTES: the casts are exact.
+        self.resize(path, end.max(old))?[off as usize..end as usize].copy_from_slice(data);
+        Ok(end.max(old))
+    }
+
+    /// Cuts or zero-extends the existing file `path` to `len` bytes. Fails as
+    /// [`Vfs::write_at`] does.
+    pub fn set_len(&mut self, path: &str, len: u64) -> Result<(), VfsError> {
+        self.resize(path, len).map(drop)
+    }
+
+    /// Resizes the file `path` to `len` bytes: its contents, to change.
+    fn resize(&mut self, path: &str, len: u64) -> Result<&mut Vec<u8>, VfsError> {
+        let old = self.read(path)?.len() as u64;
+        if len.saturating_sub(old) > Vfs::MAX_BYTES - self.bytes {
+            return Err(VfsError::NoSpace);
+        }
+        let (dir, name) = parent(&mut self.root, &names(path)?, VfsError::IsADir)?;
+        // `read` found the file: the else is never taken.
+        let Some(Node::File(file)) = dir.get_mut(name) else { return Err(VfsError::NotFound) };
+        file.resize(len as usize, 0);
+        (self.bytes, self.generation) = (self.bytes - old + len, self.generation + 1);
+        Ok(file)
     }
 
     fn get(&self, path: &str) -> Result<&Node, VfsError> {
@@ -408,7 +452,7 @@ impl Vfs {
                 self.entries += 1;
             }
         }
-        self.bytes = bytes;
+        (self.bytes, self.generation) = (bytes, self.generation + 1);
         Ok(())
     }
 }
@@ -516,26 +560,16 @@ mod tests {
 
     #[test]
     fn normalize_table() {
+        #[rustfmt::skip]
         let table = [
-            ("/", "", "/"),
-            ("/tmp", "", "/tmp"),
-            ("/tmp", ".", "/tmp"),
-            ("/tmp", "a/b/", "/tmp/a/b"),
-            ("/tmp", "a//b///c", "/tmp/a/b/c"),
-            ("/tmp", "./a/./b/.", "/tmp/a/b"),
-            ("/tmp", "a/b/../../c", "/tmp/c"),
-            ("/tmp", "../../..", "/"),
-            ("/tmp", "../../x", "/x"),
-            ("/tmp", "//apps//x/", "/apps/x"),
-            ("/tmp", "/../apps", "/apps"),
-            ("/tmp/x/../y", "z", "/tmp/y/z"),
-            ("//tmp//", "", "/tmp"),
-            ("/tmp", "...", "/tmp/..."),
-            ("/tmp", "a b", "/tmp/a b"),
-            ("/tmp", "~x", "/tmp/~x"),
-            ("/tmp", "a/~", "/tmp/a/~"),
-            ("/tmp", "~/..", "/home"),
-            ("/tmp", "~/../..", "/"),
+            ("/", "", "/"), ("/tmp", "", "/tmp"), ("/tmp", ".", "/tmp"),
+            ("/tmp", "a/b/", "/tmp/a/b"), ("/tmp", "a//b///c", "/tmp/a/b/c"),
+            ("/tmp", "./a/./b/.", "/tmp/a/b"), ("/tmp", "a/b/../../c", "/tmp/c"),
+            ("/tmp", "../../..", "/"), ("/tmp", "../../x", "/x"),
+            ("/tmp", "//apps//x/", "/apps/x"), ("/tmp", "/../apps", "/apps"),
+            ("/tmp/x/../y", "z", "/tmp/y/z"), ("//tmp//", "", "/tmp"),
+            ("/tmp", "...", "/tmp/..."), ("/tmp", "a b", "/tmp/a b"), ("/tmp", "~x", "/tmp/~x"),
+            ("/tmp", "a/~", "/tmp/a/~"), ("/tmp", "~/..", "/home"), ("/tmp", "~/../..", "/"),
             ("relative", "/apps", "/apps"),
         ];
         for (cwd, path, want) in table {
@@ -578,6 +612,8 @@ mod tests {
             assert_eq!(fs.remove(p, true), Err(InvalidPath));
             assert_eq!(fs.rename(p, "/tmp/y"), Err(InvalidPath));
             assert_eq!(fs.rename("/tmp", p), Err(InvalidPath));
+            assert_eq!(fs.write_at(p, 0, b"x"), Err(InvalidPath));
+            assert_eq!(fs.set_len(p, 0), Err(InvalidPath));
         }
         assert_eq!(fs, Vfs::new());
         fs.write("//tmp/./x/../f", b"1").unwrap();
@@ -629,6 +665,8 @@ mod tests {
             assert_eq!(fs.write(path, b"x"), Err(err), "{path}");
             assert_eq!(fs.append(path, b"x"), Err(err), "{path}");
             assert_eq!(fs.read(path), Err(err), "{path}");
+            assert_eq!(fs.write_at(path, 0, b""), Err(err), "{path}");
+            assert_eq!(fs.set_len(path, 0), Err(err), "{path}");
         }
         assert_eq!(fs.read("/tmp/nope"), Err(NotFound));
         assert_eq!(fs, before);
@@ -699,7 +737,7 @@ mod tests {
         fs.write("/tmp/file", b"").unwrap();
         assert_eq!(fs.remove("/tmp/empty", false), Ok(()));
         assert_eq!(fs.remove("/tmp/file", true), Ok(()));
-        assert_eq!(fs, Vfs::new(), "entry and byte counts are back");
+        assert_eq!(fs, Vfs { generation: fs.generation, ..Vfs::new() }, "counts are back");
     }
 
     #[test]
@@ -732,7 +770,7 @@ mod tests {
         fs.remove(&home("/d"), true).unwrap();
         fs.remove("/tmp", true).unwrap();
         fs.mkdir("/tmp").unwrap();
-        assert_eq!(fs, Vfs::new());
+        assert_eq!(fs, Vfs { generation: fs.generation, ..Vfs::new() });
     }
 
     #[test]
@@ -741,19 +779,14 @@ mod tests {
         fs.mkdir_all("/tmp/a/b").unwrap();
         fs.write("/tmp/f", b"x").unwrap();
         let before = fs.clone();
+        #[rustfmt::skip]
         let cases = [
-            ("/tmp/a", "/tmp/a/c", InvalidPath),
-            ("/tmp/a", "/tmp/a/b/c", InvalidPath),
-            ("/tmp/a", "/tmp/a/b", InvalidPath),
-            ("/tmp/a/b", "/tmp/a", NotEmpty),
-            ("/tmp/a/b", "/tmp", NotEmpty),
-            ("/", "/tmp/r", InvalidPath),
-            ("/tmp/a", "/", InvalidPath),
-            ("/tmp/nope", "/tmp/x", NotFound),
-            ("/tmp/nope", "/tmp/nope", NotFound),
-            ("/tmp/a", "/nope/x", NotFound),
-            ("/tmp/a", "/tmp/f/x", NotADir),
-            ("/tmp/f/x", "/tmp/y", NotADir),
+            ("/tmp/a", "/tmp/a/c", InvalidPath), ("/tmp/a", "/tmp/a/b/c", InvalidPath),
+            ("/tmp/a", "/tmp/a/b", InvalidPath), ("/tmp/a/b", "/tmp/a", NotEmpty),
+            ("/tmp/a/b", "/tmp", NotEmpty), ("/", "/tmp/r", InvalidPath),
+            ("/tmp/a", "/", InvalidPath), ("/tmp/nope", "/tmp/x", NotFound),
+            ("/tmp/nope", "/tmp/nope", NotFound), ("/tmp/a", "/nope/x", NotFound),
+            ("/tmp/a", "/tmp/f/x", NotADir), ("/tmp/f/x", "/tmp/y", NotADir),
         ];
         for (from, to, err) in cases {
             assert_eq!(fs.rename(from, to), Err(err), "{from} -> {to}");
@@ -793,9 +826,12 @@ mod tests {
         assert_eq!(fs.append("/tmp/big", b"xy"), Err(NoSpace));
         assert_eq!(fs.write("/tmp/other", b"xy"), Err(NoSpace));
         assert_eq!(fs.write("/tmp/big", &vec![1; max + 1]), Err(NoSpace));
+        assert_eq!(fs.write_at("/tmp/big", Vfs::MAX_BYTES - 1, b"xy"), Err(NoSpace));
+        assert_eq!(fs.write_at("/tmp/big", u64::MAX - 1, b"xy"), Err(NoSpace));
+        assert_eq!(fs.set_len("/tmp/big", u64::MAX), Err(NoSpace));
         assert_eq!(fs, before);
         fs.append("/tmp/big", b"x").unwrap();
-        assert_eq!(fs.total_bytes(), Vfs::MAX_BYTES);
+        assert_eq!(fs.write_at("/tmp/big", 3, b"in place"), Ok(Vfs::MAX_BYTES));
         // Replacing frees the old contents first.
         fs.write("/tmp/big", &vec![1; max]).unwrap();
         fs.write("/tmp/empty", b"").unwrap();
@@ -829,14 +865,28 @@ mod tests {
     }
 
     #[test]
+    fn write_at_and_set_len_work_in_place() {
+        let mut fs = Vfs::new();
+        fs.write("/tmp/f", b"hello").unwrap();
+        // Over, past the end, appending, after a gap (zeros), and nothing.
+        let writes: [(u64, &[u8], u64); 5] =
+            [(1, b"EL", 5), (4, b"O!", 6), (u64::MAX, b"?", 7), (9, b"z", 10), (1 << 40, b"", 10)];
+        for (off, data, len) in writes {
+            let old = fs.generation();
+            assert_eq!(fs.write_at("/tmp/f", off, data), Ok(len), "{off}");
+            assert_eq!(fs.generation() > old, !data.is_empty(), "{off}");
+        }
+        assert_eq!((fs.read("/tmp/f"), fs.total_bytes()), (Ok(&b"hELlO!?\0\0z"[..]), 10));
+        assert_eq!((fs.set_len("/tmp/f", 3), fs.set_len("/tmp/f", 5)), (Ok(()), Ok(())));
+        assert_eq!((fs.read("/tmp/f"), fs.total_bytes()), (Ok(&b"hEL\0\0"[..]), 5));
+    }
+
+    #[test]
     fn errors_display() {
         assert_eq!(NotFound.to_string(), "no such file or directory");
         assert_eq!(NoSpace.to_string(), "no space left on device");
-        let all = [NotFound, NotADir, IsADir, Exists, NotEmpty, NoSpace];
-        let mut msgs: Vec<String> = all.iter().map(|e| e.to_string()).collect();
-        msgs.push(InvalidPath.to_string());
-        msgs.sort();
-        msgs.dedup();
+        let all = [NotFound, NotADir, IsADir, Exists, NotEmpty, NoSpace, InvalidPath];
+        let msgs: std::collections::BTreeSet<_> = all.iter().map(|e| e.to_string()).collect();
         assert_eq!(msgs.len(), 7);
         let err: Box<dyn std::error::Error> = Box::new(InvalidPath);
         assert_eq!(err.to_string(), "invalid path");
@@ -855,7 +905,7 @@ mod tests {
             fs
         };
         let (a, mut b) = (run(), run());
-        assert_eq!((&a, format!("{a:?}")), (&b, format!("{b:?}")));
+        assert_eq!((&a, format!("{a:?}"), a.generation()), (&b, format!("{b:?}"), 6));
         b.remove("/apps/z", false).unwrap();
         assert!(a != b && a.exists("/apps/z"));
     }

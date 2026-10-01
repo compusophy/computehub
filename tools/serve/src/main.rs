@@ -1,8 +1,10 @@
 //! Development-only static file server for `dist/`; never shipped.
-//! `serve <dir> <port>` answers GET and HEAD on `127.0.0.1:<port>`: `.../`
-//! is `index.html`, `.wasm` is `application/wasm`, nothing may be cached. A
-//! path that could leave `<dir>` (a `.`, `..` or empty segment, a backslash or
-//! a drive colon) is a 404; paths are not percent-decoded, so `%2e` hides none.
+//! `serve <dir> <port> [--plain]` answers GET and HEAD on `127.0.0.1:<port>`:
+//! `.../` is `index.html`, `.wasm` is `application/wasm`, nothing may be
+//! cached, and unless `--plain` the page is cross-origin isolated, as
+//! deploy.sh makes it (programs need that). A path that could leave `<dir>`
+//! (a `.`, `..` or empty segment, a backslash or a drive colon) is a 404;
+//! paths are not percent-decoded, so `%2e` hides none.
 
 #![forbid(unsafe_code)]
 
@@ -12,9 +14,17 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 use std::{env, fs, process, thread};
 
+/// The headers every response sends unless `--plain`.
+const ISOLATION: &str = "Cross-Origin-Opener-Policy: same-origin\r\n\
+    Cross-Origin-Embedder-Policy: require-corp\r\nCross-Origin-Resource-Policy: same-origin\r\n";
+
 fn main() {
     let args: Vec<String> = env::args().skip(1).collect();
-    let [dir, port] = args.as_slice() else { fail("usage: serve <dir> <port>") };
+    let (dir, port, extra) = match args.as_slice() {
+        [dir, port] => (dir, port, ISOLATION),
+        [dir, port, plain] if plain == "--plain" => (dir, port, ""),
+        _ => fail("usage: serve <dir> <port> [--plain]"),
+    };
     let port: u16 = port.parse().unwrap_or_else(|_| fail(&format!("bad port {port:?}")));
     let root = PathBuf::from(dir);
     if !root.is_dir() {
@@ -25,7 +35,9 @@ fn main() {
     println!("serving {} on http://127.0.0.1:{port}/", root.display());
     for stream in listener.incoming().flatten() {
         let root = root.clone();
-        thread::spawn(move || handle(stream, &root).unwrap_or_else(|e| eprintln!("serve: {e}")));
+        let serve =
+            move || handle(stream, &root, extra).unwrap_or_else(|e| eprintln!("serve: {e}"));
+        thread::spawn(serve);
     }
 }
 
@@ -34,8 +46,8 @@ fn fail(msg: &str) -> ! {
     process::exit(2);
 }
 
-/// Answers one request, then closes the connection.
-fn handle(mut stream: TcpStream, root: &Path) -> io::Result<()> {
+/// Answers one request with `extra` headers, then closes the connection.
+fn handle(mut stream: TcpStream, root: &Path, extra: &str) -> io::Result<()> {
     stream.set_read_timeout(Some(Duration::from_secs(10)))?;
     let mut reader = BufReader::new(stream.try_clone()?.take(16 * 1024));
     let (mut line, mut header) = (String::new(), String::new());
@@ -58,7 +70,7 @@ fn handle(mut stream: TcpStream, root: &Path) -> io::Result<()> {
     write!(
         stream,
         "HTTP/1.1 {status}\r\nContent-Type: {ty}\r\nContent-Length: {len}\r\n\
-         Cache-Control: no-store\r\nAllow: GET, HEAD\r\nConnection: close\r\n\r\n"
+         Cache-Control: no-store\r\nAllow: GET, HEAD\r\nConnection: close\r\n{extra}\r\n"
     )?;
     stream.write_all(if head { &[] } else { &body })?;
     stream.flush()
@@ -107,4 +119,12 @@ fn paths_stay_inside_the_root() {
     }
     let t = ["a/os_bg.WASM", "index.html", "LICENSE"].map(|p| mime(Path::new(p)));
     assert_eq!(t, ["application/wasm", "text/html; charset=utf-8", "application/octet-stream"]);
+}
+
+#[test]
+fn responses_isolate_the_page() {
+    let lines: Vec<&str> = ISOLATION.split_terminator("\r\n").collect();
+    assert_eq!(lines[0], "Cross-Origin-Opener-Policy: same-origin");
+    assert_eq!(lines[1], "Cross-Origin-Embedder-Policy: require-corp");
+    assert_eq!(lines[2..], ["Cross-Origin-Resource-Policy: same-origin"]);
 }

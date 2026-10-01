@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Download-size budgets (see DESIGN.md), measured on dist/ with gzip -9, which
 # is larger than the brotli a real host serves, so passing here is
-# conservative. Four groups:
+# conservative. Six groups:
 #
 #   boot      the files directly in dist/ (page, glue, wasm with the boot
 #             font inside): everything a visitor downloads before the first
@@ -10,6 +10,11 @@
 #             the page fetches right after its first frame. Cap 30 KB.
 #   lazy      the other files in dist/fonts/: the symbol fonts a terminal
 #             fetches when it first opens, never before. Cap 60 KB.
+#   system    dist/cpu/: the program worker (cpu.js, cpu_bg.wasm,
+#             worker.js), fetched when a program first runs or /home is
+#             restored. Cap 40 KB.
+#   programs  dist/bin/: the test programs (toolbox.wasm), fetched when one
+#             first runs. Cap 64 KB.
 #   licenses  dist/licenses/: the font licenses, shipped but never fetched by
 #             the page. Not counted.
 #
@@ -21,6 +26,8 @@ cd "$(dirname "$0")/.."
 BOOT_CAP=$((150 * 1024))
 DEFERRED_CAP=$((30 * 1024))
 LAZY_CAP=$((60 * 1024))
+SYSTEM_CAP=$((40 * 1024))
+PROGRAMS_CAP=$((64 * 1024))
 
 if [ ! -d dist ]; then
   echo "budget: SKIP, no dist/ yet (run scripts/build-web.sh)"
@@ -48,6 +55,8 @@ group() {
 boot=()
 deferred=()
 lazy=()
+system=()
+programs=()
 licenses=()
 stray=()
 while IFS= read -r f; do
@@ -56,6 +65,10 @@ while IFS= read -r f; do
     dist/fonts/deferred/*) deferred+=("$f") ;;
     dist/fonts/*/*) stray+=("$f") ;;
     dist/fonts/*) lazy+=("$f") ;;
+    dist/cpu/*/*) stray+=("$f") ;;
+    dist/cpu/*) system+=("$f") ;;
+    dist/bin/*/*) stray+=("$f") ;;
+    dist/bin/*) programs+=("$f") ;;
     dist/licenses/*) licenses+=("$f") ;;
     dist/*/*) stray+=("$f") ;;
     *) boot+=("$f") ;;
@@ -74,6 +87,14 @@ group "lazy (dist/fonts/ outside deferred/, cap $LAZY_CAP bytes gzipped)" ${lazy
 lazy_sum=$sum
 printf '  %-46s %8d bytes gzipped (cap %d)\n' "lazy total" "$lazy_sum" "$LAZY_CAP"
 
+group "system (dist/cpu/, cap $SYSTEM_CAP bytes gzipped)" ${system[@]+"${system[@]}"}
+system_sum=$sum
+printf '  %-46s %8d bytes gzipped (cap %d)\n' "system total" "$system_sum" "$SYSTEM_CAP"
+
+group "programs (dist/bin/, cap $PROGRAMS_CAP bytes gzipped)" ${programs[@]+"${programs[@]}"}
+programs_sum=$sum
+printf '  %-46s %8d bytes gzipped (cap %d)\n' "programs total" "$programs_sum" "$PROGRAMS_CAP"
+
 group "licenses (dist/licenses/, not counted)" ${licenses[@]+"${licenses[@]}"}
 printf '  %-46s %8d bytes gzipped (not counted)\n' "licenses total" "$sum"
 
@@ -89,8 +110,16 @@ if [ "$lazy_sum" -gt "$LAZY_CAP" ]; then
   echo "FAIL: the lazy fonts are $lazy_sum bytes gzipped, over their cap of $LAZY_CAP" >&2
   fail=1
 fi
+if [ "$system_sum" -gt "$SYSTEM_CAP" ]; then
+  echo "FAIL: the program worker is $system_sum bytes gzipped, over its cap of $SYSTEM_CAP" >&2
+  fail=1
+fi
+if [ "$programs_sum" -gt "$PROGRAMS_CAP" ]; then
+  echo "FAIL: the test programs are $programs_sum bytes gzipped, over their cap of $PROGRAMS_CAP" >&2
+  fail=1
+fi
 for f in ${stray[@]+"${stray[@]}"}; do
-  echo "FAIL: $f is in no budget group (dist/ is boot, dist/fonts/deferred/ deferred, dist/fonts/ lazy, dist/licenses/ uncounted)" >&2
+  echo "FAIL: $f is in no budget group (dist/ is boot, dist/fonts/deferred/ deferred, dist/fonts/ lazy, dist/cpu/ system, dist/bin/ programs, dist/licenses/ uncounted)" >&2
   fail=1
 done
 

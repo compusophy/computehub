@@ -49,4 +49,7 @@ web-sys = { workspace = true, features = [
     "WebGlVertexArrayObject",
     "WheelEvent",
     "Window",
+    "Worker",
+    "WorkerOptions",
+    "WorkerType",
 ] }

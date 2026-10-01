@@ -15,20 +15,22 @@ mesh of pooled compute across tabs and devices. Author handle: compusophy.
 
 ## Constitution (CI-enforced by `scripts/caps.sh` where possible)
 
-1. **Rust only.** No hand-written JS beyond a two-line bootstrap.
+1. **Rust only.** No hand-written JS beyond two one-line bootstraps
+   (web/index.html, web/worker.js).
 2. **Zero external dependencies.** Only `compusophy-*` workspace siblings.
-   Exception: the web crates `platform` and `os` may take wasm-bindgen
-   (pinned), js-sys, web-sys. Build-time tools never ship.
+   Exception: the web crates `platform`, `os` and `cpu` may take
+   wasm-bindgen (pinned), js-sys, web-sys. Build-time tools never ship.
 3. **Caps:** ≤2,000 lines of Rust per crate (tests count), ≤25,000 total,
    this file ≤8,000 chars. At a cap: split, shrink, or delete. Never raise
    it.
-4. **Deterministic crates** (`wm`, `vfs`, later `kernel`): no floats, no
+4. **Deterministic crates** (`wm`, `vfs`, `kernel`): no floats, no
    HashMap/HashSet, no clocks, no randomness. State must replay bit-for-bit
    and hash identically.
 5. **wasm32 always green:** `cargo check --workspace --target wasm32-unknown-unknown`.
 6. **Budgets** (`scripts/budget.sh`, gzip -9): boot ≤150 KB (top-level
    `dist/` files), deferred fonts ≤30 KB (`dist/fonts/deferred/`), lazy
-   fonts ≤60 KB (the rest of `dist/fonts/`), licenses not counted;
+   fonts ≤60 KB (the rest of `dist/fonts/`), system ≤40 KB (`dist/cpu/`),
+   programs ≤64 KB (`dist/bin/`), licenses not counted;
    first frame ≤100 ms after the wasm arrives; idle draws zero frames
    (a frame only on input or while an animation runs).
 7. **Every failure is coded and spanned** in the language crates; never a
@@ -60,12 +62,17 @@ crates/
   host/      wm + one app per window; motion, frame geometry, launcher search
   shell/     the desktop: top bar, dock, launcher, window chrome, keys (no web deps)
   platform/  the browser boundary: canvas, WebGL2, input, textarea, fetch,
-             frames on demand, cursor, localStorage
+             frames on demand, cursor, localStorage, program workers
   os/        wasm entry: fonts, VFS, app registry, theme storage, event glue
+  kernel/    R2 kernel, deterministic: wire protocol, process table and
+             consoles (main), wasi (worker half), snap (/home), module
+  cpu/       the program worker (cdylib; dist/cpu/): loader, WASI imports, homed
+  toolbox/   test programs, one wasm32-wasip1 multicall binary (dist/bin/)
 assets/fonts/  Inter Regular (boot, in the wasm); deferred/ Inter SemiBold +
                JetBrains Mono; lazy/ symbol fallbacks; OFL texts; README.md
 tools/serve/   dev-only static server for dist/ (never shipped)
 web/index.html the page: <canvas id="os"> + the one-line module bootstrap
+web/worker.js  the program worker's one-line bootstrap
 scripts/       caps.sh, budget.sh, build-web.sh, deploy.sh (Vercel, prebuilt)
 ```
 
@@ -90,8 +97,10 @@ RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
 cargo +1.85 test --workspace   # the MSRV: rust-version in Cargo.toml
 bash scripts/caps.sh
 bash scripts/build-web.sh        # dist/; needs wasm-bindgen CLI = Cargo.lock's
+                                 # and `rustup target add wasm32-wasip1`
 bash scripts/budget.sh
-cargo run -p serve --release -- dist 8080   # preview (.claude/launch.json "os")
+cargo run -p serve --release -- dist 8080   # preview (.claude/launch.json "os");
+                                            # --plain drops COOP/COEP/CORP
 ```
 
 Add `?debug` to the page URL to get a `performance.mark("frame")` per frame:

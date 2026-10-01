@@ -42,6 +42,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "compusophy-cpu"
+version = "0.1.0"
+dependencies = [
+ "compusophy-kernel",
+ "js-sys",
+ "wasm-bindgen",
+ "web-sys",
+]
+
+[[package]]
 name = "compusophy-font"
 version = "0.1.0"
 
@@ -67,9 +77,17 @@ name = "compusophy-host"
 version = "0.1.0"
 dependencies = [
  "compusophy-gfx",
+ "compusophy-kernel",
  "compusophy-ui",
  "compusophy-vfs",
  "compusophy-wm",
+]
+
+[[package]]
+name = "compusophy-kernel"
+version = "0.1.0"
+dependencies = [
+ "compusophy-vfs",
 ]
 
 [[package]]
@@ -139,10 +157,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "compusophy-toolbox"
+version = "0.1.0"
+
+[[package]]
 name = "compusophy-ui"
 version = "0.1.0"
 dependencies = [
  "compusophy-gfx",
+ "compusophy-kernel",
  "compusophy-text",
  "compusophy-vfs",
 ]

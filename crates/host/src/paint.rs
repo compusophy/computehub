@@ -49,10 +49,8 @@ pub fn draw_icon(
     list.border(r, radius, line, WHITE.with_alpha(36));
     let first: String = label.chars().take(1).map(crate::search::upper).collect();
     let glyph = if icon.glyph.is_empty() { first.as_str() } else { icon.glyph };
-    let font = match glyph.chars().all(|c| c.is_ascii_alphanumeric()) {
-        true => FontId::SansBold,
-        false => FontId::Mono,
-    };
+    let bold = glyph.chars().all(|c| c.is_ascii_alphanumeric());
+    let font = if bold { FontId::SansBold } else { FontId::Mono };
     let mut style = TextStyle::new(font, (80.0 * k).round() / 4.0, WHITE);
     let (room, w) = (r.w - 16.0 * k, text.measure(glyph, style));
     if w > room {

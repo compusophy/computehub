@@ -16,3 +16,4 @@ compusophy-wm.workspace = true
 compusophy-gfx.workspace = true
 compusophy-ui.workspace = true
 compusophy-vfs.workspace = true
+compusophy-kernel.workspace = true

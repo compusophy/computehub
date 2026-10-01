@@ -15,6 +15,7 @@ pub mod theme;
 mod widgets;
 
 pub use gfx::Rgba;
+pub use kernel;
 pub use text::{ATLAS_SIZE, FontId, MAX_FALLBACKS, TextStyle, TextSystem};
 pub use theme::{Glow, THEMES, Theme, theme};
 pub use widgets::{BUTTON_H, CARD_PAD, FIELD_H, PAD, RADIUS_LG, RADIUS_SM};
@@ -78,6 +79,9 @@ pub enum AppEvent {
     Resized { w: f32, h: f32 },
     /// Time passed (milliseconds on the page clock), for apps that animate.
     Tick { now_ms: f64 },
+    /// A process this window owns has console output, exited or changed
+    /// mode, or homed has a new note: see [`Cx::kernel`].
+    Io,
 }
 
 /// A key by its physical position (`KeyboardEvent.code`); text comes
@@ -160,18 +164,20 @@ pub enum Request {
     SetTheme(String),
 }
 
-/// What an app can reach while handling an event: the filesystem, the clock
+/// What an app can reach while handling an event: the filesystem, the
+/// kernel (processes it spawns are owned by its window), the clock
 /// (milliseconds on the page clock) and requests to the shell.
 #[derive(Debug)]
 pub struct Cx<'a> {
     pub vfs: &'a mut vfs::Vfs,
+    pub kernel: &'a mut kernel::Kernel,
     pub now_ms: f64,
     requests: Vec<Request>,
 }
 
 impl<'a> Cx<'a> {
-    pub fn new(vfs: &'a mut vfs::Vfs, now_ms: f64) -> Cx<'a> {
-        Cx { vfs, now_ms, requests: Vec::new() }
+    pub fn new(vfs: &'a mut vfs::Vfs, kernel: &'a mut kernel::Kernel, now_ms: f64) -> Cx<'a> {
+        Cx { vfs, kernel, now_ms, requests: Vec::new() }
     }
 
     /// Opens an app (a registry name or a `.app` path) in a new tiled window.

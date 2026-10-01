@@ -130,10 +130,8 @@ impl Vis {
 
 /// A window at `base` shrunk into the dock tile `tile`, clear.
 pub fn docked(base: RectF, tile: RectF) -> Vis {
-    let (dx, dy) = (
-        tile.x + tile.w / 2.0 - base.x - base.w / 2.0,
-        tile.y + tile.h / 2.0 - base.y - base.h / 2.0,
-    );
+    let dx = tile.x + tile.w / 2.0 - base.x - base.w / 2.0;
+    let dy = tile.y + tile.h / 2.0 - base.y - base.h / 2.0;
     Vis { rect: base, s: tile.w / base.w.max(tile.w), dx, dy, a: 0.0 }
 }
 
@@ -142,13 +140,9 @@ impl Lerp for Vis {
     fn lerp(self, to: Vis, t: f32) -> Vis {
         let l = |a: f32, b: f32| a.lerp(b, t);
         let (r, q) = (self.rect, to.rect);
-        Vis {
-            rect: RectF::new(l(r.x, q.x), l(r.y, q.y), l(r.w, q.w), l(r.h, q.h)),
-            s: l(self.s, to.s),
-            dx: l(self.dx, to.dx),
-            dy: l(self.dy, to.dy),
-            a: self.a.lerp(to.a, if to.a < self.a { t * t } else { t }),
-        }
+        let rect = RectF::new(l(r.x, q.x), l(r.y, q.y), l(r.w, q.w), l(r.h, q.h));
+        let (s, dx, dy) = (l(self.s, to.s), l(self.dx, to.dx), l(self.dy, to.dy));
+        Vis { rect, s, dx, dy, a: self.a.lerp(to.a, if to.a < self.a { t * t } else { t }) }
     }
 }
 

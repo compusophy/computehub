@@ -21,7 +21,8 @@ fn fs() -> Vfs {
 
 /// Sends `ev` with a fresh context; returns the redraw flag and requests.
 fn send(app: &mut dyn App, fs: &mut Vfs, ev: AppEvent) -> (bool, Vec<Request>) {
-    let mut cx = Cx::new(fs, 0.0);
+    let mut kernel = ui::kernel::Kernel::new();
+    let mut cx = Cx::new(fs, &mut kernel, 0.0);
     let redraw = app.event(ev, &mut cx);
     (redraw, cx.take_requests())
 }

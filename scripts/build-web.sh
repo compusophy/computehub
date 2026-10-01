@@ -2,7 +2,9 @@
 # Builds the web bundle into dist/: the os crate as wasm (the boot font is
 # inside it), wasm-bindgen's glue, wasm-opt when it is installed and helps,
 # web/index.html, the deferred fonts in dist/fonts/deferred/, the lazy fonts
-# in dist/fonts/ and the font licenses in dist/licenses/.
+# in dist/fonts/ and the font licenses in dist/licenses/; then the program
+# worker (the cpu crate, its glue and web/worker.js) in dist/cpu/ and the
+# test programs (the toolbox crate, for wasm32-wasip1) in dist/bin/.
 # scripts/budget.sh measures the result;
 # `cargo run -p serve --release -- dist 8080` serves it.
 set -euo pipefail
@@ -64,7 +66,10 @@ if [ ! -f "$wasm" ]; then
 fi
 
 rm -rf dist
-wasm-bindgen --target web --no-typescript --out-dir dist --out-name os "$wasm"
+# The glue's flags: TextEncoder.encodeInto only (every engine that runs this
+# page has it; the fallback path costs glue), and no producers section.
+bindgen=(--target web --no-typescript --encode-into always --remove-producers-section)
+wasm-bindgen "${bindgen[@]}" --out-dir dist --out-name os "$wasm"
 
 # The features rustc's wasm32 output uses; wasm-opt rejects a module that
 # uses a feature it was not told about. Some wasm-opt builds (the npm one)
@@ -81,25 +86,41 @@ features=(
 # stores, which differs only when an address wraps past 4 GiB into the low
 # 1 KiB. Rust never does that (pointer overflow is undefined), and the low
 # 1 KiB is the far end of rustc's 1 MiB stack, below every static. About
-# 1.5 KB gzipped.
-opts=(-Oz --low-memory-unused)
-if ! command -v wasm-opt >/dev/null 2>&1; then
-  echo "WARNING: wasm-opt not found (install binaryen); dist/os_bg.wasm stays unoptimized"
-elif wasm-opt "${opts[@]}" "${features[@]}" dist/os_bg.wasm -o dist/os_bg.opt.wasm && [ -s dist/os_bg.opt.wasm ]; then
-  # The budget is compressed bytes, and a smaller module can compress worse
-  # (binaryen 112 on this one does): keep whichever gzips smaller.
-  opt_gz=$(($(gzip -9 -c dist/os_bg.opt.wasm | wc -c)))
-  raw_gz=$(($(gzip -9 -c dist/os_bg.wasm | wc -c)))
-  if [ "$opt_gz" -le "$raw_gz" ]; then
-    mv dist/os_bg.opt.wasm dist/os_bg.wasm
-  else
-    rm -f dist/os_bg.opt.wasm
-    echo "note: wasm-opt output gzips larger ($opt_gz > $raw_gz bytes); kept the unoptimized module"
+# 1.5 KB gzipped on the os module.
+opts=(--low-memory-unused)
+# The pass pipelines tried: -Oz, and -Oz run twice (the second run finds
+# more). gzip -9 is chaotic at the margin (a few bytes of code can move the
+# os module's gzipped size by hundreds), so each is measured.
+pipelines=("-Oz" "-Oz -Oz")
+# Runs wasm-opt on the module $1 in place, if it is installed and helps:
+# of the input and each pipeline's output, keeps whichever gzips smallest.
+optimize() {
+  local f=$1 in="${1%.wasm}.in.wasm" out="${1%.wasm}.opt.wasm" best gz p
+  if ! command -v wasm-opt >/dev/null 2>&1; then
+    echo "WARNING: wasm-opt not found (install binaryen); $f stays unoptimized"
+    return
   fi
-else
-  rm -f dist/os_bg.opt.wasm
-  echo "WARNING: wasm-opt failed; dist/os_bg.wasm stays unoptimized"
-fi
+  cp "$f" "$in"
+  best=$(($(gzip -9 -c "$f" | wc -c)))
+  for p in "${pipelines[@]}"; do
+    # $p unquoted on purpose: a pipeline is several flags.
+    # shellcheck disable=SC2086
+    if wasm-opt $p "${opts[@]}" "${features[@]}" "$in" -o "$out" && [ -s "$out" ]; then
+      # The budget is compressed bytes, and a smaller module can compress
+      # worse (binaryen 112 on the os module does).
+      gz=$(($(gzip -9 -c "$out" | wc -c)))
+      if [ "$gz" -le "$best" ]; then
+        best=$gz
+        mv "$out" "$f"
+      fi
+    else
+      echo "WARNING: wasm-opt $p failed on $f"
+    fi
+    rm -f "$out"
+  done
+  rm -f "$in"
+}
+optimize dist/os_bg.wasm
 
 cp web/index.html dist/
 # The fonts outside the wasm, none of them part of the boot download: the
@@ -112,6 +133,19 @@ mkdir -p dist/fonts/deferred dist/licenses
 cp assets/fonts/deferred/*.ttf dist/fonts/deferred/
 cp assets/fonts/lazy/*.ttf dist/fonts/
 cp assets/fonts/OFL-*.txt dist/licenses/
+
+# The program worker, fetched only when a program first runs or /home is
+# restored: its own cargo invocation, so its web-sys features never unify
+# into os. web/worker.js is its one-line bootstrap.
+cargo build -p compusophy-cpu --release --target wasm32-unknown-unknown
+wasm-bindgen "${bindgen[@]}" --out-dir dist/cpu --out-name cpu "$target_dir/wasm32-unknown-unknown/release/cpu.wasm"
+optimize dist/cpu/cpu_bg.wasm
+cp web/worker.js dist/cpu/
+# The test programs, fetched when one first runs: a std binary for WASI.
+rustup target list --installed 2>/dev/null | tr -d '\r' | grep -qx wasm32-wasip1 || { echo "ERROR: run: rustup target add wasm32-wasip1" >&2; exit 1; }
+cargo build -p compusophy-toolbox --release --target wasm32-wasip1
+mkdir -p dist/bin && cp "$target_dir/wasm32-wasip1/release/toolbox.wasm" dist/bin/
+optimize dist/bin/toolbox.wasm
 
 # dist/ is what visitors download, so it gets scripts/caps.sh's privacy check
 # too (same patterns; -a because the wasm and fonts are binary). A leaky

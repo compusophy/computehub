@@ -14,7 +14,8 @@ const BANNER: &str = "\x1b[1mcompusophyOS terminal\x1b[m — type 'help'.\n";
 /// A terminal window running [`guest::Guest`]: a Mono 13 px grid (the same
 /// before that font arrives), [`Theme::ansi`] colors, a steady accent block
 /// cursor (an outline when unfocused). The greeting waits for the first grid;
-/// the wheel scrolls back and any key snaps back.
+/// the wheel scrolls back and any key snaps back. A program the shell starts
+/// runs in the foreground: its output comes on [`AppEvent::Io`].
 #[derive(Debug)]
 pub struct Terminal {
     pub(crate) term: Term,
@@ -51,9 +52,12 @@ impl Default for Terminal {
 }
 
 impl Terminal {
-    /// Shows `s`, `\n` as CR LF.
-    fn print(&mut self, s: &str) {
-        self.term.feed(s.replace('\n', "\r\n").as_bytes());
+    /// Shows `s`, `\n` as CR LF (ONLCR).
+    fn print(&mut self, s: &[u8]) {
+        for (i, line) in s.split(|&b| b == b'\n').enumerate() {
+            self.term.feed(&b"\r\n"[..2 * usize::from(i > 0)]);
+            self.term.feed(line);
+        }
     }
 
     /// Shows what waited for the grid: the greeting, wrapped, and a prompt.
@@ -61,7 +65,7 @@ impl Terminal {
         if std::mem::take(&mut self.greet) {
             let mut text = String::new();
             guest::wrap(BANNER, usize::from(self.term.cols()), &mut text);
-            self.print(&text);
+            self.print(text.as_bytes());
             self.guest.render();
             self.shell_output();
         }
@@ -70,14 +74,41 @@ impl Terminal {
     /// Shows what the guest shell printed.
     fn shell_output(&mut self) {
         let out = std::mem::take(&mut self.guest.out);
-        self.print(&out);
+        self.print(out.as_bytes());
+    }
+
+    /// While a program runs: shows its output (the typed-ahead line moves
+    /// below) and, once it ended, the prompt. Live resizes and the terminal's
+    /// replies come with step 3's console input: until then the kernel
+    /// ignores both, and the calls would cost boot bytes.
+    fn io(&mut self, cx: &mut Cx<'_>) {
+        let Some(pid) = self.guest.running() else { return };
+        let (raw, out) = (cx.kernel.mode(pid).raw, cx.kernel.take_output(pid));
+        self.output(&out, raw, cx.kernel.reap(pid));
+    }
+
+    /// Shows a program's output, ONLCR unless `raw`, moving the typed-ahead
+    /// line below it; then the prompt if it ended with `status`.
+    pub(crate) fn output(&mut self, out: &[u8], raw: bool, status: Option<i32>) {
+        if !out.is_empty() || status.is_some() {
+            self.guest.hide();
+            self.shell_output();
+            if raw { self.term.feed(out) } else { self.print(out) }
+        }
+        let col = self.term.cursor().1;
+        match status {
+            Some(status) => self.guest.finished(status, col),
+            None if !out.is_empty() => self.guest.show(col),
+            None => {}
+        }
+        self.shell_output();
     }
 
     /// Resizes the grid, and the guest shell's idea of it.
     fn fit(&mut self, (cols, rows): (u16, u16)) {
         if (cols, rows) != (self.term.cols(), self.term.rows()) {
             self.term.resize(cols, rows);
-            self.guest.cols = self.term.cols();
+            (self.guest.cols, self.guest.rows) = (self.term.cols(), self.term.rows());
         }
     }
 
@@ -223,7 +254,9 @@ impl App for Terminal {
                 true
             }
             AppEvent::Click(_) | AppEvent::PointerDown { .. } | AppEvent::Tick { .. } => false,
+            AppEvent::Io => false,
         };
+        self.io(cx);
         redraw || self.term.generation() != before
     }
 

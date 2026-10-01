@@ -23,7 +23,7 @@ mod keys;
 mod launcher;
 mod motion;
 
-pub use host::{Cursor, Effect, Input, LocalTime, Registry, Response};
+pub use host::{Cursor, Effect, Input, KernelIn, LocalTime, Registry, Response};
 pub use ui::{Key, Mods};
 
 use std::mem;
@@ -150,16 +150,31 @@ impl Shell {
         self.host.theme.current().base
     }
 
-    /// The effects that arose outside a [`Response`] (while drawing, or in
-    /// [`Shell::new`]); call it after every frame and event.
+    /// The kernel, for os to set up; its effects leave by [`Shell::take_effects`].
+    pub fn kernel_mut(&mut self) -> &mut ui::kernel::Kernel {
+        &mut self.host.kernel
+    }
+
+    /// The effects that arose outside a [`Response`] (while drawing, in
+    /// [`Shell::new`], in the kernel); call it after every frame and event.
     pub fn take_effects(&mut self) -> Vec<Effect> {
-        mem::take(&mut self.pending)
+        let mut out = Response { effects: mem::take(&mut self.pending), ..Response::default() };
+        self.host.pump(&mut out);
+        out.effects
     }
 
     /// The result of an [`Effect::Fetch`].
     pub fn fetched(&mut self, id: u32, got: Result<Vec<u8>, String>) -> Response {
         let (mut out, before) = (Response::default(), self.visuals());
         self.host.fetched(id, got, &mut out);
+        self.finish(before, &mut out);
+        out
+    }
+
+    /// What the platform heard for the kernel: workers, the timer, hiding.
+    pub fn kernel(&mut self, ev: KernelIn) -> Response {
+        let (mut out, before) = (Response::default(), self.visuals());
+        self.host.kernel_in(ev, &mut out);
         self.finish(before, &mut out);
         out
     }

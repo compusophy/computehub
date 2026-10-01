@@ -11,9 +11,9 @@ pub struct Ctl {
     pub(crate) effects: Vec<Effect>,
 }
 
-/// One queued request of a [`Ctl`], named for the method that queues it.
-/// `RequestFrame` and `Cursor` (a CSS keyword; the last wins) queue at most
-/// once per handle.
+/// One queued request of a [`Ctl`], named for the method that queues it
+/// (`Wake` for `wake_in`). `RequestFrame` and `Cursor` (a CSS keyword; the
+/// last wins) queue at most once per handle.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Effect {
     TextInput(bool),
@@ -21,6 +21,22 @@ pub enum Effect {
     RequestFrame,
     Cursor(&'static str),
     Store { key: String, value: String },
+    Spawn { pid: u32, sab: bool },
+    Start { pid: u32, msg: Vec<u8>, program: Load },
+    Send { pid: u32, msg: Vec<u8> },
+    Reply { pid: u32, errno: u16, data: Vec<u8> },
+    Word { pid: u32, index: u32, value: i32 },
+    Kill(u32),
+    Wake(u32),
+}
+
+/// The program a Start carries ([`Ctl::start`]): none (homed), its bytes,
+/// or a page-relative URL the worker fetches.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Load {
+    None,
+    Bytes(Vec<u8>),
+    Url(String),
 }
 
 /// A local date and time to the minute, as `Date` reports it in the user's
@@ -60,29 +76,54 @@ impl LocalTime {
     }
 }
 
+/// [`Ctl`] methods that queue one effect each: `doc name(args) => effect;`.
+macro_rules! queue {
+    ($($(#[$doc:meta])* $f:ident($($a:ident: $t:ty),*) => $fx:expr;)+) => {
+        $($(#[$doc])* pub fn $f(&mut self, $($a: $t),*) { self.effects.push($fx); })+
+    };
+}
+
 impl Ctl {
     /// The requests queued so far, oldest first.
     pub fn effects(&self) -> &[Effect] {
         &self.effects
     }
 
-    /// Focuses or blurs the hidden `<textarea>`: while focused, unprevented
-    /// printable keys, pastes and IME input arrive as [`crate::Event::Text`].
-    /// `true` while focused blurs first, bringing back a dismissed keyboard.
-    pub fn set_text_input(&mut self, active: bool) {
-        self.effects.push(Effect::TextInput(active));
-    }
-
-    /// Fetches `url`, which must be same-origin relative (else it fails
-    /// without a request); the 2xx body or an error such as `"HTTP 404"`
-    /// arrives as [`crate::Event::Fetched`].
-    pub fn fetch(&mut self, id: u32, url: &str) {
-        self.effects.push(Effect::Fetch { id, url: url.to_owned() });
+    queue! {
+        /// Focuses or blurs the hidden `<textarea>`: while focused, unprevented
+        /// printable keys, pastes and IME input arrive as [`crate::Event::Text`].
+        /// `true` while focused blurs first, bringing back a dismissed keyboard.
+        set_text_input(active: bool) => Effect::TextInput(active);
+        /// Fetches `url`, which must be same-origin relative (else it fails
+        /// without a request); the 2xx body or an error such as `"HTTP 404"`
+        /// arrives as [`crate::Event::Fetched`].
+        fetch(id: u32, url: &str) => Effect::Fetch { id, url: url.to_owned() };
+        /// Stores `value` under `key` in `localStorage`; failures are ignored.
+        storage_set(key: &str, value: &str) =>
+            Effect::Store { key: key.to_owned(), value: value.to_owned() };
+        /// Starts a module Worker (`cpu/worker.js`) for `pid`, with a SAB if `sab`,
+        /// which needs [`Ctl::isolated`] (the kernel asks only then): its
+        /// [`crate::Event::Proc`] and [`crate::Event::ProcError`] follow. The
+        /// calls below ignore unknown pids.
+        spawn(pid: u32, sab: bool) => Effect::Spawn { pid, sab };
+        /// Posts `[sab | null, msg, program]` to the worker of `pid`.
+        start(pid: u32, msg: Vec<u8>, program: Load) => Effect::Start { pid, msg, program };
+        /// Posts `msg` as a Uint8Array to the worker of `pid`.
+        send(pid: u32, msg: Vec<u8>) => Effect::Send { pid, msg };
+        /// Answers the blocked worker of `pid` through its SAB: the payload (at
+        /// most 64 KiB), LEN and ERRNO, then STATE = 1 and notify.
+        reply(pid: u32, errno: u16, data: Vec<u8>) => Effect::Reply { pid, errno, data };
+        /// Stores `value` in SAB word `index` (0 to 15) of `pid`, then notifies.
+        word(pid: u32, index: u32, value: i32) => Effect::Word { pid, index, value };
+        /// Terminates the worker of `pid` and drops its callbacks.
+        kill(pid: u32) => Effect::Kill(pid);
+        /// Arms the one-shot timer, replacing it: [`crate::Event::Wake`] in `ms`.
+        wake_in(ms: u32) => Effect::Wake(ms);
     }
 
     /// Asks for one more frame; from a frame, exactly one after it.
     pub fn request_frame(&mut self) {
-        if !self.effects.contains(&Effect::RequestFrame) {
+        if !self.effects.iter().any(|e| matches!(e, Effect::RequestFrame)) {
             self.effects.push(Effect::RequestFrame);
         }
     }
@@ -107,12 +148,6 @@ impl Ctl {
         crate::io::storage()?.get_item(key).ok().flatten()
     }
 
-    /// Stores `value` under `key` in `localStorage`; failures are ignored.
-    pub fn storage_set(&mut self, key: &str, value: &str) {
-        let (key, value) = (key.to_owned(), value.to_owned());
-        self.effects.push(Effect::Store { key, value });
-    }
-
     /// `performance.now()`: monotonic milliseconds since the page started.
     pub fn monotonic_ms(&self) -> f64 {
         if !cfg!(target_arch = "wasm32") {
@@ -127,6 +162,15 @@ impl Ctl {
             return LocalTime::EPOCH;
         }
         LocalTime::of(&js_sys::Date::new_0())
+    }
+
+    /// Whether the page is cross-origin isolated, so workers can share
+    /// memory (`crossOriginIsolated`); false natively.
+    pub fn isolated(&self) -> bool {
+        cfg!(target_arch = "wasm32")
+            && crate::window().is_some_and(|w| {
+                js_sys::Reflect::get(&w, &"crossOriginIsolated".into()).is_ok_and(|v| v.is_truthy())
+            })
     }
 }
 

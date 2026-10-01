@@ -12,13 +12,10 @@ use web_sys::{
 /// The instance attributes as (location, GL type, normalized, byte offset),
 /// each a vec4 with divisor 1, matching [`gfx::VERTEX_SHADER`]'s `a_rect`,
 /// `a_params`, `a_color` (bytes), `a_clip`, `a_uv`, `a_color2` (bytes).
+#[rustfmt::skip]
 pub(crate) const ATTRIBS: [(u32, u32, bool, i32); 6] = [
-    (0, Gl::FLOAT, false, 0),
-    (1, Gl::FLOAT, false, 16),
-    (2, Gl::UNSIGNED_BYTE, true, 32),
-    (3, Gl::FLOAT, false, 36),
-    (4, Gl::FLOAT, false, 52),
-    (5, Gl::UNSIGNED_BYTE, true, 68),
+    (0, Gl::FLOAT, false, 0), (1, Gl::FLOAT, false, 16), (2, Gl::UNSIGNED_BYTE, true, 32),
+    (3, Gl::FLOAT, false, 36), (4, Gl::FLOAT, false, 52), (5, Gl::UNSIGNED_BYTE, true, 68),
 ];
 
 /// The smallest GL instance buffer, in bytes.
@@ -82,34 +79,18 @@ impl Renderer {
         // The atlas texture; its storage comes with the first draw.
         let texture = gl.create_texture().ok_or("createTexture failed")?;
         gl.bind_texture(Gl::TEXTURE_2D, Some(&texture));
-        let params = [
-            (Gl::TEXTURE_MIN_FILTER, Gl::NEAREST),
-            (Gl::TEXTURE_MAG_FILTER, Gl::NEAREST),
-            (Gl::TEXTURE_WRAP_S, Gl::CLAMP_TO_EDGE),
-            (Gl::TEXTURE_WRAP_T, Gl::CLAMP_TO_EDGE),
-        ];
+        #[rustfmt::skip]
+        let params = [(Gl::TEXTURE_MIN_FILTER, Gl::NEAREST), (Gl::TEXTURE_MAG_FILTER, Gl::NEAREST),
+            (Gl::TEXTURE_WRAP_S, Gl::CLAMP_TO_EDGE), (Gl::TEXTURE_WRAP_T, Gl::CLAMP_TO_EDGE)];
         for (p, v) in params {
             gl.tex_parameteri(Gl::TEXTURE_2D, p, v as i32);
         }
 
-        Ok(Renderer {
-            gl,
-            canvas: canvas.clone(),
-            program,
-            vao,
-            buffer,
-            texture,
-            u_viewport,
-            u_dpr,
-            u_atlas,
-            u_atlas_size,
-            bytes: Vec::new(),
-            capacity: 0,
-            backing: (0, 0),
-            texels: None,
-            css: (0.0, 0.0),
-            dpr: 1.0,
-        })
+        #[rustfmt::skip]
+        let r = Renderer { gl, canvas: canvas.clone(), program, vao, buffer, texture, u_viewport,
+            u_dpr, u_atlas, u_atlas_size, bytes: Vec::new(), capacity: 0, backing: (0, 0),
+            texels: None, css: (0.0, 0.0), dpr: 1.0 };
+        Ok(r)
     }
 
     /// The device pixel ratio, as last measured.
@@ -185,30 +166,14 @@ impl Renderer {
         if self.texels != Some((w, h)) {
             self.texels = Some((w, h));
             let (w, h, r8) = (w as i32, h as i32, Gl::R8 as i32);
+            #[rustfmt::skip]
             let _ = gl.tex_image_2d_with_i32_and_i32_and_i32_and_format_and_type_and_opt_u8_array(
-                Gl::TEXTURE_2D,
-                0,
-                r8,
-                w,
-                h,
-                0,
-                fmt,
-                ty,
-                Some(px),
-            );
+                Gl::TEXTURE_2D, 0, r8, w, h, 0, fmt, ty, Some(px));
         } else if let Some((y0, rows, bytes)) = band.and_then(|b| band_bytes(b, w, px.len())) {
             let (y0, w, rows) = (y0 as i32, w as i32, rows as i32);
+            #[rustfmt::skip]
             let _ = gl.tex_sub_image_2d_with_i32_and_i32_and_u32_and_type_and_opt_u8_array(
-                Gl::TEXTURE_2D,
-                0,
-                0,
-                y0,
-                w,
-                rows,
-                fmt,
-                ty,
-                Some(&px[bytes]),
-            );
+                Gl::TEXTURE_2D, 0, 0, y0, w, rows, fmt, ty, Some(&px[bytes]));
         }
     }
 }

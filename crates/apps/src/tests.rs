@@ -17,20 +17,21 @@ const H24: f32 = 436.0;
 const PROMPT: &str = "guest@compusophy:~$";
 const MIDNIGHT: &Theme = &THEMES[0];
 
-/// An app, the VFS its [`Cx`]s are made from, and helpers that show what it
-/// asked for as text.
+/// An app, the VFS and kernel its [`Cx`]s are made from, and helpers that
+/// show what it asked for as text.
 struct Sim<A> {
     app: A,
     fs: Vfs,
+    kernel: ui::kernel::Kernel,
 }
 
 impl<A: App> Sim<A> {
     fn new(app: A) -> Sim<A> {
-        Sim { app, fs: Vfs::new() }
+        Sim { app, fs: Vfs::new(), kernel: ui::kernel::Kernel::new() }
     }
     /// Sends `ev`; returns whether the app redraws and its requests.
     fn both(&mut self, ev: AppEvent) -> (bool, String) {
-        let mut cx = Cx::new(&mut self.fs, 0.0);
+        let mut cx = Cx::new(&mut self.fs, &mut self.kernel, 0.0);
         let redraw = self.app.event(ev, &mut cx);
         let reqs: Vec<String> = cx.take_requests().iter().map(show).collect();
         (redraw, reqs.join("; "))
@@ -207,6 +208,37 @@ fn terminal_wraps_like_the_screen_and_greets_at_first_grid() {
     let rows: String = (0..3).map(|r| s.row(r).replace(' ', "")).collect();
     assert!(rows.contains("compusophyOSterminal—type'help'."), "{rows}");
     assert_eq!(s.at().2, PROMPT.to_string() + " ls");
+}
+
+#[test]
+fn terminal_runs_programs_in_the_foreground() {
+    use ui::kernel::{Effect, wire::Msg};
+    let mut s = Sim::term(W80, H24, true);
+    s.kernel.set_isolated(true);
+    s.fs.mkdir("/bin").and(s.fs.write("/bin/hi", b"#!wasm bin/toolbox.wasm")).unwrap();
+    let worker = |s: &mut Sim<Terminal>, pid, msg: Msg<'_>| {
+        s.kernel.message(&mut s.fs, pid, &msg.encode());
+        s.both(AppEvent::Io).0
+    };
+    // Output comes on Io with `\n` as CR LF, above the typed-ahead line, and
+    // the exit status is shown. (Terminal replies and live resizes reach the
+    // program from step 3 on.)
+    s.line("hi");
+    s.text("ab");
+    assert!(worker(&mut s, 2, Msg::ConsWrite { data: b"one\ntwo" }));
+    s.has("$ hi\none\ntwoab");
+    assert!(worker(&mut s, 2, Msg::Exit { status: 3 }));
+    assert_eq!(s.at().2, "3 guest@compusophy:~$ ab");
+    // Ctrl+C ends a program at once.
+    s.key(Key::Char('c'), CTRL);
+    s.line("hi");
+    s.key(Key::Char('c'), CTRL);
+    s.has("$ hi\n^C\n130 guest@compusophy:~$");
+    assert!(s.kernel.take_effects().contains(&Effect::Kill { pid: 3 }));
+    s.line("hi");
+    // Raw output keeps `\n` as it is.
+    s.app.output(b"x\ny", true, None);
+    assert_eq!(s.at(), (s.at().0, 2, " y".into()));
 }
 
 #[test]

@@ -1,5 +1,6 @@
 use super::ctl::is_relative_url;
 use super::io::{http_error, inserts_text};
+use super::proc::{RING_AT, RING_BYTES, ring_spans};
 use super::render::{ATTRIBS, MIN_CAPACITY, backing_size, band_bytes, clear_rgb, grow_capacity};
 use super::*;
 use gfx::{INSTANCE_BYTES, Rgba};
@@ -100,24 +101,32 @@ fn ctl_queues_requests_in_order() {
     ctl.storage_set("dock", "left");
     ctl.set_text_input(false);
     let store = |k: &str, v: &str| Effect::Store { key: k.to_owned(), value: v.to_owned() };
-    let want = [
-        Effect::TextInput(true),
-        Effect::Fetch { id: 2, url: a },
-        Effect::RequestFrame,
-        store("theme", "dusk"),
-        Effect::Cursor("nwse-resize"),
-        Effect::Fetch { id: 1, url: b },
-        store("theme", "dawn"),
-        store("dock", "left"),
-        Effect::TextInput(false),
-    ];
+    #[rustfmt::skip]
+    let want = [Effect::TextInput(true), Effect::Fetch { id: 2, url: a }, Effect::RequestFrame,
+        store("theme", "dusk"), Effect::Cursor("nwse-resize"), Effect::Fetch { id: 1, url: b },
+        store("theme", "dawn"), store("dock", "left"), Effect::TextInput(false)];
     assert_eq!(ctl.effects(), want);
     // A queued write reads back, the newest first; natively nothing else is
-    // stored, and the clocks are neutral.
+    // stored, the clocks are neutral and the page is not isolated.
     let got = ["theme", "dock", "Theme"].map(|k| ctl.storage_get(k));
     assert_eq!(got, [Some("dawn".into()), Some("left".into()), None]);
     assert_eq!(Ctl::default().storage_get("theme"), None);
-    assert_eq!((ctl.monotonic_ms(), ctl.local_time()), (0.0, LocalTime::EPOCH));
+    let neutral = (ctl.monotonic_ms(), ctl.local_time(), ctl.isolated());
+    assert_eq!(neutral, (0.0, LocalTime::EPOCH, false));
+}
+
+#[test]
+fn the_ring_drains_in_at_most_two_spans() {
+    // kernel::wire's layout: 16 words, a 64 KiB payload, a 64 KiB ring.
+    assert_eq!((RING_AT, RING_AT + RING_BYTES), (64 + 65_536, 131_136));
+    // (tail, head, end of the first span, length of the second): counts wrap
+    // at 2^32, a multiple of the ring; more than a ring (a broken worker)
+    // reads one ring, never past it.
+    let r = RING_BYTES;
+    let cases = [(0, 0, 0, 0), (3, 8, 8, 0), (r - 2, r + 3, r, 3), (u32::MAX - 1, 2, r, 2)];
+    for (tail, head, end, wrapped) in cases.into_iter().chain([(7, 7 + r, r, 7), (7, 6, r, 7)]) {
+        assert_eq!(ring_spans(tail, head), [(tail % r, end), (0, wrapped)], "{tail}..{head}");
+    }
 }
 
 #[test]

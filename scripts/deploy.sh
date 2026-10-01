@@ -14,7 +14,10 @@ rm -rf .vercel/output
 mkdir -p .vercel/output/static
 cp -R dist/. .vercel/output/static/
 # Every response: no other site keeps a handle on the page's window or
-# frames it.
+# frames it, and the page is cross-origin isolated (COOP plus COEP
+# require-corp; Safari has no credentialless), which programs need for
+# SharedArrayBuffer. CORP same-origin on every file too, so no engine's rules
+# for how workers inherit COEP matter.
 cat > .vercel/output/config.json <<'EOF'
 {
   "version": 3,
@@ -23,6 +26,8 @@ cat > .vercel/output/config.json <<'EOF'
       "src": "/(.*)",
       "headers": {
         "Cross-Origin-Opener-Policy": "same-origin",
+        "Cross-Origin-Embedder-Policy": "require-corp",
+        "Cross-Origin-Resource-Policy": "same-origin",
         "Content-Security-Policy": "frame-ancestors 'none'"
       },
       "continue": true

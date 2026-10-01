@@ -1,0 +1,27 @@
+use crate::{js::span, link::wasi, sys::EXPORTS};
+use kernel::wasi::{ARITY, FD_WRITE, NAMES, PROC_EXIT};
+
+#[test]
+fn the_exports_are_the_46_wasi_functions_by_id_and_arity() {
+    let mut seen = [false; 46];
+    for (id, name, arity) in EXPORTS.into_iter().chain([(PROC_EXIT, "proc_exit", 1)]) {
+        assert_eq!((NAMES[id], ARITY[id], seen[id]), (name, arity, false));
+        seen[id] = true;
+    }
+    assert!(seen.iter().all(|s| *s));
+    let p1 = "wasi_snapshot_preview1";
+    assert_eq!(wasi(p1, "fd_write"), Some(FD_WRITE));
+    let others = [(p1, "fd_write2"), (p1, "__wbindgen_malloc"), ("wasi_unstable", "fd_write")];
+    assert!(others.iter().all(|(m, n)| wasi(m, n).is_none()));
+}
+
+#[test]
+fn ring_spans_wrap_and_stop_when_full() {
+    let r = kernel::wire::RING_BYTES;
+    assert_eq!((span(0, 0, 10), span(0, 0, 70_000)), ((0, 10, 10), (0, 65_536, 65_536)));
+    assert_eq!((span(r, 0, 1), span(0, 1, 9)), ((0, 0, 0), (0, 0, 0)));
+    assert_eq!((span(r - 6, r - 6, 10), span(r + 3, 5, 100)), ((r - 6, 6, 10), (3, 2, 2)));
+    // HEAD and TAIL wrap at 2^32, a multiple of the ring.
+    assert_eq!(span(u32::MAX - 1, u32::MAX - 101, 300), (r - 2, 2, 300));
+    assert_eq!(span(5, u32::MAX - 10, 9), (5, 9, 9));
+}

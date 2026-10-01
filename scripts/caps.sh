@@ -9,14 +9,14 @@ REPO_CAP=25000
 CLAUDE_CAP=8000
 # Only these crates may touch the browser, so only they may take the
 # wasm-bindgen family.
-WEB_CRATES="platform os"
+WEB_CRATES="platform os cpu"
 WEB_DEPS="wasm-bindgen js-sys web-sys"
 # Registry packages Cargo.lock may hold: the web deps' transitive closure,
 # listed by name. Anything new here is a reviewed decision, not a drift.
 LOCK_ALLOW="bumpalo cfg-if futures-core futures-task futures-util js-sys once_cell pin-project-lite proc-macro2 quote rustversion slab syn unicode-ident wasm-bindgen wasm-bindgen-macro wasm-bindgen-macro-support wasm-bindgen-shared web-sys"
 # Crates whose state must replay bit-for-bit: no floats, no hash-ordered or
 # randomly seeded collections, no clocks, no randomness.
-DETERMINISTIC_CRATES="wm vfs"
+DETERMINISTIC_CRATES="wm vfs kernel"
 DET_TOKENS="HashMap|HashSet|RandomState|DefaultHasher|Instant|SystemTime|UNIX_EPOCH|thread_rng"
 fail=0
 

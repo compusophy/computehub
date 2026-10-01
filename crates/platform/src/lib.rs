@@ -10,19 +10,22 @@
 //! Frames are on demand, with no render loop: a redraw or
 //! [`Ctl::request_frame`] requests one `requestAnimationFrame` unless one is
 //! pending. The flag clears before [`App::frame`] runs, so an animation asks
-//! on every frame and the first that does not ask is the last. The only
-//! timer is the minute tick behind [`Event::Tick`]. While the WebGL context
-//! is lost frames are skipped; on restore the renderer is rebuilt.
+//! on every frame and the first that does not ask is the last. The timers
+//! are the minute tick behind [`Event::Tick`] and the one-shot
+//! [`Ctl::wake_in`]. While the WebGL context is lost frames are skipped; on
+//! restore the renderer is rebuilt. Program workers ([`Ctl::spawn`]) are
+//! heard like DOM events.
 
 #![forbid(unsafe_code)]
 
 mod ctl;
 mod io;
+mod proc;
 mod render;
 #[cfg(test)]
 mod tests;
 
-pub use ctl::{Ctl, Effect, LocalTime};
+pub use ctl::{Ctl, Effect, Load, LocalTime};
 pub use render::Renderer;
 
 use std::cell::{Cell, RefCell};
@@ -77,6 +80,14 @@ pub enum Event {
     Tick { time: LocalTime },
     /// Fetch `id` ([`Ctl::fetch`]) finished: the body, or why there is none.
     Fetched { id: u32, result: Result<Vec<u8>, String> },
+    /// The worker of `pid` posted `msg`, after its ring's output as a CONS_WRITE.
+    Proc { pid: u32, msg: Vec<u8> },
+    /// The worker of `pid` failed to load or threw.
+    ProcError { pid: u32 },
+    /// The one-shot timer of [`Ctl::wake_in`] fired.
+    Wake,
+    /// The page was hidden.
+    Hidden,
 }
 
 /// What an [`App`] did with an [`Event`].
@@ -127,18 +138,21 @@ pub fn run<A: App + 'static>(app: A) -> Result<(), JsValue> {
         pressed: Cell::new(None),
         css_h: Cell::new(0.0),
         typing: Cell::new(false),
-        raf: handler(me, |s, _| {
+        raf: handler(me, 0, |s, _, _| {
             s.frame_pending.set(false);
             frame(s);
         }),
-        tick_fn: handler(me, |s, _| tick(s, false)),
+        tick_fn: handler(me, 0, |s, _, _| tick(s, false)),
         tick_timer: Cell::new(None),
         time: Cell::new(None),
         cursor: Cell::new("default"),
         later: RefCell::new(Vec::new()),
-        later_fn: handler(me, io::flush_later),
+        later_fn: handler(me, 0, |s, _, _| io::flush_later(s)),
         dpr_watch: RefCell::new(None),
         debug,
+        procs: RefCell::new(Vec::new()),
+        wake_fn: handler(me, 0, |s, _, _| _ = dispatch(s, Event::Wake)),
+        wake_timer: Cell::new(None),
     });
 
     resize(&s);
@@ -185,6 +199,10 @@ struct Shared {
     /// The live `(resolution: Xdppx)` query, kept so its listener lives.
     dpr_watch: RefCell<Option<MediaQueryList>>,
     debug: bool,
+    procs: RefCell<Vec<proc::Proc>>,
+    /// The one-shot timer of [`Ctl::wake_in`]: its callback and handle.
+    wake_fn: Function,
+    wake_timer: Cell<Option<i32>>,
 }
 
 /// Which pointer [`Event`] a DOM pointer event becomes.
@@ -196,16 +214,18 @@ enum Ptr {
     Leave,
 }
 
-/// A callback of the page: a DOM listener or a timer.
-type Handler = fn(&Rc<Shared>, &DomEvent);
+/// A callback of the page: a DOM listener or a timer (tag 0), or a worker's
+/// (tagged with its pid).
+type Handler = fn(&Rc<Shared>, u32, &DomEvent);
 
-/// `f` as a JS function that runs while the state lives. Every callback is
-/// this one closure type, which fetches share, so its glue exists once.
-fn handler(me: &Weak<Shared>, f: Handler) -> Function {
+/// `f` as a JS function that runs while the state lives, told `tag`. Every
+/// callback is this one closure type, which fetches share, so its glue
+/// exists once.
+fn handler(me: &Weak<Shared>, tag: u32, f: Handler) -> Function {
     let me = me.clone();
     let cb = Closure::<dyn FnMut(JsValue)>::new(move |e: JsValue| {
         if let Some(s) = me.upgrade() {
-            f(&s, e.unchecked_ref());
+            f(&s, tag, e.unchecked_ref());
         }
     });
     cb.into_js_value().unchecked_into()
@@ -216,41 +236,43 @@ fn install(s: &Rc<Shared>) -> Result<(), JsValue> {
     let (win, doc): (&EventTarget, &EventTarget) = (&s.window, &s.document);
     let (canvas, sink): (&EventTarget, &EventTarget) = (&s.canvas, &s.sink);
     let listeners: [(&EventTarget, &str, Handler); 16] = [
-        (win, "keydown", |s, e| on_key(s, e, true)),
-        (win, "keyup", |s, e| on_key(s, e, false)),
-        (win, "resize", |s, _| resize(s)),
-        (canvas, "pointerdown", |s, e| on_pointer(s, e, Ptr::Down)),
-        (canvas, "pointermove", |s, e| on_pointer(s, e, Ptr::Move)),
-        (canvas, "pointerup", |s, e| on_pointer(s, e, Ptr::Up)),
-        (canvas, "pointercancel", |s, e| on_pointer(s, e, Ptr::Up)),
-        (canvas, "pointerleave", |s, e| on_pointer(s, e, Ptr::Leave)),
-        (canvas, "wheel", on_wheel),
+        (win, "keydown", |s, _, e| on_key(s, e, true)),
+        (win, "keyup", |s, _, e| on_key(s, e, false)),
+        (win, "resize", |s, _, _| resize(s)),
+        (canvas, "pointerdown", |s, _, e| on_pointer(s, e, Ptr::Down)),
+        (canvas, "pointermove", |s, _, e| on_pointer(s, e, Ptr::Move)),
+        (canvas, "pointerup", |s, _, e| on_pointer(s, e, Ptr::Up)),
+        (canvas, "pointercancel", |s, _, e| on_pointer(s, e, Ptr::Up)),
+        (canvas, "pointerleave", |s, _, e| on_pointer(s, e, Ptr::Leave)),
+        (canvas, "wheel", |s, _, e| on_wheel(s, e)),
         // A press would move focus to the body and end text input.
-        (canvas, "mousedown", |s, e| {
+        (canvas, "mousedown", |s, _, e| {
             if s.typing.get() {
                 e.prevent_default();
             }
         }),
-        (canvas, "contextmenu", |_, e| e.prevent_default()),
-        (canvas, "webglcontextlost", |s, e| {
+        (canvas, "contextmenu", |_, _, e| e.prevent_default()),
+        (canvas, "webglcontextlost", |s, _, e| {
             e.prevent_default();
             *s.renderer.borrow_mut() = None;
         }),
-        (canvas, "webglcontextrestored", |s, _| restore(s)),
+        (canvas, "webglcontextrestored", |s, _, _| restore(s)),
         // Hidden pages throttle timers, up to a minute: catch up on return.
-        (doc, "visibilitychange", |s, _| {
-            if !s.document.hidden() {
+        (doc, "visibilitychange", |s, _, _| {
+            if s.document.hidden() {
+                dispatch(s, Event::Hidden);
+            } else {
                 tick(s, false);
             }
         }),
-        (sink, "input", io::on_input),
-        (sink, "compositionend", io::on_composition_end),
+        (sink, "input", |s, _, e| io::on_input(s, e)),
+        (sink, "compositionend", |s, _, e| io::on_composition_end(s, e)),
     ];
     // Default options: none of these is passive (wheel defaults to passive
     // only on window, document and body), so the app can prevent scrolling.
     let opts = AddEventListenerOptions::new();
     for (on, ty, f) in listeners {
-        let f = handler(&me, f);
+        let f = handler(&me, 0, f);
         on.add_event_listener_with_callback_and_add_event_listener_options(ty, &f, &opts)?;
     }
     Ok(())
@@ -268,12 +290,7 @@ fn dispatch(s: &Rc<Shared>, ev: Event) -> Handled {
 }
 
 fn on_key(s: &Rc<Shared>, e: &DomEvent, down: bool) {
-    let Some(k) = e.dyn_ref::<KeyboardEvent>() else {
-        return;
-    };
-    if k.is_composing() {
-        return;
-    }
+    let Some(k) = e.dyn_ref::<KeyboardEvent>().filter(|k| !k.is_composing()) else { return };
     let (code, key) = (k.code(), k.key());
     let (shift, ctrl, alt, meta) = (k.shift_key(), k.ctrl_key(), k.alt_key(), k.meta_key());
     let paste = s.typing.get() && is_paste(&code, &key, [shift, ctrl, alt, meta]);
@@ -286,12 +303,8 @@ fn on_key(s: &Rc<Shared>, e: &DomEvent, down: bool) {
 }
 
 fn on_pointer(s: &Rc<Shared>, e: &DomEvent, kind: Ptr) {
-    let Some(p) = e.dyn_ref::<PointerEvent>() else {
-        return;
-    };
-    let Some(pressed) = gate(s.pressed.get(), p.pointer_id(), p.is_primary(), kind) else {
-        return;
-    };
+    let Some(p) = e.dyn_ref::<PointerEvent>() else { return };
+    let Some(pressed) = gate(s.pressed.get(), p.pointer_id(), p.is_primary(), kind) else { return };
     s.pressed.set(pressed);
     let (x, y) = (p.offset_x() as f32, p.offset_y() as f32);
     let button = button_u8(p.button());
@@ -310,9 +323,7 @@ fn on_pointer(s: &Rc<Shared>, e: &DomEvent, kind: Ptr) {
 }
 
 fn on_wheel(s: &Rc<Shared>, e: &DomEvent) {
-    let Some(w) = e.dyn_ref::<WheelEvent>() else {
-        return;
-    };
+    let Some(w) = e.dyn_ref::<WheelEvent>() else { return };
     let (x, y) = (w.offset_x() as f32, w.offset_y() as f32);
     let dy = wheel_px(w.delta_y(), w.delta_mode(), s.css_h.get());
     if dispatch(s, Event::Wheel { x, y, dy }).prevent_default {
@@ -341,18 +352,22 @@ fn measure(s: &Shared) -> (f32, f32, f32) {
 /// Sends [`Event::Tick`] if the local minute changed (or `always`), and sets
 /// the one timer for just after the next minute starts.
 fn tick(s: &Rc<Shared>, always: bool) {
-    if let Some(t) = s.tick_timer.take() {
-        s.window.clear_timeout_with_handle(t);
-    }
     let now = js_sys::Date::new_0();
     let time = LocalTime::of(&now);
-    let delay = ms_to_next_minute(now.get_seconds(), now.get_milliseconds());
-    let timer = s.window.set_timeout_with_callback_and_timeout_and_arguments_0(&s.tick_fn, delay);
-    s.tick_timer.set(timer.ok());
+    arm(s, &s.tick_timer, &s.tick_fn, ms_to_next_minute(now.get_seconds(), now.get_milliseconds()));
     if always || s.time.get() != Some(time) {
         s.time.set(Some(time));
         dispatch(s, Event::Tick { time });
     }
+}
+
+/// Replaces the timer in `slot` with one that runs `f` in `ms`.
+fn arm(s: &Shared, slot: &Cell<Option<i32>>, f: &Function, ms: u32) {
+    if let Some(t) = slot.take() {
+        s.window.clear_timeout_with_handle(t);
+    }
+    let ms = i32::try_from(ms).unwrap_or(i32::MAX);
+    slot.set(s.window.set_timeout_with_callback_and_timeout_and_arguments_0(f, ms).ok());
 }
 
 /// Watches `(resolution: <dpr>dppx)`; when it stops matching (zoom, another
@@ -362,10 +377,8 @@ fn watch_dpr(s: &Rc<Shared>) {
     // formatting costs ~10 KB.
     let ratio = js_sys::Number::from(s.window.device_pixel_ratio()).to_string_with_radix(10);
     let query = ratio.map(|n| ["(resolution: ", &String::from(n), "dppx)"].concat());
-    let Ok(Some(mql)) = query.and_then(|q| s.window.match_media(&q)) else {
-        return;
-    };
-    let f = handler(&Rc::downgrade(s), |s, _| {
+    let Ok(Some(mql)) = query.and_then(|q| s.window.match_media(&q)) else { return };
+    let f = handler(&Rc::downgrade(s), 0, |s, _, _| {
         resize(s);
         watch_dpr(s);
     });
@@ -402,20 +415,28 @@ fn frame(s: &Rc<Shared>) {
     let mut ctl = Ctl::default();
     {
         let mut slot = s.renderer.borrow_mut();
-        let Some(r) = slot.as_mut() else {
-            return;
-        };
+        let Some(r) = slot.as_mut() else { return };
         s.app.borrow_mut().frame(r, &mut ctl);
     }
-    if s.debug {
-        mark(&s.window, "frame");
-    }
+    mark_debug(s, "frame", &[]);
     io::apply(s, ctl.effects);
 }
 
 fn mark(window: &Window, name: &str) {
     if let Some(p) = window.performance() {
         let _ = p.mark(name);
+    }
+}
+
+/// With `?debug`, `performance.mark` of `name` and `nums`, `:`-joined.
+pub(crate) fn mark_debug(s: &Shared, name: &str, nums: &[u32]) {
+    if s.debug {
+        let mut name = String::from(name);
+        for &n in nums {
+            name.push(':');
+            io::push_num(&mut name, n);
+        }
+        mark(&s.window, &name);
     }
 }
 
@@ -483,9 +504,8 @@ fn wheel_px(delta: f64, mode: u32, page: f32) -> f32 {
 
 /// Milliseconds from `sec`:`ms` past a minute until 10 ms after the next
 /// starts, so a timer that fires a hair early still sees the new minute.
-fn ms_to_next_minute(sec: u32, ms: u32) -> i32 {
-    let into = sec.min(59) * 1000 + ms.min(999);
-    (60_000 - into + 10) as i32
+fn ms_to_next_minute(sec: u32, ms: u32) -> u32 {
+    60_000 - (sec.min(59) * 1000 + ms.min(999)) + 10
 }
 
 /// `Some(the press after it)` if the app hears a pointer event, else `None`:

@@ -1,0 +1,34 @@
+[package]
+name = "compusophy-cpu"
+description = "compusophyOS's virtual CPU: the worker module that loads and runs one wasm32-wasip1 program per Worker (or homed), linking its WASI imports to the kernel's process half."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[lib]
+name = "cpu"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+compusophy-kernel.workspace = true
+wasm-bindgen.workspace = true
+js-sys.workspace = true
+web-sys = { workspace = true, features = [
+    "DedicatedWorkerGlobalScope",
+    "WorkerGlobalScope",
+    "MessageEvent",
+    "Crypto",
+    "Performance",
+    "Response",
+    "IdbFactory",
+    "IdbDatabase",
+    "IdbOpenDbRequest",
+    "IdbRequest",
+    "IdbTransaction",
+    "IdbTransactionMode",
+    "IdbObjectStore",
+    "Event",
+] }

@@ -20,6 +20,7 @@ pub mod search;
 use std::mem;
 
 use gfx::{DrawList, RectF};
+use kernel::Kernel;
 use motion::Themes;
 use ui::{AppEvent, AppIcon, Cx, Key, Mods, Request, TextSystem, Theme, Ui, UiState};
 use vfs::Vfs;
@@ -88,11 +89,21 @@ impl LocalTime {
     }
 }
 
-/// Something only the platform can do: fetch `url` (relative to the page)
-/// and hand the result to [`Host::fetched`] with `id`.
+/// Something only the platform can do: fetch `url` (page-relative) for
+/// [`Host::fetched`] with `id`, or what the kernel asked for (workers, timer).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Effect {
     Fetch { id: u32, url: String },
+    Kernel(kernel::Effect),
+}
+
+/// For the kernel: a worker's message or failure, the one-shot timer, the page hidden.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum KernelIn {
+    Msg { pid: u32, msg: Vec<u8> },
+    Error { pid: u32 },
+    Wake,
+    Hidden,
 }
 
 /// The pointer's look: the arrow, an I-beam over text, an open hand over a
@@ -138,12 +149,15 @@ enum Load {
     Done,
 }
 
-/// The window manager and the apps in its windows (closing ones too, by
-/// id), and what they share: text, files, the page clock (ms), the theme.
+/// The window manager and the apps in its windows (closing ones too, by id),
+/// and what they share: text, files, the kernel, the page clock (ms), the theme.
 pub struct Host {
     wm: Wm,
     pub text: TextSystem,
     pub vfs: Vfs,
+    pub kernel: Kernel,
+    /// The [`Vfs::generation`] the kernel last heard of.
+    generation: u64,
     registry: Registry,
     pub wins: Vec<Win>,
     pub now_ms: f64,
@@ -161,10 +175,12 @@ pub struct Host {
 }
 
 impl Host {
+    #[rustfmt::skip]
     pub fn new(wm: Wm, text: TextSystem, vfs: Vfs, registry: Registry, theme: &str) -> Host {
         let (wins, fonts, icons, theme) = (Vec::new(), Vec::new(), Vec::new(), Themes::new(theme));
         let (now_ms, launcher, themes, focus) = (0.0, false, Vec::new(), None);
-        Host { wm, text, vfs, registry, wins, now_ms, theme, launcher, themes, fonts, focus, icons }
+        Host { generation: vfs.generation(), kernel: Kernel::new(), wm, text, vfs, registry, wins,
+            now_ms, theme, launcher, themes, fonts, focus, icons }
     }
 
     pub fn wm(&self) -> &Wm {
@@ -212,21 +228,50 @@ impl Host {
         }
     }
 
-    /// Drops the app of `win` once its window is closed.
+    /// Drops the app of `win` once its window is closed, killing what it ran.
     pub fn reap(&mut self, win: WinId) {
         if self.wm.normal_rect(win).is_none() {
             self.wins.retain(|w| w.id != win);
+            self.kernel.kill_owned(win.0);
         }
     }
 
-    /// Hands `ev` to the app of `win` if open, then carries out its requests.
+    /// Hands `ev` to the app of `win` if open, does what it asked, then pumps.
     pub fn deliver(&mut self, win: WinId, ev: AppEvent, out: &mut Response) {
+        self.event(win, ev, out);
+        self.pump(out);
+    }
+
+    /// After an app event or kernel input: `Io` to the windows the kernel woke
+    /// (at most 4 rounds), a moved [`Vfs::generation`] told, its effects out.
+    pub fn pump(&mut self, out: &mut Response) {
+        for _ in 0..4 {
+            let woken = self.kernel.take_woken();
+            // By index, not a collected Vec: fewer boot bytes; apps only add windows.
+            for i in 0..self.wins.len() {
+                let Some(win) = self.wins.get(i).map(|w| w.id) else { break };
+                if woken.iter().any(|&o| o == win.0 || o == u32::MAX) {
+                    self.event(win, AppEvent::Io, out);
+                }
+            }
+        }
+        if mem::replace(&mut self.generation, self.vfs.generation()) != self.generation {
+            self.kernel.vfs_changed();
+        }
+        for e in self.kernel.take_effects() {
+            out.effects.push(Effect::Kernel(e));
+        }
+    }
+
+    /// Hands `ev` to the app of `win` if open, owning what it spawns.
+    fn event(&mut self, win: WinId, ev: AppEvent, out: &mut Response) {
         let shown = self.wm.layout().iter().any(|p| p.win == win);
         let open = self.wm.normal_rect(win).is_some();
         let Some(w) = self.wins.iter_mut().find(|w| w.id == win && open) else {
             return;
         };
-        let mut cx = Cx::new(&mut self.vfs, self.now_ms);
+        self.kernel.set_owner(win.0);
+        let mut cx = Cx::new(&mut self.vfs, &mut self.kernel, self.now_ms);
         out.redraw |= w.app.event(ev, &mut cx) && shown;
         for request in cx.take_requests() {
             // Nothing more once the app closed itself.
@@ -267,6 +312,16 @@ impl Host {
                 out.redraw |= self.text.add_fallback(bytes).is_ok();
             }
         }
+    }
+
+    /// Hands the kernel what the platform heard from workers and timers; pumps.
+    pub fn kernel_in(&mut self, ev: KernelIn, out: &mut Response) {
+        match ev {
+            KernelIn::Msg { pid, msg } => self.kernel.message(&mut self.vfs, pid, &msg),
+            KernelIn::Error { pid } => self.kernel.failed(pid),
+            KernelIn::Wake | KernelIn::Hidden => self.kernel.wake(),
+        }
+        self.pump(out);
     }
 
     pub fn tick(&mut self, out: &mut Response) {
