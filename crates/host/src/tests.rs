@@ -519,6 +519,6 @@ fn glyphs_draw_on_whole_pixels_and_time_reads_as_the_bar_shows_it() {
 
 #[test]
 fn a_window_on_a_file_counts_as_its_app() {
-    let names = ["studio:/apps/x.app", "files:/home/guest", "studio", "/apps/a:b.app"];
+    let names = ["studio:/apps/x.app", "files:/tmp", "studio", "/apps/a:b.app"];
     assert_eq!(names.map(app_of), ["studio", "files", "studio", "/apps/a:b.app"]);
 }

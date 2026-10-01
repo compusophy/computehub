@@ -27,6 +27,10 @@ pub fn tile(
     let (d, side) = (text.dpr(), (r.w.min(r.h) * text.dpr()).round());
     let (at, s) = (|c: f32| (c * d - side / 2.0).round() / d, side / d);
     let t = RectF::new(at(r.x + r.w / 2.0), at(r.y + r.h / 2.0), s, s);
+    // The mark is never on a tile: its dots in the theme's ink, on whatever is under them.
+    if g == Glyph::Mark {
+        return draw(list, text, t.inset(s * 0.09), g, theme.text);
+    }
     let ([top, bottom, ink], radius, style) = (theme.icon_colors(hue), s / PHI.powi(3), theme.icon);
     if style.shadow > 0 {
         let a = u16::from(theme.shadow.3) * u16::from(style.shadow.min(100)) / 100;

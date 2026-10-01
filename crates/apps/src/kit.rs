@@ -3,7 +3,6 @@
 
 use gfx::RectF;
 use ui::icon::{Glyph, MARK_HOLE, rings};
-use ui::theme::mix;
 use ui::{AppIcon, RADIUS_SM, Rgba, TextStyle, Theme, Ui, WidgetId};
 
 /// The app icons; Studio's and the Assistant's as their programs give them.
@@ -182,7 +181,7 @@ pub(crate) fn switch(ui: &mut Ui<'_>, r: RectF, on: bool) {
 }
 
 /// compusophy's mark in `t.text`, in the square centered in `r`, `ms` into its reveal: from the
-/// center out, each band (the center, a ring of dots, the rim) fades in, then the glyph stands.
+/// center out, the center dot and then each ring of dots fades in, then the glyph stands.
 pub(crate) fn mark(ui: &mut Ui<'_>, r: RectF, ms: f64) {
     let t = ui.theme();
     // Done, or no clock (NaN): whole.
@@ -195,30 +194,20 @@ pub(crate) fn mark(ui: &mut Ui<'_>, r: RectF, ms: f64) {
     let left = ((r.x + r.w / 2.0) * d - side / 2.0).round();
     let top = ((r.y + r.h / 2.0) * d + side / 2.0).round() - side;
     let (cx, cy, k) = ((left + side / 2.0) / d, (top + side / 2.0) / d, side / d / 1000.0);
-    let disc = |ui: &mut Ui<'_>, (x, y): (f32, f32), radius: f32, color: Rgba| {
+    // Ring `i` (the center dot first) fades in, smoothstepped, `STEP` after the one inside it.
+    let ink = |i: usize| {
+        let x = ((ms - i as f64 * STEP) / FADE).clamp(0.0, 1.0) as f32;
+        t.text.with_alpha((f32::from(t.text.3) * x * x * (3.0 - 2.0 * x)).round() as u8)
+    };
+    let dot = |ui: &mut Ui<'_>, (x, y): (f32, f32), radius: f32, color: Rgba| {
         let s = radius * k;
         ui.fill(RectF::new(x - s, y - s, 2.0 * s, 2.0 * s), s, color);
     };
-    // Band `i` reaches halfway from ring `i - 1` (the center hole first) to ring `i`; the last is
-    // the whole disc. Its fade is smoothstepped.
-    let band = |ui: &mut Ui<'_>, i: usize, edge: f32| {
-        let x = ((ms - i as f64 * STEP) / FADE).clamp(0.0, 1.0) as f32;
-        let alpha = f32::from(t.text.3) * x * x * (3.0 - 2.0 * x);
-        disc(ui, (cx, cy), edge, t.text.with_alpha(alpha.round() as u8));
-    };
-    let (mut outer, mut i) = (MARK_HOLE, 0);
-    for (_, at, dot) in rings() {
-        band(ui, i, (outer + at - dot) / 2.0);
-        (outer, i) = (at + dot, i + 1);
-    }
-    band(ui, i, 500.0);
-    // The holes, in the color of the window under them.
-    let under = mix(t.base, t.surface.with_alpha(255), f32::from(t.surface.3) / 255.0);
-    disc(ui, (cx, cy), MARK_HOLE, under);
-    for (n, at, dot) in rings() {
+    dot(ui, (cx, cy), MARK_HOLE, ink(0));
+    for (i, (n, at, size)) in rings().enumerate() {
         for j in 0..n {
             let a = core::f32::consts::FRAC_PI_2 - core::f32::consts::TAU * j as f32 / n as f32;
-            disc(ui, (cx + at * k * a.cos(), cy - at * k * a.sin()), dot, under);
+            dot(ui, (cx + at * k * a.cos(), cy - at * k * a.sin()), size, ink(i + 1));
         }
     }
 }

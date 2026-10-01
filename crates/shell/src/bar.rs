@@ -46,7 +46,7 @@ impl Shell {
                 list.fill(square(r, WASH), WASH / 2.0, theme.wash(self.armed == Some(target)));
             }
             let (side, glyph, ink) = match target {
-                Target::Mark => (MARK, Glyph::Mark, theme.accent),
+                Target::Mark => (MARK, Glyph::Mark, theme.text),
                 Target::Feedback => (GLYPH, Glyph::Feedback, theme.text),
                 _ => (GLYPH, Glyph::Cog, theme.text),
             };

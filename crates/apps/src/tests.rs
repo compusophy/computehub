@@ -364,12 +364,16 @@ fn welcome_lists_the_apps_under_the_mark_it_reveals_once() {
     let (a, b) = (hits[0].rect, hits[6].rect);
     assert!(a.x == b.x && a.w == b.w && b.y == a.y + 6.0 * 55.0 && a.h == 55.0, "{a:?} {b:?}");
     assert!(a.x >= 27.0 && a.x + a.w <= 493.0 && b.y + b.h <= 796.0, "in the window: {b:?}");
-    // The reveal runs 618 ms from the first draw, frames only meanwhile: bands and 365 holes, then
-    // the mark's one glyph (144 px: 1/φ of the shorter side is more).
+    // The reveal runs 618 ms from the first draw, frames only meanwhile: 365 dots fading in ring
+    // by ring, then the mark's one glyph (144 px: 1/φ of the shorter side is more; its outer
+    // dots stop short of the box).
     assert!(s.app.animating(400.0) && !s.app.animating(718.0) && !s.app.animating(f64::NAN));
+    let mid = frame(&mut s.app, &mut ts, r, at(400.0), MIDNIGHT).0;
     let done = frame(&mut s.app, &mut ts, r, at(718.0), MIDNIGHT).0;
-    assert!(of(&early, Kind::Fill).count() >= of(&done, Kind::Fill).count() + 365);
-    assert_eq!(of(&done, Kind::Glyph).filter(|g| (144.0..147.0).contains(&g.rect[2])).count(), 1);
+    // 300 ms in: the center dot and the five inner rings, 132 dots; nothing yet at the start.
+    let fills = |l: &DrawList| of(l, Kind::Fill).count();
+    assert_eq!((fills(&early), fills(&mid)), (fills(&done), fills(&done) + 132));
+    assert_eq!(of(&done, Kind::Glyph).filter(|g| (138.0..147.0).contains(&g.rect[2])).count(), 1);
     let opened: Vec<String> = (1..=7).map(|i| s.click(i)).collect();
     assert_eq!(
         opened.join(","),
@@ -462,7 +466,7 @@ fn about_shows_the_mark_the_stack_and_credits_and_scrolls() {
     let r = RectF::new(0.0, 36.0, 560.0, 640.0);
     let (list, hits) = draw(&mut s.app, &mut ts, r, MIDNIGHT);
     assert!(hits.is_empty(), "nothing to click");
-    assert_eq!(of(&list, Kind::Glyph).filter(|g| (89.0..92.0).contains(&g.rect[2])).count(), 1);
+    assert_eq!(of(&list, Kind::Glyph).filter(|g| (86.0..92.0).contains(&g.rect[2])).count(), 1);
     assert!(inks(&list).len() > 600 && thumb(&list, MIDNIGHT), "{}", inks(&list).len());
     assert!(s.wheel(200.0) && s.wheel(1e9) && !s.wheel(5.0));
     let moved = draw(&mut s.app, &mut ts, r, MIDNIGHT).0;

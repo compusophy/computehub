@@ -30,7 +30,7 @@ type Outline = Vec<Vec<Point>>;
 /// The icons. `Glyph as u16` is a stable id for caching a drawn size.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Glyph {
-    /// compusophy's logo: a disc with 365 dots punched out in Fibonacci rings.
+    /// compusophy's logo: 365 dots in Fibonacci rings, on nothing (the background shows).
     Mark,
     /// The launcher: a ring around a dot.
     Apps,
@@ -188,7 +188,7 @@ fn corner(v: &mut Vec<(f32, f32)>, c: (f32, f32), r: f32, a: f32) {
     v.extend((0..=8).map(|i| (c.0 + r * at(i).cos(), c.1 + r * at(i).sin())));
 }
 
-/// The radius of the mark's center hole, in box units (its disc's is 500).
+/// The radius of the mark's center dot, in box units (its outer ring reaches 500).
 pub const MARK_HOLE: f32 = 80.08;
 
 /// The mark's rings, inside out: dot count, ring radius, dot radius, in box units from the
@@ -203,15 +203,14 @@ pub fn rings() -> impl Iterator<Item = (usize, f32, f32)> {
     })
 }
 
-/// A disc of radius 500 with the center dot and every ring's dots punched out,
-/// each ring's first dot at 12 o'clock and the rest clockwise.
+/// The center dot and every ring's dots, each ring's first dot at 12 o'clock and the rest
+/// clockwise: ink on whatever lies under it, as compusophy.com's mark is white on black.
 fn mark(o: &mut Outline) {
-    circle(o, C, 500.0, true);
-    circle(o, C, MARK_HOLE, false);
+    circle(o, C, MARK_HOLE, true);
     for (n, r, dot) in rings() {
         for j in 0..n {
             let a = FRAC_PI_2 - TAU * j as f32 / n as f32;
-            circle(o, (C.0 + r * a.cos(), C.1 + r * a.sin()), dot, false);
+            circle(o, (C.0 + r * a.cos(), C.1 + r * a.sin()), dot, true);
         }
     }
 }

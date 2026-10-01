@@ -24,9 +24,9 @@ fn every_glyph_draws_inside_its_box() {
         }
     }
     assert!(Glyph::ALL.iter().enumerate().all(|(i, &g)| g as usize == i));
-    // Holes punch through: the mark's center dot is clear, the launcher's dot solid.
+    // The mark's center is a dot, as is the launcher's; the cog's center a hole.
     let mid = |b: Bitmap| b.data[(b.h / 2 * b.w + b.w / 2) as usize];
-    assert_eq!((mid(draw(Glyph::Mark, 55)), mid(draw(Glyph::Apps, 55))), (0, 255));
+    assert_eq!([Glyph::Mark, Glyph::Apps, Glyph::Cog].map(|g| mid(draw(g, 55))), [255, 255, 0]);
 }
 
 #[test]
@@ -40,9 +40,9 @@ fn the_mark_is_rings_of_fibonacci_dots() {
     }
     let mut o = Vec::new();
     outline(Glyph::Mark, &mut o);
-    // The disc and 365 holes: the center dot, then each ring's dots clockwise from the top.
-    assert_eq!(o.len(), 366);
-    assert!(area(&o[0]) > 0.0 && o[1..].iter().all(|c| area(c) < 0.0));
+    // 365 dots, all ink (no disc behind them): the center, then each ring clockwise from the top.
+    assert_eq!(o.len(), 365);
+    assert!(o.iter().all(|c| area(c) > 0.0));
     let center = |c: &[Point]| {
         let on: Vec<&Point> = c.iter().filter(|p| p.on).collect();
         let n = on.len() as f32;
@@ -50,6 +50,6 @@ fn the_mark_is_rings_of_fibonacci_dots() {
     };
     let near =
         |(x, y): (f32, f32), (u, v): (f32, f32)| (x - u).abs() < 0.05 && (y - v).abs() < 0.05;
-    assert!(near(center(&o[1]), C) && near(center(&o[2]), (500.0, 690.74)));
-    assert!(near(center(&o[3]), (634.87, 634.87)) && near(center(&o[365]), (478.97, 981.68)));
+    assert!(near(center(&o[0]), C) && near(center(&o[1]), (500.0, 690.74)));
+    assert!(near(center(&o[2]), (634.87, 634.87)) && near(center(&o[364]), (478.97, 981.68)));
 }
