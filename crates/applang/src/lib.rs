@@ -117,24 +117,61 @@ impl App {
 pub const REFERENCE: &str = "\
 applang: a tiny TOTAL language for small interactive apps. One program = state
 declarations, then a widget tree. Every event handler halts; faults roll back.
-STATE (first, before any widget; the literal fixes the type — int, bool, string):
+STATE (first, before any widget; the literal fixes the type — int (64-bit), bool, string):
   state count = 0;   state name = \"world\";   state on = false;
-WIDGETS (render top to bottom):
+WIDGETS (render top to bottom; label and input end with ; everywhere, also inside the
+braces of if, row and col; a closing } takes no ;):
   label EXPR;                  -- one line of text (any type, displayed)
   button \"text\" { STMTS }      -- runs its handler when clicked
   input name;                  -- text field bound two-way to a STRING state
   row { WIDGETS }  col { WIDGETS }   -- horizontal / vertical grouping
   if EXPR { WIDGETS } else if EXPR { WIDGETS } else { WIDGETS }   -- conditional UI
+  e.g. if on { label \"yes\"; } else { label \"no\"; }
 HANDLER STATEMENTS (each ends with ;):
-  let x = EXPR;      -- local variable       x = EXPR;   -- assign local or state
+  let x = EXPR;      -- a local, in any block    x = EXPR;   -- assign local or state
   if EXPR { ... } else if EXPR { ... } else { ... }
   repeat EXPR { ... }          -- the ONLY loop; count evaluated once, up front
 EXPRESSIONS: 42, true, \"text\" (escapes \\\" \\\\ \\n); state/local names;
   - !; * / %; + -; < <= > >=; == != (same type only); && || (short-circuit); ( ).
-  `+` with any string operand CONCATENATES (\"n = \" + count). Arithmetic is
+  `+` with any string operand CONCATENATES (\"n = \" + count). Ints are 64-bit and
   CHECKED: overflow and divide-by-zero are errors. Comments: // and /* nested */.
 NO functions, NO recursion, NO while, NO host calls: the widgets are the whole
 world. Type-checked before running: every name must resolve, types must match.";
+
+/// The rule a diagnostic's code says was broken, in a line, for a model fixing its program:
+/// every code a program can earn when it compiles or first renders; "" for the others.
+pub fn rule(code: u16) -> &'static str {
+    match code {
+        codes::UNEXPECTED_CHAR => "only the card's symbols exist: no [ ] . , : or ' quotes.",
+        codes::UNTERMINATED_COMMENT => "every /* comment ends with */.",
+        codes::BAD_INT => "ints are whole numbers that fit in 64 bits.",
+        codes::UNTERMINATED_STRING => {
+            "a string ends with \" on its line; write a line break as \\n."
+        }
+        codes::BAD_ESCAPE => "the only escapes are \\\" \\\\ and \\n.",
+        codes::UNEXPECTED_TOKEN => {
+            "label, input, let and assignments end with ;, also inside the braces of if, row \
+             and col (if on { label \"a\"; } else { label \"b\"; }), and no ; follows a closing \
+             }. Statements go only in button handlers; there is no fn, for or while."
+        }
+        codes::TOO_DEEP => "nest less: split long expressions and deep if chains.",
+        codes::DIV_BY_ZERO => "guard every / and % so the divisor is never 0.",
+        codes::OVERFLOW => "keep ints within 64 bits: take % before you multiply.",
+        codes::FUEL_EXHAUSTED => "do less in one render or click: at most 100,000 steps.",
+        codes::STR_TOO_LONG => "keep each string under 4 KiB.",
+        codes::RENDER_TOO_BIG => "show under 256 KiB of text at once.",
+        codes::DUP_STATE => "declare each state once.",
+        codes::UNKNOWN_NAME => {
+            "use only declared states and the lets of enclosing handler blocks; there are no \
+             built-in functions."
+        }
+        codes::TYPE_MISMATCH => {
+            "types never convert: compare like with like, conditions are bool, input binds a \
+             string state, and + with a string joins text."
+        }
+        _ => "",
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -258,5 +295,47 @@ mod tests {
         let src = "state count = 0; state name = \"world\"; state on = false;
                    label count; input name; if on { label 1; }";
         assert!(compile(src).is_ok() && REFERENCE.contains("state count = 0"));
+    }
+
+    #[test]
+    fn the_card_says_what_models_got_wrong_and_each_code_has_a_rule() {
+        // A model's one slip: a label without `;` inside `if` braces. The card shows the form.
+        let good = "if on { label \"yes\"; } else { label \"no\"; }";
+        let bad = good.replacen("\"yes\";", "\"yes\"", 1);
+        assert_eq!(compile(&["state on = true; ", &bad].concat()).unwrap_err().code, Some(101));
+        assert!(compile(&["state on = true; ", good].concat()).is_ok() && REFERENCE.contains(good));
+        // Ints are 64-bit (a model shrank its constants, fearing 32), and a let fits any block.
+        assert!(REFERENCE.contains("int (64-bit)") && REFERENCE.contains("a local, in any block"));
+        let mut a = app("state n = 0; button \"b\" { if true { let x = 3000000000; repeat 1 { \
+                         let y = x * x; n = y % 7; } } }");
+        let want = Value::Int(9_000_000_000_000_000_000 % 7);
+        assert_eq!((click(&mut a, 0), vals(&a)), (None, vec![want]));
+        // Every code a program earns when it compiles or first renders has its rule, so a fix
+        // turn always says what was broken.
+        let [big, long] = [4000, 3000].map(|n| ["state s = \"", &"x".repeat(n), "\";"].concat());
+        let deep = ["label ", &"(".repeat(999), "1;"].concat();
+        let cases: [(&str, u16); 15] = [
+            ("label 1 # 2;", codes::UNEXPECTED_CHAR),
+            ("/* x", codes::UNTERMINATED_COMMENT),
+            ("label 99999999999999999999;", codes::BAD_INT),
+            ("label \"x;", codes::UNTERMINATED_STRING),
+            ("label \"\\q\";", codes::BAD_ESCAPE),
+            ("label 1", codes::UNEXPECTED_TOKEN),
+            (&deep, codes::TOO_DEEP),
+            ("state n = 0; label 1 / n;", codes::DIV_BY_ZERO),
+            ("state n = 9223372036854775807; label n + 1;", codes::OVERFLOW),
+            (&"label 1;".repeat(60_000), codes::FUEL_EXHAUSTED),
+            (&[&long, " label s + s;"].concat(), codes::STR_TOO_LONG),
+            (&[big, "label s;".repeat(70)].concat(), codes::RENDER_TOO_BIG),
+            ("state a = 0; state a = 1;", codes::DUP_STATE),
+            ("label nope;", codes::UNKNOWN_NAME),
+            ("label 1 + true;", codes::TYPE_MISMATCH),
+        ];
+        for (src, code) in cases {
+            let first = compile(src).and_then(|p| App::new(p, Limits::default()).render());
+            assert_eq!(first.unwrap_err().code, Some(code), "{}", &src[..src.len().min(40)]);
+            assert!(rule(code).ends_with('.'), "{code}");
+        }
+        assert_eq!(rule(codes::BAD_EVENT), "");
     }
 }

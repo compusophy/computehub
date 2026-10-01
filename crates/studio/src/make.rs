@@ -1,13 +1,16 @@
 //! Making with the AI: the prompt (with the program it changes) goes out as a chat request (at
-//! most [`MAX_BODY`] bytes), the reply streams in, then is checked; a program that does not
-//! compile or faults when it first renders, or a reply without one, goes back with why at most
-//! [`RETRIES`] times (then E0906), and one that runs is saved, run and added to the corpus, unless
-//! the code was edited meanwhile.
+//! most [`MAX_BODY`] bytes), the reply streams in, then is checked. A program that does not
+//! compile or faults when it first renders goes back in a fresh request, with what was asked, its
+//! problem (its line, a caret, the rule broken) and the program; a reply that ran out of room asks
+//! for the same app shorter, and one without a program asks again: at most [`RETRIES`] times
+//! (then E0906, or E0907 out of room). Never with an empty or cut-off reply as context, and never
+//! asking for reasoning (asked for, it took the whole room). One that runs is saved, run and added
+//! to the corpus, unless the code was edited meanwhile; what its first comment says is said for it.
 
 use crate::{Disk, Studio};
-use applang::{App, Limits};
-use assistant::ai::{self, CORPUS, EXAMPLE, MAX_BODY, MAX_REPLY, RETRIES};
-use assistant::ai::{app_block, corpus_line, failure, free_path, problem, slug};
+use applang::Class;
+use assistant::ai::{self, CORPUS, MAX_BODY, MAX_REPLY, RETRIES, ROOM, SHORTER};
+use assistant::ai::{app_block, clip, corpus_line, failure, fault, free_path, slug};
 use assistant::json::Stream;
 use uiwire::{Request, Style};
 
@@ -15,26 +18,36 @@ use uiwire::{Request, Style};
 pub(crate) const EXAMPLES: [&str; 4] =
     ["a tip calculator", "a pomodoro timer", "a habit tracker", "a dice roller"];
 
-/// The system prompt, with applang's reference card between the parts and an example after.
+/// The system prompt ([`ai::system`]): applang's reference card goes between the parts.
 const SYSTEM: [&str; 2] = [
     "You write apps for Studio, the app maker of compusophyOS, a desktop that runs in a browser \
      tab. Apps are written in applang:\n\n",
     "\n\napplang has no clock and no randomness: for chance, keep a seed in state and step it \
-     (seed = (seed * 1103515245 + 12345) % 2147483648); for time, count with buttons.\n\n\
+     (seed = (seed * 1103515245 + 12345) % 2147483648). Keep programs under 150 lines. Decide \
+     quickly what applang can make, then write it: your reply has room for the program, not for \
+     long deliberation.\n\n\
      Reply with the complete program in one fenced block whose info string is app, and nothing \
-     else. Start it with a label naming the app. For example:\n",
+     else; after its first comment, a label naming the app. ",
 ];
-/// Room to think, a little reasoning (it writes better code), steady output.
-const OPTIONS: &str = ",\"max_tokens\":8192,\"temperature\":0.3,\"reasoning\":{\"effort\":\"low\"}";
+/// Room for a whole program, steady output, and no reasoning field: the free AI then asks for
+/// thinking off (asked for at a low effort, it took all 8,192 tokens and left none for the
+/// program). GLM 5.3 may still think unseen, so a reply out of room asks for less.
+const OPTIONS: &str = ",\"max_tokens\":8192,\"temperature\":0.3";
+/// A fix's last line, and the retry after a reply without a program.
+const AGAIN: &str = "Reply with the corrected complete program in one app block.";
+pub(crate) const NO_BLOCK: &str =
+    "Your reply held no app block. Reply with the complete program in one app block.";
 
 /// A make in flight: its request, what was asked, the program it changes ("" for a first
-/// make), the conversation so far, which attempt it is (from 1) and the reply as read so far.
+/// make), the first request's message and this attempt's, which attempt it is (from 1) and the
+/// reply as read so far.
 #[derive(Debug)]
 pub(crate) struct Make {
     pub(crate) id: u32,
     prompt: String,
     base: String,
-    messages: Vec<(&'static str, String)>,
+    first: String,
+    asked: String,
     attempt: u32,
     stream: Stream,
     reply: String,
@@ -54,7 +67,7 @@ impl Studio {
             return;
         }
         let base = if self.text.trim().is_empty() { String::new() } else { self.text.clone() };
-        let user = match base.is_empty() {
+        let first = match base.is_empty() {
             true => ask.clone(),
             false => format!(
                 "The program now:\n```app\n{}\n```\nChange it: {ask}\nReply with the complete \
@@ -62,24 +75,21 @@ impl Studio {
                 base.trim_end()
             ),
         };
-        let (messages, stream, reply) = (vec![("user", user)], Stream::default(), String::new());
-        let m = Make { id: 0, prompt: ask, base, messages, attempt: 1, stream, reply, done: false };
+        let (asked, stream, reply) = (first.clone(), Stream::default(), String::new());
+        let m =
+            Make { id: 0, prompt: ask, base, first, asked, attempt: 1, stream, reply, done: false };
         self.make = Some(m);
         self.ask();
     }
 
-    /// Sends the make's conversation as a new request: a fix too big to send goes without the
-    /// program it changes (the reply holds the new one); still too big, the make ends.
+    /// Sends the make's message as a new request, alone after the system prompt; one too big to
+    /// send ends the make.
     fn ask(&mut self) {
         self.last_id = self.last_id.wrapping_add(1).max(1);
-        let system = [&SYSTEM.join(applang::REFERENCE), EXAMPLE].concat();
+        let system = ai::system(SYSTEM[0], SYSTEM[1]);
         let model = self.model().to_string();
         let Some(m) = &mut self.make else { return };
-        let mut body = ai::chat(&model, OPTIONS, &system, &m.messages);
-        if body.len() > MAX_BODY && m.messages.len() > 1 {
-            m.messages[0].1.clone_from(&m.prompt);
-            body = ai::chat(&model, OPTIONS, &system, &m.messages);
-        }
+        let body = ai::chat(&model, OPTIONS, &system, &[("user", m.asked.clone())]);
         if body.len() > MAX_BODY {
             self.make = None;
             let why =
@@ -116,11 +126,13 @@ impl Studio {
         }
     }
 
-    /// Checks a reply that is all in: a program that compiles and renders is the app now; one
-    /// that does not, or none, goes back to the AI with why. Whether there was a reply to check.
+    /// Checks a reply that is all in: a program that compiles and renders is the app now; else
+    /// the next request asks for it fixed, shorter (the reply ran out of room) or at all.
+    /// Whether there was a reply to check.
     pub(crate) fn verify(&mut self, disk: &mut dyn Disk) -> bool {
         let Some(mut m) = self.make.take_if(|m| m.done) else { return false };
-        let why = match app_block(&m.reply).map(|src| (src, fault(src))) {
+        let src = app_block(&m.reply);
+        let why = match src.map(|src| (src, fault(src))) {
             Some((src, None)) => {
                 self.made(src.to_string(), &m, disk);
                 return true;
@@ -128,26 +140,27 @@ impl Studio {
             Some((_, why)) => why,
             None => None,
         };
+        let long = m.stream.finish == "length";
         if m.attempt > RETRIES {
-            let why = why.map_or_else(
-                || "the AI replied without a program".into(),
-                |([_, still], p)| format!("still {still} after {RETRIES} fixes: {p}"),
-            );
-            self.status = (Style::Error, ["E0906 ", &why].concat());
+            let why = match why {
+                _ if long => ROOM.into(),
+                Some(([_, still], p, _)) => {
+                    format!("E0906 still {still} after {RETRIES} fixes: {p}")
+                }
+                None => "E0906 the AI replied without a program".into(),
+            };
+            self.status = (Style::Error, why);
             return true;
         }
-        let fix = match why {
-            Some(([what, _], p)) => format!(
-                "The program {what}: {p}. Reply with the corrected complete program in one app \
-                 block."
+        m.asked = match (why, src) {
+            _ if long => [&m.first, "\n\n", SHORTER].concat(),
+            (Some((_, _, account)), Some(src)) => format!(
+                "You were asked: {}\n\n{account}\n\nYour program:\n```app\n{}\n```\n{AGAIN}",
+                m.prompt,
+                src.trim_end()
             ),
-            None => "Your reply held no app block. Reply with the complete program in one app \
-                     block."
-                .into(),
+            _ => [&m.first, "\n\n", NO_BLOCK].concat(),
         };
-        let reply = std::mem::take(&mut m.reply);
-        m.messages.truncate(1);
-        m.messages.extend([("assistant", reply), ("user", fix)]);
         m.attempt += 1;
         self.make = Some(m);
         self.ask();
@@ -156,12 +169,12 @@ impl Studio {
 
     /// `src`, which runs, is the app now: saved (a first make names the file), run, its prompt
     /// kept (and cleared from the prompt, unless another was typed) and the pair added to the
-    /// corpus. Unless the code was edited since the make began: then the edits stay.
+    /// corpus; what its first comment says (what it is, what it leaves out) said for it. Unless
+    /// the code was edited since the make began: then the edits stay.
     fn made(&mut self, src: String, m: &Make, disk: &mut dyn Disk) {
         let blank = m.base.is_empty() && self.text.trim().is_empty();
         if !self.path.is_empty() && self.text != m.base && !blank {
-            let kept = "Not applied: the code was edited while it was made; Make again to apply it";
-            self.status = (Style::Small, kept.into());
+            self.status = (Style::Small, "Kept your edits, not the AI's".into());
             return;
         }
         if self.path.is_empty() {
@@ -172,13 +185,15 @@ impl Studio {
             };
             self.path = path;
         }
+        let note = about(&src);
         self.replace(src);
         self.made.push(m.prompt.clone());
         self.made.drain(..self.made.len().saturating_sub(5));
         if self.prompt.trim() == m.prompt {
             self.set_prompt("");
         }
-        let (style, mut said) = self.save(disk, "Ready \u{2713} \u{2014} saved ");
+        let note = if note.is_empty() { "Ready \u{2713}" } else { note.as_str() };
+        let (style, mut said) = self.save(disk, &[note, " \u{2014} saved "].concat());
         let line = corpus_line(&m.prompt, &self.text, &m.base, m.attempt, self.model());
         if let Err(e) = disk.append(CORPUS, &line) {
             said.push_str(&format!(" (not added to the corpus: {e})"));
@@ -191,9 +206,9 @@ impl Studio {
     pub(crate) fn progress(&self) -> String {
         let Some(m) = &self.make else { return String::new() };
         let (word, n) = match (m.reply.chars().count(), m.stream.thought) {
-            (0, 0) => (["Asking ", self.model()].concat(), 0),
-            (0, t) => ("Thinking".into(), t),
-            (c, _) => ("Writing".into(), c),
+            (0, 0) => ("Asking", 0),
+            (0, t) => ("Thinking", t),
+            (c, _) => ("Writing", c),
         };
         let n = if n == 0 { String::new() } else { [" ", &count(n), " chars"].concat() };
         match m.attempt {
@@ -206,14 +221,13 @@ impl Studio {
     }
 }
 
-/// What is wrong with `src`, if anything: that it does not compile, or faults when it first
-/// renders (as a fix asks and as E0906 says it), and its problem.
-fn fault(src: &str) -> Option<([&'static str; 2], String)> {
-    match applang::compile(src).map(|p| App::new(p, Limits::default()).render()) {
-        Ok(Ok(_)) => None,
-        Ok(Err(d)) => Some((["faults when it first renders", "faulting"], problem(&d, src))),
-        Err(d) => Some((["did not compile", "not compiling"], problem(&d, src))),
-    }
+/// What `src` says it is: its leading comments, markers and spaces trimmed, joined, at most 400
+/// bytes (the "Without:" a long one ends with may be cut); "" if none.
+fn about(src: &str) -> String {
+    let lead = applang::highlight(src).into_iter().take_while(|(_, c)| *c == Class::Comment);
+    let trim: &[char] = &['/', '*', ' ', '\t', '\r', '\n'];
+    let text: Vec<&str> = lead.map(|(s, _)| src[s.start..s.end].trim_matches(trim)).collect();
+    clip(&text.join(" "), 400)
 }
 
 /// `n` with its thousands apart: 12,345.

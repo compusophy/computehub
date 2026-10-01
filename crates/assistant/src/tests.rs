@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use super::*;
-use ai::HOME;
+use ai::{HOME, problem};
 use json::{Json, quote};
 
 /// A disk in memory; a full one fails every write.
@@ -162,6 +162,10 @@ fn streams_a_reply_split_anywhere() {
     assert_eq!([body.get("stream"), usage], [Some(&Json::Bool(true)); 2]);
     let (role, system) = message(&body, 0);
     assert!(role == "system" && system.contains(applang::REFERENCE));
+    // No reasoning field (the free AI turns thinking off); the program says what it is.
+    assert!(body.get("reasoning").is_none() && system.contains(ai::HONEST));
+    assert!(system.ends_with(&[ai::HONEST, ai::EXAMPLE].concat()));
+    assert!(ai::EXAMPLE.starts_with("```app\n// Counter: - and + change the number.\nstate"));
     assert_eq!((messages(&body), message(&body, 1)), (2, ("user", "Hi there")));
     let f = w.a.frame();
     assert!(has(&f, "Hi there") && has(&f, "\u{2026}") && has(&f, "Stop") && !has(&f, "Send"));
@@ -208,13 +212,13 @@ fn builds_an_app_and_feeds_the_corpus() {
 }
 
 #[test]
-fn a_program_that_does_not_compile_goes_back_twice() {
+fn a_program_that_does_not_run_goes_back_three_times_with_its_line_and_rule() {
     let mut w = Win::new();
     let (mut id, _) = w.ask("a todo app");
-    for attempt in 1..=3 {
-        let f = w.answer(id, "Sure.\n```app\nstate n = 0;\nlabel;\n```", "", 7);
-        assert!(has(&f, "The program did not compile: E0"));
-        if attempt == 3 {
+    for attempt in 1..=4 {
+        let f = w.answer(id, "Sure.\n```app\nstate n = 0;\nif n == 0 { label n }\n```", "", 7);
+        assert!(has(&f, "The program did not compile: E0101 2:21"));
+        if attempt == 4 {
             assert!(f.requests.is_empty() && has(&f, "Send") && w.disk.0.is_empty());
             let last = f.nodes.iter().rev().nth(1);
             assert!(matches!(last, Some(Node::Text { style: Style::Error, .. })));
@@ -222,9 +226,21 @@ fn a_program_that_does_not_compile_goes_back_twice() {
         }
         let body;
         (id, body) = ai(&f);
+        // After the reply: what broke, its line with a caret, the rule and every occurrence.
         let (role, text) = message(&body, messages(&body) - 1);
-        assert!(role == "user" && text.contains(" 2:") && text.ends_with("in one app block."));
+        let want = "Your program did not compile: E0101 at line 2, col 21: expected `;`, found \
+                    `}`\n  if n == 0 { label n }\n                      ^\nRule: label, input,";
+        assert!(role == "user" && text.starts_with(want), "{text}");
+        assert!(text.contains("fix every occurrence.\nReply with the corrected full program"));
+        assert_eq!(message(&body, messages(&body) - 2).0, "assistant");
     }
+    // One that compiles but faults when it first renders goes back too.
+    let (id, _) = w.ask("an average");
+    let f = w.answer(id, "```app\nstate n = 0;\nlabel 1 / n;\n```", "", 64);
+    assert!(has(&f, "The program faults when it first renders: E0203 2:7"));
+    let (_, body) = ai(&f);
+    let fix = message(&body, messages(&body) - 1).1;
+    assert!(fix.contains("E0203 at line 2, col 7: ") && fix.contains("Rule: guard every /"));
     // A fix on the retry is built, its attempts counted against the prompt.
     let mut w = Win::new();
     let (id, _) = w.ask("a counter app");
@@ -236,6 +252,41 @@ fn a_program_that_does_not_compile_goes_back_twice() {
     let mut w = Win { disk: Mem(BTreeMap::new(), true), ..Win::new() };
     let (id, _) = w.ask("again");
     assert!(has(&w.answer(id, &format!("```app\n{COUNTER}```"), "", 64), "Couldn't save"));
+}
+
+#[test]
+fn a_reply_out_of_room_asks_for_the_same_app_shorter_then_says_e0907() {
+    let long = "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"length\"}]}\n\n";
+    let mut w = Win::new();
+    let (mut id, _) = w.ask("a tetris game");
+    for attempt in 1..=4 {
+        let f = w.answer(id, "Here.\n```app\nstate n = 0;\nlabel \"Tet", long, 64);
+        if attempt == 4 {
+            assert!(has(&f, ROOM) && f.requests.is_empty() && w.disk.0.is_empty());
+            break;
+        }
+        assert!(has(&f, "The program ran out of room; asking for a shorter one."));
+        let body;
+        (id, body) = ai(&f);
+        assert_eq!(message(&body, messages(&body) - 1), ("user", SHORTER));
+    }
+    // A cut-off reply that still holds a whole program is built; a cut-off chat says so.
+    let notes = |w: &Win| -> Vec<String> {
+        w.a.turns.last().unwrap().notes.iter().map(|n| n.1.clone()).collect()
+    };
+    let (id, _) = w.ask("a counter");
+    w.answer(id, &format!("```app\n{COUNTER}```\nIt counts"), long, 64);
+    assert_eq!(notes(&w), ["Built counter.app \u{2713} \u{2014} open in Studio to change it"]);
+    let (id, _) = w.ask("a long story");
+    let f = w.answer(id, "Once upon", long, 64);
+    assert!(has(&f, "Once upon") && notes(&w) == [ROOM] && f.requests.is_empty());
+    // All thinking and no reply: out of room, not "No reply.", and the prompt leaves the history.
+    let (id, _) = w.ask("think hard");
+    let think = "data: {\"choices\":[{\"delta\":{\"reasoning\":\"Hm\"}}]}\n\n";
+    w.answer(id, "", &[think, long].concat(), 64);
+    assert_eq!(notes(&w), [ROOM]);
+    let (_, body) = w.ask("next");
+    assert_eq!(message(&body, messages(&body) - 2), ("assistant", "Once upon"));
 }
 
 #[test]
@@ -339,6 +390,14 @@ fn json_reads_and_quotes() {
     }
     let text = "a\"b\\c\n\u{1}\u{7f}\u{e9}";
     assert_eq!(Json::parse(&quote(text)), Some(Json::Str(text.into())));
+    // The stream keeps why the reply ended; a null finish_reason leaves it as it was.
+    let (mut s, mut out) = (json::Stream::default(), String::new());
+    let end =
+        |f: &str| format!("data: {{\"choices\":[{{\"delta\":{{}},\"finish_reason\":{f}}}]}}\n");
+    s.feed(end("null").as_bytes(), &mut out, 64);
+    assert_eq!(s.finish, "");
+    s.feed([end("\"length\""), end("null")].concat().as_bytes(), &mut out, 64);
+    assert_eq!((s.finish.as_str(), out.as_str()), ("length", ""));
 }
 
 #[test]

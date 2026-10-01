@@ -17,4 +17,5 @@ path = "src/main.rs"
 
 [dependencies]
 compusophy-applang.workspace = true
+compusophy-lang.workspace = true
 compusophy-uiwire.workspace = true

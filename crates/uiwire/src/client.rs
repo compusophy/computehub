@@ -58,11 +58,13 @@ impl<R: Read, W: Write> Client<R, W> {
         }
     }
 
-    /// Sends `frame` in one write. One that would not decode (over a cap, bad spans) is
-    /// `InvalidInput` and sends nothing; a partial write is `WriteZero`.
+    /// Sends `frame` in one write. One over [`MAX_FRAME`] bytes is `InvalidInput` and sends
+    /// nothing; a partial write is `WriteZero`. Only the size is checked here, not every cap (a
+    /// whole decode per frame would ship the decoder in every program): the desktop drops a frame
+    /// that does not decode, and a program's tests decode every frame it sends.
     pub fn show(&mut self, frame: &Frame) -> io::Result<()> {
         let bytes = frame.encode();
-        if Frame::decode(&bytes).is_none() {
+        if bytes.len() > MAX_FRAME {
             return Err(io::Error::new(ErrorKind::InvalidInput, "frame breaks the protocol"));
         }
         loop {

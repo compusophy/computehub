@@ -168,8 +168,7 @@ impl Studio {
             (self.text, self.version, self.lost, self.dirty) =
                 (text.clone(), *version, false, true);
             self.mark = None;
-            let edited = "Edited \u{2014} Check (Ctrl+Enter) runs and saves it";
-            self.status = (Style::Small, edited.into());
+            self.status = (Style::Small, "Edited".into());
         }
     }
 
@@ -187,7 +186,7 @@ impl Studio {
     fn open(&mut self) {
         self.requests.push(Request::Open { name: self.path.clone() });
         if self.dirty {
-            let note = "Opened the saved version; Check saves your edits";
+            let note = "Opened the saved version";
             self.status = (Style::Small, note.into());
         }
     }
