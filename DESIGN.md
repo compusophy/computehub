@@ -88,7 +88,9 @@ frame: os → shell::draw → gfx::DrawList → platform::Renderer: one draw cal
 | `vt`, `term` | VT/xterm escape parser; terminal screen model |
 | `guest` | the shell the Terminal runs over the VFS |
 | `apps` | Terminal, Welcome, Settings |
+| `system` | About, Feedback and Files: one wasip1 GUI program (`dist/bin/system.wasm`), off the boot download |
 | `studio` | the applang editor, and `AppHost`, which runs `.app` files |
+| `uiwire`, `uiview` | the remote UI protocol GUI programs speak; the desktop's half, which draws their trees |
 | `host` | the wm plus one app per window; motion, frame geometry, launcher search |
 | `shell` | the desktop around `host`: bar, dock, launcher, chrome, keys |
 | `platform` | the browser boundary: canvas, WebGL2, input, textarea, fetch, storage, cursor |
@@ -184,8 +186,10 @@ one. Forked crates keep their Apache-2.0 license and note their origin.
 - Apps reach outside themselves only through the `ui::Cx` of an event: the
   VFS, the page clock, and requests (open or close a window, load the
   fallback fonts, switch the theme). `os` owns the registry: `apps::open`
-  makes `welcome`, `terminal` and `settings`; `studio::open` makes
-  `studio`, `studio:<path>` and any `*.app` path.
+  makes `welcome`, `terminal` and `settings`; `remote::open` makes the GUI
+  programs' windows: `about`, `feedback`, `files` and `files:<dir>` (the
+  `system` program), `assistant`, `studio`, `studio:<path>` and any `*.app`
+  path.
 - **Terminal**: `vt` + `term` + a cell renderer, running the `guest` shell
   over the VFS (`ls`, `cd`, `cat`, `mkdir`, `mv`, `open`, `edit`, `run`,
   `theme`, ...). `term` already speaks xterm, keys and replies included, for

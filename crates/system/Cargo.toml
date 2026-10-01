@@ -1,0 +1,24 @@
+[package]
+name = "compusophy-system"
+description = "compusophyOS About, Feedback and Files: one wasm32-wasip1 GUI program on the remote UI protocol, run as about, feedback or files and fetched when one first opens, never with the boot download. Built into dist/bin/, never committed."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[lib]
+name = "system"
+
+[[bin]]
+name = "system"
+path = "src/main.rs"
+
+[dependencies]
+compusophy-icons.workspace = true
+compusophy-uiwire.workspace = true
+compusophy-vfs.workspace = true
+
+[dev-dependencies]
+compusophy-ui.workspace = true

@@ -1,22 +1,22 @@
 //! Remote: the window of a GUI program, a kernel process that describes it as a [`uiwire`] tree,
-//! drawn here with `ui` in the frame's theme; the window's input goes back as uiwire events. The
-//! program starts at the first size ([`Event::Resize`]) with the roots `/`; until its first frame
-//! the window shows a note, or why it failed (a first frame that does not decode: the program is
-//! newer than the desktop). A frame's title is the window's and its requests are honored (Size in
-//! the first only; Focus when the frame holds that Input or Code); a clean exit closes the window,
-//! and closing it sends [`Event::Close`]. A prompt from the everything bar goes to the program as
-//! [`Event::Ask`], held until it starts. Edited text is owned as uiwire says, one
+//! drawn here by [`uiview`] in the frame's theme; the window's input goes back as uiwire events.
+//! The program starts at the first size ([`Event::Resize`]) with the roots `/`; until its first
+//! frame the window shows a note, or why it failed (a first frame that does not decode: the
+//! program is newer than the desktop). A frame's title is the window's and its requests are
+//! honored (Size in the first only; Focus when the frame holds that Input, Code or Area; Feedback
+//! goes to the page); a clean exit closes the window, and closing it sends [`Event::Close`]. The
+//! window's focus goes to the program as [`Event::Focus`], and a prompt from the everything bar
+//! as [`Event::Ask`], held until it starts. Edited text is owned as uiwire says, one
 //! [`Event::Change`] out at a time: the next waits for a frame, or goes before any other event.
-//! Nodes stack [`PAD`] inside the content rect, the wheel scrolling what does not fit.
+//! The wheel scrolls the Code under it, else what does not fit.
 
 use std::mem;
 
-use gfx::RectF;
 use ui::icon::Glyph;
 use ui::kernel::{Spawn, wire::Stdout};
-use ui::{App, AppEvent, AppIcon, BUTTON_H, CARD_PAD, Code, Cx, FIELD_H, Key, Mods, PAD};
-use ui::{RADIUS_SM, Rgba, SPACING, Sense, TextStyle, TextSystem, Theme, Ui, WidgetId};
-use uiwire::{Event, Frame, Node, Request, Style, Variant};
+use ui::{App, AppEvent, AppIcon, Code, Cx, Key, Mods, Rgba, Ui, WidgetId};
+use uiview::{Area, Texts, View};
+use uiwire::{Event, Frame, Node, Request};
 use vfs::Vfs;
 
 use crate::ai::Ai;
@@ -28,18 +28,35 @@ pub const ASSISTANT: &str = "/bin/assistant";
 pub const STUDIO_ICON: AppIcon = AppIcon { glyph: Glyph::Studio, hue: Rgba::hex(0x8b7bff) };
 pub const APP_ICON: AppIcon = AppIcon { glyph: Glyph::Window, hue: Rgba::hex(0xf59e0b) };
 pub const ASSISTANT_ICON: AppIcon = AppIcon { glyph: Glyph::Assistant, hue: Rgba::hex(0xa78bfa) };
-/// An Item's height, a chip's, and a chip's padding either side of its label.
-const ITEM_H: f32 = 36.0;
-const CHIP_H: f32 = 28.0;
-const CHIP_PAD: f32 = 12.0;
+/// A system app as (name, title, icon, size, whether compact).
+pub type SystemApp = (&'static str, &'static str, AppIcon, (f32, f32), bool);
+/// About, Feedback and Files: one program, bin/system.wasm, run as the name of its /bin marker.
+#[rustfmt::skip]
+pub const SYSTEM: [SystemApp; 3] = [
+    ("about", "About", icon(Glyph::About, 0xfbbf24), (560.0, 640.0), true),
+    ("feedback", "Feedback", icon(Glyph::Feedback, 0x34d399), (520.0, 420.0), true),
+    ("files", "Files", icon(Glyph::Folder, 0x60a5fa), (640.0, 480.0), false),
+];
 /// Studio's size: room for the app beside its prompt.
 const STUDIO_SIZE: Option<(f32, f32)> = Some((880.0, 560.0));
 /// Shown in place of a first frame that does not decode.
 const NEWER: &str = "This program is newer than the desktop; reload the page";
 
-/// The app for a window name: the Assistant for `"assistant"`, Studio with nothing open for
-/// `"studio"` or on `<path>` for `"studio:<path>"`, or running a `.app` path (relative: in `/apps`).
+const fn icon(glyph: Glyph, hue: u32) -> AppIcon {
+    AppIcon { glyph, hue: Rgba::hex(hue) }
+}
+
+/// The app for a window name: About, Feedback or Files ([`SYSTEM`]; `"files:<dir>"` is Files at
+/// that folder), the Assistant for `"assistant"`, Studio with nothing open for `"studio"` or on
+/// `<path>` for `"studio:<path>"`, or running a `.app` path (relative: in `/apps`).
 pub fn open(name: &str, ai: &Ai) -> Option<Box<dyn App>> {
+    let (head, dir) = name.strip_prefix("files:").map_or((name, None), |d| ("files", Some(d)));
+    if let Some(&(prog, title, icon, size, compact)) = SYSTEM.iter().find(|s| s.0 == head) {
+        let argv = [prog].into_iter().chain(dir).map(String::from).collect();
+        let mut r = Remote::new(&["/bin/", prog].concat(), argv, ai);
+        (r.title, r.icon, r.size, r.compact) = (title.into(), icon, Some(size), compact);
+        return Some(Box::new(r));
+    }
     let abs = |p: &str| Vfs::normalize("/apps", p).ok().filter(|_| !p.is_empty());
     let file = |p: &str| p.rsplit('/').next().unwrap_or_default().to_string();
     let (argv, title, icon, size) = match name.strip_prefix("studio:") {
@@ -60,28 +77,20 @@ pub fn open(name: &str, ai: &Ai) -> Option<Box<dyn App>> {
     };
     let program = if name == "assistant" { ASSISTANT } else { STUDIO };
     let mut r = Remote::new(program, argv, ai);
-    (r.title, r.icon, r.size, r.follow) = (title, icon, size, name == "assistant");
+    (r.title, r.icon, r.size, r.view.follow) = (title, icon, size, name == "assistant");
     Some(Box::new(r))
-}
-
-/// The text the host owns: each Input's id, text and version, each Code by
-/// id, and the focused one (0 for none).
-#[derive(Debug, Default)]
-struct Texts {
-    inputs: Vec<(u32, String, u32)>,
-    codes: Vec<(u32, Code)>,
-    focus: u32,
 }
 
 /// A GUI program in a window: see the module docs.
 #[derive(Default)]
 pub struct Remote {
-    /// The title until a frame names one, the icon, the preferred size, and whether a view at
-    /// the bottom stays there as the content grows (the Assistant's transcript).
+    /// The title until a frame names one, the icon, the preferred size, whether it is a small
+    /// card ([`App::compact`]), and how it is scrolled.
     pub title: String,
     pub icon: AppIcon,
     pub size: Option<(f32, f32)>,
-    pub follow: bool,
+    pub compact: bool,
+    pub view: View,
     program: String,
     argv: Vec<String>,
     pid: Option<u32>,
@@ -100,9 +109,7 @@ pub struct Remote {
     last_key: Option<Key>,
     /// Prompts from the everything bar that wait for the program to start.
     asks: Vec<String>,
-    /// As last drawn: pixels scrolled, content and view height, content corner.
-    scroll: f32,
-    heights: (f32, f32),
+    /// The content's corner as last drawn.
     origin: (f32, f32),
 }
 
@@ -155,20 +162,22 @@ impl Remote {
             let t = &self.texts;
             let code = t.codes.iter().find(|c| c.0 == id).map(|c| (c.1.version, c.1.ed.text()));
             let input = || t.inputs.iter().find(|i| i.0 == id).map(|i| (i.2, i.1.clone()));
-            if let Some((version, text)) = code.or_else(input) {
+            let area =
+                || t.areas.iter().find(|a| a.0 == id).map(|a| (a.1.version, a.1.text.clone()));
+            if let Some((version, text)) = code.or_else(input).or_else(area) {
                 self.post(Event::Change { id, version, text }, cx);
                 self.waiting = true;
             }
         }
     }
 
-    /// A key: an edit in the focused Input or Code, else a Key event for
+    /// A key: an edit in the focused Input, Code or Area, else a Key event for
     /// Escape (which also leaves the editor), Enter and chords.
     fn key(&mut self, key: Key, mods: Mods, cx: &mut Cx<'_>) -> bool {
         let (chord, id) = (mods.ctrl || mods.alt || mods.meta, self.texts.focus);
-        let plain = !chord && key != Key::Escape;
-        let edited = self.texts.codes.iter_mut().find(|c| c.0 == id && plain);
-        let edited = edited.and_then(|c| c.1.key(key));
+        let (plain, t) = (!chord && key != Key::Escape, &mut self.texts);
+        let edited = t.codes.iter_mut().find(|c| c.0 == id && plain).and_then(|c| c.1.key(key));
+        let edited = edited.or_else(|| t.areas.iter_mut().find(|a| a.0 == id && plain)?.1.key(key));
         match (edited, self.texts.inputs.iter_mut().find(|i| i.0 == id && plain), key) {
             (Some(edited), ..) => return !edited || self.changed(id, cx),
             (_, Some(_), Key::Enter) => return self.send(Event::Submit { id }, cx),
@@ -195,13 +204,15 @@ impl Remote {
         key == Key::Escape && mem::take(&mut self.texts.focus) != 0
     }
 
-    /// Typed or pasted text for the focused Input or Code, unless it echoes
-    /// the Enter or Tab just handled.
+    /// Typed or pasted text for the focused Input, Code or Area, unless it
+    /// echoes the Enter or Tab just handled.
     fn type_text(&mut self, s: &str, last: Option<Key>, cx: &mut Cx<'_>) -> bool {
         let echo = matches!((last, s), (Some(Key::Enter), "\n" | "\r\n") | (Some(Key::Tab), "\t"));
         let (id, t) = (self.texts.focus, &mut self.texts);
+        let area = t.areas.iter_mut().find(|a| a.0 == id).map(|a| !echo && a.1.insert(s));
         let edited = match t.codes.iter_mut().find(|c| c.0 == id) {
             Some(c) => !echo && c.1.insert(s),
+            None if area.is_some() => area == Some(true),
             None => t.inputs.iter_mut().find(|i| i.0 == id).is_some_and(|i| {
                 let n = i.1.len();
                 i.1.extend(s.chars().filter(|c| !c.is_control()));
@@ -213,15 +224,18 @@ impl Remote {
         edited && self.changed(id, cx)
     }
 
-    /// A press focuses the Input or Code under it (a Code takes the caret there), or none.
+    /// A press focuses the Input, Code or Area under it (a Code or Area takes the caret there),
+    /// or none.
     fn press(&mut self, x: f32, y: f32, id: Option<WidgetId>) -> bool {
         let (t, id) = (&mut self.texts, id.map_or(0, |w| w.0));
-        let code = t.codes.iter_mut().find(|c| c.0 == id && id != 0);
-        let focus =
-            if code.is_some() || id != 0 && t.inputs.iter().any(|i| i.0 == id) { id } else { 0 };
-        if let Some(c) = code {
-            c.1.click(x + self.origin.0, y + self.origin.1);
+        let (x, y) = (x + self.origin.0, y + self.origin.1);
+        if let Some(c) = t.codes.iter_mut().find(|c| c.0 == id && id != 0) {
+            c.1.click(x, y);
         }
+        if let Some(a) = t.areas.iter_mut().find(|a| a.0 == id && id != 0) {
+            a.1.click(x, y);
+        }
+        let focus = if id != 0 && t.has(id) { id } else { 0 };
         mem::replace(&mut t.focus, focus) != focus || focus != 0
     }
 
@@ -231,8 +245,9 @@ impl Remote {
         if let Some(c) = self.texts.codes.iter_mut().find(|c| c.1.contains(x, y)) {
             return c.1.wheel(dy);
         }
-        let s = (self.scroll + dy).min(self.heights.0 - self.heights.1).max(0.0);
-        dy.is_finite() && mem::replace(&mut self.scroll, s) != s
+        let v = &mut self.view;
+        let s = (v.scroll + dy).min(v.heights.0 - v.heights.1).max(0.0);
+        dy.is_finite() && mem::replace(&mut v.scroll, s) != s
     }
 
     /// Output (the last kept for a failure) and the exit: clean closes, failed says why.
@@ -278,11 +293,18 @@ impl Remote {
                 }
                 self.texts.codes.push((*id, c));
             }
+            Node::Area { id, value, .. } if *id != 0 => {
+                let a = old.areas.iter().position(|a| a.0 == *id).map(|a| old.areas.remove(a));
+                let mut a = a.unwrap_or_else(|| (*id, Area::new(value)));
+                if old.focus != *id {
+                    a.1.set(value);
+                }
+                self.texts.areas.push(a);
+            }
             _ => {}
         });
-        let t = &mut self.texts;
-        if t.inputs.iter().any(|i| i.0 == old.focus) || t.codes.iter().any(|c| c.0 == old.focus) {
-            t.focus = old.focus;
+        if self.texts.has(old.focus) {
+            self.texts.focus = old.focus;
         }
         for r in mem::take(&mut frame.requests) {
             match r {
@@ -290,12 +312,9 @@ impl Remote {
                 Request::Close => cx.close_self(),
                 Request::Size { w, h } if self.frame.is_none() => cx.set_size(w, h),
                 Request::Size { .. } => {}
-                Request::Focus { id } => {
-                    let t = &mut self.texts;
-                    if t.inputs.iter().any(|i| i.0 == id) || t.codes.iter().any(|c| c.0 == id) {
-                        t.focus = id;
-                    }
-                }
+                Request::Focus { id } if self.texts.has(id) => self.texts.focus = id,
+                Request::Focus { .. } => {}
+                Request::Feedback { kind, text, context } => cx.feedback(&kind, &text, context),
                 r => self.ai.ask(self.pid.unwrap_or_default(), r),
             }
         }
@@ -327,6 +346,10 @@ impl App for Remote {
 
     fn icon(&self) -> AppIcon {
         self.icon
+    }
+
+    fn compact(&self) -> bool {
+        self.compact
     }
 
     fn event(&mut self, ev: AppEvent, cx: &mut Cx<'_>) -> bool {
@@ -363,7 +386,10 @@ impl App for Remote {
             AppEvent::Text(s) => self.type_text(&s, last, cx),
             AppEvent::Wheel { x, y, dy } => self.wheel(x, y, dy),
             AppEvent::Io => self.io(cx),
-            AppEvent::Focus(_) => true,
+            AppEvent::Focus(on) => {
+                self.send(Event::Focus { on }, cx);
+                true
+            }
             _ => false,
         }
     }
@@ -401,270 +427,8 @@ impl App for Remote {
             }
             return;
         };
-        let (w, view, texts) = ((r.w - 2.0 * PAD).max(0.0), r.h - 2.0 * PAD, &mut self.texts);
-        let (t, sizes, slack) = (ui.theme(), Vec::new(), Vec::new());
-        let mut lay = Lay { t, texts, sizes, extra: 0.0, fills: 0, slack, again: false, i: 0 };
-        let ts = ui.text_system();
-        let mut h = lay.stack(ts, &frame.nodes, w, SPACING, None);
-        // Again with the room left shared by the Fills, each also taking what it is short of a
-        // taller sibling in a Row.
-        let fills = mem::take(&mut lay.fills);
-        if fills > 0 && (h < view || lay.slack.iter().any(|s| *s > 0.0)) {
-            (lay.extra, lay.sizes, lay.again) =
-                ((view - h).max(0.0) / fills as f32, Vec::new(), true);
-            h = lay.stack(ts, &frame.nodes, w, SPACING, None);
-        }
-        let end = self.follow && self.scroll >= self.heights.0 - self.heights.1;
-        self.heights = (h + 2.0 * PAD, r.h);
-        self.scroll = if end { f32::MAX } else { self.scroll }.min(self.heights.0 - r.h).max(0.0);
-        let (x, y) = (r.x + PAD, r.y + PAD - self.scroll);
-        lay.draw_stack(ui, &frame.nodes, (x, y), SPACING);
+        uiview::draw(ui, &frame.nodes, &mut self.texts, &mut self.view);
     }
-}
-
-/// How a Text of `style` is set.
-fn style_of(style: Style, t: &Theme) -> TextStyle {
-    match style {
-        Style::Body => t.body(),
-        Style::Title => t.title(),
-        Style::Heading => t.heading(),
-        Style::Subheading => t.subheading(),
-        Style::Small => t.small(),
-        Style::Mono => t.mono(),
-        Style::Dim => t.body().with_color(t.text_dim),
-        Style::Error => t.body().with_color(t.danger),
-        Style::Success => t.body().with_color(t.ansi[2]),
-    }
-}
-
-/// One frame's layout in theme `t` over the host's text: each node's size in
-/// pre-order, the height each Fill adds, the Fills so far, each Fill's shortfall
-/// beside a taller sibling, whether this is the second pass, the next size to draw.
-struct Lay<'t> {
-    t: &'t Theme,
-    texts: &'t mut Texts,
-    sizes: Vec<(f32, f32)>,
-    extra: f32,
-    fills: usize,
-    slack: Vec<f32>,
-    again: bool,
-    i: usize,
-}
-
-impl Lay<'_> {
-    /// Measures `ns` stacked `gap` apart in width `w`; their height. Each Code
-    /// takes `g` more height (in a Fill).
-    fn stack(&mut self, ts: &mut TextSystem, ns: &[Node], w: f32, gap: f32, g: Option<f32>) -> f32 {
-        let h = ns.iter().map(|n| self.measure(ts, n, w, g).1 + gap).sum::<f32>();
-        h - if ns.is_empty() { 0.0 } else { gap }
-    }
-
-    /// Measures `n` given width `w` (Buttons and Spacers take their own).
-    fn measure(&mut self, ts: &mut TextSystem, n: &Node, w: f32, grow: Option<f32>) -> (f32, f32) {
-        let (at, t) = (self.sizes.len(), self.t);
-        self.sizes.push((0.0, 0.0));
-        let size = match n {
-            Node::Col { gap, children: c, .. } => (w, self.stack(ts, c, w, f32::from(*gap), None)),
-            Node::Card { children, .. } => {
-                (w, self.stack(ts, children, w - 2.0 * CARD_PAD, SPACING, None) + 2.0 * CARD_PAD)
-            }
-            Node::Fill { children, .. } => {
-                if self.slack.len() <= self.fills {
-                    self.slack.push(0.0);
-                }
-                let extra = self.extra + self.slack[self.fills];
-                self.fills += 1;
-                let codes = children.iter().filter(|c| matches!(c, Node::Code { .. })).count();
-                let grow = Some(extra / codes.max(1) as f32);
-                (w, self.stack(ts, children, w, SPACING, grow) + [extra, 0.0][codes.min(1)])
-            }
-            Node::Pane { w: pw, children, .. } => {
-                let w = w.min(f32::from(*pw));
-                (w, self.stack(ts, children, w, SPACING, None))
-            }
-            // Buttons and Spacers take their width, each Text its own up to
-            // an even share of the rest, the others share what is left.
-            Node::Row { gap, children, .. } => {
-                let (gap, mut x, mut h) = (f32::from(*gap), 0.0, 0.0f32);
-                let mut own: Vec<_> = children.iter().map(|c| own_width(ts, t, c, w)).collect();
-                let gaps = gap * children.len().saturating_sub(1) as f32;
-                let mut room = (w - own.iter().flatten().sum::<f32>() - gaps).max(0.0);
-                let mut flex = own.iter().filter(|o| o.is_none()).count();
-                let share = room / flex.max(1) as f32;
-                for (c, o) in children.iter().zip(&mut own) {
-                    if let Node::Text { style, text, .. } = c {
-                        let style = style_of(*style, t);
-                        let lines = ts.wrap(text, style, f32::MAX);
-                        let one = lines.iter().map(|l| ts.measure(l, style)).fold(0.0, f32::max);
-                        // A pixel more: snapping must not wrap it.
-                        let one = (one.ceil() + 1.0).min(share);
-                        (*o, room, flex) = (Some(one), room - one, flex - 1);
-                    }
-                }
-                let share = room / flex.max(1) as f32;
-                let mut fills = Vec::new();
-                for (c, o) in children.iter().zip(own) {
-                    let first = self.fills;
-                    let s = self.measure(ts, c, o.unwrap_or(share), None);
-                    (x, h) = (x + s.0 + gap, h.max(s.1));
-                    fills.extend((self.fills > first).then_some((first, s.1)));
-                }
-                // A child's first Fill grows by what the child is short of the Row's height.
-                for (fill, ch) in fills.into_iter().filter(|_| !self.again) {
-                    self.slack[fill] += h - ch;
-                }
-                (x - if children.is_empty() { 0.0 } else { gap }, h)
-            }
-            // 3 to 12 rows as the text has lines; 3 and what is left in a Fill.
-            Node::Code { id, text, .. } => {
-                let n = self.texts.codes.iter().find(|c| c.0 == *id).map(|c| c.1.ed.line_count());
-                let rows = grow.map_or(n.unwrap_or(text.lines().count()).clamp(3, 12), |_| 3);
-                (w, rows as f32 * ts.line_height(t.mono()) + 12.0 + grow.unwrap_or(0.0))
-            }
-            Node::Text { style, text, .. } => {
-                let style = style_of(*style, t);
-                (w, ts.wrap(text, style, w).len() as f32 * ts.line_height(style))
-            }
-            Node::Button { variant: Variant::Chip, label, .. } => {
-                (chip_width(ts, t, label), CHIP_H)
-            }
-            Node::Button { label, .. } => (ui::button_width(ts, t, label), BUTTON_H),
-            Node::Spacer { px } => (f32::from(*px), f32::from(*px)),
-            Node::Input { .. } => (w, FIELD_H),
-            Node::Item { .. } => (w, ITEM_H),
-            Node::Separator => (w, 1.0),
-        };
-        self.sizes[at] = size;
-        size
-    }
-
-    /// The next size to draw; `take` moves past it.
-    fn next(&mut self, take: bool) -> (f32, f32) {
-        self.i += usize::from(take);
-        self.sizes.get(self.i - usize::from(take)).copied().unwrap_or_default()
-    }
-
-    /// Draws `nodes` down from `(x, y)`, `gap` apart.
-    fn draw_stack(&mut self, ui: &mut Ui<'_>, nodes: &[Node], (x, mut y): (f32, f32), gap: f32) {
-        for n in nodes {
-            let h = self.next(false).1;
-            self.draw(ui, n, x, y);
-            y += h + gap;
-        }
-    }
-
-    /// Draws `n` at `(x, y)` in its measured size.
-    fn draw(&mut self, ui: &mut Ui<'_>, n: &Node, x: f32, y: f32) {
-        let ((w, h), t) = (self.next(true), self.t);
-        let r = ui.snapped(RectF::new(x, y, w, h));
-        let at = |ui: &mut Ui<'_>, f: &mut dyn FnMut(&mut Ui<'_>)| ui.within(r, |ui| f(ui));
-        match n {
-            Node::Col { gap, children: c, .. } => self.draw_stack(ui, c, (x, y), f32::from(*gap)),
-            Node::Fill { children, .. } | Node::Pane { children, .. } => {
-                self.draw_stack(ui, children, (x, y), SPACING)
-            }
-            Node::Card { children, .. } => {
-                ui.raised(r);
-                self.draw_stack(ui, children, (x + CARD_PAD, y + CARD_PAD), SPACING);
-            }
-            // Leaves center on the row's height.
-            Node::Row { gap, children, .. } => {
-                let mut cx = x;
-                for c in children {
-                    let (cw, ch) = self.next(false);
-                    let leaf = c.children().is_empty() && !matches!(c, Node::Code { .. });
-                    let cy = if leaf { y + (h - ch) / 2.0 } else { y };
-                    self.draw(ui, c, cx, cy);
-                    cx += cw + f32::from(*gap);
-                }
-            }
-            Node::Text { style, text, .. } => {
-                at(ui, &mut |ui| _ = ui.wrapped(text, style_of(*style, t)))
-            }
-            Node::Button { id, variant, label } => at(ui, &mut |ui| {
-                _ = match variant {
-                    Variant::Normal => ui.button(WidgetId(*id), label),
-                    Variant::Primary => ui.button_primary(WidgetId(*id), label),
-                    Variant::Danger => ui.button_danger(WidgetId(*id), label),
-                    Variant::Chip => chip(ui, WidgetId(*id), r, label),
-                }
-            }),
-            Node::Input { id, placeholder, .. } => {
-                let value = self.texts.inputs.iter().find(|i| i.0 == *id).map_or("", |i| &i.1);
-                let focus = self.texts.focus == *id && *id != 0;
-                at(ui, &mut |ui| _ = ui.text_field(WidgetId(*id), value, focus, placeholder));
-            }
-            Node::Code { id, line_numbers, text, .. } => {
-                let focus = self.texts.focus == *id;
-                match self.texts.codes.iter_mut().find(|c| c.0 == *id) {
-                    Some(c) => c.1.draw(ui, WidgetId(*id), r, *line_numbers, focus),
-                    None => at(ui, &mut |ui| _ = ui.wrapped(text, t.mono())),
-                }
-            }
-            Node::Item { id, text, detail, selected } => {
-                item(ui, WidgetId(*id), r, [text, detail], *selected)
-            }
-            Node::Separator => ui.fill(RectF { h: ui.px(1.0), ..r }, 0.0, t.border),
-            Node::Spacer { .. } => {}
-        }
-    }
-}
-
-/// The width a Button, Spacer or Pane takes in a Row `w` wide; `None` for the others.
-fn own_width(ts: &mut TextSystem, t: &Theme, n: &Node, w: f32) -> Option<f32> {
-    match n {
-        Node::Button { variant: Variant::Chip, label, .. } => Some(chip_width(ts, t, label)),
-        Node::Button { label, .. } => Some(ui::button_width(ts, t, label)),
-        Node::Spacer { px } => Some(f32::from(*px)),
-        Node::Pane { w: pw, .. } => Some(f32::from(*pw).min(w)),
-        _ => None,
-    }
-}
-
-/// The width of a chip labeled `label`, on device pixels.
-fn chip_width(ts: &mut TextSystem, t: &Theme, label: &str) -> f32 {
-    let d = ts.dpr();
-    ((ts.measure(label, t.small()) + 2.0 * CHIP_PAD) * d).ceil() / d
-}
-
-/// A chip in `r`: `label` small on a pill, brightening under the pointer; a [`Sense::Click`] hit.
-fn chip(ui: &mut Ui<'_>, id: WidgetId, r: RectF, label: &str) -> RectF {
-    let (t, s) = (ui.theme(), ui.state());
-    let hover = s.hover == Some(id);
-    ui.fill(r, r.h / 2.0, t.surface_lo);
-    if hover {
-        ui.fill(r, r.h / 2.0, t.wash(s.pressed == Some(id)));
-    }
-    let edge = ui.px(1.0);
-    ui.border(r, r.h / 2.0, edge, t.border);
-    let style = t.small().with_color(if hover { t.text } else { t.text_dim });
-    let ts = ui.text_system();
-    let base = ts.snap(r.y + (r.h + 0.727 * style.size) / 2.0);
-    let lw = ts.measure(label, style);
-    let x = ts.snap(r.x + (r.w - lw) / 2.0);
-    ui.text(x, base, label, style);
-    ui.hit(id, r, Sense::Click);
-    r
-}
-
-/// A list row in `r`: `text`, then `detail` dim at the right; washed under
-/// the pointer, tinted when `selected`; a [`Sense::Click`] hit.
-fn item(ui: &mut Ui<'_>, id: WidgetId, r: RectF, [text, detail]: [&String; 2], selected: bool) {
-    let (t, s) = (ui.theme(), ui.state());
-    if selected || s.hover == Some(id) {
-        ui.fill(r, RADIUS_SM, if selected { t.selection } else { t.wash(s.pressed == Some(id)) });
-    }
-    let (body, small) = (t.body(), t.small());
-    let ts = ui.text_system();
-    let (base, dw) = (ts.snap(r.y + (r.h + 0.727 * body.size) / 2.0), ts.measure(detail, small));
-    let right = ts.snap(r.x + r.w - 12.0 - dw);
-    ui.push_clip(RectF { w: (right - r.x - 12.0).max(0.0), ..r });
-    ui.text(r.x + 12.0, base, text, body);
-    ui.pop_clip();
-    ui.push_clip(r);
-    ui.text(right, base, detail, small);
-    ui.pop_clip();
-    ui.hit(id, r, Sense::Click);
 }
 
 #[cfg(test)]

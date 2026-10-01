@@ -37,12 +37,29 @@ fn sample() -> Frame {
         Node::Card { id: 5, children: vec![item] },
         Node::Fill { id: 0, children: vec![code] },
         Node::Pane { id: 8, w: 300, children: vec![chip] },
+        Node::Glyph { glyph: 6, size: 89 },
+        Node::Entry {
+            id: 11,
+            glyph: 6,
+            hue: 0x60a5fa,
+            text: "apps".into(),
+            detail: "".into(),
+            more: true,
+        },
+        Node::Toggle { id: 12, on: true, label: "Include what\u{2019}s open".into() },
+        Node::Area { id: 13, value: "a\nb".into(), placeholder: "What happened?".into() },
+        Node::Center { id: 14, gap: 5, children: vec![text(Style::Accent, "compusophy")] },
     ];
     let requests = vec![Request::Open { name: "/apps/clock.app".into() }, Request::Close];
     let ai = vec![
         Request::Ai { id: 3, body: "{\"stream\":true}".into() },
         Request::AiCancel { id: 3 },
         Request::Focus { id: 4 },
+        Request::Feedback {
+            kind: "idea".into(),
+            text: "more themes\nplease".into(),
+            context: true,
+        },
     ];
     Frame {
         seq: 7,
@@ -65,6 +82,8 @@ fn events() -> Vec<Event> {
         Event::AiData { id: 3, data: vec![b'd', 0xC3, 0xFF] },
         Event::AiEnd { id: 3, status: 429, error: "".into() },
         Event::Ask { text: "a dice roller".into() },
+        Event::Focus { on: true },
+        Event::Focus { on: false },
     ]
 }
 
@@ -82,7 +101,7 @@ fn strict<T: PartialEq + Debug>(v: &T, encode: fn(&T) -> Vec<u8>, decode: fn(&[u
 #[test]
 fn every_kind_round_trips_and_nothing_else_decodes() {
     let frame = sample();
-    assert_eq!(frame.nodes[0].count(), 13);
+    assert_eq!(frame.nodes[0].count(), 19);
     [frame.clone(), Frame::default()].iter().for_each(|f| strict(f, Frame::encode, Frame::decode));
     let nodes = frame.nodes.iter().chain(frame.nodes[0].children());
     nodes.for_each(|n| strict(n, Node::encode, Node::decode));
@@ -100,7 +119,7 @@ fn codes_and_layout_are_as_documented() {
     let variant = n(&|n| Variant::from_u8(n).map(|v| v as u8));
     let (class, key) =
         (n(&|n| Class::from_u8(n).map(|v| v as u8)), n(&|n| Key::from_u8(n).map(|v| v as u8)));
-    assert_eq!(([style, variant, class, key], Key::from_u8(0)), ([9, 4, 8, 8], None));
+    assert_eq!(([style, variant, class, key], Key::from_u8(0)), ([10, 6, 8, 8], None));
     // Little-endian, in field order.
     let (requests, button) = (vec![Request::Size { w: 0x0506, h: 7 }], "ok".into());
     let nodes = vec![Node::Button { id: 9, variant: Variant::Primary, label: button }];
@@ -149,21 +168,29 @@ fn set(mut bytes: Vec<u8>, at: usize, to: u8) -> Vec<u8> {
 fn malformations_fail() {
     let ok = sample().encode();
     // The version; not UTF-8 in the title; the node count, one off either way.
+    let feedback = 1 + (4 + 4) + (4 + 18) + 1;
     let at = 1 + 4 + 4 + "Studio é".len() + 2 + (1 + 4 + 15) + 1 + (1 + 4) + (9 + 15) + 5 + 5;
-    assert_eq!(ok[at..at + 4], [14, 0, 0, 0]);
-    for (i, to) in [(0, 2), (13, 0xFF), (at, 13), (at, 15)] {
+    let at = at + feedback;
+    assert_eq!(ok[at..at + 4], [20, 0, 0, 0]);
+    for (i, to) in [(0, 2), (13, 0xFF), (at, 19), (at, 21)] {
         assert!(Frame::decode(&set(ok.clone(), i, to)).is_none(), "{i}");
     }
-    // A leaf with a child; an id on a Separator or Spacer; unknown kinds.
+    // A leaf with a child; an id on a Separator, Spacer or Glyph; unknown kinds.
     let leaf = [set(text(Style::Body, "a").encode(), 5, 1), Node::Separator.encode()].concat();
     assert!(Node::decode(&leaf).is_none());
     assert_eq!(Node::decode(&[7, 0, 0, 0, 0, 0, 0]), Some(Node::Separator));
     assert!(Node::decode(&[7, 1, 0, 0, 0, 0, 0]).is_none());
     assert!(Node::decode(&[8, 1, 0, 0, 0, 0, 0, 5, 0]).is_none());
-    assert!([0, 13, 255].iter().all(|&kind| Node::decode(&[kind, 0, 0, 0, 0, 0, 0]).is_none()));
-    // Codes: style, variant, selected, line-number flags, span class.
-    assert!(Node::decode(&[3, 0, 0, 0, 0, 0, 0, 9, 0, 0, 0, 0]).is_none());
-    assert!(Node::decode(&[4, 0, 0, 0, 0, 0, 0, 4, 0, 0, 0, 0]).is_none());
+    assert!(Node::decode(&[13, 1, 0, 0, 0, 0, 0, 6, 89, 0]).is_none());
+    assert_eq!(
+        Node::decode(&[13, 0, 0, 0, 0, 0, 0, 6, 89, 0]),
+        Some(Node::Glyph { glyph: 6, size: 89 })
+    );
+    assert!([0, 18, 255].iter().all(|&kind| Node::decode(&[kind, 0, 0, 0, 0, 0, 0]).is_none()));
+    // Codes: style, variant, selected, line-number and on flags, span class.
+    assert!(Node::decode(&[3, 0, 0, 0, 0, 0, 0, 10, 0, 0, 0, 0]).is_none());
+    assert!(Node::decode(&[4, 0, 0, 0, 0, 0, 0, 6, 0, 0, 0, 0]).is_none());
+    assert!(Node::decode(&[15, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0]).is_none());
     assert!(Node::decode(&[10, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2]).is_none());
     assert!(Node::decode(&set(code("ab", &[]).encode(), 11, 2)).is_none());
     let class = code("ab", &[(0, 1)]).encode();
@@ -187,7 +214,8 @@ fn malformations_fail() {
     assert!(key(8, 15, 'x' as u32).is_some());
     assert!(key(0, 0, 0).is_none() && key(9, 0, 0).is_none());
     assert!(key(1, 16, 0).is_none() && key(1, 0, 0xD800).is_none());
-    assert!(Event::decode(&[11]).is_none() && Request::decode(&[7, 0, 0, 0, 0]).is_none());
+    assert!(Event::decode(&[12]).is_none() && Request::decode(&[8, 0, 0, 0, 0]).is_none());
+    assert!(Event::decode(&[11, 2]).is_none() && Event::decode(&[11, 1]).is_some());
 }
 
 #[test]

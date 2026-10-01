@@ -1,0 +1,17 @@
+[package]
+name = "compusophy-uiview"
+description = "The desktop's half of the remote UI protocol: lays out a GUI program's widget tree and draws it with the compusophyOS toolkit in the frame's theme, keeping the text the user edits."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[lib]
+name = "uiview"
+
+[dependencies]
+compusophy-gfx.workspace = true
+compusophy-ui.workspace = true
+compusophy-uiwire.workspace = true

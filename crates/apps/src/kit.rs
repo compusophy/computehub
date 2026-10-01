@@ -1,5 +1,6 @@
-//! What the apps share: icons, the mark and its reveal, a wheel-scrolled view and its thumb,
-//! list rows, a switch, and helpers keeping text on device pixels.
+//! What the apps share: icons (About's, Feedback's and Files' too, for Welcome's list: they are
+//! programs now), the mark and its reveal, a wheel-scrolled view and its thumb, list rows, a
+//! switch, and helpers keeping text on device pixels.
 
 use gfx::RectF;
 use ui::icon::{Glyph, MARK_HOLE, rings};
@@ -14,8 +15,6 @@ pub(crate) const WELCOME: AppIcon = AppIcon { glyph: Glyph::Mark, hue: Rgba::hex
 pub(crate) const FILES: AppIcon = AppIcon { glyph: Glyph::Folder, hue: Rgba::hex(0x60a5fa) };
 pub(crate) const ABOUT: AppIcon = AppIcon { glyph: Glyph::About, hue: Rgba::hex(0xfbbf24) };
 pub(crate) const FEEDBACK: AppIcon = AppIcon { glyph: Glyph::Feedback, hue: Rgba::hex(0x34d399) };
-/// A plain file's tile, in Files.
-pub(crate) const FILE: AppIcon = AppIcon { glyph: Glyph::File, hue: Rgba::hex(0x94a3b8) };
 
 /// A list row's height and its tile's side (Fibonacci numbers; the row is a touch target).
 pub(crate) const ROW_H: f32 = 55.0;
@@ -65,19 +64,6 @@ pub(crate) fn lines(
         ui.text(lx, base, line, style);
     }
     lines.len() as f32 * lh
-}
-
-/// `text` wrapped to `w` and drawn from `top`, from `x` or centered; returns its height.
-pub(crate) fn para(
-    ui: &mut Ui<'_>,
-    text: &str,
-    style: TextStyle,
-    (x, w): (f32, f32),
-    top: f32,
-    center: bool,
-) -> f32 {
-    let wrapped = ui.text_system().wrap(text, style, w);
-    lines(ui, &wrapped, style, (x, w), top, center)
 }
 
 /// Whether `id` is under the pointer, and whether it is also held.
@@ -235,12 +221,6 @@ impl Scroll {
         self.y != old
     }
 
-    /// Scrolls the least that shows `top` to `bottom` (offsets into the content) in `view` px.
-    pub(crate) fn show(&mut self, top: f32, bottom: f32, view: f32) {
-        let y = if bottom > self.y + view { bottom - view } else { self.y };
-        self.y = y.min(top).max(0.0).min(self.max);
-    }
-
     /// While the content overflows, a thumb at the right edge of `view`: 3 px wide in the faint
     /// text color, as long as the share shown and as far down as the view.
     pub(crate) fn thumb(&self, ui: &mut Ui<'_>, view: RectF) {
@@ -252,27 +232,4 @@ impl Scroll {
         let r = ui.snapped(RectF::new(view.x + view.w - 6.0, y, 3.0, h));
         ui.fill(r, 1.5, ui.theme().text_faint);
     }
-}
-
-/// FNV-1a of `name`: the seed of a `.app` file's tile color, as the launcher has it.
-pub(crate) fn tint(name: &str) -> Rgba {
-    let fnv = |h: u32, b: u8| (h ^ u32::from(b)).wrapping_mul(16_777_619);
-    ui::theme::app_tint(name.bytes().fold(2_166_136_261, fnv))
-}
-
-/// `n` bytes for a person: `340 B`, `1.2 KB`, `3.4 MB`, in whole tenths (no float formatting).
-pub(crate) fn size(n: u64) -> String {
-    let mut out = String::new();
-    let (unit, scale) = match n {
-        0..1024 => ("B", 1),
-        1024..1_048_576 => ("KB", 1024),
-        _ => ("MB", 1_048_576),
-    };
-    let tenths = n * 10 / scale;
-    ui::push_num(&mut out, (tenths / 10) as usize);
-    if scale > 1 {
-        out.push('.');
-        ui::push_num(&mut out, (tenths % 10) as usize);
-    }
-    out + " " + unit
 }

@@ -28,6 +28,8 @@ members = [
     "crates/toolbox",
     "crates/uiwire",
     "crates/assistant",
+    "crates/uiview",
+    "crates/system",
     "tools/serve",
 ]
 
@@ -68,6 +70,8 @@ compusophy-kernel = { path = "crates/kernel", version = "0.1.0" }
 compusophy-wasi = { path = "crates/wasi", version = "0.1.0" }
 compusophy-uiwire = { path = "crates/uiwire", version = "0.1.0" }
 compusophy-assistant = { path = "crates/assistant", version = "0.1.0" }
+compusophy-uiview = { path = "crates/uiview", version = "0.1.0" }
+compusophy-system = { path = "crates/system", version = "0.1.0" }
 
 # The browser boundary. Only `platform`, `os` and `cpu` may use these
 # (scripts/caps.sh).

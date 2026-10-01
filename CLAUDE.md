@@ -60,10 +60,12 @@ crates/
              trait, Cx, the Code editor (re-exports text)
   vt/        VT/xterm escape parser        term/  terminal screen model
   guest/     the guest shell the Terminal runs
-  apps/      Welcome, Files, Settings, About, Feedback, Terminal
-  studio/    Studio (wasip1 GUI program): make apps by describing them, live
-  assistant/ the Assistant (wasip1 GUI program): chat; its AI code Studio shares
+  apps/      Welcome, Settings, Terminal
+  system/    About, Feedback, Files (one wasip1 program)
+  studio/    Studio (wasip1 GUI program): make apps by describing them
+  assistant/ the Assistant (wasip1 GUI program): chat; AI code Studio shares
   uiwire/    remote UI protocol: GUI programs send widget trees, get events
+  uiview/    draws them with ui; holds edited text
   host/      wm + one app per window (placement); motion, frame geometry, search
   home/      dock, everything bar + launcher panel, desktop icons, menus, touch
   shell/     the desktop: top bar, window chrome, keys; wires host + home (no web deps)
@@ -112,13 +114,13 @@ cargo run -p serve --release -- dist 8080   # preview; --plain: no COOP/COEP
 `?debug` in the page URL marks each frame (`performance.mark("frame")`):
 an idle desktop adds none.
 
-Fonts load in three groups, each with its budget: **boot** (Inter Regular,
+Fonts load in three groups: **boot** (Inter Regular,
 `include_bytes!` in `os`; the first frame needs only it), **deferred** (`os`
 fetches `fonts/deferred/*` after the first frame; until then bold draws as
 Regular and mono cells stay empty), **lazy** (the shell fetches
 `fonts/symbols-*.ttf` when a terminal first opens). `build-web.sh` copies
 them from `assets/fonts/{deferred,lazy}/` and the OFL texts to
-`dist/licenses/`. Regenerating the subsets: `assets/fonts/README.md`.
+`dist/licenses/`.
 
 ## Safety (the owner runs unattended; never trigger an approval prompt)
 

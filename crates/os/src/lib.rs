@@ -1,6 +1,7 @@
 //! compusophyOS's wasm entry: `start` runs a desktop on [`platform::run`] with the boot font, a
 //! [`Vfs`] holding the `/bin` markers and Studio's samples, and a [`Registry`] of [`apps::open`]
-//! then [`remote::open`]. The [`Shell`] is made at the first Resize that leaves a work area; until
+//! then [`remote::open`] (the GUI programs: About, Feedback, Files, Studio, the Assistant, `.app`
+//! files). The [`Shell`] is made at the first Resize that leaves a work area; until
 //! then input is dropped (a missed Tick is replayed) and frames clear to the default theme's base.
 //! The theme is kept in `localStorage` ([`THEME_KEY`]), as are the preferences of [`PREFS`]
 //! (`compusophy.<key>`), which apps and the shell set ([`shell::Effect::Pref`]) and the shell
@@ -41,8 +42,9 @@ pub const HOME_KEY: &str = "compusophy.home";
 /// the dock's favorites (registry names, comma-separated), `"1"` once Welcome was shown on a
 /// first visit, and `"off"` to stop automatic error reports. Other keys are dropped.
 pub const PREFS: [&str; 4] = [ui::AI_MODEL, "dock", "seen", "reports"];
-/// The applets of `bin/toolbox.wasm`, each a `/bin` marker file (as are the
-/// GUI programs, such as [`remote::STUDIO`] for `bin/studio.wasm`).
+/// The applets of `bin/toolbox.wasm`, each a `/bin` marker file (as are the GUI programs:
+/// [`remote::STUDIO`] for `bin/studio.wasm`, and those of [`remote::SYSTEM`] for one
+/// `bin/system.wasm`).
 const APPLETS: [&str; 9] =
     ["hello", "rev", "wc", "spin", "nap", "fstest", "keys", "bench", "selftest"];
 
@@ -81,6 +83,9 @@ impl Desktop {
         }
         let _ = vfs.write(remote::STUDIO, b"#!wasm bin/studio.wasm\n");
         let _ = vfs.write(remote::ASSISTANT, b"#!wasm bin/assistant.wasm\n");
+        for (name, ..) in remote::SYSTEM {
+            let _ = vfs.write(&["/bin/", name].concat(), b"#!wasm bin/system.wasm\n");
+        }
         Ok(Desktop { parts: Some((text, vfs)), ..Desktop::default() })
     }
 

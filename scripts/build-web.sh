@@ -4,8 +4,8 @@
 # web/index.html, the deferred fonts in dist/fonts/deferred/, the lazy fonts
 # in dist/fonts/ and the font licenses in dist/licenses/; then the program
 # worker (the cpu crate, its glue and web/worker.js) in dist/cpu/ and the
-# programs (the toolbox, studio and assistant crates, for wasm32-wasip1) in
-# dist/bin/.
+# programs (the toolbox, studio, assistant and system crates, for wasm32-wasip1)
+# in dist/bin/.
 # scripts/budget.sh measures the result;
 # `cargo run -p serve --release -- dist 8080` serves it.
 set -euo pipefail
@@ -50,7 +50,7 @@ flags+=("--remap-path-prefix=$cargo_home=/cargo")
 CARGO_ENCODED_RUSTFLAGS=$(IFS=$'\x1f'; printf '%s' "${flags[*]}")
 export CARGO_ENCODED_RUSTFLAGS
 
-# The build id reports and About show (option_env! in os and apps): the short
+# The build id reports and About show (option_env! in os and system): the short
 # commit, with -dirty when the tree has uncommitted changes; dev outside git.
 COMPUSOPHY_BUILD=$(git rev-parse --short HEAD 2>/dev/null || echo dev)
 if [ -n "$(git status --porcelain 2>/dev/null)" ]; then
@@ -156,12 +156,12 @@ wasm-bindgen "${bindgen[@]}" --out-dir dist/cpu --out-name cpu "$target_dir/wasm
 optimize dist/cpu/cpu_bg.wasm
 cp web/worker.js dist/cpu/
 # The programs, each fetched when it first runs: std binaries for WASI, the
-# test programs (toolbox.wasm), Studio (studio.wasm) and the Assistant
-# (assistant.wasm), in one cargo run.
+# test programs (toolbox.wasm), Studio (studio.wasm), the Assistant
+# (assistant.wasm) and About, Feedback and Files (system.wasm), in one cargo run.
 rustup target list --installed 2>/dev/null | tr -d '\r' | grep -qx wasm32-wasip1 || { echo "ERROR: run: rustup target add wasm32-wasip1" >&2; exit 1; }
-cargo build -p compusophy-toolbox -p compusophy-studio -p compusophy-assistant --bins --release --target wasm32-wasip1
+cargo build -p compusophy-toolbox -p compusophy-studio -p compusophy-assistant -p compusophy-system --bins --release --target wasm32-wasip1
 mkdir -p dist/bin
-for p in toolbox studio assistant; do
+for p in toolbox studio assistant system; do
   cp "$target_dir/wasm32-wasip1/release/$p.wasm" dist/bin/
   optimize "dist/bin/$p.wasm"
 done

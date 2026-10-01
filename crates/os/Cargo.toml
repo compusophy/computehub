@@ -23,3 +23,4 @@ compusophy-vfs.workspace = true
 compusophy-apps.workspace = true
 compusophy-guest.workspace = true
 compusophy-uiwire.workspace = true
+compusophy-uiview.workspace = true

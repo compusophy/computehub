@@ -102,7 +102,6 @@ fn show(r: &Request) -> String {
         Request::LoadFallbackFonts => "fonts".into(),
         Request::SetTheme(name) => format!("theme {name}"),
         Request::Pref { key, value } => format!("pref {key}={value}"),
-        Request::Feedback { kind, text, context } => format!("feedback {kind} {context} {text}"),
         other => format!("{other:?}"),
     }
 }
@@ -288,7 +287,7 @@ fn inks(list: &DrawList) -> Vec<Rgba> {
 /// the accent, or an app icon's ink, and every shape lies on device pixels.
 fn refined(list: &DrawList, t: &Theme, dpr: f32, what: &str) {
     use kit::*;
-    let icons = [TERMINAL, STUDIO, ASSISTANT, SETTINGS, WELCOME, FILES, ABOUT, FEEDBACK, FILE];
+    let icons = [TERMINAL, STUDIO, ASSISTANT, SETTINGS, WELCOME, FILES, ABOUT, FEEDBACK];
     let mut ok = vec![t.text, t.text_dim, t.accent, t.accent_text];
     ok.extend(icons.map(|i| t.icon_colors(i.hue)[2]));
     inks(list).iter().for_each(|i| assert!(ok.contains(i), "{what} in {}: ink {i:?}", t.name));
@@ -319,18 +318,18 @@ fn apps_have_grids_titles_icons_and_sizes_and_are_refined_in_every_theme() {
     t.term.feed(b"\x1b]2;notes\x07");
     assert_eq!(t.title(), "Terminal — notes");
     assert!(t.wants_text_input() && open("launcher").is_none(), "the shell owns the launcher");
-    assert_eq!(NAMES, ["welcome", "terminal", "settings", "about", "feedback", "files"]);
+    // About, Feedback and Files are programs now (the system crate), not built in.
+    assert_eq!(NAMES, ["welcome", "terminal", "settings"]);
+    assert!(["about", "feedback", "files", "files:~/apps"].iter().all(|n| open(n).is_none()));
     #[rustfmt::skip]
     let want = [
         (Glyph::Mark, 0xf472b6, (520.0, 768.0), true), (Glyph::Terminal, 0x2dd4bf, (W80, H24), false),
-        (Glyph::Cog, 0x94a3b8, (720.0, 520.0), true), (Glyph::About, 0xfbbf24, (560.0, 640.0), true),
-        (Glyph::Feedback, 0x34d399, (520.0, 420.0), true), (Glyph::Folder, 0x60a5fa, (640.0, 480.0), false),
+        (Glyph::Cog, 0x94a3b8, (720.0, 520.0), true),
     ];
     for (name, (glyph, hue, size, compact)) in NAMES.iter().zip(want) {
         let (app, icon) = (open(name).unwrap(), ui::AppIcon { glyph, hue: Rgba::hex(hue) });
         assert_eq!((app.icon(), app.preferred_size(), app.compact()), (icon, Some(size), compact));
     }
-    assert!(open("files:~/apps").is_some() && open("files").is_some());
     for dpr in [1.0, 1.5, 2.0] {
         let mut ts = text_system();
         ts.set_dpr(dpr);
@@ -457,178 +456,6 @@ fn settings_privacy_switches_reports_and_leads_to_feedback() {
     let r = RectF::new(0.0, 0.0, 360.0, 300.0);
     let list = draw(&mut s.app, &mut ts, r, MIDNIGHT).0;
     assert!(thumb(&list, MIDNIGHT) && s.wheel(100.0));
-}
-
-#[test]
-fn about_shows_the_mark_the_stack_and_credits_and_scrolls() {
-    let (mut ts, mut s) = (text_system(), Sim::new(About::default()));
-    assert_eq!(s.app.title(), "About");
-    let r = RectF::new(0.0, 36.0, 560.0, 640.0);
-    let (list, hits) = draw(&mut s.app, &mut ts, r, MIDNIGHT);
-    assert!(hits.is_empty(), "nothing to click");
-    assert_eq!(of(&list, Kind::Glyph).filter(|g| (86.0..92.0).contains(&g.rect[2])).count(), 1);
-    assert!(inks(&list).len() > 600 && thumb(&list, MIDNIGHT), "{}", inks(&list).len());
-    assert!(s.wheel(200.0) && s.wheel(1e9) && !s.wheel(5.0));
-    let moved = draw(&mut s.app, &mut ts, r, MIDNIGHT).0;
-    assert!(moved.instances() != list.instances());
-    assert!(inks(&moved).contains(&MIDNIGHT.accent), "the source, in the accent");
-    assert!(!s.both(AppEvent::Click(WidgetId(1))).0);
-    // Narrow: roles go under the names, so it is taller.
-    let narrow = draw(&mut s.app, &mut ts, RectF::new(0.0, 0.0, 300.0, 640.0), MIDNIGHT).0;
-    assert!(inks(&narrow).len() > 300);
-}
-
-#[test]
-fn feedback_composes_and_sends_with_its_kind_and_context() {
-    let (mut ts, mut s) = (text_system(), Sim::new(Feedback::default()));
-    assert!(s.app.wants_text_input(), "ready to type");
-    let r = RectF::new(0.0, 36.0, 520.0, 600.0);
-    let (list, hits) = draw(&mut s.app, &mut ts, r, MIDNIGHT);
-    assert_eq!(ids(&hits), [1, 2, 3, 10, 11, 12]);
-    assert!(s.click(12).is_empty(), "nothing to send yet");
-    let idea = hit(&hits, 2).rect;
-    let fills: Vec<_> = of(&list, Kind::Fill).map(|i| (i.rect, i.color)).collect();
-    assert!(fills.contains(&([idea.x, idea.y, idea.w, idea.h], MIDNIGHT.accent)), "Idea at first");
-    // Typing and editing.
-    s.text("Hello wrld");
-    s.keys(&[Key::Left; 3]);
-    s.text("o");
-    s.key(Key::End, NO);
-    s.key(Key::Enter, NO);
-    s.text("second\u{7}");
-    assert_eq!((s.app.text.as_str(), s.app.at), ("Hello world\nsecond", 18));
-    s.keys(&[Key::Home, Key::Backspace, Key::Delete]);
-    assert_eq!((s.app.text.as_str(), s.app.at), ("Hello worldecond", 11));
-    s.keys(&[Key::Enter, Key::Right]);
-    // Up and down go by rows, resolved where text is measured: the next draw.
-    s.key(Key::Up, NO);
-    let hits = draw(&mut s.app, &mut ts, r, MIDNIGHT).1;
-    assert_eq!(s.app.at, 1, "under the caret, a row up");
-    // A press in the text puts the caret there; one on nothing leaves the text.
-    let well = hit(&hits, 10).rect;
-    let (x, y) = (well.x + 13.0 - r.x, well.y + 13.0 + 17.0 + 5.0 - r.y);
-    s.ev(AppEvent::PointerDown { x, y, id: Some(WidgetId(10)) });
-    draw(&mut s.app, &mut ts, r, MIDNIGHT);
-    assert_eq!(s.app.at, 12, "the start of the second row");
-    assert!(s.both(AppEvent::PointerDown { x: 1.0, y: 1.0, id: None }).0);
-    assert!(!s.app.wants_text_input() && s.text("ignored").is_empty());
-    s.ev(AppEvent::PointerDown { x, y, id: Some(WidgetId(10)) });
-    // The kind and the context; then Send, which clears and thanks.
-    assert_eq!([s.click(1), s.click(11)].concat(), "");
-    assert!(s.app.kind == 0 && !s.app.context && s.app.focus);
-    let hits = draw(&mut s.app, &mut ts, r, MIDNIGHT).1;
-    assert_eq!(ids(&hits), [1, 2, 3, 10, 11, 12]);
-    let sent = s.click(12);
-    assert_eq!(sent, "feedback bug false Hello world\necond");
-    assert!(s.app.text.is_empty() && s.app.status == Some(feedback::THANKS));
-    let list = draw(&mut s.app, &mut ts, r, MIDNIGHT).0;
-    assert!(inks(&list).len() > 100);
-    assert!(s.click(12).is_empty(), "nothing to send");
-    // Typing hides the note. Ctrl+Enter sends; what it says does not hang on how an earlier
-    // report fared (the page builds and sends this one later).
-    s.text("  Love the mono theme  ");
-    assert!(s.app.status.is_none());
-    s.ai.held = true;
-    let sent = s.key(Key::Enter, CTRL);
-    assert_eq!(sent, "feedback bug false Love the mono theme");
-    assert_eq!(s.app.status, Some(feedback::THANKS));
-    // A long text grows the box and the page follows the caret down.
-    for _ in 0..40 {
-        s.text("line\n");
-    }
-    let list = draw(&mut s.app, &mut ts, r, MIDNIGHT).0;
-    let well = of(&list, Kind::Fill).find(|i| i.color == MIDNIGHT.surface_lo).expect("the box");
-    assert!(well.rect[3] > 600.0 && thumb(&list, MIDNIGHT), "{well:?}");
-    let caret = of(&list, Kind::Fill).find(|i| i.color == MIDNIGHT.accent && i.rect[2] <= 2.0);
-    let caret = caret.expect("the caret");
-    assert!(caret.rect[1] > 36.0 && caret.rect[1] < 636.0, "in view: {caret:?}");
-    assert!(s.key(Key::Escape, NO).is_empty() && !s.app.focus);
-    assert!(s.both(AppEvent::Wheel { x: 0.0, y: 0.0, dy: -50.0 }).0);
-}
-
-#[test]
-fn files_walks_folders_and_opens_what_it_finds() {
-    let (mut ts, mut s) = (text_system(), Sim::new(Files::default()));
-    let home = Vfs::HOME.to_string();
-    s.fs.mkdir_all(&[&home, "/apps"].concat()).unwrap();
-    s.fs.mkdir_all(&[&home, "/zed"].concat()).unwrap();
-    s.fs.write(&[&home, "/apps/clock.app"].concat(), b"app").unwrap();
-    s.fs.write(&[&home, "/notes.txt"].concat(), b"hello").unwrap();
-    let r = RectF::new(0.0, 36.0, 640.0, 480.0);
-    assert!(draw(&mut s.app, &mut ts, r, MIDNIGHT).1.len() == 2, "not listed before an event");
-    assert!(s.both(AppEvent::Resized { w: 640.0, h: 480.0 }).0);
-    let (list, hits) = draw(&mut s.app, &mut ts, r, MIDNIGHT);
-    assert_eq!(ids(&hits), [1, 10, 1000, 1001, 1002], "Up, ~, folders first, then files");
-    assert!(inks(&list).len() > 20 && !thumb(&list, MIDNIGHT));
-    assert_eq!([kit::size(5), kit::size(1536), kit::size(3_500_000)], ["5 B", "1.5 KB", "3.3 MB"]);
-    // Into a folder, the crumbs follow; a .app runs, other files open in Studio.
-    assert!(s.click(1000).is_empty() && s.app.dir == [&home, "/apps"].concat());
-    assert_eq!(ids(&draw(&mut s.app, &mut ts, r, MIDNIGHT).1), [1, 10, 11, 1000]);
-    assert_eq!(s.click(1000), ["open ", &home, "/apps/clock.app"].concat());
-    assert!(s.both(AppEvent::Click(WidgetId(10))).0 && s.app.dir == home);
-    draw(&mut s.app, &mut ts, r, MIDNIGHT);
-    assert_eq!(s.click(1002), ["open studio:", &home, "/notes.txt"].concat());
-    // Up, out of home: crumbs from /, home's own tile; at the root no Up.
-    assert!(s.both(AppEvent::Click(WidgetId(1))).0 && s.app.dir == "/home");
-    let hits = draw(&mut s.app, &mut ts, r, MIDNIGHT).1;
-    assert_eq!(ids(&hits), [1, 10, 11, 1000]);
-    assert!(s.both(AppEvent::Click(WidgetId(1))).0 && s.app.dir == "/");
-    assert_eq!(ids(&draw(&mut s.app, &mut ts, r, MIDNIGHT).1)[..2], [10, 1000]);
-    assert!(!s.both(AppEvent::Click(WidgetId(10))).0, "already there");
-    // A change to the files shows at the next event.
-    s.fs.write("/top.txt", b"x").unwrap();
-    assert!(s.both(AppEvent::Focus(true)).0 && !s.both(AppEvent::Focus(true)).0);
-    // files:<dir> opens there; a folder that is not falls back to home; an empty one says so.
-    let mut f = Sim::new(Files::new("~/apps"));
-    f.fs = std::mem::replace(&mut s.fs, Vfs::new());
-    f.both(AppEvent::Focus(true));
-    assert_eq!(f.app.dir, [&home, "/apps"].concat());
-    let mut gone = Sim::new(Files::new("/nope"));
-    gone.both(AppEvent::Focus(true));
-    assert_eq!(gone.app.dir, home);
-    let (list, hits) = draw(&mut gone.app, &mut ts, r, MIDNIGHT);
-    assert!(ids(&hits) == [1, 10] && inks(&list).len() > 15, "empty, and saying so");
-    // Many files scroll, under a thumb; a deep path drops its first crumbs when narrow.
-    for i in 0..30 {
-        f.fs.write(&[&home, "/apps/", &i.to_string(), ".txt"].concat(), b"").unwrap();
-    }
-    f.both(AppEvent::Focus(true));
-    let list = draw(&mut f.app, &mut ts, r, MIDNIGHT).0;
-    assert!(thumb(&list, MIDNIGHT) && f.wheel(300.0) && f.wheel(1e9) && !f.wheel(1.0));
-    f.fs.mkdir_all(&[&home, "/apps/a/very/deep/folder/indeed"].concat()).unwrap();
-    f.app = Files::new("~/apps/a/very/deep/folder/indeed");
-    f.both(AppEvent::Focus(true));
-    let hits = draw(&mut f.app, &mut ts, RectF::new(0.0, 0.0, 240.0, 400.0), MIDNIGHT).1;
-    let crumbs: Vec<u32> = ids(&hits).into_iter().filter(|&i| (10..1000).contains(&i)).collect();
-    assert!(crumbs.last() == Some(&16) && crumbs[0] > 10, "{crumbs:?}");
-}
-
-#[test]
-fn files_opens_the_entry_drawn_under_a_press_though_the_folder_changed() {
-    let (mut ts, mut s) = (text_system(), Sim::new(Files::default()));
-    let (home, r) = (Vfs::HOME.to_string(), RectF::new(0.0, 0.0, 390.0, 700.0));
-    s.fs.write(&[&home, "/notes.txt"].concat(), b"hello").unwrap();
-    s.both(AppEvent::Focus(true));
-    assert_eq!(ids(&draw(&mut s.app, &mut ts, r, MIDNIGHT).1), [1, 10, 1000]);
-    // A folder made elsewhere comes first at the next listing, which the press brings (its
-    // focus, or the press itself); the row still opens what was under the press, even with a
-    // frame of the new listing before the release.
-    s.fs.mkdir(&[&home, "/b"].concat()).unwrap();
-    let press = AppEvent::PointerDown { x: 50.0, y: 70.0, id: Some(WidgetId(1000)) };
-    assert!(s.both(press.clone()).0, "listed again");
-    assert_eq!(s.click(1000), ["open studio:", &home, "/notes.txt"].concat());
-    s.fs.mkdir(&[&home, "/c"].concat()).unwrap();
-    s.both(press);
-    assert_eq!(ids(&draw(&mut s.app, &mut ts, r, MIDNIGHT).1), [1, 10, 1000, 1001, 1002]);
-    assert_eq!(s.click(1000), ["open studio:", &home, "/notes.txt"].concat());
-    assert_eq!(s.app.dir, home);
-    // Without a press first, the row as drawn too; a row whose entry went opens nothing.
-    s.fs.mkdir(&[&home, "/a"].concat()).unwrap();
-    assert_eq!(s.click(1002), ["open studio:", &home, "/notes.txt"].concat());
-    assert_eq!(ids(&draw(&mut s.app, &mut ts, r, MIDNIGHT).1)[2..], [1000, 1001, 1002, 1003]);
-    s.fs.remove(&[&home, "/notes.txt"].concat(), false).unwrap();
-    s.ev(AppEvent::PointerDown { x: 50.0, y: 202.0, id: Some(WidgetId(1003)) });
-    assert!(!s.both(AppEvent::Click(WidgetId(1003))).0 && s.app.dir == home);
 }
 
 #[test]

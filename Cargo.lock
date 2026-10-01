@@ -129,6 +129,7 @@ dependencies = [
  "compusophy-platform",
  "compusophy-shell",
  "compusophy-ui",
+ "compusophy-uiview",
  "compusophy-uiwire",
  "compusophy-vfs",
  "compusophy-wm",
@@ -168,6 +169,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "compusophy-system"
+version = "0.1.0"
+dependencies = [
+ "compusophy-icons",
+ "compusophy-ui",
+ "compusophy-uiwire",
+ "compusophy-vfs",
+]
+
+[[package]]
 name = "compusophy-term"
 version = "0.1.0"
 dependencies = [
@@ -195,6 +206,15 @@ dependencies = [
  "compusophy-kernel",
  "compusophy-text",
  "compusophy-vfs",
+]
+
+[[package]]
+name = "compusophy-uiview"
+version = "0.1.0"
+dependencies = [
+ "compusophy-gfx",
+ "compusophy-ui",
+ "compusophy-uiwire",
 ]
 
 [[package]]
