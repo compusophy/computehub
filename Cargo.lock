@@ -42,6 +42,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "compusophy-assistant"
+version = "0.1.0"
+dependencies = [
+ "compusophy-applang",
+ "compusophy-uiwire",
+]
+
+[[package]]
 name = "compusophy-cpu"
 version = "0.1.0"
 dependencies = [

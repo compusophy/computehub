@@ -33,19 +33,12 @@ fn in_table(table: &[u32], u: u32) -> bool {
 /// The cells `c` takes: 2 for wide characters and emoji, 0 for controls and
 /// the zero-width ranges, else 1, as Ink's `string-width` counts code points.
 pub fn char_width(c: char) -> u8 {
-    let u = u32::from(c);
-    if u < 0x7F {
-        return u8::from(u >= 0x20);
-    }
-    if u < 0xA0 {
-        return 0;
-    }
-    if u < 0x300 {
-        1
-    } else if in_table(ZERO, u) {
-        0
-    } else {
-        1 + u8::from(in_table(WIDE, u))
+    match u32::from(c) {
+        u @ 0..0x7F => u8::from(u >= 0x20),
+        0x7F..0xA0 => 0,
+        0xA0..0x300 => 1,
+        u if in_table(ZERO, u) => 0,
+        u => 1 + u8::from(in_table(WIDE, u)),
     }
 }
 
@@ -69,11 +62,9 @@ mod tests {
 
     #[test]
     fn tables_are_sorted_pairs() {
+        let ok = |(i, w): (usize, &[u32])| w[0] < w[1] || (i % 2 == 0 && w[0] == w[1]);
         for t in [ZERO, WIDE] {
-            assert_eq!(t.len() % 2, 0);
-            assert!(
-                t.windows(2).enumerate().all(|(i, w)| w[0] < w[1] || (i % 2 == 0 && w[0] == w[1]))
-            );
+            assert!(t.len() % 2 == 0 && t.windows(2).enumerate().all(ok));
         }
     }
 

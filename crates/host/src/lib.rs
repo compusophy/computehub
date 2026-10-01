@@ -21,7 +21,7 @@ use std::mem;
 use gfx::{DrawList, RectF};
 use kernel::Kernel;
 use motion::Themes;
-use ui::{AppEvent, AppIcon, Cx, Key, Mods, Request, TextSystem, Theme, Ui, UiState};
+use ui::{AiStatus, AppEvent, AppIcon, Cx, Key, Mods, Request, TextSystem, Theme, Ui, UiState};
 use vfs::Vfs;
 use wm::{Cmd, Outcome, Rect, WinId, Wm};
 
@@ -85,11 +85,13 @@ impl LocalTime {
 }
 
 /// Something only the platform can do: fetch `url` (page-relative) for
-/// [`Host::fetched`] with `id`, or what the kernel asked for (workers, timer).
+/// [`Host::fetched`] with `id`, what the kernel asked for (workers, timer), or
+/// save the AI settings ([`ui::Request::AiConfig`]) in the page's storage.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Effect {
     Fetch { id: u32, url: String },
     Kernel(kernel::Effect),
+    AiConfig { provider: String, key: Option<String>, model: String },
 }
 
 /// For the kernel: a worker's message or failure, the one-shot timer, the page hidden.
@@ -103,16 +105,9 @@ pub enum KernelIn {
 
 /// The pointer: arrow, I-beam on text, open hand on a titlebar (closed while moving), resizes.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[rustfmt::skip]
 pub enum Cursor {
-    #[default]
-    Default,
-    Text,
-    Grab,
-    Grabbing,
-    EwResize,
-    NsResize,
-    NwseResize,
-    NeswResize,
+    #[default] Default, Text, Grab, Grabbing, EwResize, NsResize, NwseResize, NeswResize,
 }
 
 /// After an input: draw, `preventDefault`, text input and cursor (if changed), effects, animate.
@@ -172,6 +167,9 @@ pub struct Host {
     focus: Option<WinId>,
     /// Icons of apps by name, as the registry made them.
     icons: Vec<(String, Option<AppIcon>)>,
+    /// What apps see in [`Cx::ai`] and [`Cx::localhost`]: os sets them; saves update `ai`.
+    pub ai: AiStatus,
+    pub localhost: bool,
 }
 
 impl Host {
@@ -179,8 +177,9 @@ impl Host {
     pub fn new(wm: Wm, text: TextSystem, vfs: Vfs, registry: Registry, theme: &str) -> Host {
         let (wins, fonts, icons, theme) = (Vec::new(), Vec::new(), Vec::new(), Themes::new(theme));
         let (now_ms, launcher, themes, focus) = (0.0, false, Vec::new(), None);
+        let ai = AiStatus::default();
         Host { generation: vfs.generation(), kernel: Kernel::new(), wm, text, vfs, registry, wins,
-            now_ms, theme, launcher, themes, fonts, focus, icons }
+            now_ms, theme, launcher, themes, fonts, focus, icons, ai, localhost: false }
     }
 
     pub fn wm(&self) -> &Wm {
@@ -286,6 +285,7 @@ impl Host {
         let Some(w) = self.wins.iter_mut().find(|w| w.id == win && rect.is_some()) else { return };
         self.kernel.set_owner(win.0);
         let mut cx = Cx::new(&mut self.vfs, &mut self.kernel, self.now_ms);
+        (cx.ai, cx.localhost) = (self.ai.clone(), self.localhost);
         let redraw = match call {
             Call::Event(ev) => w.app.event(ev, &mut cx),
             Call::Frame(pid, frame) => w.app.frame(pid, frame, &mut cx),
@@ -306,6 +306,10 @@ impl Host {
                 Request::CloseSelf => out.redraw |= self.close_then(Cmd::Close(win), out),
                 Request::LoadFallbackFonts => self.load_fonts(out),
                 Request::SetTheme(name) => self.themes.push(name),
+                Request::AiConfig { provider, key, model } => {
+                    self.ai = self.ai.saved(&provider, key.as_deref(), &model);
+                    out.effects.push(Effect::AiConfig { provider, key, model });
+                }
                 Request::Size(w, h) => {
                     let (r, size) = (rect.unwrap_or_default(), window_size((w.into(), h.into())));
                     let rect = size.map(|(w, h)| Rect::new(r.x, r.y, w, h));

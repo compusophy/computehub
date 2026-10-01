@@ -1,8 +1,7 @@
-//! The byte protocol between the main thread and a program's worker; the
-//! channel names the process, so requests carry no pid. Little-endian; a `str`
-//! is a u16 length and UTF-8 (a guest's non-UTF-8 path is [`EILSEQ`] in the
-//! worker); `rest` is every remaining byte. A bad message decodes to `None`
-//! (answered with [`EINVAL`]), never a panic.
+//! The byte protocol between the main thread and a program's worker; the channel names the process,
+//! so requests carry no pid. Little-endian; a `str` is a u16 length and UTF-8 (a guest's non-UTF-8
+//! path is [`EILSEQ`] in the worker); `rest` is every remaining byte. A bad message decodes to
+//! `None` (answered with [`EINVAL`]), never a panic.
 //!
 //! A process's SAB: 16 i32 words ([`STATE`] to [`BELL`], the rest 0), the reply
 //! payload at [`PAYLOAD_AT`], the console ring at [`RING_AT`]. A reply: payload,
@@ -127,83 +126,60 @@ impl Writer {
     }
 }
 
-/// One message, borrowed: worker to main (READY to EXIT; the platform makes CONS_WRITE from
-/// the ring) or main to an async worker (REPLY, SAVE). Replies carry: OPEN `u8 kind, u64 size`;
-/// READ, CONS_READ the bytes; WRITE `u64 size`; LIST `{u8 kind, u64 size, str name}*`; others none.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Msg<'a> {
-    Ready { version: u8 },
-    Open { oflags: u8, path: &'a str },
-    Read { off: u64, max: u32, path: &'a str },
-    Write { off: u64, path: &'a str, data: &'a [u8] },
-    List { skip: u32, path: &'a str },
-    Mkdir { path: &'a str },
-    Remove { kind: u8, path: &'a str },
-    Rename { from: &'a str, to: &'a str },
-    SetLen { len: u64, path: &'a str },
-    ConsBell,
-    ConsWrite { data: &'a [u8] },
-    ConsRead { max: u32 },
-    ConsMode { bits: u8 },
-    HomeState { state: u8, note: &'a str },
-    Exit { status: i32 },
-    Reply { errno: u16, data: &'a [u8] },
-    Save,
+/// Declares [`Msg`] and its codec, an `OP Name { field: type }` per op; a type is a number, `str`,
+/// `bytes` (a `rest`) or `payload` (a `rest` of at most [`MAX_PAYLOAD`] bytes).
+macro_rules! msgs {
+    ($($op:ident $name:ident $({ $($f:ident: $t:ident),+ })?;)+) => {
+        /// One message, borrowed: worker to main (READY to EXIT; the platform makes CONS_WRITE
+        /// from the ring) or main to an async worker (REPLY, SAVE). Replies carry: OPEN `u8 kind,
+        /// u64 size`; READ, CONS_READ the bytes; WRITE `u64 size`; LIST `{u8 kind, u64 size, str
+        /// name}*`; others none.
+        #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+        pub enum Msg<'a> {
+            $($name $({ $($f: msgs!(@ty $t)),+ })?,)+
+        }
+
+        impl<'a> Msg<'a> {
+            /// `None` for an unknown or reserved op, a short or long body, non-UTF-8
+            /// text, or a WRITE body over [`MAX_PAYLOAD`].
+            pub fn decode(b: &'a [u8]) -> Option<Msg<'a>> {
+                let mut r = Reader(b);
+                let msg = match r.u8()? {
+                    $($op => Msg::$name $({ $($f: msgs!(@get r $t)),+ })?,)+
+                    _ => return None,
+                };
+                r.end().map(|()| msg)
+            }
+
+            pub fn encode(&self) -> Vec<u8> {
+                match *self {
+                    $(Msg::$name $({ $($f),+ })? => msgs!(@put Writer::new($op), $($($t $f)+)?),)+
+                }
+                .done()
+            }
+        }
+    };
+    (@ty str) => { &'a str };
+    (@ty bytes) => { &'a [u8] };
+    (@ty payload) => { &'a [u8] };
+    (@ty $t:ident) => { $t };
+    (@get $r:ident bytes) => { $r.rest() };
+    (@get $r:ident payload) => { Some($r.rest()).filter(|d| d.len() <= MAX_PAYLOAD)? };
+    (@get $r:ident $t:ident) => { $r.$t()? };
+    (@put $w:expr,) => { $w };
+    (@put $w:expr, payload $f:ident $($more:tt)*) => { msgs!(@put $w.bytes($f), $($more)*) };
+    (@put $w:expr, $t:ident $f:ident $($more:tt)*) => { msgs!(@put $w.$t($f), $($more)*) };
 }
 
-impl<'a> Msg<'a> {
-    /// `None` for an unknown or reserved op, a short or long body, non-UTF-8
-    /// text, or a WRITE body over [`MAX_PAYLOAD`].
-    pub fn decode(b: &'a [u8]) -> Option<Msg<'a>> {
-        let mut r = Reader(b);
-        let msg = match r.u8()? {
-            READY => Msg::Ready { version: r.u8()? },
-            OPEN => Msg::Open { oflags: r.u8()?, path: r.str()? },
-            READ => Msg::Read { off: r.u64()?, max: r.u32()?, path: r.str()? },
-            WRITE => {
-                let (off, path, data) = (r.u64()?, r.str()?, r.rest());
-                (data.len() <= MAX_PAYLOAD).then_some(Msg::Write { off, path, data })?
-            }
-            LIST => Msg::List { skip: r.u32()?, path: r.str()? },
-            MKDIR => Msg::Mkdir { path: r.str()? },
-            REMOVE => Msg::Remove { kind: r.u8()?, path: r.str()? },
-            RENAME => Msg::Rename { from: r.str()?, to: r.str()? },
-            SETLEN => Msg::SetLen { len: r.u64()?, path: r.str()? },
-            CONS_BELL => Msg::ConsBell,
-            CONS_WRITE => Msg::ConsWrite { data: r.rest() },
-            CONS_READ => Msg::ConsRead { max: r.u32()? },
-            CONS_MODE => Msg::ConsMode { bits: r.u8()? },
-            HOME_STATE => Msg::HomeState { state: r.u8()?, note: r.str()? },
-            EXIT => Msg::Exit { status: r.i32()? },
-            REPLY => Msg::Reply { errno: r.u16()?, data: r.rest() },
-            SAVE => Msg::Save,
-            _ => return None,
-        };
-        r.end().map(|()| msg)
-    }
-
-    pub fn encode(&self) -> Vec<u8> {
-        match *self {
-            Msg::Ready { version } => Writer::new(READY).u8(version),
-            Msg::Open { oflags, path } => Writer::new(OPEN).u8(oflags).str(path),
-            Msg::Read { off, max, path } => Writer::new(READ).u64(off).u32(max).str(path),
-            Msg::Write { off, path, data } => Writer::new(WRITE).u64(off).str(path).bytes(data),
-            Msg::List { skip, path } => Writer::new(LIST).u32(skip).str(path),
-            Msg::Mkdir { path } => Writer::new(MKDIR).str(path),
-            Msg::Remove { kind, path } => Writer::new(REMOVE).u8(kind).str(path),
-            Msg::Rename { from, to } => Writer::new(RENAME).str(from).str(to),
-            Msg::SetLen { len, path } => Writer::new(SETLEN).u64(len).str(path),
-            Msg::ConsBell => Writer::new(CONS_BELL),
-            Msg::ConsWrite { data } => Writer::new(CONS_WRITE).bytes(data),
-            Msg::ConsRead { max } => Writer::new(CONS_READ).u32(max),
-            Msg::ConsMode { bits } => Writer::new(CONS_MODE).u8(bits),
-            Msg::HomeState { state, note } => Writer::new(HOME_STATE).u8(state).str(note),
-            Msg::Exit { status } => Writer::new(EXIT).i32(status),
-            Msg::Reply { errno, data } => Writer::new(REPLY).u16(errno).bytes(data),
-            Msg::Save => Writer::new(SAVE),
-        }
-        .done()
-    }
+msgs! {
+    READY Ready { version: u8 }; OPEN Open { oflags: u8, path: str };
+    READ Read { off: u64, max: u32, path: str }; WRITE Write { off: u64, path: str, data: payload };
+    LIST List { skip: u32, path: str }; MKDIR Mkdir { path: str };
+    REMOVE Remove { kind: u8, path: str }; RENAME Rename { from: str, to: str };
+    SETLEN SetLen { len: u64, path: str }; CONS_BELL ConsBell; CONS_WRITE ConsWrite { data: bytes };
+    CONS_READ ConsRead { max: u32 }; CONS_MODE ConsMode { bits: u8 };
+    HOME_STATE HomeState { state: u8, note: str }; EXIT Exit { status: i32 };
+    REPLY Reply { errno: u16, data: bytes }; SAVE Save;
 }
 
 /// What a worker runs as: a program, or homed.
@@ -259,11 +235,7 @@ impl Start {
     pub fn decode(b: &[u8]) -> Option<Start> {
         let mut r = Reader(b);
         (r.u8()? == VERSION).then_some(())?;
-        let role = match r.u8()? {
-            0 => Role::Process,
-            1 => Role::Home,
-            _ => return None,
-        };
+        let role = [Role::Process, Role::Home].get(usize::from(r.u8()?)).copied()?;
         let (pid, flags, size) = (r.u32()?, r.u8()?, (r.u16()?, r.u16()?));
         (flags < 2).then_some(())?;
         let tty = (flags == 1).then_some(size);
@@ -274,9 +246,7 @@ impl Start {
             _ => return None,
         };
         let cwd = r.str()?.into();
-        let mut list = || -> Option<Vec<String>> {
-            (0..r.u16()?).map(|_| r.str().map(String::from)).collect()
-        };
+        let mut list = || (0..r.u16()?).map(|_| r.str().map(String::from)).collect::<Option<_>>();
         let (roots, argv, env) = (list()?, list()?, list()?);
         r.end()?;
         Some(Start { role, pid, tty, stdout, cwd, roots, argv, env })

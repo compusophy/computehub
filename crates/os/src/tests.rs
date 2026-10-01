@@ -178,7 +178,7 @@ fn shell_starts_at_the_first_usable_size() {
     assert_eq!(send(&mut desk, resize(1280.0, 800.0)), ((true, false), vec![Fx::TextInput(false)]));
     // The startup window sits as it would at that size from the start.
     let (text, fs) = fresh().parts.expect("unused");
-    let fresh = Shell::new(1280.0, 800.0, text, fs, registry(), "");
+    let fresh = Shell::new(1280.0, 800.0, text, fs, registry(ai::Ai::default()), "");
     let got = shell(&desk);
     let wm = |s: &Shell| (s.wm().state_hash(), s.wm().layout());
     assert_eq!(wm(got), wm(&fresh));
@@ -279,10 +279,10 @@ fn fonts_load_in_groups_and_frames_come_only_while_something_moves() {
 
 #[test]
 fn desktop_routes_events_through_the_shell() {
-    use Cursor::*;
+    use shell::Cursor::*;
     let all = [Default, Text, Grab, Grabbing, EwResize, NsResize, NwseResize, NeswResize];
     let css = "default text grab grabbing ew-resize ns-resize nwse-resize nesw-resize";
-    assert_eq!(all.map(cursor).join(" "), css);
+    assert_eq!(all.map(|c| CURSORS[c as usize]).join(" "), css);
     // Over a titlebar the hand opens, once; over the bare desktop the arrow.
     let mut desk = desktop(false);
     let r = shell(&desk).wm().layout()[0].rect;
@@ -348,8 +348,9 @@ fn programs_reach_the_kernel_and_its_effects_the_page() {
     // /bin holds each applet's marker; kernel events before the shell are dropped.
     let mut desk = fresh();
     let vfs = &desk.parts.as_ref().expect("unused").1;
-    assert_eq!(vfs.list("/bin").map(|l| l.len()), Ok(10));
+    assert_eq!(vfs.list("/bin").map(|l| l.len()), Ok(11));
     assert_eq!(vfs.read("/bin/selftest").unwrap(), b"#!wasm bin/toolbox.wasm\n");
+    assert_eq!(vfs.read("/bin/assistant").unwrap(), b"#!wasm bin/assistant.wasm\n");
     assert_eq!(send(&mut desk, Event::Hidden), (NOTHING, vec![]));
     // Each kernel effect is its platform call.
     let mut ctl = Ctl::default();
@@ -358,11 +359,26 @@ fn programs_reach_the_kernel_and_its_effects_the_page() {
         K::Start { pid: 2, msg: vec![1], program: kernel::Load::Bytes(vec![0]) },
         K::Reply { pid: 2, errno: 44, data: vec![7] }, K::Word { pid: 2, index: 5, value: 1 },
         K::Kill { pid: 2 }, K::Wake { ms: 1000 }, K::Saved];
-    fx.into_iter().for_each(|k| effect(Effect::Kernel(k), &mut ctl));
+    fx.into_iter().for_each(|k| effect(Effect::Kernel(k), &mut ctl, &desk.ai));
     #[rustfmt::skip]
     let want = [Fx::Spawn { pid: 2, sab: true }, Fx::Send { pid: 1, msg: vec![0x81] },
         Fx::Start { pid: 2, msg: vec![1], program: platform::Load::Bytes(vec![0]) },
         Fx::Reply { pid: 2, errno: 44, data: vec![7] }, Fx::Word { pid: 2, index: 5, value: 1 },
         Fx::Kill(2), Fx::Wake(1000), Fx::Store { key: HOME_KEY.into(), value: "1".into() }];
     assert_eq!(ctl.effects(), want);
+    // The AI settings load with the shell and change as apps save them; streams nobody
+    // asked for are dropped.
+    ctl.storage_set(ai::KEY, "sk-abcd");
+    desk.event(resize(1280.0, 800.0), &mut ctl);
+    effect(
+        Effect::AiConfig { provider: "x".into(), key: None, model: "m".into() },
+        &mut ctl,
+        &desk.ai,
+    );
+    let (ai, local) = desk.ai.status();
+    assert!(!local && [ai.provider, ai.model, ai.key_hint] == ["gateway", "m", "abcd"]);
+    let end = Event::StreamEnd { id: 1, status: 0, error: "".into() };
+    for ev in [Event::Chunk { id: 1, data: vec![1] }, end] {
+        assert_eq!((send(&mut desk, ev.clone()), input_of(ev)), ((NOTHING, vec![]), None));
+    }
 }

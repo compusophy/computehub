@@ -67,6 +67,10 @@ impl Shell {
                 self.host.open("terminal", None, out);
                 None
             }
+            (Key::Char('a'), false) => {
+                self.host.show("assistant", out);
+                None
+            }
             (Key::Char('q'), false) => focused.map(Cmd::Close),
             (Key::Up, false) => focused.map(Cmd::ToggleMaximize),
             (Key::Down, false) if maximized => focused.map(Cmd::Restore),

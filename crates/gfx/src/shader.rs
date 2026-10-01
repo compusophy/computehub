@@ -1,9 +1,8 @@
 //! The GLSL ES 3.00 program that reads the [`crate::INSTANCE_BYTES`] layout.
 
-/// Vertex shader: each instance's quad from `gl_VertexID` (a 4-vertex
-/// `TRIANGLE_STRIP`, no vertex buffer), grown by the blur for a shadow, by
-/// nothing for a glyph or glow and by one physical pixel otherwise, then
-/// clamped to the clip. Uniforms: `u_viewport` (logical size) and `u_dpr`.
+/// Vertex shader: each instance's quad from `gl_VertexID` (a 4-vertex `TRIANGLE_STRIP`, no vertex
+/// buffer), grown by the blur for a shadow, by nothing for a glyph or glow and by one physical
+/// pixel otherwise, then clamped to the clip. Uniforms: `u_viewport` (logical size) and `u_dpr`.
 pub const VERTEX_SHADER: &str = r"#version 300 es
 precision highp float;
 layout(location = 0) in vec4 a_rect;
@@ -19,31 +18,22 @@ flat out vec2 v_half;
 flat out vec4 v_params, v_color, v_clip, v_color2;
 void main() {
   vec2 corner = vec2(float(gl_VertexID & 1), float(gl_VertexID >> 1));
-  float px = 1.0 / u_dpr;
-  int kind = int(a_params.y + 0.5);
+  float px = 1.0 / u_dpr; int kind = int(a_params.y + 0.5);
   float grow = kind == 2 ? max(a_params.z, px) : (kind == 4 || kind == 6 ? 0.0 : px);
-  vec2 hs = a_rect.zw * 0.5;
-  vec2 center = a_rect.xy + hs;
+  vec2 hs = a_rect.zw * 0.5, center = a_rect.xy + hs;
   vec2 pos = clamp(center + (corner * 2.0 - 1.0) * (hs + grow), a_clip.xy, a_clip.xy + a_clip.zw);
   vec2 local = pos - center;
-  v_local = local;
-  v_pos = pos;
-  v_tex = a_uv.xy + (local + hs) / a_rect.zw * a_uv.zw;
-  v_half = hs;
-  v_params = a_params;
-  v_color = a_color;
-  v_clip = a_clip;
-  v_color2 = a_color2;
+  v_local = local; v_pos = pos; v_tex = a_uv.xy + (local + hs) / a_rect.zw * a_uv.zw; v_half = hs;
+  v_params = a_params; v_color = a_color; v_clip = a_clip; v_color2 = a_color2;
   vec2 ndc = pos / u_viewport * 2.0 - 1.0;
   gl_Position = vec4(ndc.x, -ndc.y, 0.0, 1.0);
 }
 ";
 
-/// Fragment shader: coverage from the signed distance to the rounded rect or
-/// icon (antialiased over one physical pixel), the atlas texel's red channel,
-/// or the glow falloff; zero outside the clip; written premultiplied.
-/// Shadows, gradients and glows are dithered by under half an 8-bit step.
-/// Uniforms: `u_atlas` (an `R8` `NEAREST` texture on unit 0), `u_atlas_size`.
+/// Fragment shader: coverage from the signed distance to the rounded rect or icon (antialiased
+/// over one physical pixel), the atlas texel's red channel, or the glow falloff; zero outside the
+/// clip; written premultiplied. Shadows, gradients and glows are dithered by under half an 8-bit
+/// step. Uniforms: `u_atlas` (an `R8` `NEAREST` texture on unit 0), `u_atlas_size`.
 pub const FRAGMENT_SHADER: &str = r"#version 300 es
 precision highp float;
 precision highp int;
@@ -54,17 +44,14 @@ uniform float u_dpr;
 uniform sampler2D u_atlas;
 uniform vec2 u_atlas_size;
 out vec4 fragColor;
-
 float rbox(vec2 p, vec2 b, float r) {
   vec2 q = abs(p) - b + r;
   return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - r;
 }
-
 float seg(vec2 p, vec2 a, vec2 b) {
   vec2 pa = p - a, ba = b - a;
   return length(pa - ba * clamp(dot(pa, ba) / dot(ba, ba), 0.0, 1.0));
 }
-
 float icon(vec2 p, float s, int id, float w) {
   float hw = w * 0.5, l = 0.35 * s;
   if (id == 1) p = vec2(p.x + p.y, p.y - p.x) * 0.70710678;
@@ -75,23 +62,17 @@ float icon(vec2 p, float s, int id, float w) {
   if (id == 4) return abs(rbox(p, vec2(0.28 * s), 0.0)) - hw;
   return length(abs(p) - 0.22 * s) - 0.12 * s;
 }
-
 uint mix32(uint x) {
-  x ^= x >> 16;
-  x *= 0x7feb352du;
-  x ^= x >> 15;
-  x *= 0x846ca68bu;
+  x ^= x >> 16; x *= 0x7feb352du;
+  x ^= x >> 15; x *= 0x846ca68bu;
   return x ^ (x >> 16);
 }
-
 uint pixel_hash(uint seed) {
   uvec2 p = uvec2(gl_FragCoord.xy);
   return mix32(p.x ^ mix32(p.y ^ mix32(seed)));
 }
-
 void main() {
-  float aa = 1.0 / u_dpr;
-  int kind = int(v_params.y + 0.5);
+  float aa = 1.0 / u_dpr; int kind = int(v_params.y + 0.5);
   float d = rbox(v_local, v_half, v_params.x);
   vec4 c = vec4(v_color.rgb * v_color.a, v_color.a);
   float cov = clamp(0.5 - d / aa, 0.0, 1.0);

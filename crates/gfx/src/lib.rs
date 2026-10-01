@@ -1,18 +1,16 @@
-//! Draw lists for compusophyOS: every fill, border, shadow, icon, glyph,
-//! gradient, glow and grain pass is one [`Instance`] of a single quad, and a
-//! frame is one flat byte buffer that the `platform` crate draws with one
-//! instanced WebGL2 call through [`VERTEX_SHADER`] and [`FRAGMENT_SHADER`],
-//! which live here beside the byte contract they read.
+//! Draw lists for compusophyOS: every fill, border, shadow, icon, glyph, gradient, glow and grain
+//! pass is one [`Instance`] of a single quad, and a frame is one flat byte buffer that the
+//! `platform` crate draws with one instanced WebGL2 call through [`VERTEX_SHADER`] and
+//! [`FRAGMENT_SHADER`], which live here beside the byte contract they read.
 //!
-//! - Logical (CSS) pixels as `f32`, origin top-left, y down. Colors are
-//!   straight sRGB; the shader writes premultiplied (`ONE, ONE_MINUS_SRC_ALPHA`).
-//! - Draw order is push order. A push is skipped when its rect is empty, a
-//!   value is not finite, every alpha is 0, or its reach misses the clip
-//!   (the rect grown by 1 px of antialiasing, by blur + 1 for a shadow, by
-//!   nothing for a glyph or glow). The radius is clamped to `[0, min(w, h) / 2]`.
+//! - Logical (CSS) pixels as `f32`, origin top-left, y down. Colors are straight sRGB; the shader
+//!   writes premultiplied (`ONE, ONE_MINUS_SRC_ALPHA`).
+//! - Draw order is push order. A push is skipped when its rect is empty, a value is not finite,
+//!   every alpha is 0, or its reach misses the clip (the rect grown by 1 px of antialiasing, by
+//!   blur + 1 for a shadow, by nothing for a glyph or glow). Radii clamp to `[0, min(w, h) / 2]`.
 //! - Each instance keeps the clip current at its push ([`NO_CLIP`] if none).
-//! - Glyphs sample the [`Atlas`] 1:1: a glyph's rect is its uv size over the
-//!   device pixel ratio, on a device pixel.
+//! - Glyphs sample the [`Atlas`] 1:1: a glyph's rect is its uv size over the device pixel ratio,
+//!   on a device pixel.
 
 #![forbid(unsafe_code)]
 
@@ -22,9 +20,9 @@ mod shader;
 pub use atlas::Atlas;
 pub use shader::{FRAGMENT_SHADER, VERTEX_SHADER};
 
-/// Bytes per encoded [`Instance`] (the attribute stride), little-endian:
-/// `rect` 4 x f32 at 0, `radius kind p0 p1` 4 x f32 at 16, `color` 4 x u8 at
-/// 32, `clip` 4 x f32 at 36, `uv` 4 x f32 at 52, `color2` 4 x u8 at 68.
+/// Bytes per encoded [`Instance`] (the attribute stride), little-endian: `rect` 4 x f32 at 0,
+/// `radius kind p0 p1` 4 x f32 at 16, `color` 4 x u8 at 32, `clip` 4 x f32 at 36, `uv` 4 x f32 at
+/// 52, `color2` 4 x u8 at 68.
 pub const INSTANCE_BYTES: usize = 72;
 
 /// The clip (x, y, w, h) of an unclipped instance: beyond any canvas.
@@ -81,14 +79,12 @@ impl RectF {
     /// The overlap; zero-sized (at where it would start) when there is none.
     pub fn intersect(self, o: RectF) -> RectF {
         let (x, y) = (self.x.max(o.x), self.y.max(o.y));
-        let right = (self.x + self.w).min(o.x + o.w);
-        let bottom = (self.y + self.h).min(o.y + o.h);
+        let (right, bottom) = ((self.x + self.w).min(o.x + o.w), (self.y + self.h).min(o.y + o.h));
         RectF::new(x, y, (right - x).max(0.0), (bottom - y).max(0.0))
     }
 }
 
-/// What an [`Instance`] draws; encoded as its discriminant in `f32`. Unused
-/// parameters are 0.
+/// What an [`Instance`] draws; encoded as its discriminant in `f32`. Unused parameters are 0.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
     /// A filled rounded rect.
@@ -128,25 +124,20 @@ pub enum Icon {
     Grid = 5,
 }
 
-/// One quad of the instanced draw; [`INSTANCE_BYTES`] once encoded.
+/// One quad of the instanced draw; [`INSTANCE_BYTES`] once encoded. Rects are x, y, w, h: `rect`
+/// in logical pixels, `clip` (the instance is visible only inside it) and, for a glyph, `uv` in
+/// [`Atlas`] pixels. `radius` is within `[0, min(w, h) / 2]`, `kind` the [`Kind`] as `f32` with
+/// its parameters `p0` and `p1`, `color` straight and `color2` a gradient's end color.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Instance {
-    /// x, y, w, h in logical pixels.
     pub rect: [f32; 4],
-    /// Corner radius, within `[0, min(w, h) / 2]`.
     pub radius: f32,
-    /// The [`Kind`] as `f32`.
     pub kind: f32,
-    /// The kind's parameters.
     pub p0: f32,
     pub p1: f32,
-    /// Straight color.
     pub color: Rgba,
-    /// x, y, w, h: the instance is visible only inside it.
     pub clip: [f32; 4],
-    /// x, y, w, h in [`Atlas`] pixels, for a glyph.
     pub uv: [f32; 4],
-    /// The end color, for a gradient.
     pub color2: Rgba,
 }
 
@@ -202,8 +193,7 @@ impl DrawList {
 
     /// An icon in the rect's centered square, stroked `stroke` px wide.
     pub fn icon(&mut self, r: RectF, icon: Icon, stroke: f32, color: Rgba) {
-        let id = icon as u8 as f32;
-        self.push(r, 0.0, Kind::Icon, [id, stroke], [color, CLEAR], [0.0; 4]);
+        self.push(r, 0.0, Kind::Icon, [icon as u8 as f32, stroke], [color, CLEAR], [0.0; 4]);
     }
 
     /// A rounded rect in a linear gradient along `angle` (see [`Kind::Gradient`]).
@@ -225,8 +215,7 @@ impl DrawList {
     /// The [`Atlas`] pixel rect `uv` (skipped if empty) drawn into `dst`.
     pub fn glyph(&mut self, dst: RectF, uv: RectF, color: Rgba) {
         if uv.w > 0.0 && uv.h > 0.0 {
-            let uv = [uv.x, uv.y, uv.w, uv.h];
-            self.push(dst, 0.0, Kind::Glyph, [0.0; 2], [color, CLEAR], uv);
+            self.push(dst, 0.0, Kind::Glyph, [0.0; 2], [color, CLEAR], [uv.x, uv.y, uv.w, uv.h]);
         }
     }
 
@@ -258,57 +247,31 @@ impl DrawList {
     pub fn encode_into(&self, out: &mut Vec<u8>) {
         out.clear();
         out.reserve(self.items.len() * INSTANCE_BYTES);
-        let le = |out: &mut Vec<u8>, vs: [f32; 4]| {
-            for v in vs {
-                out.extend_from_slice(&v.to_le_bytes());
-            }
-        };
+        let le = |o: &mut Vec<u8>, v: &[f32]| o.extend(v.iter().flat_map(|v| v.to_le_bytes()));
         for it in &self.items {
-            le(out, it.rect);
-            le(out, [it.radius, it.kind, it.p0, it.p1]);
-            let Rgba(r, g, b, a) = it.color;
-            out.extend_from_slice(&[r, g, b, a]);
-            le(out, it.clip);
-            le(out, it.uv);
-            let Rgba(r, g, b, a) = it.color2;
-            out.extend_from_slice(&[r, g, b, a]);
+            le(out, [it.rect, [it.radius, it.kind, it.p0, it.p1]].as_flattened());
+            out.extend_from_slice(&[it.color.0, it.color.1, it.color.2, it.color.3]);
+            le(out, [it.clip, it.uv].as_flattened());
+            out.extend_from_slice(&[it.color2.0, it.color2.1, it.color2.2, it.color2.3]);
         }
     }
 
     fn push(&mut self, r: RectF, radius: f32, kind: Kind, p: [f32; 2], c: [Rgba; 2], uv: [f32; 4]) {
-        let [p0, p1] = p;
-        let values = [r.x, r.y, r.w, r.h, radius, p0, p1];
-        let finite = values.iter().chain(&uv).all(|v| v.is_finite());
-        let [color, color2] = c;
-        if !finite || r.w <= 0.0 || r.h <= 0.0 || (color.3 == 0 && color2.3 == 0) {
-            return;
-        }
+        let ([p0, p1], [color, color2], clip) = (p, c, self.clip());
+        let finite = [r.x, r.y, r.w, r.h, radius, p0, p1].iter().chain(&uv).all(|v| v.is_finite());
         // Widths, blurs and strokes are lengths; an angle or a seed is not.
-        let (p0, p1) = match kind {
-            Kind::Gradient | Kind::Grain => (p0, p1),
-            _ => (p0.max(0.0), p1.max(0.0)),
-        };
-        let reach = match kind {
-            Kind::Glyph | Kind::Glow => 0.0,
-            Kind::Shadow => p0 + 1.0,
-            _ => 1.0,
-        };
-        let clip = self.clip();
+        let length = !matches!(kind, Kind::Gradient | Kind::Grain);
+        let (p0, p1) = if length { (p0.max(0.0), p1.max(0.0)) } else { (p0, p1) };
+        // How far past the rect it draws, by kind: a shadow its blur + 1, a glyph or glow 0.
+        let reach = [1.0, 1.0, p0 + 1.0, 1.0, 0.0, 1.0, 0.0, 1.0][kind as usize];
         let seen = r.inset(-reach).intersect(clip);
-        if seen.w <= 0.0 || seen.h <= 0.0 {
+        let empty = r.w <= 0.0 || r.h <= 0.0 || seen.w <= 0.0 || seen.h <= 0.0;
+        if !finite || empty || (color.3 == 0 && color2.3 == 0) {
             return;
         }
-        self.items.push(Instance {
-            rect: [r.x, r.y, r.w, r.h],
-            radius: radius.max(0.0).min(r.w.min(r.h) / 2.0),
-            kind: kind as u8 as f32,
-            p0,
-            p1,
-            color,
-            clip: [clip.x, clip.y, clip.w, clip.h],
-            uv,
-            color2,
-        });
+        let (rect, radius) = ([r.x, r.y, r.w, r.h], radius.max(0.0).min(r.w.min(r.h) / 2.0));
+        let (kind, clip) = (kind as u8 as f32, [clip.x, clip.y, clip.w, clip.h]);
+        self.items.push(Instance { rect, radius, kind, p0, p1, color, clip, uv, color2 });
     }
 }
 

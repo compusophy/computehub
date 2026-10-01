@@ -1,15 +1,30 @@
-//! Settings: the themes, and what compusophyOS is made of.
+//! Settings: the themes, the AI provider, and what compusophyOS is made of.
+
+use std::mem;
 
 use gfx::RectF;
-use ui::{App, AppEvent, AppIcon, Cx, PAD, RADIUS_LG, RADIUS_SM, Sense, THEMES, Theme, Ui};
-use ui::{SPACING, WidgetId};
+use ui::{AiStatus, App, AppEvent, AppIcon, Cx, Key, PAD, RADIUS_LG, RADIUS_SM, Sense, Theme, Ui};
+use ui::{SPACING, THEMES, WidgetId};
 
 use crate::kit::{self, Scroll};
 
-const PAGES: [&str; 2] = ["Appearance", "About"];
-/// Widget ids: page `i`'s nav item is `NAV + i`, theme card `i` `THEME + i`.
+const PAGES: [&str; 3] = ["Appearance", "AI", "About"];
+/// Widget ids: page `i`'s nav item is `NAV + i`, theme card `i` `THEME + i`,
+/// provider `i` `PROVIDER + i`; then the AI page's fields and buttons.
 const NAV: u32 = 1;
 const THEME: u32 = 10;
+const PROVIDER: u32 = 20;
+const KEY: u32 = 30;
+const MODEL: u32 = 31;
+const SAVE: u32 = 32;
+const CLEAR: u32 = 33;
+/// The AI providers, by stored name and label (the mock only on localhost),
+/// the model when none is typed, and the most a field holds, in bytes.
+const PROVIDERS: [(&str, &str); 3] =
+    [("gateway", "AI Gateway"), ("openrouter", "OpenRouter"), ("mock", "Mock")];
+const MODEL_DEFAULT: &str = "zai/glm-5.3";
+const FIELD_MAX: usize = 512;
+const NOTE: &str = "Your key stays in this browser and is sent only to the provider you choose.";
 /// The nav column's width, and the narrowest window with one (else tabs).
 const NAV_W: f32 = 172.0;
 const WIDE: f32 = 520.0;
@@ -44,13 +59,22 @@ const STACK: [(&str, &str); 19] = [
     ("fuel", "Fuel and byte budgets"),
 ];
 
-/// Settings: Appearance (each of [`THEMES`] as a miniature desktop; a click applies it) and
-/// About (version, stack, credits), by nav column or, narrow, tabs; tall pages scroll.
+/// Settings: Appearance (each of [`THEMES`] as a miniature desktop; a click applies it), AI
+/// (provider, key and model, saved by the host; a stored key never shows) and About (version,
+/// stack, credits), by nav column or, narrow, tabs; tall pages scroll.
 #[derive(Debug, Default)]
 pub struct Settings {
     /// The page shown, an index into [`PAGES`].
     pub(crate) page: usize,
     scroll: Scroll,
+    /// The AI status last seen and whether on localhost; the provider picked (an index
+    /// into [`PROVIDERS`]), the key and model typed, and the field focused (0: none).
+    pub(crate) ai: AiStatus,
+    localhost: bool,
+    provider: usize,
+    pub(crate) key: String,
+    model: String,
+    focus: u32,
 }
 
 impl App for Settings {
@@ -66,6 +90,7 @@ impl App for Settings {
         ui.set_cursor(view.x + left, top);
         let bottom = match self.page {
             0 => appearance(ui),
+            1 => self.ai_page(ui),
             _ => about(ui),
         };
         ui.pop_clip();
@@ -73,22 +98,27 @@ impl App for Settings {
     }
 
     fn event(&mut self, ev: AppEvent, cx: &mut Cx<'_>) -> bool {
-        match ev {
-            AppEvent::Click(WidgetId(id)) if (NAV..NAV + PAGES.len() as u32).contains(&id) => {
-                let page = (id - NAV) as usize;
-                if page == self.page {
-                    return false;
-                }
-                (self.page, self.scroll) = (page, Scroll::default());
+        let fresh = self.seen(cx);
+        let changed = match ev {
+            AppEvent::Click(WidgetId(id)) => self.click(id, cx),
+            AppEvent::PointerDown { id, .. } => {
+                let f = id.map_or(0, |w| w.0);
+                let f = if f == KEY || f == MODEL { f } else { 0 };
+                mem::replace(&mut self.focus, f) != f
             }
-            AppEvent::Click(WidgetId(id)) if (THEME..THEME + THEMES.len() as u32).contains(&id) => {
-                cx.set_theme(THEMES[(id - THEME) as usize].name);
-            }
-            AppEvent::Wheel { dy, .. } => return self.scroll.wheel(dy),
-            AppEvent::Resized { .. } => {}
-            _ => return false,
-        }
-        true
+            AppEvent::Text(s) => self.edit(|f| f.extend(s.chars().filter(|c| !c.is_control()))),
+            AppEvent::Key { key: Key::Backspace, .. } => self.edit(|f| _ = f.pop()),
+            AppEvent::Key { key: Key::Enter, .. } if self.focus != 0 => self.click(SAVE, cx),
+            AppEvent::Key { key: Key::Escape, .. } => mem::take(&mut self.focus) != 0,
+            AppEvent::Wheel { dy, .. } => self.scroll.wheel(dy),
+            AppEvent::Resized { .. } => true,
+            _ => false,
+        };
+        fresh || changed
+    }
+
+    fn wants_text_input(&self) -> bool {
+        self.focus != 0
     }
 
     fn preferred_size(&self) -> Option<(f32, f32)> {
@@ -101,55 +131,145 @@ impl App for Settings {
 }
 
 impl Settings {
+    /// A click on widget `id`: a page, a theme, a provider, Save or Clear (the key).
+    fn click(&mut self, id: u32, cx: &mut Cx<'_>) -> bool {
+        let (page, n) = (id.wrapping_sub(NAV) as usize, id.wrapping_sub(PROVIDER) as usize);
+        if let Some(th) = THEMES.get(id.wrapping_sub(THEME) as usize) {
+            cx.set_theme(th.name);
+        } else if page < PAGES.len() {
+            let new = page != self.page;
+            if new {
+                (self.page, self.scroll, self.focus) = (page, Scroll::default(), 0);
+            }
+            return new;
+        } else if n < PROVIDERS.len() {
+            self.provider = n;
+        } else if id == SAVE || id == CLEAR {
+            let key = if id == CLEAR { Some("") } else { Some(self.key.trim()) };
+            let key = key.filter(|k| id == CLEAR || !k.is_empty());
+            let model = Some(self.model.trim()).filter(|m| !m.is_empty());
+            cx.ai_config(PROVIDERS[self.provider].0, key, model.unwrap_or(MODEL_DEFAULT));
+            (self.key, self.focus) = (String::new(), 0);
+            self.seen(cx);
+        } else {
+            return false;
+        }
+        true
+    }
+
+    /// Takes in what `cx` says of AI; a new status resets the provider and model picked.
+    fn seen(&mut self, cx: &Cx<'_>) -> bool {
+        self.localhost = cx.localhost;
+        if cx.ai == self.ai {
+            return false;
+        }
+        self.ai = cx.ai.clone();
+        self.provider = PROVIDERS.iter().position(|p| p.0 == self.ai.provider).unwrap_or(0);
+        self.model = self.ai.model.clone();
+        true
+    }
+
+    /// Edits the focused field, if any, by `f` (undone past [`FIELD_MAX`]); whether it changed.
+    fn edit(&mut self, f: impl FnOnce(&mut String)) -> bool {
+        let s = match self.focus {
+            KEY => &mut self.key,
+            MODEL => &mut self.model,
+            _ => return false,
+        };
+        let n = s.len();
+        f(s);
+        s.truncate(if s.len() > FIELD_MAX { n } else { s.len() });
+        s.len() != n
+    }
+
+    /// The key as typed, in bullets but its last 4 chars.
+    pub(crate) fn masked(&self) -> String {
+        let n = self.key.chars().count();
+        self.key.chars().enumerate().map(|(i, c)| if i + 4 < n { '\u{2022}' } else { c }).collect()
+    }
+
+    /// The AI page from the cursor; returns its bottom.
+    fn ai_page(&self, ui: &mut Ui<'_>) -> f32 {
+        ui.heading("AI");
+        ui.small("The Assistant answers and builds apps with the model you pick.");
+        ui.subheading("Provider");
+        let (r, (x, y)) = (ui.rect(), ui.cursor());
+        let n = 2 + usize::from(self.localhost || self.provider == 2);
+        let w = (r.x + r.w - PAD - x).min(132.0 * n as f32);
+        let bar = ui.snapped(RectF::new(x, y, w, 36.0));
+        segmented(ui, bar, &PROVIDERS.map(|p| p.1)[..n], PROVIDER, self.provider);
+        ui.advance_to(bar.y + bar.h);
+        ui.subheading("API key");
+        let saved = ["saved (\u{2026}", &self.ai.key_hint, ")"].concat();
+        let hint = if self.ai.key_hint.is_empty() { "Paste your key" } else { &saved };
+        ui.text_field(WidgetId(KEY), &self.masked(), self.focus == KEY, hint);
+        ui.subheading("Model");
+        ui.text_field(WidgetId(MODEL), &self.model, self.focus == MODEL, MODEL_DEFAULT);
+        ui.small("zai/glm-5.3-flash is faster and cheaper.");
+        ui.space(SPACING);
+        ui.row(|ui| {
+            ui.button_primary(WidgetId(SAVE), "Save");
+            if !self.ai.key_hint.is_empty() {
+                ui.button(WidgetId(CLEAR), "Clear key");
+            }
+        });
+        let r = ui.small(NOTE);
+        r.y + r.h
+    }
+
     /// The nav column and the line right of it; returns the page's area.
     fn nav(&self, ui: &mut Ui<'_>) -> RectF {
         let (r, t, line) = (ui.rect(), ui.theme(), ui.px(1.0));
         let sep = ui.text_system().snap(r.x + NAV_W);
         ui.fill(RectF::new(sep, r.y, line, r.h), 0.0, t.border);
-        for i in 0..PAGES.len() {
+        for (i, page) in PAGES.iter().enumerate() {
             let y = r.y + 12.0 + i as f32 * (ITEM_H + 2.0);
-            let item = ui.snapped(RectF::new(r.x + 12.0, y, NAV_W - 24.0, ITEM_H));
-            self.item(ui, i, item, false);
+            let at = ui.snapped(RectF::new(r.x + 12.0, y, NAV_W - 24.0, ITEM_H));
+            item(ui, NAV + i as u32, page, at, [self.page == i, false]);
         }
         RectF::new(sep + line, r.y, r.x + r.w - sep - line, r.h)
     }
 
     /// The pages as a segmented control on top; returns the page's area.
     fn tabs(&self, ui: &mut Ui<'_>) -> RectF {
-        let (r, t, line) = (ui.rect(), ui.theme(), ui.px(1.0));
+        let r = ui.rect();
         let bar = ui.snapped(RectF::new(r.x + PAD, r.y + 14.0, r.w - 2.0 * PAD, 36.0));
-        ui.fill(bar, RADIUS_SM, t.surface_lo);
-        ui.border(bar, RADIUS_SM, line, t.border);
-        let seg = (bar.w - 8.0) / PAGES.len() as f32;
-        for i in 0..PAGES.len() {
-            let at = RectF::new(bar.x + 4.0 + i as f32 * seg, bar.y + 4.0, seg, bar.h - 8.0);
-            let item = ui.snapped(at);
-            self.item(ui, i, item, true);
-        }
+        segmented(ui, bar, &PAGES, NAV, self.page);
         let y = bar.y + bar.h + 2.0;
         RectF::new(r.x, y, r.w, r.y + r.h - y)
     }
+}
 
-    /// Nav item or tab `i`: the current one lit, the others dim until hovered.
-    fn item(&self, ui: &mut Ui<'_>, i: usize, rect: RectF, tab: bool) {
-        let t = ui.theme();
-        let id = WidgetId(NAV + i as u32);
-        let (hover, down) = kit::pointer(ui, id);
-        let on = self.page == i;
-        match (on, tab) {
-            (true, true) => kit::raised(ui, rect, RADIUS_SM - 2.0, t.surface_hi, t.border),
-            (true, false) => ui.fill(rect, RADIUS_SM, t.accent.with_alpha(52)),
-            (false, false) if hover => ui.fill(rect, RADIUS_SM, t.wash(down)),
-            (false, _) => {}
-        }
-        let style = t.body().with_color(if on || hover { t.text } else { t.text_dim });
-        let w = ui.text_system().measure(PAGES[i], style);
-        let x = if tab { rect.x + (rect.w - w) / 2.0 } else { rect.x + 12.0 };
-        let base = kit::cap_base(ui, rect.y, rect.h, style);
-        let x = ui.text_system().snap(x);
-        ui.text(x, base, PAGES[i], style);
-        ui.hit(id, rect, Sense::Click);
+/// A segmented control in `bar`: `labels` as items `id`, `id + 1`, ..., item `on` lit.
+fn segmented(ui: &mut Ui<'_>, bar: RectF, labels: &[&str], id: u32, on: usize) {
+    let (t, line) = (ui.theme(), ui.px(1.0));
+    ui.fill(bar, RADIUS_SM, t.surface_lo);
+    ui.border(bar, RADIUS_SM, line, t.border);
+    let seg = (bar.w - 8.0) / labels.len() as f32;
+    for (i, label) in labels.iter().enumerate() {
+        let at = RectF::new(bar.x + 4.0 + i as f32 * seg, bar.y + 4.0, seg, bar.h - 8.0);
+        let rect = ui.snapped(at);
+        item(ui, id + i as u32, label, rect, [i == on, true]);
     }
+}
+
+/// Nav item or tab `id`, `label`ed: lit if `on`, else dim until hovered.
+fn item(ui: &mut Ui<'_>, id: u32, label: &str, rect: RectF, [on, tab]: [bool; 2]) {
+    let (t, id) = (ui.theme(), WidgetId(id));
+    let (hover, down) = kit::pointer(ui, id);
+    match (on, tab) {
+        (true, true) => kit::raised(ui, rect, RADIUS_SM - 2.0, t.surface_hi, t.border),
+        (true, false) => ui.fill(rect, RADIUS_SM, t.accent.with_alpha(52)),
+        (false, false) if hover => ui.fill(rect, RADIUS_SM, t.wash(down)),
+        (false, _) => {}
+    }
+    let style = t.body().with_color(if on || hover { t.text } else { t.text_dim });
+    let w = ui.text_system().measure(label, style);
+    let x = if tab { rect.x + (rect.w - w) / 2.0 } else { rect.x + 12.0 };
+    let base = kit::cap_base(ui, rect.y, rect.h, style);
+    let x = ui.text_system().snap(x);
+    ui.text(x, base, label, style);
+    ui.hit(id, rect, Sense::Click);
 }
 
 /// The Appearance page from the cursor; returns its bottom.

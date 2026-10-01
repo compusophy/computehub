@@ -17,21 +17,25 @@ const H24: f32 = 436.0;
 const PROMPT: &str = "guest@compusophy:~$";
 const MIDNIGHT: &Theme = &THEMES[0];
 
-/// An app with the VFS and kernel its [`Cx`]s are made from; helpers show requests as text.
+/// An app with the VFS, kernel and AI status its [`Cx`]s are made from (kept as the host
+/// keeps them); helpers show requests as text.
 struct Sim<A> {
     app: A,
     fs: Vfs,
     kernel: ui::kernel::Kernel,
+    ai: (ui::AiStatus, bool),
 }
 
 impl<A: App> Sim<A> {
     fn new(app: A) -> Sim<A> {
-        Sim { app, fs: Vfs::new(), kernel: ui::kernel::Kernel::new() }
+        Sim { app, fs: Vfs::new(), kernel: ui::kernel::Kernel::new(), ai: Default::default() }
     }
     /// Sends `ev`; returns whether the app redraws and its requests.
     fn both(&mut self, ev: AppEvent) -> (bool, String) {
         let mut cx = Cx::new(&mut self.fs, &mut self.kernel, 0.0);
+        (cx.ai, cx.localhost) = self.ai.clone();
         let redraw = self.app.event(ev, &mut cx);
+        self.ai.0 = cx.ai.clone();
         let reqs: Vec<String> = cx.take_requests().iter().map(show).collect();
         (redraw, reqs.join("; "))
     }
@@ -361,7 +365,7 @@ fn welcome_cards_open_apps_and_wrap_and_settings_switches_pages_and_themes() {
     for (i, theme) in THEMES.iter().enumerate() {
         let (list, hits) = draw(&mut s.app, &mut ts, r, theme);
         let ids: Vec<u32> = hits.iter().map(|h| h.id.0).collect();
-        assert_eq!(ids, [1, 2, 10, 11, 12], "nav, then the theme cards");
+        assert_eq!(ids, [1, 2, 3, 10, 11, 12], "nav, then the theme cards");
         // The current theme's card wears a 2 px accent ring outside it.
         let card = hit(&hits, 10 + i as u32).rect;
         let ring = |b: &&Instance| b.color == theme.accent && b.p0 == 2.0;
@@ -382,9 +386,9 @@ fn welcome_cards_open_apps_and_wrap_and_settings_switches_pages_and_themes() {
     assert_eq!([s.click(10), s.click(12)].join(","), "theme Midnight,theme Mono");
     // About: the version and the stack, taller than the window: it scrolls.
     assert!(!s.both(AppEvent::Click(WidgetId(1))).0, "already there");
-    assert!(s.both(AppEvent::Click(WidgetId(2))).0 && s.app.page == 1);
+    assert!(s.both(AppEvent::Click(WidgetId(3))).0 && s.app.page == 2);
     let (list, hits) = draw(&mut s.app, &mut ts, r, MIDNIGHT);
-    assert_eq!(hits.len(), 2, "only the nav");
+    assert_eq!(hits.len(), 3, "only the nav");
     assert!(inks(&list).len() > 400, "the stack and the credits");
     assert!(s.wheel(100.0) && s.wheel(1e9) && !s.wheel(5.0));
     assert!(draw(&mut s.app, &mut ts, r, MIDNIGHT).0.instances() != list.instances());
@@ -393,4 +397,42 @@ fn welcome_cards_open_apps_and_wrap_and_settings_switches_pages_and_themes() {
     let (a, b) = (hit(&tabs, 1).rect, hit(&tabs, 2).rect);
     assert!(a.y == b.y && a.w == b.w && b.x > a.x, "{a:?} {b:?}");
     assert!(s.both(AppEvent::Click(WidgetId(1))).0 && s.app.page == 0);
+}
+
+#[test]
+fn settings_saves_the_ai_provider_key_and_model_and_never_shows_a_stored_key() {
+    let (mut ts, mut s) = (text_system(), Sim::new(Settings::default()));
+    let status = |p, k| ui::AiStatus::default().saved(p, Some(k), "zai/glm-5.3");
+    let cfg = |p: &str, k: &str| {
+        format!("AiConfig {{ provider: \"{p}\", key: {k}, model: \"zai/glm-5.3\" }}")
+    };
+    s.ai.0 = status("openrouter", "");
+    assert!(s.both(AppEvent::Click(WidgetId(2))).0 && s.app.page == 1);
+    let mut ids = |s: &mut Sim<Settings>, w| {
+        let hits = draw(&mut s.app, &mut ts, RectF::new(0.0, 36.0, w, 520.0), MIDNIGHT).1;
+        hits.iter().map(|h| h.id.0).collect::<Vec<u32>>()
+    };
+    assert_eq!(ids(&mut s, 720.0), [1, 2, 3, 20, 21, 30, 31, 32], "no mock, no key to clear");
+    // The key field takes text but control chars, shown in bullets but its last 4.
+    let focus = |id| AppEvent::PointerDown { x: 0.0, y: 0.0, id: Some(WidgetId(id)) };
+    s.ev(focus(30));
+    s.text(" sk-é\n12345");
+    s.key(Key::Backspace, NO);
+    assert_eq!((s.app.wants_text_input(), s.app.masked()), (true, "\u{2022}".repeat(5) + "1234"));
+    // Enter saves it, trimmed; the field empties and the status keeps its last 4.
+    assert_eq!(s.key(Key::Enter, NO), cfg("openrouter", "Some(\"sk-é1234\")"));
+    let after = (s.app.key.len(), s.app.wants_text_input(), s.app.ai.key_hint.as_str());
+    assert_eq!(after, (0, false, "1234"));
+    // On localhost the mock shows; Clear empties the key; an empty model is the default.
+    s.ai.1 = true;
+    s.click(22);
+    s.ev(focus(31));
+    (0..20).for_each(|_| _ = s.key(Key::Backspace, NO));
+    assert_eq!(ids(&mut s, 360.0), [1, 2, 3, 20, 21, 22, 30, 31, 32, 33]);
+    assert_eq!((s.click(33), s.app.ai.clone()), (cfg("mock", "Some(\"\")"), status("mock", "")));
+    // A new status from the host resets what was picked; Escape leaves a field.
+    s.ai.0 = status("gateway", "wxyz");
+    s.ev(focus(30));
+    assert!(s.both(AppEvent::Key { key: Key::Escape, mods: NO }).0 && !s.app.wants_text_input());
+    assert_eq!(s.click(32), cfg("gateway", "None"));
 }

@@ -39,6 +39,11 @@ impl App for Probe {
                 ("theme", arg) => cx.set_theme(arg),
                 ("spawn", _) => _ = cx.kernel.spawn(spin()),
                 ("size", _) => cx.set_size(500, 300),
+                ("ai", key) => cx.ai_config(
+                    &cx.ai.provider.clone(),
+                    Some(key),
+                    ["m", "l"][cx.localhost as usize],
+                ),
                 _ => {}
             }
         }
@@ -232,6 +237,11 @@ fn apps_get_icons_labels_themes_and_fonts_fetched_once_in_order() {
     let (mut h, _, _) = host();
     h.text.add_fallback(SYM_A.to_vec()).unwrap();
     assert!(h.say(1, "fonts").effects.is_empty());
+    // Apps see the AI settings; a save leaves as an effect and updates them.
+    (h.ai.provider, h.localhost) = ("openrouter".into(), true);
+    let (provider, key, model) = ("openrouter".into(), Some("sk-12345".into()), "l".into());
+    assert_eq!(h.say(1, "ai sk-12345").effects, [Effect::AiConfig { provider, key, model }]);
+    assert_eq!((h.ai.key_hint.as_str(), h.ai.model.as_str()), ("2345", "l"));
 }
 
 #[test]

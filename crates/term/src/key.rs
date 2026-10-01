@@ -1,42 +1,24 @@
 //! Input: the bytes a key press or a paste sends to the program.
 
-/// A key the host reports; text arrives as `Char`, already shifted.
+/// A key the host reports: text arrives as `Char`, already shifted (`'A'`, `'!'`); of the
+/// function keys `F`, F1 to F12 send bytes and others nothing.
 #[allow(missing_docs)] // the variants are the keys they name
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[rustfmt::skip]
 pub enum Key {
-    /// A character key, shift applied (`'A'`, `'!'`).
-    Char(char),
-    Enter,
-    Backspace,
-    Tab,
-    Escape,
-    Up,
-    Down,
-    Left,
-    Right,
-    Home,
-    End,
-    PageUp,
-    PageDown,
-    Insert,
-    Delete,
-    /// A function key: F1 to F12 send bytes, others nothing.
-    F(u8),
+    Char(char), Enter, Backspace, Tab, Escape, Up, Down, Left, Right, Home, End, PageUp, PageDown,
+    Insert, Delete, F(u8),
 }
 
 /// The modifiers held with a key; alt sends an ESC prefix or a modifier code.
 #[allow(missing_docs)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct KeyMods {
-    pub shift: bool,
-    pub ctrl: bool,
-    pub alt: bool,
-}
+#[rustfmt::skip]
+pub struct KeyMods { pub shift: bool, pub ctrl: bool, pub alt: bool }
 
-/// The bytes xterm sends for `key`; with `app_cursor`
-/// ([`Term::app_cursor_keys`](crate::Term::app_cursor_keys)) arrows, Home and
-/// End send `ESC O` forms. Modified keys send `CSI 1 ; m X` or `CSI n ; m ~`
-/// (m = 1 + shift + 2 alt + 4 ctrl); ctrl makes C0 controls, alt prefixes ESC.
+/// The bytes xterm sends for `key`; with `app_cursor` ([`crate::Term::app_cursor_keys`]) arrows,
+/// Home and End send `ESC O` forms. Modified keys send `CSI 1 ; m X` or `CSI n ; m ~` (m = 1 +
+/// shift + 2 alt + 4 ctrl); ctrl makes C0 controls, alt prefixes ESC.
 pub fn encode_key(key: Key, mods: KeyMods, app_cursor: bool) -> Vec<u8> {
     let m = 1 + u8::from(mods.shift) + 2 * u8::from(mods.alt) + 4 * u8::from(mods.ctrl);
     // CSI n ; m x without `; m` for m = 1 and n for 0. Not `format!`: this
@@ -46,9 +28,8 @@ pub fn encode_key(key: Key, mods: KeyMods, app_cursor: bool) -> Vec<u8> {
         let with = [b';', b'0' + m].into_iter().filter(|_| m > 1);
         [0x1B, b'['].into_iter().chain(n).chain(with).chain([x]).collect()
     };
-    let letter = |ss3: bool, x: u8| match m == 1 && ss3 {
-        true => vec![0x1B, b'O', x],
-        false => csi(u8::from(m > 1), x),
+    let letter = |ss3: bool, x: u8| {
+        if m == 1 && ss3 { vec![0x1B, b'O', x] } else { csi(u8::from(m > 1), x) }
     };
     let tilde = |n: u8| csi(n, b'~');
     let alt = |bytes: &[u8]| [&b"\x1b"[..usize::from(mods.alt)], bytes].concat();
@@ -58,8 +39,7 @@ pub fn encode_key(key: Key, mods: KeyMods, app_cursor: bool) -> Vec<u8> {
         }
         Key::Char(c) => alt(c.encode_utf8(&mut [0; 4]).as_bytes()),
         Key::Enter => alt(b"\r"),
-        Key::Backspace if mods.ctrl => alt(b"\x08"),
-        Key::Backspace => alt(b"\x7f"),
+        Key::Backspace => alt(if mods.ctrl { b"\x08" } else { b"\x7f" }),
         Key::Tab if mods.shift => b"\x1b[Z".to_vec(),
         Key::Tab => alt(b"\t"),
         Key::Escape => alt(b"\x1b"),

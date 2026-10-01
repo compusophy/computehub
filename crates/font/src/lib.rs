@@ -1,17 +1,14 @@
 //! A dependency-free TrueType reader and glyph rasterizer for compusophyOS.
 //!
-//! - [`Font::parse`] checks the header and the bounds of every table it
-//!   needs (`head hhea maxp cmap hmtx loca glyf`); every later read is
-//!   bounds-checked again, so malformed input is an `Err`, never a panic or a
-//!   garbage picture. One bad `loca` entry fails only its glyph.
-//! - `glyf` outlines only (CFF and collections are [`FontError::NotTrueType`]);
-//!   `cmap` format 12 is preferred over format 4; no hinting, kerning or
-//!   variations. Composites apply offsets, scales and 2x2 matrices
-//!   (point-matched parts sit at offset 0), at most 8 levels deep, 1,024
+//! - [`Font::parse`] checks the header and the bounds of every table it needs (`head hhea maxp
+//!   cmap hmtx loca glyf`); every later read is bounds-checked again, so malformed input is an
+//!   `Err`, never a panic or a garbage picture. One bad `loca` entry fails only its glyph.
+//! - `glyf` outlines only (CFF and collections are [`FontError::NotTrueType`]); `cmap` format 12
+//!   is preferred over format 4; no hinting, kerning or variations. Composites apply offsets,
+//!   scales and 2x2 matrices (point-matched parts sit at offset 0), at most 8 levels deep, 1,024
 //!   components and 262,144 points.
-//! - [`Font::rasterize`] flattens curves to within 0.2 px and accumulates
-//!   signed area per cell (the font-rs technique): coverage is
-//!   `min(1, |winding|)`, so holes cancel and overlaps clamp.
+//! - [`Font::rasterize`] flattens curves to within 0.2 px and accumulates signed area per cell
+//!   (the font-rs technique): coverage is `min(1, |winding|)`, so holes cancel and overlaps clamp.
 
 #![forbid(unsafe_code)]
 
@@ -65,8 +62,8 @@ pub struct Point {
     pub on: bool,
 }
 
-/// An 8-bit coverage bitmap of one glyph: `w * h` bytes in `data`, row-major,
-/// its top-left corner `left` px right of the pen and `top` px below the baseline.
+/// An 8-bit coverage bitmap of one glyph: `w * h` bytes in `data`, row-major, its top-left corner
+/// `left` px right of the pen and `top` px below the baseline.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Bitmap {
     pub w: u32,
@@ -112,16 +109,15 @@ fn span(d: &[u8], start: usize, len: usize) -> Option<Range<usize>> {
     (end <= d.len()).then_some(start..end)
 }
 
-/// Finds a table in the directory, checked to lie inside the file.
-fn table(d: &[u8], tag: &[u8; 4]) -> Result<Range<usize>, FontError> {
+/// Finds a table of at least `min` bytes in the directory, checked to lie inside the file.
+fn table(d: &[u8], tag: &[u8; 4], min: usize) -> Result<Range<usize>, FontError> {
     let count = u16_at(d, 4).ok_or(FontError::NotTrueType)?;
     for i in 0..usize::from(count) {
         let rec = 12 + 16 * i;
         if d.get(rec..rec + 4).ok_or(FontError::NotTrueType)? == tag {
-            let bad = FontError::Malformed(*tag);
-            let off = u32_at(d, rec + 8).ok_or(bad)? as usize;
-            let len = u32_at(d, rec + 12).ok_or(bad)? as usize;
-            return span(d, off, len).ok_or(bad);
+            let at = u32_at(d, rec + 8).zip(u32_at(d, rec + 12));
+            let t = at.and_then(|(off, len)| span(d, off as usize, len as usize));
+            return t.filter(|t| t.len() >= min).ok_or(FontError::Malformed(*tag));
         }
     }
     Err(FontError::MissingTable(*tag))
@@ -135,17 +131,12 @@ fn pick_cmap(d: &[u8], cmap: Range<usize>) -> Result<Cmap, FontError> {
     let mut best: Option<Cmap> = None;
     for i in 0..usize::from(count) {
         let rec = 4 + 8 * i;
-        let (Some(plat), Some(enc), Some(off)) =
-            (u16_at(c, rec), u16_at(c, rec + 2), u32_at(c, rec + 4))
-        else {
-            return Err(bad);
-        };
+        let ids = u16_at(c, rec).zip(u16_at(c, rec + 2)).zip(u32_at(c, rec + 4));
+        let ((plat, enc), off) = ids.ok_or(bad)?;
         if !(plat == 0 || (plat == 3 && (enc == 1 || enc == 10))) {
             continue;
         }
-        let off = off as usize;
-        let s = c.get(off..).ok_or(bad)?;
-        let at = cmap.start + off;
+        let (s, at) = (c.get(off as usize..).ok_or(bad)?, cmap.start + off as usize);
         let found = match u16_at(s, 0).ok_or(bad)? {
             12 if plat == 0 || enc == 10 => {
                 let groups = u32_at(s, 12).ok_or(bad)? as usize;
@@ -154,17 +145,13 @@ fn pick_cmap(d: &[u8], cmap: Range<usize>) -> Result<Cmap, FontError> {
                 Cmap { sub, n: groups, f12: true }
             }
             4 => {
-                let segs = usize::from(u16_at(s, 6).ok_or(bad)? / 2);
-                if segs == 0 || 16 + 8 * segs > s.len() {
-                    return Err(bad);
-                }
-                Cmap { sub: at..cmap.end, n: segs, f12: false }
+                let segs = u16_at(s, 6).map(|n| usize::from(n / 2));
+                let n = segs.filter(|&n| n > 0 && 16 + 8 * n <= s.len()).ok_or(bad)?;
+                Cmap { sub: at..cmap.end, n, f12: false }
             }
             _ => continue,
         };
-        if best.as_ref().is_none_or(|b| found.f12 && !b.f12) {
-            best = Some(found);
-        }
+        best = best.filter(|b| b.f12 || !found.f12).or(Some(found)); // format 12 wins
     }
     best.ok_or(bad)
 }
@@ -176,18 +163,10 @@ fn cmap4(s: &[u8], segs: usize, c: u32) -> Option<u16> {
     let (mut lo, mut hi) = (0, segs);
     while lo < hi {
         let mid = (lo + hi) / 2;
-        if u16_at(s, 14 + 2 * mid)? < c {
-            lo = mid + 1;
-        } else {
-            hi = mid;
-        }
+        (lo, hi) = if u16_at(s, 14 + 2 * mid)? < c { (mid + 1, hi) } else { (lo, mid) };
     }
-    let start = u16_at(s, starts + 2 * lo)?;
-    if lo == segs || c < start {
-        return None;
-    }
-    let delta = u16_at(s, deltas + 2 * lo)?;
-    let range = usize::from(u16_at(s, ranges + 2 * lo)?);
+    let start = u16_at(s, starts + 2 * lo).filter(|&start| lo < segs && c >= start)?;
+    let (delta, range) = (u16_at(s, deltas + 2 * lo)?, usize::from(u16_at(s, ranges + 2 * lo)?));
     if range == 0 {
         return Some(c.wrapping_add(delta));
     }
@@ -202,13 +181,10 @@ fn cmap12(s: &[u8], groups: usize, c: u32) -> Option<u16> {
         let mid = (lo + hi) / 2;
         let g = 16 + 12 * mid;
         let (start, end) = (u32_at(s, g)?, u32_at(s, g + 4)?);
-        if end < c {
-            lo = mid + 1;
-        } else if start > c {
-            hi = mid;
-        } else {
+        if start <= c && c <= end {
             return u16::try_from(u32_at(s, g + 8)?.checked_add(c - start)?).ok();
         }
+        (lo, hi) = if end < c { (mid + 1, hi) } else { (lo, mid) };
     }
     None
 }
@@ -242,48 +218,25 @@ impl Font {
         if !matches!(u32_at(d, 0), Some(0x0001_0000 | 0x7472_7565)) {
             return Err(FontError::NotTrueType);
         }
-        let head = &d[table(d, b"head")?];
+        let head = &d[table(d, b"head", 0)?];
         let bad = FontError::Malformed(*b"head");
-        let upem = u16_at(head, 18).ok_or(bad)?;
-        if u32_at(head, 12) != Some(0x5F0F_3CF5) || !(16..=16384).contains(&upem) {
-            return Err(bad);
-        }
+        let magic = u32_at(head, 12) == Some(0x5F0F_3CF5);
+        let upem = u16_at(head, 18).filter(|u| magic && (16..=16384).contains(u)).ok_or(bad)?;
         let long_loca = i16_at(head, 50).filter(|&v| v == 0 || v == 1).ok_or(bad)? == 1;
-        let hhea = &d[table(d, b"hhea")?];
+        let hhea = &d[table(d, b"hhea", 0)?];
         let bad = FontError::Malformed(*b"hhea");
-        let (Some(ascender), Some(descender), Some(line_gap), Some(num_hmetrics)) =
-            (i16_at(hhea, 4), i16_at(hhea, 6), i16_at(hhea, 8), u16_at(hhea, 34))
-        else {
+        let [Some(asc), Some(desc), Some(gap)] = [4, 6, 8].map(|at| i16_at(hhea, at)) else {
             return Err(bad);
         };
-        if num_hmetrics == 0 {
-            return Err(bad);
-        }
-        let metrics = [upem.into(), ascender.into(), descender.into(), line_gap.into()];
-        let maxp = &d[table(d, b"maxp")?];
+        let num_hmetrics = u16_at(hhea, 34).filter(|&n| n > 0).ok_or(bad)?;
+        let metrics = [upem.into(), asc.into(), desc.into(), gap.into()];
+        let maxp = &d[table(d, b"maxp", 0)?];
         let num_glyphs = u16_at(maxp, 4).ok_or(FontError::Malformed(*b"maxp"))?;
-        let hmtx = table(d, b"hmtx")?;
-        if hmtx.len() < 4 * usize::from(num_hmetrics) {
-            return Err(FontError::Malformed(*b"hmtx"));
-        }
-        let loca = table(d, b"loca")?;
+        let hmtx = table(d, b"hmtx", 4 * usize::from(num_hmetrics))?.start;
         let entry = if long_loca { 4 } else { 2 };
-        if loca.len() < entry * (usize::from(num_glyphs) + 1) {
-            return Err(FontError::Malformed(*b"loca"));
-        }
-        let glyf = table(d, b"glyf")?;
-        let cmap = pick_cmap(d, table(d, b"cmap")?)?;
-        Ok(Font {
-            metrics,
-            num_glyphs,
-            num_hmetrics,
-            long_loca,
-            hmtx: hmtx.start,
-            loca: loca.start,
-            glyf,
-            cmap,
-            data,
-        })
+        let loca = table(d, b"loca", entry * (usize::from(num_glyphs) + 1))?.start;
+        let (glyf, cmap) = (table(d, b"glyf", 0)?, pick_cmap(d, table(d, b"cmap", 0)?)?);
+        Ok(Font { metrics, num_glyphs, num_hmetrics, long_loca, hmtx, loca, glyf, cmap, data })
     }
 
     /// Units per em, ascender, descender (usually negative) and line gap.
@@ -309,14 +262,13 @@ impl Font {
         if glyph >= self.num_glyphs {
             return Err(FontError::NoGlyph(glyph));
         }
-        let i = usize::from(glyph);
+        let (g, i) = (&self.glyf, usize::from(glyph));
         let at = |k: usize| match self.long_loca {
             true => u32_at(&self.data, self.loca + 4 * k).map(|v| v as usize),
             false => u16_at(&self.data, self.loca + 2 * k).map(|v| 2 * usize::from(v)),
         };
-        let start = self.glyf.start;
         match (at(i), at(i + 1)) {
-            (Some(a), Some(b)) if a <= b && b <= self.glyf.len() => Ok(start + a..start + b),
+            (Some(a), Some(b)) if a <= b && b <= g.len() => Ok(g.start + a..g.start + b),
             _ => Err(FontError::Malformed(*b"loca")),
         }
     }
@@ -325,16 +277,11 @@ impl Font {
     pub fn outline(&self, glyph: u16, out: &mut Vec<Vec<Point>>) -> Result<(), FontError> {
         out.clear();
         let mut w = Walk { out, components: MAX_COMPONENTS, points: MAX_POINTS };
-        let r = self.walk(glyph, &IDENTITY, 0, &mut w);
-        if r.is_err() {
-            w.out.clear();
-        }
-        r
+        self.walk(glyph, &IDENTITY, 0, &mut w).inspect_err(|_| w.out.clear())
     }
 
     fn walk(&self, glyph: u16, m: &Affine, depth: u32, w: &mut Walk) -> Result<(), FontError> {
-        let range = self.glyph_range(glyph)?;
-        let d = &self.data[range];
+        let d = &self.data[self.glyph_range(glyph)?];
         if d.is_empty() {
             return Ok(());
         }
@@ -345,46 +292,35 @@ impl Font {
         }
         let mut p = 10;
         loop {
-            let (Some(flags), Some(child)) = (u16_at(d, p), u16_at(d, p + 2)) else {
-                return Err(bad);
-            };
+            let (flags, child) = u16_at(d, p).zip(u16_at(d, p + 2)).ok_or(bad)?;
             p += 4;
             let words = flags & 0x0001 != 0;
             let arg = |k: usize| match words {
                 true => i16_at(d, p + 2 * k).map(f32::from),
                 false => d.get(p + k).map(|&b| f32::from(b as i8)),
             };
-            let (Some(dx), Some(dy)) = (arg(0), arg(1)) else {
-                return Err(bad);
-            };
+            let (dx, dy) = arg(0).zip(arg(1)).ok_or(bad)?;
             p += if words { 4 } else { 2 };
             // Without ARGS_ARE_XY_VALUES the args name points to match.
             let (dx, dy) = if flags & 0x0002 != 0 { (dx, dy) } else { (0.0, 0.0) };
-            let f2 = |at: usize| i16_at(d, at).map(|v| f32::from(v) / 16384.0).ok_or(bad);
-            let (a, b, c, e) = if flags & 0x0008 != 0 {
-                let s = f2(p)?;
-                p += 2;
-                (s, 0.0, 0.0, s)
+            // A scale, x and y scales, a 2x2 matrix or none: 1, 2, 4 or 0 F2Dot14 words.
+            let f2 = |k: usize| i16_at(d, p + 2 * k).map(|v| f32::from(v) / 16384.0).ok_or(bad);
+            let (n, mut t) = if flags & 0x0008 != 0 {
+                (1, [f2(0)?, 0.0, 0.0, f2(0)?, 0.0, 0.0])
             } else if flags & 0x0040 != 0 {
-                p += 4;
-                (f2(p - 4)?, 0.0, 0.0, f2(p - 2)?)
+                (2, [f2(0)?, 0.0, 0.0, f2(1)?, 0.0, 0.0])
             } else if flags & 0x0080 != 0 {
-                p += 8;
-                (f2(p - 8)?, f2(p - 6)?, f2(p - 4)?, f2(p - 2)?)
+                (4, [f2(0)?, f2(1)?, f2(2)?, f2(3)?, 0.0, 0.0])
             } else {
-                (1.0, 0.0, 0.0, 1.0)
+                (0, IDENTITY)
             };
+            p += 2 * n;
             // SCALED_COMPONENT_OFFSET (without UNSCALED_...) transforms the offset.
-            let (dx, dy) = if flags & 0x1800 == 0x0800 {
-                (a * dx + c * dy, b * dx + e * dy)
-            } else {
-                (dx, dy)
-            };
-            if depth >= MAX_DEPTH || w.components == 0 {
-                return Err(FontError::TooComplex);
-            }
-            w.components -= 1;
-            self.walk(child, &compose(m, &[a, b, c, e, dx, dy]), depth + 1, w)?;
+            let scaled = flags & 0x1800 == 0x0800;
+            [t[4], t[5]] = if scaled { lin(&t, dx, dy) } else { [dx, dy] };
+            let left = w.components.checked_sub(1).filter(|_| depth < MAX_DEPTH);
+            w.components = left.ok_or(FontError::TooComplex)?;
+            self.walk(child, &compose(m, &t), depth + 1, w)?;
             if flags & 0x0020 == 0 {
                 return Ok(());
             }
@@ -406,8 +342,7 @@ impl Font {
 
 /// Per-point deltas: `short` is a byte signed by `same`, else `same` repeats.
 fn deltas(d: &[u8], p: &mut usize, flags: &[u8], short: u8, same: u8) -> Option<Vec<i32>> {
-    let mut out = Vec::with_capacity(flags.len());
-    let mut v = 0i32;
+    let (mut out, mut v) = (Vec::with_capacity(flags.len()), 0i32);
     for &f in flags {
         if f & short != 0 {
             let b = i32::from(*d.get(*p)?);
@@ -428,43 +363,28 @@ fn simple(d: &[u8], contours: usize, m: &Affine, w: &mut Walk) -> Result<(), Fon
     if contours == 0 {
         return Ok(());
     }
-    let (mut ends, mut n, mut p) = (Vec::with_capacity(contours), 0usize, 10);
-    for _ in 0..contours {
-        let end = usize::from(u16_at(d, p).ok_or(bad)?);
-        if end < n {
-            return Err(bad);
-        }
-        n = end + 1;
+    let (mut ends, mut n) = (Vec::with_capacity(contours), 0usize);
+    for k in 0..contours {
+        n = 1 + u16_at(d, 10 + 2 * k).map(usize::from).filter(|&end| end >= n).ok_or(bad)?;
         ends.push(n);
-        p += 2;
     }
-    if n > w.points {
-        return Err(FontError::TooComplex);
-    }
-    w.points -= n;
-    p += 2 + usize::from(u16_at(d, p).ok_or(bad)?);
+    w.points = w.points.checked_sub(n).ok_or(FontError::TooComplex)?;
+    let p = 10 + 2 * contours;
+    let mut p = p + 2 + usize::from(u16_at(d, p).ok_or(bad)?);
     let mut flags = Vec::with_capacity(n);
     while flags.len() < n {
         let f = *d.get(p).ok_or(bad)?;
-        p += 1;
-        let mut reps = 1;
-        if f & 0x08 != 0 {
-            reps += usize::from(*d.get(p).ok_or(bad)?);
-            p += 1;
-        }
-        let reps = reps.min(n - flags.len());
-        flags.extend(core::iter::repeat_n(f, reps));
+        let reps = if f & 0x08 != 0 { 1 + usize::from(*d.get(p + 1).ok_or(bad)?) } else { 1 };
+        p += 1 + usize::from(f & 0x08 != 0);
+        flags.extend(core::iter::repeat_n(f, reps.min(n - flags.len())));
     }
     let xs = deltas(d, &mut p, &flags, 0x02, 0x10).ok_or(bad)?;
     let ys = deltas(d, &mut p, &flags, 0x04, 0x20).ok_or(bad)?;
-    let points: Vec<Point> = flags
-        .iter()
-        .zip(xs.iter().zip(&ys))
-        .map(|(&f, (&x, &y))| {
-            let [x, y] = lin(m, x as f32, y as f32);
-            Point { x: x + m[4], y: y + m[5], on: f & 0x01 != 0 }
-        })
-        .collect();
+    let point = |(&f, (&x, &y)): (&u8, (&i32, &i32))| {
+        let [x, y] = lin(m, x as f32, y as f32);
+        Point { x: x + m[4], y: y + m[5], on: f & 0x01 != 0 }
+    };
+    let points: Vec<Point> = flags.iter().zip(xs.iter().zip(&ys)).map(point).collect();
     let mut start = 0;
     for end in ends {
         w.out.push(points.get(start..end).ok_or(bad)?.to_vec());

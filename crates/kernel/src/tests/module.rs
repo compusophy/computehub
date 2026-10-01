@@ -6,14 +6,13 @@ fn module(sections: &[(u8, &[u8])]) -> Vec<u8> {
     let body = sections.iter().flat_map(|&(id, b)| [&[id, b.len() as u8][..], b].concat());
     [&b"\0asm\x01\0\0\0"[..], &body.collect::<Vec<u8>>()].concat()
 }
-
 /// One memory (count 1), then its limits; 4,096 is `0x80 0x20`.
 fn mem(limits: &[u8]) -> Vec<u8> {
     module(&[(1, &[0]), (5, &[&[1], limits].concat()), (10, &[0])])
 }
 
 #[test]
-fn a_maximum_is_added_or_lowered_to_the_cap_and_a_lower_one_kept() {
+fn a_maximum_is_added_or_lowered_to_the_cap_padding_reencoded_and_nothing_else_changed() {
     let capped = mem(&[1, 2, 0x80, 0x20]);
     assert_eq!(cap_memory(&mem(&[0, 2]), 4_096), Ok(capped.clone()));
     assert_eq!(cap_memory(&mem(&[1, 2, 0xFF, 0xFF, 3]), 4_096), Ok(capped.clone()));
@@ -22,10 +21,6 @@ fn a_maximum_is_added_or_lowered_to_the_cap_and_a_lower_one_kept() {
     assert_eq!(cap_memory(&mem(&[0, 1]), 1), Ok(mem(&[1, 1, 1])));
     // No memory at all is left alone (cpu then refuses it: no `memory`).
     assert_eq!(cap_memory(&module(&[(1, &[0])]), 4_096), Ok(module(&[(1, &[0])])));
-}
-
-#[test]
-fn leb_padding_is_reencoded_and_only_the_memory_section_changes() {
     // A custom section with a padded size, then a padded size, min (2) and max (5).
     let custom = [&b"\0asm\x01\0\0\0"[..], &[0, 0x84, 0x80, 0x80, 0x80, 0, 1, b'x', 0, 0]].concat();
     let pad = |n: u8| [n | 0x80, 0x80, 0x80, 0x80, 0];
@@ -37,7 +32,7 @@ fn leb_padding_is_reencoded_and_only_the_memory_section_changes() {
 }
 
 #[test]
-fn shared_64_bit_oversized_and_imported_memories_are_refused() {
+fn shared_64_bit_oversized_imported_memories_non_modules_and_malformed_sections_are_refused() {
     let refused = |wasm: &[u8], why| assert_eq!(cap_memory(wasm, 4_096), Err(why), "{wasm:?}");
     refused(&mem(&[3, 1, 2]), "shared memory is not supported");
     refused(&mem(&[2, 1]), "shared memory is not supported");
@@ -52,10 +47,6 @@ fn shared_64_bit_oversized_and_imported_memories_are_refused() {
     }
     let funcs = module(&[(2, &[2, 1, b'e', 1, b'f', 0, 0, 1, b'e', 1, b'g', 0, 0x80, 0])]);
     assert_eq!(cap_memory(&funcs, 4_096), Ok(funcs));
-}
-
-#[test]
-fn non_modules_and_malformed_sections_are_refused() {
     for wasm in [&b""[..], b"#!wasm bin/x.wasm\n", b"\0asm\x0d\0\x01\0", b"\0asm\x01\0\0"] {
         assert_eq!(cap_memory(wasm, 4_096), Err("not a wasm module"));
     }

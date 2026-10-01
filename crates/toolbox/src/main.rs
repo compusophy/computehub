@@ -1,9 +1,8 @@
-//! The toolbox: compusophyOS's test programs in one std binary for
-//! wasm32-wasip1, so they share one copy of std. It runs the applet named by
-//! the file name of argv\[0\] (less a `.wasm`), or by argv\[1\] when argv\[0\]
-//! names the toolbox itself; the /bin marker of every applet points here.
-//! The exit status is the applet's: 127 for no applet, and 1 for one not
-//! built yet (all but `hello`, `spin` and `fstest`), which says so.
+//! The toolbox: compusophyOS's test programs in one std binary for wasm32-wasip1, so they share one
+//! copy of std. It runs the applet named by the file name of argv\[0\] (less a `.wasm`), or by
+//! argv\[1\] when argv\[0\] names the toolbox itself; the /bin marker of every applet points here.
+//! The exit status is the applet's: 127 for no applet, and 1 for one not built yet (all but
+//! `hello`, `spin` and `fstest`), which says so.
 
 #![forbid(unsafe_code)]
 
@@ -58,8 +57,7 @@ fn run(name: &str, args: &[String], out: &mut dyn Write, err: &mut dyn Write) ->
 
 /// `hello [word...]`: the words joined by spaces and a newline, in one write; 1 if it fails.
 fn hello(words: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8 {
-    let mut line = words.join(" ");
-    line.push('\n');
+    let line = words.join(" ") + "\n";
     match out.write_all(line.as_bytes()).and_then(|()| out.flush()) {
         Ok(()) => 0,
         Err(e) => {
@@ -97,18 +95,15 @@ mod tests {
     #[test]
     fn applets_resolve_from_argv_and_exit_with_their_status() {
         let name = |s| applet(&args(s)).0.to_owned();
-        assert_eq!(name("hello a b"), "hello");
-        assert_eq!(name("/bin/rev.wasm"), "rev");
-        assert_eq!(name("toolbox wc -l"), "wc");
-        assert_eq!(name("bin/toolbox.wasm spin"), "spin");
+        let argvs = ["hello a b", "/bin/rev.wasm", "toolbox wc -l", "bin/toolbox.wasm spin"];
+        assert_eq!(argvs.map(name), ["hello", "rev", "wc", "spin"]);
         assert_eq!(name("toolbox"), "toolbox");
         assert_eq!(applet(&args("toolbox wc -l")).1, args("wc -l"));
         assert_eq!(applet(&[]).0, "");
         // hello prints its arguments joined by spaces.
         let ok = |s: &str| (0, s.to_owned(), String::new());
-        assert_eq!(exec(&args("hello a b")), ok("a b\n"));
-        assert_eq!(exec(&args("/bin/hello")), ok("\n"));
-        assert_eq!(exec(&args("toolbox hello x y")), ok("x y\n"));
+        let runs = ["hello a b", "/bin/hello", "toolbox hello x y"].map(|s| exec(&args(s)));
+        assert_eq!(runs, ["a b\n", "\n", "x y\n"].map(ok));
         assert_eq!(exec(&args("bin/toolbox.wasm hello.wasm 1")), ok("1\n"));
         // Each argument is kept whole, spaces and empty ones included.
         let argv = ["hello", "a b", "", "c"].map(String::from);
@@ -127,7 +122,6 @@ mod tests {
         let (status, out, err) = exec(&args("/bin/nope a"));
         assert_eq!((status, out.as_str()), (127, ""));
         assert_eq!(err, format!("toolbox: no applet \"nope\"; {list}"));
-        assert_eq!(exec(&args("toolbox")).0, 127);
-        assert_eq!(exec(&[]).0, 127);
+        assert_eq!((exec(&args("toolbox")).0, exec(&[]).0), (127, 127));
     }
 }

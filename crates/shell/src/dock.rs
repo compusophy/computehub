@@ -16,7 +16,7 @@ const LIFT: f32 = 2.0;
 const TIP_GAP: f32 = 10.0;
 const TIP_H: f32 = 24.0;
 /// The apps the dock always shows, in order (those the registry knows).
-pub(crate) const PINNED: [&str; 3] = ["terminal", "studio", "settings"];
+pub(crate) const PINNED: [&str; 4] = ["terminal", "assistant", "studio", "settings"];
 
 /// One app on the dock: its registry name, icon and open windows.
 pub(crate) type Item = (String, AppIcon, Vec<WinId>);

@@ -18,9 +18,7 @@ fn mid(a: Point, b: Point) -> Point {
 
 impl Raster {
     fn add(&mut self, i: usize, v: f32) {
-        if let Some(cell) = self.acc.get_mut(i) {
-            *cell += v;
-        }
+        self.acc.get_mut(i).into_iter().for_each(|cell| *cell += v);
     }
 
     /// Adds one line, in bitmap coordinates clamped to `[0, w] x [0, h]`.
@@ -30,9 +28,7 @@ impl Raster {
         }
         let (dir, p0, p1) = if a.y < b.y { (1.0, a, b) } else { (-1.0, b, a) };
         let dxdy = (p1.x - p0.x) / (p1.y - p0.y);
-        let wf = self.w as f32;
-        let mut x = p0.x;
-        let y_end = (p1.y.ceil() as usize).min(self.h);
+        let (wf, mut x, y_end) = (self.w as f32, p0.x, (p1.y.ceil() as usize).min(self.h));
         for y in p0.y as usize..y_end {
             let row = y * (self.w + 2);
             let dy = ((y + 1) as f32).min(p1.y) - (y as f32).max(p0.y);
@@ -48,8 +44,7 @@ impl Raster {
                 self.add(row + x0i + 1, d * xm);
             } else {
                 let (s, x0f, x1f) = ((x1 - x0).recip(), x0 - x0floor, x1 - x1ceil + 1.0);
-                let a0 = 0.5 * s * (1.0 - x0f) * (1.0 - x0f);
-                let am = 0.5 * s * x1f * x1f;
+                let (a0, am) = (0.5 * s * (1.0 - x0f) * (1.0 - x0f), 0.5 * s * x1f * x1f);
                 self.add(row + x0i, d * a0);
                 if x1i == x0i + 2 {
                     self.add(row + x0i + 1, d * (1.0 - a0 - am));
@@ -76,11 +71,8 @@ impl Raster {
         let mut prev = a;
         for i in 1..=n {
             let (t, u) = (i as f32 / n as f32, 1.0 - i as f32 / n as f32);
-            let p = Point {
-                x: u * u * a.x + 2.0 * u * t * c.x + t * t * b.x,
-                y: u * u * a.y + 2.0 * u * t * c.y + t * t * b.y,
-                on: true,
-            };
+            let at = |a: f32, c: f32, b: f32| u * u * a + 2.0 * u * t * c + t * t * b;
+            let p = Point { x: at(a.x, c.x, b.x), y: at(a.y, c.y, b.y), on: true };
             self.line(prev, p);
             prev = p;
         }
@@ -88,9 +80,7 @@ impl Raster {
 
     /// Walks one closed contour (two off-curve points imply one on it halfway).
     fn contour(&mut self, pts: &[Point]) {
-        let (Some(&first), Some(&last)) = (pts.first(), pts.last()) else {
-            return;
-        };
+        let (Some(&first), Some(&last)) = (pts.first(), pts.last()) else { return };
         let (start, body) = if first.on {
             (first, &pts[1..])
         } else if last.on {
@@ -98,8 +88,7 @@ impl Raster {
         } else {
             (mid(first, last), pts)
         };
-        let mut cur = start;
-        let mut ctrl: Option<Point> = None;
+        let (mut cur, mut ctrl) = (start, None::<Point>);
         for &p in body.iter().chain(core::iter::once(&start)) {
             if p.on {
                 match ctrl.take() {
@@ -139,14 +128,11 @@ pub(crate) fn render(o: &[Vec<Point>], scale: f32, out: &mut Bitmap) -> Result<(
     }
     let (wu, hu) = (w as usize, h as usize);
     let mut r = Raster { w: wu, h: hu, acc: vec![0.0; (wu + 2) * hu] };
+    let px = |v: f32, at: f32, max: f32| (v * scale - at).max(0.0).min(max);
     let mut pts = Vec::new();
     for c in o {
         pts.clear();
-        pts.extend(c.iter().map(|p| Point {
-            x: (p.x * scale - left).max(0.0).min(w),
-            y: (-p.y * scale - top).max(0.0).min(h),
-            on: p.on,
-        }));
+        pts.extend(c.iter().map(|p| Point { x: px(p.x, left, w), y: px(-p.y, top, h), on: p.on }));
         r.contour(&pts);
     }
     out.data.reserve(wu * hu);

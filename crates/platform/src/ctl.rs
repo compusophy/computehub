@@ -1,19 +1,17 @@
 //! [`Ctl`]: what an app asks of the page while it handles an event or draws.
 
-/// The app's handle on the page, lent to each [`crate::App`] call. Requests
-/// queue as [`Effect`]s and apply in order right after the app returns, still
-/// inside the DOM event that caused them (phones need that user activation to
-/// show a keyboard); results come back as events. Reads are live; natively
-/// the clocks read 0 and [`LocalTime::EPOCH`], and storage holds only the
-/// handle's queued writes.
+/// The app's handle on the page, lent to each [`crate::App`] call. Requests queue as [`Effect`]s
+/// and apply in order right after the app returns, still inside the DOM event that caused them
+/// (phones need that user activation to show a keyboard); results come back as events. Reads are
+/// live; natively the clocks read 0 and [`LocalTime::EPOCH`], and storage holds only the handle's
+/// queued writes.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Ctl {
     pub(crate) effects: Vec<Effect>,
 }
 
-/// One queued request of a [`Ctl`], named for the method that queues it
-/// (`Wake` for `wake_in`). `RequestFrame` and `Cursor` (a CSS keyword; the
-/// last wins) queue at most once per handle.
+/// One queued request of a [`Ctl`], named for the method that queues it (`Wake` for `wake_in`).
+/// `RequestFrame` and `Cursor` (a CSS keyword; the last wins) queue at most once per handle.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Effect {
     TextInput(bool),
@@ -28,6 +26,8 @@ pub enum Effect {
     Word { pid: u32, index: u32, value: i32 },
     Kill(u32),
     Wake(u32),
+    Stream { id: u32, url: String, headers: Vec<(&'static str, String)>, body: Vec<u8> },
+    Abort(u32),
 }
 
 /// The program a Start carries ([`Ctl::start`]): none (homed), its bytes,
@@ -56,8 +56,7 @@ impl LocalTime {
     pub const EPOCH: LocalTime =
         LocalTime { year: 1970, month: 1, day: 1, weekday: 4, hour: 0, minute: 0 };
 
-    /// From `Date`'s getters (`getMonth` counts from 0), each clamped into
-    /// its field's range.
+    /// From `Date`'s getters (`getMonth` counts from 0), each clamped into its field's range.
     pub(crate) fn from_js(y: u32, month0: u32, day: u32, wd: u32, h: u32, m: u32) -> LocalTime {
         let byte = |v: u32, lo: u32, hi: u32| v.clamp(lo, hi) as u8;
         LocalTime {
@@ -94,17 +93,15 @@ impl Ctl {
         /// printable keys, pastes and IME input arrive as [`crate::Event::Text`].
         /// `true` while focused blurs first, bringing back a dismissed keyboard.
         set_text_input(active: bool) => Effect::TextInput(active);
-        /// Fetches `url`, which must be same-origin relative (else it fails
-        /// without a request); the 2xx body or an error such as `"HTTP 404"`
-        /// arrives as [`crate::Event::Fetched`].
+        /// Fetches `url`, which must be same-origin relative (else it fails without a request); the
+        /// 2xx body or an error such as `"HTTP 404"` arrives as [`crate::Event::Fetched`].
         fetch(id: u32, url: &str) => Effect::Fetch { id, url: url.to_owned() };
         /// Stores `value` under `key` in `localStorage`; failures are ignored.
         storage_set(key: &str, value: &str) =>
             Effect::Store { key: key.to_owned(), value: value.to_owned() };
-        /// Starts a module Worker (`cpu/worker.js`) for `pid`, with a SAB if `sab`,
-        /// which needs [`Ctl::isolated`] (the kernel asks only then): its
-        /// [`crate::Event::Proc`] and [`crate::Event::ProcError`] follow. The
-        /// calls below ignore unknown pids.
+        /// Starts a module Worker (`cpu/worker.js`) for `pid`, with a SAB if `sab`, which needs
+        /// [`Ctl::isolated`] (the kernel asks only then): its [`crate::Event::Proc`] and
+        /// [`crate::Event::ProcError`] follow. The calls below ignore unknown pids.
         spawn(pid: u32, sab: bool) => Effect::Spawn { pid, sab };
         /// Posts `[sab | null, msg, program]` to the worker of `pid`.
         start(pid: u32, msg: Vec<u8>, program: Load) => Effect::Start { pid, msg, program };
@@ -119,6 +116,12 @@ impl Ctl {
         kill(pid: u32) => Effect::Kill(pid);
         /// Arms the one-shot timer, replacing it: [`crate::Event::Wake`] in `ms`.
         wake_in(ms: u32) => Effect::Wake(ms);
+        /// POSTs `body` with `headers` to `url` (any: the caller vouches for it); the body
+        /// streams back as [`crate::Event::Chunk`]s, then a [`crate::Event::StreamEnd`].
+        stream(id: u32, url: &str, headers: Vec<(&'static str, String)>, body: Vec<u8>) =>
+            Effect::Stream { id, url: url.to_owned(), headers, body };
+        /// Aborts stream `id`, which then says nothing more.
+        abort(id: u32) => Effect::Abort(id);
     }
 
     /// Asks for one more frame; from a frame, exactly one after it.
@@ -128,8 +131,7 @@ impl Ctl {
         }
     }
 
-    /// Shows the CSS cursor `css` over the canvas; the style is written only
-    /// when it changes.
+    /// Shows the CSS cursor `css` over the canvas; the style is written only when it changes.
     pub fn set_cursor(&mut self, css: &'static str) {
         self.effects.retain(|e| !matches!(e, Effect::Cursor(_)));
         self.effects.push(Effect::Cursor(css));
@@ -162,6 +164,12 @@ impl Ctl {
             return LocalTime::EPOCH;
         }
         LocalTime::of(&js_sys::Date::new_0())
+    }
+
+    /// The page's `location.hostname`; `None` natively.
+    pub fn hostname(&self) -> Option<String> {
+        let w = cfg!(target_arch = "wasm32").then(crate::window).flatten();
+        w.and_then(|w| js_sys::Reflect::get(&w.location(), &"hostname".into()).ok()?.as_string())
     }
 
     /// Whether the page is cross-origin isolated, so workers can share

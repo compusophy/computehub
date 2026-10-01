@@ -19,8 +19,7 @@ impl Perform for Sink<'_> {
             0x09 => t.tab(1, false),
             0x0A..=0x0C => t.index(),
             0x0D => t.goto(t.cur.y, 0),
-            0x0E => t.cur.gl = 1,
-            0x0F => t.cur.gl = 0,
+            0x0E | 0x0F => t.cur.gl = usize::from(byte == 0x0E),
             _ => return,
         }
         t.dirty = true;
@@ -41,10 +40,7 @@ impl Perform for Sink<'_> {
             ([], b'c') => t.reset(),
             ([], b'H') => t.tabs[t.cur.x] = true,
             ([b'#'], b'8') => {
-                for line in &mut t.screen {
-                    line.fill(Cell::BLANK);
-                    line.iter_mut().for_each(|c| c.ch = 'E');
-                }
+                t.screen.iter_mut().for_each(|line| line.fill(Cell { ch: 'E', ..Cell::BLANK }));
                 (t.top, t.bottom) = (0, t.rows - 1);
                 t.goto(0, 0);
             }
@@ -62,43 +58,33 @@ impl Perform for Sink<'_> {
         let (y, x, cols) = (t.cur.y, t.cur.x, t.cols);
         let in_region = (t.top..=t.bottom).contains(&y);
         match (private, inter, action) {
-            (None, [], b'A') => t.up(n),
-            (None, [], b'B' | b'e') => t.down(n),
+            (None, [], b'A') => t.up(n, x),
+            (None, [], b'B' | b'e') => t.down(n, x),
             (None, [], b'C' | b'a') => t.goto(y, x.saturating_add(n)),
             (None, [], b'D') => t.goto(y, x.saturating_sub(n)),
-            (None, [], b'E') => {
-                t.down(n);
-                t.cur.x = 0;
-            }
-            (None, [], b'F') => {
-                t.up(n);
-                t.cur.x = 0;
-            }
+            (None, [], b'E') => t.down(n, 0),
+            (None, [], b'F') => t.up(n, 0),
             (None, [], b'G' | b'`') => t.goto(y, n - 1),
             (None, [], b'H' | b'f') => t.goto_origin(n - 1, arg(1).max(1) - 1),
             (None, [], b'd') => t.goto_origin(n - 1, x),
             (None, [], b'I' | b'Z') => t.tab(n, action == b'Z'),
-            (None, [], b'J') => {
-                match arg(0) {
-                    0 => (y..t.rows).for_each(|r| t.erase(r, if r == y { x } else { 0 }, cols)),
-                    1 => (0..=y).for_each(|r| t.erase(r, 0, if r == y { x + 1 } else { cols })),
-                    2 => (0..t.rows).for_each(|r| t.erase(r, 0, cols)),
-                    3 => t.scrollback.clear(),
+            // ED, EL and ECH.
+            (None, [], b'J' | b'K' | b'X') => {
+                match (action, arg(0)) {
+                    (b'J', 0) => {
+                        (y..t.rows).for_each(|r| t.erase(r, if r == y { x } else { 0 }, cols))
+                    }
+                    (b'J', 1) => {
+                        (0..=y).for_each(|r| t.erase(r, 0, if r == y { x + 1 } else { cols }))
+                    }
+                    (b'J', 2) => t.clear_screen(),
+                    (b'J', 3) => t.scrollback.clear(),
+                    (b'K', 0) => t.erase(y, x, cols),
+                    (b'K', 1) => t.erase(y, 0, x + 1),
+                    (b'K', 2) => t.erase(y, 0, cols),
+                    (b'X', _) => t.erase(y, x, x.saturating_add(n).min(cols)),
                     _ => {}
                 }
-                t.cur.wrap = false;
-            }
-            (None, [], b'K') => {
-                match arg(0) {
-                    0 => t.erase(y, x, cols),
-                    1 => t.erase(y, 0, x + 1),
-                    2 => t.erase(y, 0, cols),
-                    _ => {}
-                }
-                t.cur.wrap = false;
-            }
-            (None, [], b'X') => {
-                t.erase(y, x, x.saturating_add(n).min(cols));
                 t.cur.wrap = false;
             }
             (None, [], b'P') => t.delete_cells(n),
@@ -111,18 +97,13 @@ impl Perform for Sink<'_> {
                 t.scroll_up(y, t.bottom, n, false);
                 t.goto(y, 0);
             }
-            (None, [], b'S') => {
-                let save = t.top == 0 && !t.alt;
-                t.scroll_up(t.top, t.bottom, n, save);
-            }
+            (None, [], b'S') => t.scroll_up(t.top, t.bottom, n, t.top == 0 && !t.alt),
             (None, [], b'T') if p.len() <= 1 => t.scroll_down(t.top, t.bottom, n),
-            // REP, at most to the end of the line (as VTE): ncurses asks no
-            // more, and chained REPs would otherwise cost a screen each.
+            // REP, at most to the end of the line (as VTE): ncurses asks no more, and chained
+            // REPs would otherwise cost a screen each.
             (None, [], b'b') => {
-                if let Some(c) = last {
-                    for _ in 0..n.min(cols - x) {
-                        t.print(c);
-                    }
+                for c in last.into_iter().flat_map(|c| std::iter::repeat_n(c, n.min(cols - x))) {
+                    t.print(c);
                 }
             }
             (None, [], b'r') => {
@@ -147,9 +128,7 @@ impl Perform for Sink<'_> {
                 }
             }
             (Some(b'?'), [], b'h' | b'l') => {
-                for i in 0..p.len() {
-                    t.dec_mode(p.get(i).unwrap_or(0), action == b'h');
-                }
+                (0..p.len()).for_each(|i| t.dec_mode(p.get(i).unwrap_or(0), action == b'h'))
             }
             (None, [b'!'], b'p') => t.soft_reset(),
             (None, [], b'n') if arg(0) == 5 => return t.reply(b"\x1b[0n"),
@@ -192,18 +171,14 @@ const SGR_BITS: [u16; 10] = [0, 1, 2, 4, 8, 16, 16, 32, 64, 128];
 fn ext_color(p: &Params, i: usize) -> (Option<Color>, usize) {
     let sub = p.sub(i);
     let colon = sub.len() > 1;
-    let at = |k: usize| {
-        if colon { sub.get(k).copied().flatten() } else { p.get(i + k) }
-    };
+    let at = |k: usize| if colon { sub.get(k).copied().flatten() } else { p.get(i + k) };
     let byte = |k: usize| u8::try_from(at(k).unwrap_or(0)).ok();
     let (color, used) = match at(1) {
         Some(5) => (at(2).and_then(|v| u8::try_from(v).ok()).map(Color::Indexed), 2),
         Some(2) => {
             let o = if colon && sub.len() >= 6 { 3 } else { 2 };
-            match (byte(o), byte(o + 1), byte(o + 2)) {
-                (Some(r), Some(g), Some(b)) => (Some(Color::Rgb(r, g, b)), 4),
-                _ => (None, 4),
-            }
+            let rgb = byte(o).zip(byte(o + 1)).zip(byte(o + 2));
+            (rgb.map(|((r, g), b)| Color::Rgb(r, g, b)), 4)
         }
         _ => (None, 1),
     };
@@ -276,13 +251,6 @@ impl Term {
         }
     }
 
-    fn clear_screen(&mut self) {
-        let blank = self.blank();
-        for line in &mut self.screen {
-            line.fill(blank);
-        }
-    }
-
     /// SGR: sets colors and attributes. Unknown codes are skipped.
     fn sgr(&mut self, p: &Params) {
         if p.is_empty() {
@@ -294,13 +262,13 @@ impl Term {
             match p.get(i).unwrap_or(0) {
                 0 => *pen = Cell::BLANK,
                 4 => match p.sub(i).get(1) {
-                    Some(Some(0) | None) => pen.attrs.remove(Attrs::UNDERLINE),
-                    _ => pen.attrs.insert(Attrs::UNDERLINE),
+                    Some(Some(0) | None) => pen.attrs.0 &= !Attrs::UNDERLINE.0,
+                    _ => pen.attrs.0 |= Attrs::UNDERLINE.0,
                 },
-                v @ 1..=9 => pen.attrs.insert(Attrs(SGR_BITS[usize::from(v)])),
-                21 => pen.attrs.insert(Attrs::UNDERLINE),
-                22 => pen.attrs.remove(Attrs::BOLD | Attrs::DIM),
-                v @ (23..=25 | 27..=29) => pen.attrs.remove(Attrs(SGR_BITS[usize::from(v - 20)])),
+                v @ 1..=9 => pen.attrs.0 |= SGR_BITS[usize::from(v)],
+                21 => pen.attrs.0 |= Attrs::UNDERLINE.0,
+                22 => pen.attrs.0 &= !(Attrs::BOLD | Attrs::DIM).0,
+                v @ (23..=25 | 27..=29) => pen.attrs.0 &= !SGR_BITS[usize::from(v - 20)],
                 v @ 30..=37 => pen.fg = Color::Indexed((v - 30) as u8),
                 39 => pen.fg = Color::Default,
                 v @ 40..=47 => pen.bg = Color::Indexed((v - 40) as u8),

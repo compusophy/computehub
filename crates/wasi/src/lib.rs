@@ -17,38 +17,54 @@ use kernel::wire::{E2BIG, EBADF, EEXIST, EFAULT, EILSEQ, EINVAL, EISDIR, ENOENT,
 use kernel::wire::{ENOTCAPABLE, ENOTDIR, ENOTSUP, ESPIPE, KIND_DIR, KIND_FILE, O_CREAT};
 use vfs::Vfs;
 
+/// Calls `$m! { ID name(types); .. }` on the 46 `wasi_snapshot_preview1` functions in witx order,
+/// with their core argument types (u32 is i32, u64 is i64); a function's id is its index.
+#[macro_export]
+macro_rules! functions {
+    ($m:ident) => { $m! {
+    ARGS_GET args_get(u32 u32); ARGS_SIZES_GET args_sizes_get(u32 u32);
+    ENVIRON_GET environ_get(u32 u32); ENVIRON_SIZES_GET environ_sizes_get(u32 u32);
+    CLOCK_RES_GET clock_res_get(u32 u32); CLOCK_TIME_GET clock_time_get(u32 u64 u32);
+    FD_ADVISE fd_advise(u32 u64 u64 u32); FD_ALLOCATE fd_allocate(u32 u64 u64);
+    FD_CLOSE fd_close(u32); FD_DATASYNC fd_datasync(u32); FD_FDSTAT_GET fd_fdstat_get(u32 u32);
+    FD_FDSTAT_SET_FLAGS fd_fdstat_set_flags(u32 u32);
+    FD_FDSTAT_SET_RIGHTS fd_fdstat_set_rights(u32 u64 u64);
+    FD_FILESTAT_GET fd_filestat_get(u32 u32); FD_FILESTAT_SET_SIZE fd_filestat_set_size(u32 u64);
+    FD_FILESTAT_SET_TIMES fd_filestat_set_times(u32 u64 u64 u32);
+    FD_PREAD fd_pread(u32 u32 u32 u64 u32); FD_PRESTAT_GET fd_prestat_get(u32 u32);
+    FD_PRESTAT_DIR_NAME fd_prestat_dir_name(u32 u32 u32); FD_PWRITE fd_pwrite(u32 u32 u32 u64 u32);
+    FD_READ fd_read(u32 u32 u32 u32); FD_READDIR fd_readdir(u32 u32 u32 u64 u32);
+    FD_RENUMBER fd_renumber(u32 u32); FD_SEEK fd_seek(u32 u64 u32 u32); FD_SYNC fd_sync(u32);
+    FD_TELL fd_tell(u32 u32); FD_WRITE fd_write(u32 u32 u32 u32);
+    PATH_CREATE_DIRECTORY path_create_directory(u32 u32 u32);
+    PATH_FILESTAT_GET path_filestat_get(u32 u32 u32 u32 u32);
+    PATH_FILESTAT_SET_TIMES path_filestat_set_times(u32 u32 u32 u32 u64 u64 u32);
+    PATH_LINK path_link(u32 u32 u32 u32 u32 u32 u32);
+    PATH_OPEN path_open(u32 u32 u32 u32 u32 u64 u64 u32 u32);
+    PATH_READLINK path_readlink(u32 u32 u32 u32 u32 u32);
+    PATH_REMOVE_DIRECTORY path_remove_directory(u32 u32 u32);
+    PATH_RENAME path_rename(u32 u32 u32 u32 u32 u32);
+    PATH_SYMLINK path_symlink(u32 u32 u32 u32 u32); PATH_UNLINK_FILE path_unlink_file(u32 u32 u32);
+    POLL_ONEOFF poll_oneoff(u32 u32 u32 u32); PROC_EXIT proc_exit(u32); PROC_RAISE proc_raise(u32);
+    SCHED_YIELD sched_yield(); RANDOM_GET random_get(u32 u32); SOCK_ACCEPT sock_accept(u32 u32 u32);
+    SOCK_RECV sock_recv(u32 u32 u32 u32 u32 u32); SOCK_SEND sock_send(u32 u32 u32 u32 u32);
+    SOCK_SHUTDOWN sock_shutdown(u32 u32);
+    } };
+}
+
 macro_rules! names {
-    ($($id:ident $name:literal $n:literal)+) => {
+    ($($id:ident $name:ident($($t:ident)*);)+) => {
         /// The 46 `wasi_snapshot_preview1` functions; a function's id is its index.
-        pub const NAMES: [&str; 46] = [$($name),+];
+        pub const NAMES: [&str; 46] = [$(stringify!($name)),+];
         /// How many core-wasm arguments each function takes, by id.
-        pub const ARITY: [usize; 46] = [$($n),+];
+        pub const ARITY: [usize; 46] = [$(<[&str]>::len(&[$(stringify!($t)),*])),+];
         #[allow(non_camel_case_types, clippy::upper_case_acronyms)]
         enum Id { $($id),+ }
-        $(#[doc = $name] pub const $id: usize = Id::$id as usize;)+
+        $(#[doc = stringify!($name)] pub const $id: usize = Id::$id as usize;)+
     };
 }
 
-names! {
-    ARGS_GET "args_get" 2 ARGS_SIZES_GET "args_sizes_get" 2 ENVIRON_GET "environ_get" 2
-    ENVIRON_SIZES_GET "environ_sizes_get" 2 CLOCK_RES_GET "clock_res_get" 2
-    CLOCK_TIME_GET "clock_time_get" 3 FD_ADVISE "fd_advise" 4 FD_ALLOCATE "fd_allocate" 3
-    FD_CLOSE "fd_close" 1 FD_DATASYNC "fd_datasync" 1 FD_FDSTAT_GET "fd_fdstat_get" 2
-    FD_FDSTAT_SET_FLAGS "fd_fdstat_set_flags" 2 FD_FDSTAT_SET_RIGHTS "fd_fdstat_set_rights" 3
-    FD_FILESTAT_GET "fd_filestat_get" 2 FD_FILESTAT_SET_SIZE "fd_filestat_set_size" 2
-    FD_FILESTAT_SET_TIMES "fd_filestat_set_times" 4 FD_PREAD "fd_pread" 5
-    FD_PRESTAT_GET "fd_prestat_get" 2 FD_PRESTAT_DIR_NAME "fd_prestat_dir_name" 3
-    FD_PWRITE "fd_pwrite" 5 FD_READ "fd_read" 4 FD_READDIR "fd_readdir" 5
-    FD_RENUMBER "fd_renumber" 2 FD_SEEK "fd_seek" 4 FD_SYNC "fd_sync" 1 FD_TELL "fd_tell" 2
-    FD_WRITE "fd_write" 4 PATH_CREATE_DIRECTORY "path_create_directory" 3
-    PATH_FILESTAT_GET "path_filestat_get" 5 PATH_FILESTAT_SET_TIMES "path_filestat_set_times" 7
-    PATH_LINK "path_link" 7 PATH_OPEN "path_open" 9 PATH_READLINK "path_readlink" 6
-    PATH_REMOVE_DIRECTORY "path_remove_directory" 3 PATH_RENAME "path_rename" 6
-    PATH_SYMLINK "path_symlink" 5 PATH_UNLINK_FILE "path_unlink_file" 3
-    POLL_ONEOFF "poll_oneoff" 4 PROC_EXIT "proc_exit" 1 PROC_RAISE "proc_raise" 1
-    SCHED_YIELD "sched_yield" 0 RANDOM_GET "random_get" 2 SOCK_ACCEPT "sock_accept" 3
-    SOCK_RECV "sock_recv" 6 SOCK_SEND "sock_send" 5 SOCK_SHUTDOWN "sock_shutdown" 2
-}
+functions!(names);
 
 /// Clock resolution, and the floor of every time a guest sees: 100 µs.
 const RES_NS: u64 = 100_000;
@@ -72,8 +88,6 @@ pub trait Mem {
 pub trait Host {
     /// Sends a request and blocks for its reply: `(errno, data)`.
     fn call(&mut self, req: &[u8]) -> (u16, Vec<u8>);
-    /// Posts a message that has no reply (EXIT, HOME_STATE).
-    fn post(&mut self, msg: &[u8]);
     /// Console output into the ring; blocks while it is full.
     fn console(&mut self, bytes: &[u8]);
     /// WASI clock `clock` (Proc asks only 0, realtime, and 1, monotonic) in
@@ -190,9 +204,7 @@ impl Proc {
         h: &mut dyn Host,
     ) -> Result<u16, Exit> {
         match f {
-            _ if ARITY.get(f) != Some(&a.len()) => {
-                Ok(if f < NAMES.len() { EINVAL } else { ENOSYS })
-            }
+            _ if ARITY.get(f) != Some(&a.len()) => Ok(if f < 46 { EINVAL } else { ENOSYS }),
             PROC_EXIT => Err(Exit(a[0] as u32 & 0xFF)),
             PROC_RAISE if (1..128).contains(&a[0]) => Err(Exit(128 + a[0] as u32)),
             _ => Ok(self.run(f, a, m, h).err().unwrap_or(0)),
@@ -260,10 +272,8 @@ impl Proc {
             FD_FILESTAT_SET_SIZE => req(h, Msg::SetLen { len: a[1], path: &self.file(p(0))?.path }),
             FD_ALLOCATE => {
                 let (path, end) = (&self.file(p(0))?.path, a[1].checked_add(a[2]).ok_or(EINVAL)?);
-                match open(h, 0, path)?.1 {
-                    size if size < end => req(h, Msg::SetLen { len: end, path }),
-                    _ => Ok(()),
-                }
+                let grow = open(h, 0, path)?.1 < end;
+                if grow { req(h, Msg::SetLen { len: end, path }) } else { Ok(()) }
             }
             PATH_OPEN => self.open(a, m, h),
             PATH_FILESTAT_GET => m.write(p(4), &filestat(h, &self.path(p(0), p(2), p(3), m)?)?),
@@ -277,9 +287,7 @@ impl Proc {
                 let (from, to) = (writable(path(self, m, 0))?, writable(path(self, m, 3))?);
                 req(h, Msg::Rename { from: &from, to: &to })
             }
-            PATH_LINK | PATH_SYMLINK | SOCK_ACCEPT | SOCK_RECV | SOCK_SEND | SOCK_SHUTDOWN => {
-                Err(ENOTSUP)
-            }
+            PATH_LINK | PATH_SYMLINK | SOCK_ACCEPT..=SOCK_SHUTDOWN => Err(ENOTSUP),
             PATH_READLINK => Err(EINVAL),
             _ => Err(ENOSYS),
         }
@@ -382,9 +390,7 @@ impl Proc {
             }
         };
         let n = scatter(m, &list, &data)?;
-        if at.is_none() {
-            f.pos += u64::from(n);
-        }
+        f.pos += if at.is_none() { u64::from(n) } else { 0 };
         m.write(a[a.len() - 1] as u32, &n.to_le_bytes())
     }
 
@@ -412,10 +418,8 @@ impl Proc {
             (Kind::Draw, _) if total as usize > kernel::MAX_FRAME => return Err(E2BIG),
             (Kind::Draw, _) => {
                 let mut frame = vec![wire::DRAW];
-                if gather(m, &list, total, &mut |b| frame.extend_from_slice(b))? < total {
-                    return Err(EFAULT);
-                }
-                call(h, &frame)?;
+                let n = gather(m, &list, total, &mut |b| frame.extend_from_slice(b))?;
+                (n == total).then_some(()).ok_or(EFAULT).and_then(|()| call(h, &frame))?;
                 total
             }
             _ => return Err(EBADF),
@@ -480,8 +484,7 @@ fn list(h: &mut dyn Host, path: &str, skip: usize) -> Result<Vec<(u8, String)>, 
     }
     let reply = call(h, &Msg::List { skip: skip as u32, path }.encode())?;
     let mut r = Reader(&reply);
-    let entry =
-        || Some((if r.u8()? == KIND_DIR { 3 } else { 4 }, r.u64()?, String::from(r.str()?)));
+    let entry = || Some((if r.u8()? == KIND_DIR { 3 } else { 4 }, r.u64()?, r.str()?.into()));
     Ok(core::iter::from_fn(entry).map(|(kind, _, name)| (kind, name)).collect())
 }
 
@@ -557,9 +560,7 @@ fn scatter(m: &mut dyn Mem, list: &[(u32, u32)], mut data: &[u8]) -> Result<u32,
 fn cstrs(list: &[String]) -> Result<Vec<u8>, u16> {
     let mut blob = Vec::new();
     for s in list {
-        if s.contains('\0') {
-            return Err(EINVAL);
-        }
+        (!s.contains('\0')).then_some(()).ok_or(EINVAL)?;
         blob.extend_from_slice(s.as_bytes());
         blob.push(0);
     }

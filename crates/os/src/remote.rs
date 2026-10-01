@@ -1,13 +1,11 @@
-//! Remote: the window of a GUI program, a kernel process that describes it as
-//! a [`uiwire`] tree, drawn here with `ui` in the frame's theme; the window's
-//! input goes back as uiwire events. The program starts at the first size
-//! ([`Event::Resize`]) with the roots `/`; until its first frame the window
-//! shows a note, or why it failed. A frame's title is the window's and its
-//! requests are honored (Size in the first only); a clean exit closes the
-//! window, and closing it sends [`Event::Close`]. Edited text is owned as
-//! uiwire says, one [`Event::Change`] out at a time: the next waits for a
-//! frame, or goes before any other event. Nodes stack [`PAD`] inside the
-//! content rect, the wheel scrolling what does not fit.
+//! Remote: the window of a GUI program, a kernel process that describes it as a [`uiwire`] tree,
+//! drawn here with `ui` in the frame's theme; the window's input goes back as uiwire events. The
+//! program starts at the first size ([`Event::Resize`]) with the roots `/`; until its first frame
+//! the window shows a note, or why it failed. A frame's title is the window's and its requests are
+//! honored (Size in the first only); a clean exit closes the window, and closing it sends
+//! [`Event::Close`]. Edited text is owned as uiwire says, one [`Event::Change`] out at a time: the
+//! next waits for a frame, or goes before any other event. Nodes stack [`PAD`] inside the content
+//! rect, the wheel scrolling what does not fit.
 
 use std::mem;
 
@@ -18,12 +16,16 @@ use ui::{RADIUS_SM, Rgba, SPACING, Sense, TextStyle, TextSystem, Theme, Ui, Widg
 use uiwire::{Event, Frame, Node, Request, Style, Variant};
 use vfs::Vfs;
 
-/// The Studio program, and the file `"studio"` edits.
+use crate::ai::Ai;
+
+/// The Studio and Assistant programs, and the file `"studio"` edits.
 pub const STUDIO: &str = "/bin/studio";
+pub const ASSISTANT: &str = "/bin/assistant";
 pub const DEFAULT_FILE: &str = "/apps/counter.app";
 /// Studio's icon (braces on violet), and that of every `.app` it runs.
 pub const STUDIO_ICON: AppIcon = AppIcon { glyph: "{ }", hue: Rgba::hex(0x8b7bff) };
 pub const APP_ICON: AppIcon = AppIcon { glyph: "<>", hue: Rgba::hex(0xf59e0b) };
+pub const ASSISTANT_ICON: AppIcon = AppIcon { glyph: "AI", hue: Rgba::hex(0xa78bfa) };
 /// Studio's sample apps, from its `samples/`, as `(path, source)`.
 pub const SAMPLES: [(&str, &str); 3] = [
     (DEFAULT_FILE, include_str!("../../studio/samples/counter.app")),
@@ -33,10 +35,16 @@ pub const SAMPLES: [(&str, &str); 3] = [
 /// An Item's height.
 const ITEM_H: f32 = 36.0;
 
-/// The app for a window name: Studio editing [`DEFAULT_FILE`] for `"studio"` or
-/// `<path>` for `"studio:<path>"`, or running a `.app` path (relative: in `/apps`).
-pub fn open(name: &str) -> Option<Box<dyn App>> {
+/// The app for a window name: the Assistant for `"assistant"`, Studio editing [`DEFAULT_FILE`] for
+/// `"studio"` or `<path>` for `"studio:<path>"`, or running a `.app` path (relative: in `/apps`).
+pub fn open(name: &str, ai: &Ai) -> Option<Box<dyn App>> {
     let abs = |p: &str| Vfs::normalize("/apps", p).ok().filter(|_| !p.is_empty());
+    if name == "assistant" {
+        let mut r = Remote::new(ASSISTANT, vec![name.into()], ai);
+        (r.title, r.icon, r.size) = ("Assistant".into(), ASSISTANT_ICON, Some((560.0, 600.0)));
+        r.follow = true;
+        return Some(Box::new(r));
+    }
     let (edit, path) = match name.strip_prefix("studio:") {
         Some(p) => (true, abs(p)?),
         None if name == "studio" => (true, DEFAULT_FILE.to_string()),
@@ -45,7 +53,7 @@ pub fn open(name: &str) -> Option<Box<dyn App>> {
     };
     let file = path.rsplit('/').next().unwrap_or_default().to_string();
     let mode = if edit { "edit" } else { "run" };
-    let mut r = Remote::new(STUDIO, ["studio", mode, &path].map(String::from).into());
+    let mut r = Remote::new(STUDIO, ["studio", mode, &path].map(String::from).into(), ai);
     (r.title, r.icon, r.size) = match edit {
         true => (["Studio \u{2014} ", &file].concat(), STUDIO_ICON, Some((760.0, 540.0))),
         false => (file, APP_ICON, None),
@@ -63,15 +71,18 @@ struct Texts {
 }
 
 /// A GUI program in a window: see the module docs.
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub struct Remote {
-    /// The title until a frame names one, the icon, the preferred size.
+    /// The title until a frame names one, the icon, the preferred size, and whether a view at
+    /// the bottom stays there as the content grows (the Assistant's transcript).
     pub title: String,
     pub icon: AppIcon,
     pub size: Option<(f32, f32)>,
+    pub follow: bool,
     program: String,
     argv: Vec<String>,
     pid: Option<u32>,
+    ai: Ai,
     /// Why nothing runs (empty while it does), and its last output.
     note: String,
     log: String,
@@ -91,9 +102,9 @@ pub struct Remote {
 }
 
 impl Remote {
-    /// The window of `program` (a wasm file or marker in the VFS) run with `argv`.
-    pub fn new(program: &str, argv: Vec<String>) -> Remote {
-        Remote { program: program.to_string(), argv, ..Remote::default() }
+    /// The window of `program` (a wasm file or marker in the VFS) run with `argv`, sharing `ai`.
+    pub fn new(program: &str, argv: Vec<String>, ai: &Ai) -> Remote {
+        Remote { program: program.to_string(), argv, ai: ai.clone(), ..Remote::default() }
     }
 
     fn start(&mut self, cx: &mut Cx<'_>) {
@@ -227,7 +238,7 @@ impl Remote {
             self.log = String::from_utf8_lossy(&out).into_owned();
         }
         let Some(status) = cx.kernel.reap(pid) else { return false };
-        self.pid = None;
+        (self.pid, _) = (None, self.ai.ask(pid, Request::Close));
         if status == 0 {
             cx.close_self();
             return false;
@@ -239,7 +250,7 @@ impl Remote {
     }
 
     /// Takes `frame` as the window's tree, keeping the text the user edits.
-    fn take(&mut self, frame: Frame, cx: &mut Cx<'_>) {
+    fn take(&mut self, mut frame: Frame, cx: &mut Cx<'_>) {
         let mut old = mem::take(&mut self.texts);
         each(&frame.nodes, &mut |n| match n {
             Node::Input { id, value, .. } if *id != 0 => {
@@ -268,12 +279,13 @@ impl Remote {
         if t.inputs.iter().any(|i| i.0 == old.focus) || t.codes.iter().any(|c| c.0 == old.focus) {
             t.focus = old.focus;
         }
-        for r in &frame.requests {
-            match *r {
-                Request::Open { ref name } => cx.open(name),
+        for r in mem::take(&mut frame.requests) {
+            match r {
+                Request::Open { name } => cx.open(&name),
                 Request::Close => cx.close_self(),
                 Request::Size { w, h } if self.frame.is_none() => cx.set_size(w, h),
                 Request::Size { .. } => {}
+                r => self.ai.ask(self.pid.unwrap_or_default(), r),
             }
         }
         (self.frame, self.waiting) = (Some(frame), false);
@@ -314,10 +326,14 @@ impl App for Remote {
                 if self.pid.is_none() && self.note.is_empty() && !self.closed {
                     self.start(cx);
                 }
-                // `as` saturates, and NaN is 0.
+                // `as` saturates, and NaN is 0. The AI settings follow the first.
                 let size = (w as u16, h as u16);
+                let first = self.told.is_none();
                 if self.told.replace(size) != Some(size) {
                     self.post(Event::Resize { w: size.0, h: size.1 }, cx);
+                }
+                if let Some(pid) = self.pid.filter(|_| first) {
+                    self.post(self.ai.hello(pid), cx);
                 }
                 true
             }
@@ -340,6 +356,7 @@ impl App for Remote {
     fn closing(&mut self, cx: &mut Cx<'_>) {
         if !mem::replace(&mut self.closed, true) {
             self.post(Event::Close, cx);
+            self.ai.ask(self.pid.unwrap_or_default(), Request::Close);
         }
     }
 
@@ -364,8 +381,9 @@ impl App for Remote {
             (lay.extra, lay.sizes) = ((view - h) / lay.fills as f32, Vec::new());
             h = lay.stack(ts, &frame.nodes, w, SPACING, None);
         }
+        let end = self.follow && self.scroll >= self.heights.0 - self.heights.1;
         self.heights = (h + 2.0 * PAD, r.h);
-        self.scroll = self.scroll.min(self.heights.0 - r.h).max(0.0);
+        self.scroll = if end { f32::MAX } else { self.scroll }.min(self.heights.0 - r.h).max(0.0);
         let (x, y) = (r.x + PAD, r.y + PAD - self.scroll);
         lay.draw_stack(ui, &frame.nodes, (x, y), SPACING);
     }

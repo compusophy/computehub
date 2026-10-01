@@ -12,7 +12,6 @@ impl Rng {
         self.0 ^= self.0 << 17;
         self.0
     }
-
     pub fn bytes(&mut self, len: usize) -> Vec<u8> {
         (0..len).map(|_| self.next() as u8).collect()
     }

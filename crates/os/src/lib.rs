@@ -1,24 +1,23 @@
-//! compusophyOS's wasm entry: `start` runs a desktop on [`platform::run`]
-//! with the boot font, a [`Vfs`] holding the `/bin` markers and Studio's
-//! samples, and a [`Registry`] of [`apps::open`] then [`remote::open`]. The
-//! [`Shell`] is made at the first Resize that leaves a work area; until then
-//! input is dropped (a missed Tick is replayed) and frames clear to the
-//! default theme's base. The theme is kept in `localStorage` ([`THEME_KEY`]).
+//! compusophyOS's wasm entry: `start` runs a desktop on [`platform::run`] with the boot font, a
+//! [`Vfs`] holding the `/bin` markers and Studio's samples, and a [`Registry`] of [`apps::open`]
+//! then [`remote::open`]. The [`Shell`] is made at the first Resize that leaves a work area; until
+//! then input is dropped (a missed Tick is replayed) and frames clear to the default theme's base.
+//! The theme is kept in `localStorage` ([`THEME_KEY`]), as are the AI settings ([`ai`]).
 //!
-//! Fonts: boot (Inter Regular, in the wasm); deferred (Inter SemiBold and
-//! JetBrains Mono, fetched after the first frame under the top two fetch ids,
-//! which the shell never reaches; a failure leaves bold as Regular and mono
-//! cells empty); lazy (symbol fallbacks the shell fetches). A key-down that
-//! types text is never prevented while text input is on: text reaches apps
-//! only through the platform's textarea.
+//! Fonts: boot (Inter Regular, in the wasm); deferred (Inter SemiBold and JetBrains Mono, fetched
+//! after the first frame under the top two fetch ids, which the shell never reaches; a failure
+//! leaves bold as Regular and mono cells empty); lazy (symbol fallbacks the shell fetches). A
+//! key-down that types text is never prevented while text input is on: text reaches apps only
+//! through the platform's textarea.
 
 #![forbid(unsafe_code)]
 
+pub mod ai;
 pub mod remote;
 
 use gfx::{DrawList, RectF, Rgba};
 use platform::{App, Ctl, Event, Handled, Renderer};
-use shell::{Cursor, Effect, Input, KernelIn, Key, LocalTime, Mods, Registry, Response, Shell};
+use shell::{Effect, Input, KernelIn, Key, LocalTime, Mods, Registry, Response, Shell};
 use ui::kernel::{self, Effect as K};
 use ui::{FontId, TextSystem};
 use vfs::Vfs;
@@ -35,8 +34,8 @@ const DEFERRED: [(u32, FontId, &str); 2] = [
 /// The `localStorage` keys of the theme's name and of `"1"` once /home was saved.
 pub const THEME_KEY: &str = "compusophy.theme";
 pub const HOME_KEY: &str = "compusophy.home";
-/// The applets of `bin/toolbox.wasm`, each a `/bin` marker file (as is
-/// Studio, [`remote::STUDIO`], for `bin/studio.wasm`).
+/// The applets of `bin/toolbox.wasm`, each a `/bin` marker file (as are the
+/// GUI programs, such as [`remote::STUDIO`] for `bin/studio.wasm`).
 const APPLETS: [&str; 9] =
     ["hello", "rev", "wc", "spin", "nap", "fstest", "keys", "bench", "selftest"];
 
@@ -56,8 +55,9 @@ struct Desktop {
     typing: bool,
     /// Which [`DEFERRED`] fonts are on their way; `None` before the first frame.
     deferred: Option<[bool; 2]>,
-    /// The theme's name as storage has it.
+    /// The theme's name as storage has it, and the AI state the program windows share.
     saved: &'static str,
+    ai: ai::Ai,
     list: DrawList,
 }
 
@@ -70,6 +70,7 @@ impl Desktop {
             let _ = vfs.write(&["/bin/", name].concat(), b"#!wasm bin/toolbox.wasm\n");
         }
         let _ = vfs.write(remote::STUDIO, b"#!wasm bin/studio.wasm\n");
+        let _ = vfs.write(remote::ASSISTANT, b"#!wasm bin/assistant.wasm\n");
         for (path, src) in remote::SAMPLES {
             let _ = vfs.write(path, src.as_bytes());
         }
@@ -86,9 +87,10 @@ impl Desktop {
             Input::Resize { w, h } if w >= 1.0 && h >= shell::BAR_H + shell::DOCK_CLEAR + 1.0 => {
                 let (text, vfs) = self.parts.take()?;
                 let theme = ctl.storage_get(THEME_KEY).unwrap_or_default();
-                let shell = Shell::new(w, h, text, vfs, registry(), &theme);
+                let shell = Shell::new(w, h, text, vfs, registry(self.ai.clone()), &theme);
                 let shell = self.shell.insert(shell);
                 shell.kernel_mut().set_isolated(ctl.isolated());
+                self.ai.load(ctl);
                 self.saved = shell.theme_name();
                 shell.set_now(ctl.monotonic_ms());
                 let mut r = shell.input(input);
@@ -115,6 +117,12 @@ impl Desktop {
                 Some(slot) => return self.set_font(slot, result),
                 None => self.shell.as_mut().map(|s| s.fetched(id, result)),
             },
+            ev @ (Event::Chunk { .. } | Event::StreamEnd { .. }) => {
+                if let Some(shell) = &mut self.shell {
+                    self.ai.heard(shell.kernel_mut(), ev);
+                }
+                return Handled::default();
+            }
             Event::Proc { pid, msg } => self.kernel(KernelIn::Msg { pid, msg }),
             Event::ProcError { pid } => self.kernel(KernelIn::Error { pid }),
             Event::Wake => self.kernel(KernelIn::Wake),
@@ -123,13 +131,13 @@ impl Desktop {
         };
         let Some(r) = r else { return Handled::default() };
         let asked = r.text_input.is_some();
-        r.effects.into_iter().for_each(|fx| effect(fx, ctl));
+        r.effects.into_iter().for_each(|fx| effect(fx, ctl, &self.ai));
         if let Some(on) = r.text_input {
             self.typing = on;
             ctl.set_text_input(on);
         }
         if let Some(c) = r.cursor {
-            ctl.set_cursor(cursor(c));
+            ctl.set_cursor(CURSORS[c as usize]);
         }
         // A tap on the focused window while typing asks for text input again,
         // inside its user activation: that brings back a dismissed keyboard.
@@ -144,10 +152,16 @@ impl Desktop {
         self.shell.as_mut().map(|s| s.kernel(ev))
     }
 
-    /// Passes on what the shell queued outside a response; stores a changed theme.
+    /// Pumps AI and the shell's queued effects (twice: each can cause the other); stores a theme.
     fn flush(&mut self, ctl: &mut Ctl) {
         let Some(shell) = &mut self.shell else { return };
-        shell.take_effects().into_iter().for_each(|fx| effect(fx, ctl));
+        for _ in 0..2 {
+            if self.ai.pump(ctl, shell.kernel_mut()) {
+                let (ai, localhost) = self.ai.status();
+                shell.set_ai(ai, localhost);
+            }
+            shell.take_effects().into_iter().for_each(|fx| effect(fx, ctl, &self.ai));
+        }
         let theme = shell.theme_name();
         if theme != self.saved {
             self.saved = theme;
@@ -233,7 +247,7 @@ fn text_of<'a>(shell: &'a mut Option<Shell>, parts: &'a mut Parts) -> Option<&'a
     }
 }
 
-fn effect(fx: Effect, ctl: &mut Ctl) {
+fn effect(fx: Effect, ctl: &mut Ctl, ai: &ai::Ai) {
     match fx {
         Effect::Fetch { id, url } => ctl.fetch(id, &url),
         Effect::Kernel(K::Spawn { pid, sab }) => ctl.spawn(pid, sab),
@@ -244,6 +258,7 @@ fn effect(fx: Effect, ctl: &mut Ctl) {
         Effect::Kernel(K::Kill { pid }) => ctl.kill(pid),
         Effect::Kernel(K::Wake { ms }) => ctl.wake_in(ms),
         Effect::Kernel(K::Saved) => ctl.storage_set(HOME_KEY, "1"),
+        Effect::AiConfig { provider, key, model } => ai.configure(ctl, &provider, key, &model),
         // The host hands frames to the apps; none reach here.
         Effect::Kernel(K::Draw { .. }) => {}
     }
@@ -258,28 +273,18 @@ fn load(program: kernel::Load) -> platform::Load {
     }
 }
 
-/// The CSS `cursor` keyword for the shell's cursor.
-fn cursor(c: Cursor) -> &'static str {
-    match c {
-        Cursor::Default => "default",
-        Cursor::Text => "text",
-        Cursor::Grab => "grab",
-        Cursor::Grabbing => "grabbing",
-        Cursor::EwResize => "ew-resize",
-        Cursor::NsResize => "ns-resize",
-        Cursor::NwseResize => "nwse-resize",
-        Cursor::NeswResize => "nesw-resize",
-    }
-}
+/// The CSS `cursor` keyword of each [`Cursor`], in its order.
+const CURSORS: [&str; 8] =
+    ["default", "text", "grab", "grabbing", "ew-resize", "ns-resize", "nwse-resize", "nesw-resize"];
 
 fn local(t: platform::LocalTime) -> LocalTime {
     let platform::LocalTime { year, month, day, weekday, hour, minute } = t;
     LocalTime { year, month, day, weekday, hour, minute }
 }
 
-/// Makes apps by name: the built-ins, then Studio and `.app` files.
-fn registry() -> Registry {
-    Box::new(|name| apps::open(name).or_else(|| remote::open(name)))
+/// Makes apps by name: the built-ins, then the GUI programs and `.app` files.
+fn registry(ai: ai::Ai) -> Registry {
+    Box::new(move |name| apps::open(name).or_else(|| remote::open(name, &ai)))
 }
 
 /// `a` then `b`, as one response.
@@ -297,6 +302,7 @@ fn merge(mut a: Response, b: Response) -> Response {
 fn input_of(ev: Event) -> Option<Input> {
     Some(match ev {
         Event::Key { down: false, .. } | Event::Fetched { .. } => return None,
+        Event::Chunk { .. } | Event::StreamEnd { .. } => return None,
         Event::Proc { .. } | Event::ProcError { .. } | Event::Wake | Event::Hidden => return None,
         Event::Key { code, key, shift, ctrl, alt, meta, altgr, .. } => {
             let (ctrl, alt) = without_altgr(ctrl, alt, altgr);
@@ -314,10 +320,9 @@ fn input_of(ev: Event) -> Option<Input> {
     })
 }
 
-/// The shell key for a key-down: by `code`, or with no code (phone keyboards)
-/// by `key`. With a `chord` (Ctrl, Alt or Meta) an ASCII letter `key` is that
-/// letter (AZERTY's Ctrl+Z is not Ctrl+W); a NumLock-off keypad key is the key
-/// it names; `Backquote` is a backquote everywhere.
+/// The shell key for a key-down: by `code`, or with no code (phone keyboards) by `key`. With a
+/// `chord` (Ctrl, Alt or Meta) an ASCII letter `key` is that letter (AZERTY's Ctrl+Z is not
+/// Ctrl+W); a NumLock-off keypad key is the key it names; `Backquote` is a backquote everywhere.
 fn key_of(code: &str, key: &str, chord: bool) -> Key {
     let one = key.chars().next().filter(|c| c.len_utf8() == key.len());
     if let Some(c) = one.filter(|c| chord && c.is_ascii_alphabetic()) {

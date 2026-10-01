@@ -40,24 +40,15 @@ fn encodes_the_documented_layout() {
     list.gradient(RectF::new(0.0, 0.0, 4.0, 4.0), 1.0, Rgba(1, 2, 3, 4), Rgba(5, 6, 7, 0), -0.5);
     let mut out = vec![9; 300];
     list.encode_into(&mut out);
-    let (none, zero, clear) = (le(&NO_CLIP), le(&[0.0; 4]), vec![0; 4]);
+    // Each: rect, radius, kind (Fill, Glyph, Gradient), p0, p1; color; clip, uv; color2.
+    let one = |a: &[f32], c: [u8; 4], b: &[f32], c2: [u8; 4]| [le(a), c.into(), le(b), c2.into()];
+    let (none, glyph) = ([NO_CLIP, [0.0; 4]].concat(), [0.0, 0.0, 8.0, 8.0, 1.0, 2.0, 3.0, 4.0]);
     let want = [
-        le(&[1.0, 2.0, 3.0, 4.0, 0.5, 0.0, 0.0, 0.0]), // rect, radius, kind Fill, p0, p1
-        vec![10, 20, 30, 40],
-        none.clone(),
-        zero.clone(),
-        clear.clone(),
-        le(&[-2.0, 0.0, 16.0, 8.0, 0.0, 4.0, 0.0, 0.0]), // kind Glyph
-        vec![255; 4],
-        le(&[0.0, 0.0, 8.0, 8.0, 1.0, 2.0, 3.0, 4.0]), // clip, uv
-        clear,
-        le(&[0.0, 0.0, 4.0, 4.0, 1.0, 5.0, -0.5, 0.0]), // kind Gradient, angle
-        vec![1, 2, 3, 4],
-        none,
-        zero,
-        vec![5, 6, 7, 0],
+        one(&[1.0, 2.0, 3.0, 4.0, 0.5, 0.0, 0.0, 0.0], [10, 20, 30, 40], &none, [0; 4]),
+        one(&[-2.0, 0.0, 16.0, 8.0, 0.0, 4.0, 0.0, 0.0], [255; 4], &glyph, [0; 4]),
+        one(&[0.0, 0.0, 4.0, 4.0, 1.0, 5.0, -0.5, 0.0], [1, 2, 3, 4], &none, [5, 6, 7, 0]),
     ];
-    assert_eq!((out.len(), out), (3 * INSTANCE_BYTES, want.concat()));
+    assert_eq!((out.len(), out), (3 * INSTANCE_BYTES, want.concat().concat()));
     let mut out = vec![1];
     DrawList::new().encode_into(&mut out);
     assert!(out.is_empty());
@@ -102,11 +93,9 @@ fn degenerate_pushes_are_skipped() {
     let (r, nan, inf) = (RectF::new, f32::NAN, f32::INFINITY);
     let none = WHITE.with_alpha(0);
     let mut list = DrawList::new();
-    for bad in [r(0.0, 0.0, 0.0, 10.0), r(0.0, 0.0, 10.0, -1.0), r(nan, 0.0, 10.0, 10.0)] {
-        list.fill(bad, 0.0, WHITE);
-    }
-    list.fill(r(0.0, inf, 10.0, 10.0), 0.0, WHITE);
-    list.fill(r(0.0, 0.0, nan, 10.0), 0.0, WHITE);
+    let bad = [r(0.0, 0.0, 0.0, 10.0), r(0.0, 0.0, 10.0, -1.0), r(nan, 0.0, 10.0, 10.0)];
+    let more = [r(0.0, inf, 10.0, 10.0), r(0.0, 0.0, nan, 10.0)];
+    bad.into_iter().chain(more).for_each(|bad| list.fill(bad, 0.0, WHITE));
     list.fill(OK, inf, WHITE);
     list.fill(OK, 0.0, none);
     list.border(OK, 0.0, 0.0, WHITE);
@@ -115,20 +104,13 @@ fn degenerate_pushes_are_skipped() {
     list.icon(OK, Icon::Dot, nan, WHITE);
     list.icon(r(0.0, 0.0, 10.0, 0.0), Icon::Dot, 1.0, WHITE);
     list.gradient(OK, 0.0, none, Rgba(9, 9, 9, 0), 0.0);
-    for (radius, angle) in [(0.0, nan), (0.0, inf), (nan, 0.0)] {
-        list.gradient(OK, radius, WHITE, WHITE, angle);
-    }
+    let gradients = [(0.0, nan), (0.0, inf), (nan, 0.0)];
+    gradients.into_iter().for_each(|(radius, a)| list.gradient(OK, radius, WHITE, WHITE, a));
     list.gradient(r(0.0, 0.0, -1.0, 10.0), 0.0, WHITE, WHITE, 0.0);
-    for (rect, color) in
-        [(OK, none), (r(0.0, 0.0, 10.0, 0.0), WHITE), (r(0.0, nan, 10.0, 10.0), WHITE)]
-    {
-        list.glow(rect, color);
-    }
-    for (rect, strength, seed) in
-        [(OK, 0, 1.0), (OK, 8, nan), (OK, 8, -inf), (r(0.0, 0.0, 0.0, 0.0), 8, 1.0)]
-    {
-        list.grain(rect, strength, seed);
-    }
+    let glows = [(OK, none), (r(0.0, 0.0, 10.0, 0.0), WHITE), (r(0.0, nan, 10.0, 10.0), WHITE)];
+    glows.into_iter().for_each(|(rect, color)| list.glow(rect, color));
+    let grains = [(OK, 0, 1.0), (OK, 8, nan), (OK, 8, -inf), (r(0.0, 0.0, 0.0, 0.0), 8, 1.0)];
+    grains.into_iter().for_each(|(rect, strength, seed)| list.grain(rect, strength, seed));
     list.shadow_offset(OK, 0.0, 4.0, nan, WHITE);
     list.shadow_offset(OK, 0.0, 4.0, inf, WHITE);
     list.shadow_offset(OK, 0.0, nan, 2.0, WHITE);
@@ -150,10 +132,8 @@ fn glyphs_carry_their_uv() {
     let (dst, uv) = (r(3.0, 4.0, 7.0, 9.0), r(10.0, 20.0, 14.0, 18.0));
     let mut list = DrawList::new();
     list.glyph(dst, uv, WHITE);
-    for bad in [r(10.0, 20.0, 0.0, 18.0), r(10.0, 20.0, 14.0, -1.0), r(nan, 20.0, 14.0, 18.0)] {
-        list.glyph(dst, bad, WHITE);
-    }
-    list.glyph(dst, r(10.0, inf, 14.0, 18.0), WHITE);
+    let bad = [r(10.0, 20.0, 0.0, 18.0), r(10.0, 20.0, 14.0, -1.0), r(nan, 20.0, 14.0, 18.0)];
+    bad.into_iter().chain([r(10.0, inf, 14.0, 18.0)]).for_each(|uv| list.glyph(dst, uv, WHITE));
     list.glyph(r(3.0, 4.0, 0.0, 9.0), uv, WHITE);
     list.glyph(dst, uv, WHITE.with_alpha(0));
     assert_eq!(list.len(), 1);
@@ -167,8 +147,7 @@ fn glyphs_carry_their_uv() {
 #[test]
 fn clips_nest_and_pop() {
     let [x, y, w, h] = NO_CLIP;
-    let none = RectF::new(x, y, w, h);
-    let big = RectF::new(0.0, 0.0, 200.0, 200.0);
+    let (none, big) = (RectF::new(x, y, w, h), RectF::new(0.0, 0.0, 200.0, 200.0));
     let mut list = DrawList::new();
     list.pop_clip(); // empty: a no-op
     assert_eq!(list.clip(), none);
@@ -269,4 +248,84 @@ fn shaders_name_the_contract() {
         let decl = line.replace("out ", "in ");
         assert!(fs.contains(&decl), "fragment shader lacks {decl}");
     }
+}
+
+#[test]
+fn new_and_clear_are_zero_and_all_dirty() {
+    let mut a = Atlas::new(8, 4);
+    assert_eq!((a.size(), a.pixels(), a.generation()), ((8, 4), &[0; 32][..], 0));
+    assert_eq!((a.take_dirty(), a.take_dirty()), (Some((0, 4)), None));
+    assert_eq!((Atlas::new(0, 4).take_dirty(), Atlas::new(4, 0).take_dirty()), (None, None));
+    let mut a = Atlas::new(8, 8);
+    let (x, y) = a.alloc(2, 2).unwrap();
+    a.write(x, y, 2, 2, &[7; 4]);
+    assert_eq!(a.alloc(5, 5), None);
+    a.take_dirty();
+    a.clear();
+    assert_eq!((a.take_dirty(), a.generation(), a.pixels()), (Some((0, 8)), 1, &[0; 64][..]));
+    assert_eq!(a.alloc(5, 5), Some((1, 1)));
+    a.clear();
+    assert_eq!(a.generation(), 2);
+}
+
+#[test]
+fn shelves_keep_a_one_pixel_gutter() {
+    let mut a = Atlas::new(16, 16);
+    let reqs = [(4, 3), (4, 3), (4, 2), (4, 3), (2, 1), (3, 1), (14, 5), (14, 4), (1, 1)];
+    // A shorter rect shares a shelf; a full shelf or one 2x too tall does
+    // not; no gutter row below (14, 5); with no row left for a new
+    // shelf, a tall shelf takes a short rect.
+    let more = [(6, 1), (15, 1), (20, 20)];
+    let got: Vec<_> = reqs.into_iter().chain(more).map(|(w, h)| a.alloc(w, h)).collect();
+    let s = Some;
+    let want =
+        [s((1, 1)), s((6, 1)), s((11, 1)), s((1, 5)), s((1, 9)), s((4, 9)), None, s((1, 11))];
+    assert_eq!(got, [&want[..], &[s((8, 9)), s((6, 5)), None, None]].concat());
+    let edge = [(u32::MAX, 1), (1, u32::MAX), (0, 7), (7, 0)].map(|(w, h)| a.alloc(w, h));
+    assert_eq!(edge, [None, None, s((0, 0)), s((0, 0))]);
+    assert_eq!(Atlas::new(0, 0).alloc(1, 1), None);
+    assert_eq!((Atlas::new(3, 3).alloc(1, 1), Atlas::new(3, 3).alloc(2, 1)), (s((1, 1)), None));
+}
+
+#[test]
+fn packing_never_overlaps() {
+    let mut a = Atlas::new(64, 64);
+    let mut taken = vec![0u8; 64 * 64];
+    let mut n = 0;
+    for i in 0..200u32 {
+        let (w, h) = (1 + i * 7 % 9, 1 + i * 5 % 11);
+        let Some((x, y)) = a.alloc(w, h) else { continue };
+        n += 1;
+        assert!(x >= 1 && y >= 1 && x + w < 64 && y + h < 64);
+        // No earlier rect touches this one or its gutter ring.
+        for yy in y - 1..=y + h {
+            for xx in x - 1..=x + w {
+                assert_eq!(taken[(yy * 64 + xx) as usize], 0, "overlap at {xx},{yy}");
+            }
+        }
+        for yy in y..y + h {
+            taken[(yy * 64 + x) as usize..(yy * 64 + x + w) as usize].fill(1);
+        }
+    }
+    assert!(n > 40, "only {n} rects fit");
+}
+
+#[test]
+fn writes_copy_rows_and_widen_the_dirty_band() {
+    let mut a = Atlas::new(4, 6);
+    a.take_dirty();
+    assert!(a.write(1, 2, 2, 2, &[1, 2, 3, 4]) && a.write(0, 4, 1, 1, &[5]));
+    let want = [[0; 4], [0; 4], [0, 1, 2, 0], [0, 3, 4, 0], [5, 0, 0, 0], [0; 4]];
+    assert_eq!((a.take_dirty(), a.pixels()), (Some((2, 5)), &want.concat()[..]));
+    assert!(a.write(3, 5, 1, 1, &[6]) && a.write(0, 0, 0, 3, &[]));
+    assert_eq!(a.take_dirty(), Some((5, 6)));
+    // Bad writes do nothing.
+    let mut a = Atlas::new(4, 4);
+    a.take_dirty();
+    let bad = [(3, 0, 2, 1, 2), (0, 4, 1, 1, 1), (0, 0, 2, 2, 3), (0, 0, 2, 2, 5)];
+    let more = [(u32::MAX, 0, 2, 1, 2), (0, 1, 1, u32::MAX, 1), (5, 0, 0, 0, 0)];
+    for (x, y, w, h, n) in bad.into_iter().chain(more) {
+        assert!(!a.write(x, y, w, h, &vec![1; n]), "{x} {y} {w} {h} {n}");
+    }
+    assert_eq!((a.take_dirty(), a.pixels()), (None, &[0; 16][..]));
 }

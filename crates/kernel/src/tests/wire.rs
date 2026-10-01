@@ -6,7 +6,6 @@ fn start() -> Start {
     let (argv, env) = (["hello", "a b", "é"].map(String::from).to_vec(), vec!["K=V".into()]);
     Start { role: Role::Process, pid: 7, tty: Some((80, 24)), stdout, cwd, roots, argv, env }
 }
-
 #[rustfmt::skip]
 fn msgs() -> [Msg<'static>; 17] {
     [Msg::Ready { version: VERSION }, Msg::Open { oflags: O_CREAT | O_EXCL, path: "/tmp/a" },
@@ -20,7 +19,7 @@ fn msgs() -> [Msg<'static>; 17] {
 }
 
 #[test]
-fn start_round_trips_and_rejects_every_truncation() {
+fn start_round_trips_and_rejects_every_truncation_and_bad_field() {
     let stdout = Stdout::File { path: "/tmp/out".into(), append: true };
     let (role, pid, cwd, roots) = (Role::Home, HOME_PID, "/home".into(), vec!["/home".into()]);
     let home = Start { role, pid, tty: None, stdout, cwd, roots, argv: vec![], env: vec![] };
@@ -32,10 +31,6 @@ fn start_round_trips_and_rejects_every_truncation() {
         assert_eq!(Start::decode(&[b.as_slice(), &[0]].concat()), None);
     }
     assert_eq!(start().encode()[..12], [VERSION, 0, 7, 0, 0, 0, 1, 80, 0, 24, 0, 0]);
-}
-
-#[test]
-fn start_rejects_bad_fields() {
     let b = start().encode();
     let f = Start { stdout: Stdout::File { path: "/x".into(), append: false }, ..start() }.encode();
     let with = |b: &[u8], i: usize, v: u8| Start::decode(&[&b[..i], &[v], &b[i + 1..]].concat());
@@ -44,12 +39,11 @@ fn start_rejects_bad_fields() {
     assert_eq!(bad, [None, None, None, None, None]);
     // From the cwd on: "/a", or two bytes that are not UTF-8, then no lists.
     let cwd = |c: [u8; 2]| Start::decode(&[&b[..14], &[2, 0], &c, &[0; 6]].concat());
-    assert_eq!(cwd(*b"/a").map(|s| s.cwd), Some("/a".into()));
-    assert_eq!(cwd([0xFF, 0xFE]), None);
+    assert_eq!((cwd(*b"/a").map(|s| s.cwd), cwd([0xFF, 0xFE])), (Some("/a".into()), None));
 }
 
 #[test]
-fn messages_round_trip_and_truncations_never_decode_as_them() {
+fn messages_round_trip_and_truncated_or_bad_ones_never_decode_as_them() {
     for m in msgs() {
         let b = m.encode();
         assert_eq!(Msg::decode(&b), Some(m));
@@ -62,10 +56,6 @@ fn messages_round_trip_and_truncations_never_decode_as_them() {
     }
     assert_eq!(Msg::encode(&Msg::Exit { status: 130 }), [EXIT, 130, 0, 0, 0]);
     assert_eq!(Msg::encode(&Msg::Open { oflags: 0, path: "/a" }), [OPEN, 0, 2, 0, b'/', b'a']);
-}
-
-#[test]
-fn bad_messages_decode_to_none() {
     for b in [&[][..], &[DRAW], &[EVENTS], &[0x7F], &[0xFF], &[MKDIR, 2, 0, 0xC3, 0x28]] {
         assert_eq!(Msg::decode(b), None, "{b:?}");
     }
@@ -107,8 +97,7 @@ fn random_bytes_never_panic() {
 #[test]
 fn layout_errnos_and_fnv64_hold() {
     assert_eq!((PAYLOAD_AT as usize + MAX_PAYLOAD) as u32, RING_AT);
-    assert_eq!(RING_AT + RING_BYTES, SAB_BYTES);
-    assert_eq!(MEM_PAGES * 65_536, 256 << 20);
+    assert_eq!((RING_AT + RING_BYTES, MEM_PAGES * 65_536), (SAB_BYTES, 256 << 20));
     use vfs::VfsError::*;
     let all = [NotFound, NotADir, IsADir, Exists, NotEmpty, InvalidPath, NoSpace];
     assert_eq!(all.map(errno), [44, 54, 31, 20, 55, 28, 51]);

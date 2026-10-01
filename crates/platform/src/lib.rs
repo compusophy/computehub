@@ -1,20 +1,17 @@
 //! The compusophyOS browser boundary: the only crate that calls browser APIs.
 //!
-//! [`run`] finds `<canvas id="os">` and drives an [`App`]: it feeds it
-//! [`Event`]s and asks it for frames, which [`Renderer::draw`] draws in one
-//! instanced WebGL2 call. Both calls get a [`Ctl`] for text input, fetch,
-//! frames, the cursor, `localStorage` and the clocks; what the app asks of it
-//! is applied after the app returns, so no browser call re-enters the app.
-//! Natively the crate only compiles, for tests: [`run`] needs a browser.
+//! [`run`] finds `<canvas id="os">` and drives an [`App`]: it feeds it [`Event`]s and asks it for
+//! frames, which [`Renderer::draw`] draws in one instanced WebGL2 call. Both calls get a [`Ctl`]
+//! for text input, fetch, frames, the cursor, `localStorage` and the clocks; what the app asks of
+//! it is applied after the app returns, so no browser call re-enters the app. Natively the crate
+//! only compiles, for tests: [`run`] needs a browser.
 //!
-//! Frames are on demand, with no render loop: a redraw or
-//! [`Ctl::request_frame`] requests one `requestAnimationFrame` unless one is
-//! pending. The flag clears before [`App::frame`] runs, so an animation asks
-//! on every frame and the first that does not ask is the last. The timers
-//! are the minute tick behind [`Event::Tick`] and the one-shot
-//! [`Ctl::wake_in`]. While the WebGL context is lost frames are skipped; on
-//! restore the renderer is rebuilt. Program workers ([`Ctl::spawn`]) are
-//! heard like DOM events.
+//! Frames are on demand, with no render loop: a redraw or [`Ctl::request_frame`] requests one
+//! `requestAnimationFrame` unless one is pending. The flag clears before [`App::frame`] runs, so an
+//! animation asks on every frame and the first that does not ask is the last. The timers are the
+//! minute tick behind [`Event::Tick`] and the one-shot [`Ctl::wake_in`]. While the WebGL context is
+//! lost frames are skipped; on restore the renderer is rebuilt. Program workers ([`Ctl::spawn`])
+//! and streams ([`Ctl::stream`]) are heard like DOM events.
 
 #![forbid(unsafe_code)]
 
@@ -61,9 +58,8 @@ pub enum Event {
     Text(String),
     /// The pointer moved.
     PointerMove { x: f32, y: f32 },
-    /// A button (0 primary, 1 middle, 2 secondary) went down; the canvas
-    /// captures the pointer. Only a primary pointer is heard, and during a
-    /// press only the pressing one.
+    /// A button (0 primary, 1 middle, 2 secondary) went down; the canvas captures the pointer. Only
+    /// a primary pointer is heard, and during a press only the pressing one.
     PointerDown { x: f32, y: f32, button: u8 },
     /// A button went up or the pointer was cancelled (button 0 when the DOM's
     /// is outside `0..=255`).
@@ -72,14 +68,17 @@ pub enum Event {
     PointerLeave,
     /// `dy` in CSS pixels, positive down: a line is 16 px, a page the canvas.
     Wheel { x: f32, y: f32, dy: f32 },
-    /// The canvas CSS size or `devicePixelRatio` (1 if nonsense) changed;
-    /// also sent at start.
+    /// The canvas CSS size or `devicePixelRatio` (1 if nonsense) changed; also sent at start.
     Resize { w: f32, h: f32, dpr: f32 },
     /// The local time: at start, each minute, and when a hidden page that
     /// missed a minute is shown again.
     Tick { time: LocalTime },
     /// Fetch `id` ([`Ctl::fetch`]) finished: the body, or why there is none.
     Fetched { id: u32, result: Result<Vec<u8>, String> },
+    /// More of stream `id`'s response body ([`Ctl::stream`]).
+    Chunk { id: u32, data: Vec<u8> },
+    /// Stream `id` ended: its HTTP status (0 if no response came), `"network"` if it failed.
+    StreamEnd { id: u32, status: u16, error: String },
     /// The worker of `pid` posted `msg`, after its ring's output as a CONS_WRITE.
     Proc { pid: u32, msg: Vec<u8> },
     /// The worker of `pid` failed to load or threw.
@@ -107,10 +106,9 @@ pub trait App {
     fn frame(&mut self, r: &mut Renderer, ctl: &mut Ctl);
 }
 
-/// Starts `app` on `<canvas id="os">`: sends the first [`Event::Resize`] and
-/// [`Event::Tick`], draws the first frame and marks it
-/// (`performance.mark("first-frame")`; with `debug` in the query string,
-/// `"frame"` after every frame), then listens. The app lives with the page.
+/// Starts `app` on `<canvas id="os">`: sends the first [`Event::Resize`] and [`Event::Tick`], draws
+/// the first frame and marks it (`performance.mark("first-frame")`; with `debug` in the query
+/// string, `"frame"` after every frame), then listens. The app lives with the page.
 ///
 /// # Errors
 ///
@@ -153,6 +151,7 @@ pub fn run<A: App + 'static>(app: A) -> Result<(), JsValue> {
         procs: RefCell::new(Vec::new()),
         wake_fn: handler(me, 0, |s, _, _| _ = dispatch(s, Event::Wake)),
         wake_timer: Cell::new(None),
+        streams: RefCell::new(Vec::new()),
     });
 
     resize(&s);
@@ -203,6 +202,7 @@ struct Shared {
     /// The one-shot timer of [`Ctl::wake_in`]: its callback and handle.
     wake_fn: Function,
     wake_timer: Cell<Option<i32>>,
+    streams: RefCell<Vec<io::Stream>>,
 }
 
 /// Which pointer [`Event`] a DOM pointer event becomes.
@@ -214,13 +214,11 @@ enum Ptr {
     Leave,
 }
 
-/// A callback of the page: a DOM listener or a timer (tag 0), or a worker's
-/// (tagged with its pid).
+/// A callback of the page: a DOM listener or a timer (tag 0), or a worker's (tagged with its pid).
 type Handler = fn(&Rc<Shared>, u32, &DomEvent);
 
-/// `f` as a JS function that runs while the state lives, told `tag`. Every
-/// callback is this one closure type, which fetches share, so its glue
-/// exists once.
+/// `f` as a JS function that runs while the state lives, told `tag`. Every callback is this one
+/// closure type, which fetches share, so its glue exists once.
 fn handler(me: &Weak<Shared>, tag: u32, f: Handler) -> Function {
     let me = me.clone();
     let cb = Closure::<dyn FnMut(JsValue)>::new(move |e: JsValue| {
@@ -452,8 +450,7 @@ fn window() -> Option<Window> {
     WINDOW.with(Clone::clone)
 }
 
-/// A thrown or rejected value as text: an `Error`'s message, a string, or a
-/// generic note.
+/// A thrown or rejected value as text: an `Error`'s message, a string, or a generic note.
 pub(crate) fn js_text(e: &JsValue) -> String {
     match e.dyn_ref::<js_sys::Error>() {
         Some(err) => err.message().into(),
@@ -466,8 +463,7 @@ fn sane_dpr(dpr: f64) -> f32 {
     if dpr.is_finite() && dpr > 0.0 { dpr as f32 } else { 1.0 }
 }
 
-/// Whether `hay` contains `needle`: a byte scan, far smaller than
-/// `str::contains`.
+/// Whether `hay` contains `needle`: a byte scan, far smaller than `str::contains`.
 pub(crate) fn has(hay: &str, needle: &str) -> bool {
     let needle = needle.as_bytes();
     hay.as_bytes().windows(needle.len()).any(|w| w == needle)
@@ -478,10 +474,9 @@ fn button_u8(b: i16) -> u8 {
     u8::try_from(b).unwrap_or(0)
 }
 
-/// Whether a key is a paste shortcut, given `[shift, ctrl, alt, meta]`:
-/// Ctrl/Cmd+V or Shift+Insert. The V goes by meaning when `key` is an ASCII
-/// letter (Dvorak), else by position (`KeyV`; Cyrillic), as `os` maps
-/// shortcut letters.
+/// Whether a key is a paste shortcut, given `[shift, ctrl, alt, meta]`: Ctrl/Cmd+V or Shift+Insert.
+/// The V goes by meaning when `key` is an ASCII letter (Dvorak), else by position (`KeyV`;
+/// Cyrillic), as `os` maps shortcut letters.
 fn is_paste(code: &str, key: &str, [shift, ctrl, alt, meta]: [bool; 4]) -> bool {
     let v = match key.as_bytes() {
         [b] if b.is_ascii_alphabetic() => b.eq_ignore_ascii_case(&b'v'),
@@ -493,11 +488,7 @@ fn is_paste(code: &str, key: &str, [shift, ctrl, alt, meta]: [bool; 4]) -> bool 
 /// `WheelEvent.deltaY` in CSS pixels: mode 1 (lines) counts 16 px, mode 2
 /// (pages) `page` px; a non-finite result is 0.
 fn wheel_px(delta: f64, mode: u32, page: f32) -> f32 {
-    let scale = match mode {
-        1 => 16.0,
-        2 => f64::from(page),
-        _ => 1.0,
-    };
+    let scale = [1.0, 16.0, f64::from(page)].get(mode as usize).copied().unwrap_or(1.0);
     let px = (delta * scale) as f32;
     if px.is_finite() { px } else { 0.0 }
 }

@@ -2,13 +2,8 @@ use super::*;
 
 /// One reported event; CSI and ESC rebuilt in canonical form (`?2026$p`).
 #[derive(Debug, PartialEq, Eq)]
-enum Ev {
-    Text(String),
-    Exec(u8),
-    Csi(String),
-    Esc(String),
-    Osc(Vec<Vec<u8>>),
-}
+#[rustfmt::skip]
+enum Ev { Text(String), Exec(u8), Csi(String), Esc(String), Osc(Vec<Vec<u8>>) }
 
 /// Records events and asserts the documented limits on every one.
 #[derive(Default)]
@@ -34,11 +29,7 @@ impl Perform for Rec {
             assert!((1..=MAX_SUBPARAMS).contains(&group.len()));
             assert_eq!((params.get(i), params.sub(i)), (group[0], group));
             for (j, v) in group.iter().enumerate() {
-                match (i, j) {
-                    (0, 0) => {}
-                    (_, 0) => s.push(';'),
-                    _ => s.push(':'),
-                }
+                s.extend((i + j > 0).then_some(if j == 0 { ';' } else { ':' }));
                 s.extend(v.map(|v| v.to_string()));
             }
         }
@@ -59,9 +50,7 @@ impl Perform for Rec {
 
 fn events(chunks: &[&[u8]]) -> Vec<Ev> {
     let (mut parser, mut rec) = (Parser::default(), Rec::default());
-    for chunk in chunks {
-        parser.advance(chunk, &mut rec);
-    }
+    chunks.iter().for_each(|chunk| parser.advance(chunk, &mut rec));
     rec.0
 }
 
@@ -182,8 +171,7 @@ fn limits_saturate_drop_and_truncate() {
 fn fuzz_lcg_never_panics_and_ignores_chunking() {
     let mut x: u64 = 0x2545_F491_4F6C_DD1D;
     let mut next = move || {
-        x = x.wrapping_mul(6_364_136_223_846_793_005);
-        x = x.wrapping_add(1_442_695_040_888_963_407);
+        x = x.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1_442_695_040_888_963_407);
         (x >> 33) as u32
     };
     let pick: &[u8] = b"\x1b\x1b\x1b[[]];;::?>=<0123456789m$ \"\x07\x18\x1a\\P_X^\
@@ -194,21 +182,18 @@ fn fuzz_lcg_never_panics_and_ignores_chunking() {
             r => pick[(r >> 8) as usize % pick.len()],
         })
         .collect();
-    let mut chunks = Vec::new();
-    let mut at = 0;
-    while at < bytes.len() {
-        let end = (at + (next() % 64) as usize + 1).min(bytes.len());
-        chunks.push(&bytes[at..end]);
-        at = end;
+    let (mut chunks, mut rest) = (Vec::new(), &bytes[..]);
+    while !rest.is_empty() {
+        let (chunk, tail) = rest.split_at(((next() % 64) as usize + 1).min(rest.len()));
+        chunks.push(chunk);
+        rest = tail;
     }
     let whole = events(&[&bytes]);
     assert_eq!(events(&chunks), whole);
-    let kinds = [
-        whole.iter().any(|e| matches!(e, Ev::Text(_))),
-        whole.iter().any(|e| matches!(e, Ev::Exec(_))),
-        whole.iter().any(|e| matches!(e, Ev::Csi(s) if s.contains(':'))),
-        whole.iter().any(|e| matches!(e, Ev::Esc(_))),
-        whole.iter().any(|e| matches!(e, Ev::Osc(p) if p.len() > 1)),
+    #[rustfmt::skip]
+    let kinds: [fn(&Ev) -> bool; 5] = [
+        |e| matches!(e, Ev::Text(_)), |e| matches!(e, Ev::Exec(_)), |e| matches!(e, Ev::Esc(_)),
+        |e| matches!(e, Ev::Csi(s) if s.contains(':')), |e| matches!(e, Ev::Osc(p) if p.len() > 1),
     ];
-    assert_eq!(kinds, [true; 5]);
+    assert_eq!(kinds.map(|k| whole.iter().any(k)), [true; 5]);
 }

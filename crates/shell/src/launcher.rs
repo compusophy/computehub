@@ -13,7 +13,7 @@ use crate::desktop::Target;
 use crate::{Response, Shell};
 
 /// The built-in apps the grid offers, in order (those the registry knows).
-const BUILTIN: [&str; 5] = ["terminal", "studio", "settings", "welcome", "about"];
+const BUILTIN: [&str; 6] = ["terminal", "assistant", "studio", "settings", "welcome", "about"];
 const RADIUS: f32 = 20.0;
 const FIELD_SIZE: f32 = 18.0;
 /// Where the query starts, after the search glyph.

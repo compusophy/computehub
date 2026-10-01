@@ -1,0 +1,20 @@
+[package]
+name = "compusophy-assistant"
+description = "compusophyOS Assistant: chat with a model and have it build applang apps, compiled, saved and opened for you. A wasm32-wasip1 GUI program on the remote UI protocol; built into dist/bin/, never committed."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[lib]
+name = "assistant"
+
+[[bin]]
+name = "assistant"
+path = "src/main.rs"
+
+[dependencies]
+compusophy-applang.workspace = true
+compusophy-uiwire.workspace = true

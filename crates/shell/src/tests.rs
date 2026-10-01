@@ -13,7 +13,7 @@ use wm::{Snap, State};
 use super::*;
 
 const SANS: &[u8] = include_bytes!("../../../assets/fonts/Inter-Regular.ttf");
-const KNOWN: &str = "welcome terminal studio settings about";
+const KNOWN: &str = "welcome terminal assistant studio settings about";
 type Log = Rc<RefCell<Vec<(&'static str, E)>>>;
 
 /// A scripted app: its name and log. It logs every event, runs the
@@ -129,7 +129,7 @@ fn welcome_opens_centered_once_there_is_a_work_area() {
     assert_eq!(s.rect(1), Some(Rect::new(300, 134, 680, 480)));
     assert_eq!((s.names(), s.theme_name()), (vec!["welcome"], "Midnight"));
     let dock: Vec<&str> = s.dock.iter().map(|d| &*d.0).collect();
-    assert_eq!(dock, ["terminal", "studio", "settings", "welcome"]);
+    assert_eq!(dock, ["terminal", "assistant", "studio", "settings", "welcome"]);
     // The window fades in from its first frame; then frames stop.
     assert!(s.animating() && s.at(5000.0) && s.at(5100.0) && !s.at(5180.0));
     let r = s.input(Input::PointerLeave);
@@ -300,7 +300,7 @@ fn controls_minimize_maximize_and_close() {
     // It flies into its dock tile: drawn until it gets there.
     assert!(s.animating());
     s.rest(1000.0);
-    s.click(s.tile_at(3));
+    s.click(s.tile_at(4));
     assert_eq!(s.wm().focused(), Some(WinId(1)));
     s.rest(1000.0);
     // Closing fades it out, then drops the app and kills what it ran.
@@ -319,7 +319,7 @@ fn dock_tiles_open_minimize_and_focus() {
     // Terminal opens, minimizes and comes back; then welcome is focused and
     // minimized.
     let (m, n) = (State::Minimized, State::Normal);
-    let steps = [(0, [n, n], 2), (0, [n, m], 1), (0, [n, n], 2), (3, [n, n], 1), (3, [m, n], 2)];
+    let steps = [(0, [n, n], 2), (0, [n, m], 1), (0, [n, n], 2), (4, [n, n], 1), (4, [m, n], 2)];
     for (tile, states, focus) in steps {
         s.click(s.tile_at(tile));
         let got: Vec<State> = s.wm().windows().iter().map(|w| w.1).collect();
@@ -342,9 +342,9 @@ fn the_launcher_searches_and_opens() {
         let l = &s.launcher.search;
         (0..l.count()).map(|k| l.get(k).unwrap().name.clone()).collect::<Vec<_>>()
     };
-    assert_eq!(found(&s), ["terminal", "studio", "settings", "welcome", "about"]);
+    assert_eq!(found(&s), ["terminal", "assistant", "studio", "settings", "welcome", "about"]);
     s.input(Input::Text("st".into()));
-    assert_eq!(found(&s), ["studio", "settings"]);
+    assert_eq!(found(&s), ["studio", "settings", "assistant"]);
     assert!(s.k(Char('s'), "").consumed && s.k(Right, "").redraw);
     let r = s.k(Enter, "");
     assert_eq!((s.launcher.open, r.text_input), (false, Some(false)));
@@ -398,6 +398,11 @@ fn bindings_drive_the_wm() {
     }
     assert!(s.k(Char('q'), "a").consumed);
     assert_eq!(s.names(), ["terminal"]);
+    // Alt+A opens the Assistant once, then brings it back.
+    s.k(Char('a'), "a");
+    s.k(Down, "a");
+    assert!(s.k(Char('a'), "a").consumed);
+    assert_eq!((s.names(), s.wm().focused()), (vec!["terminal", "assistant"], Some(WinId(3))));
     assert!(log.take().iter().all(|e| !matches!(e.1, E::Key { .. })));
 }
 

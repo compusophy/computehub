@@ -8,14 +8,11 @@ fn hello() -> Spawn {
     let (cwd, stdout, roots) = ("/tmp".into(), wire::Stdout::Console, vec!["/".into()]);
     Spawn { argv, program, cwd, tty: Some((80, 24)), stdout, roots }
 }
-
 /// An isolated kernel acting for window 5.
 fn kernel() -> Kernel {
     Kernel { isolated: true, owner: 5, ..Kernel::default() }
 }
-
 const READY: [u8; 2] = [wire::READY, wire::VERSION];
-
 /// Spawns `s` and answers its READY; the effects and wakes are drained.
 fn run(k: &mut Kernel, fs: &mut Vfs, s: Spawn) -> u32 {
     let pid = k.spawn(s).unwrap();
@@ -37,13 +34,11 @@ impl Sys {
         let pid = run(&mut k, &mut fs, Spawn { roots: roots.collect(), ..hello() });
         Sys { k, fs, pid }
     }
-
     /// Sends `msg` from the process: the effects it asked for.
     fn send(&mut self, msg: &[u8]) -> Vec<Effect> {
         self.k.message(&mut self.fs, self.pid, msg);
         self.k.take_effects()
     }
-
     /// Sends `m`: its one reply, `(errno, data)`.
     fn ask(&mut self, m: Msg<'_>) -> (u16, Vec<u8>) {
         let fx = self.send(&m.encode());
@@ -59,8 +54,7 @@ fn spawn_asks_for_a_worker_and_starts_it_at_ready() {
     assert_eq!((pid, k.take_effects()), (2, vec![Effect::Spawn { pid, sab: true }]));
     let (Spawn { argv, cwd, tty, stdout, roots, .. }, role) = (hello(), wire::Role::Process);
     let msg = wire::Start { role, pid, tty, stdout, cwd, roots, argv, env: vec![] }.encode();
-    k.message(&mut fs, pid, &READY);
-    k.message(&mut fs, pid, &READY); // A second READY starts nothing.
+    (0..2).for_each(|_| k.message(&mut fs, pid, &READY)); // A second READY starts nothing.
     let program = Load::Url("bin/toolbox.wasm".into());
     assert_eq!(k.take_effects(), [Effect::Start { pid, msg, program }]);
     assert_eq!(k.procs(), [(2, "hello".into(), true)]);
@@ -86,9 +80,8 @@ fn file_ops_serve_the_vfs() {
     let write = |off, data: &'static [u8]| Msg::Write { off, path: "/tmp/f", data };
     assert_eq!(s.ask(open(creat, "/tmp/f")), stat(1, 0));
     assert_eq!([s.ask(write(2, b"hi")).1, s.ask(write(wire::APPEND, b"!!")).1], [size(4), size(6)]);
-    for (off, data) in [(1, &b"\0hi"[..]), (5, &b"!"[..]), (u64::MAX, &[][..])] {
-        assert_eq!(s.ask(Msg::Read { off, max: 3, path: "/tmp/f" }), (0, data.to_vec()));
-    }
+    let reads = [1, 5, u64::MAX].map(|off| s.ask(Msg::Read { off, max: 3, path: "/tmp/f" }));
+    assert_eq!(reads, [(0, b"\0hi".to_vec()), (0, b"!".to_vec()), (0, vec![])]);
     assert_eq!([s.ask(open(0, "/tmp/f")), s.ask(open(dir, "/tmp"))], [stat(1, 6), stat(2, 0)]);
     assert_eq!(s.ask(open(creat | trunc, "/tmp/f")), stat(1, 0));
     let (mv, len) = (Msg::Rename { from: "/tmp/f", to: "/tmp/d/g" }, 2);
@@ -228,8 +221,7 @@ fn spawn_refuses_past_its_limits_and_a_closed_window_ends_its_processes() {
     k.kill_owned(5);
     assert_eq!((k.take_effects(), k.take_woken()), (vec![Effect::Kill { pid: a }], vec![]));
     assert_eq!((k.procs(), k.reap(c)), (vec![(b, "hello".into(), true)], None));
-    k.resize(a, 1, 1);
-    k.resize(b, 100, 30);
+    let _ = (k.resize(a, 1, 1), k.resize(b, 100, 30));
     let word = |index, value| Effect::Word { pid: b, index, value };
     assert_eq!(k.take_effects(), [word(wire::COLS, 100), word(wire::ROWS, 30)]);
 }

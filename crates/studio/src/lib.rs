@@ -1,28 +1,24 @@
-//! Studio: write applang apps, check them and run them, each in its own
-//! window. A wasm32-wasip1 GUI program (`dist/bin/studio.wasm`) whose window
-//! is a [`uiwire`] widget tree the desktop draws in its own theme.
+//! Studio: write applang apps, check them and run them, each in its own window. A wasm32-wasip1
+//! GUI program (`dist/bin/studio.wasm`) whose window is a [`uiwire`] widget tree the desktop draws
+//! in its own theme.
 //!
-//! [`view`] reads the arguments: `edit <path>` is [`Studio`], the editor;
-//! `run <path>` is [`AppHost`], one `.app` file running. [`serve`] runs a view
-//! until its window closes. A view asks the desktop to open a `.app` path (to
-//! run it) or `studio:<path>` (to edit it). Files go through a [`Disk`]: [`Fs`]
-//! in the program, a map in tests. The samples are files in `samples/`, so
-//! the desktop can install them without this crate.
+//! [`view`] reads the arguments: `edit <path>` is [`Studio`], the editor; `run <path>` is
+//! [`AppHost`], one `.app` file running. [`serve`] runs a view until its window closes. A view asks
+//! the desktop to open a `.app` path (to run it) or `studio:<path>` (to edit it). Files go through
+//! a [`Disk`]: [`Fs`] in the program, a map in tests. The samples are files in `samples/`, so the
+//! desktop can install them without this crate.
 
 #![forbid(unsafe_code)]
 
 mod edit;
 mod run;
 
-use std::io::{self, ErrorKind, Read, Write};
-use std::path::Path;
-
 use applang::Diag;
-use uiwire::client::Client;
-use uiwire::{Event, Frame};
-
 pub use edit::{MAX_TEXT, Studio};
 pub use run::AppHost;
+use std::io::{self, ErrorKind, Read, Write};
+use std::path::Path;
+use uiwire::{Event, Frame, client::Client};
 
 /// The file Studio edits when it is given none.
 pub const DEFAULT_FILE: &str = "/apps/counter.app";
@@ -35,14 +31,7 @@ pub const SAMPLES: [(&str, &str); 3] = [
 ];
 
 /// What New starts a file with.
-const NEW_APP: &str = "\
-// A new app. Run it with the Run button or Ctrl+Enter.
-state count = 0;
-
-label \"Hello from applang!\";
-button \"Click me\" { count = count + 1; }
-label \"Clicks: \" + count;
-";
+const NEW_APP: &str = include_str!("new.app");
 
 /// A window's program: events in, frames out.
 pub trait View {
@@ -74,10 +63,8 @@ impl Disk for Fs {
     }
 
     fn write(&mut self, path: &str, text: &str) -> io::Result<()> {
-        if let Some(dir) = Path::new(path).parent() {
-            // If this fails, the write says why.
-            let _ = std::fs::create_dir_all(dir);
-        }
+        // If this fails, the write says why.
+        let _ = Path::new(path).parent().map(std::fs::create_dir_all);
         std::fs::write(path, text)
     }
 

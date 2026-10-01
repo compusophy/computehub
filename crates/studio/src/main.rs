@@ -13,9 +13,7 @@ fn main() -> ExitCode {
     };
     let served = uiwire::client::open()
         .and_then(|mut ui| studio::serve(&mut ui, view.as_mut(), &mut studio::Fs));
-    if let Err(e) = served {
-        eprintln!("studio: {e}");
-        return ExitCode::FAILURE;
-    }
-    ExitCode::SUCCESS
+    let Err(e) = served else { return ExitCode::SUCCESS };
+    eprintln!("studio: {e}");
+    ExitCode::FAILURE
 }

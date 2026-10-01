@@ -8,13 +8,8 @@ use text::{FontId, TextStyle};
 /// the screen (`cx`, `rx` of its width; `cy`, `ry` of its height), `color`'s
 /// alpha its peak at the center (0 is an unused slot).
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Glow {
-    pub cx: f32,
-    pub cy: f32,
-    pub rx: f32,
-    pub ry: f32,
-    pub color: Rgba,
-}
+#[rustfmt::skip]
+pub struct Glow { pub cx: f32, pub cy: f32, pub rx: f32, pub ry: f32, pub color: Rgba }
 
 /// The colors of the whole desktop; `surface`, `glass`, `border`,
 /// `highlight`, `shadow` and `selection` are translucent.
@@ -84,31 +79,20 @@ const fn ansi(rgb: [u32; 16]) -> [Rgba; 16] {
 }
 
 /// The default: near-black with violet, cyan and magenta light.
+#[rustfmt::skip]
 const MIDNIGHT: Theme = Theme {
-    name: "Midnight",
-    dark: true,
-    base: Rgba::hex(0x07080c),
+    name: "Midnight", dark: true, base: Rgba::hex(0x07080c), grain: 9,
     glows: [
         glow(0x6d5cff, 90, (0.18, 0.22), (0.55, 0.50)),
         glow(0x22d3ee, 60, (0.82, 0.74), (0.50, 0.45)),
         glow(0xf472b6, 34, (0.62, 0.08), (0.35, 0.28)),
         UNUSED,
     ],
-    grain: 9,
-    surface: rgba(0x111219, 240),
-    surface_hi: Rgba::hex(0x1b1d27),
-    surface_lo: Rgba::hex(0x0c0d12),
-    glass: rgba(0x14151d, 190),
-    border: rgba(0xffffff, 20),
-    highlight: rgba(0xffffff, 14),
-    text: Rgba::hex(0xeceef5),
-    text_dim: Rgba::hex(0x8b8fa3),
-    text_faint: Rgba::hex(0x5a5e70),
-    accent: Rgba::hex(0x8b7bff),
-    accent_text: Rgba::hex(0x0b0b12),
-    danger: Rgba::hex(0xff5f6d),
-    shadow: rgba(0x000000, 150),
-    selection: rgba(0x8b7bff, 70),
+    surface: rgba(0x111219, 240), surface_hi: Rgba::hex(0x1b1d27), surface_lo: Rgba::hex(0x0c0d12),
+    glass: rgba(0x14151d, 190), border: rgba(0xffffff, 20), highlight: rgba(0xffffff, 14),
+    text: Rgba::hex(0xeceef5), text_dim: Rgba::hex(0x8b8fa3), text_faint: Rgba::hex(0x5a5e70),
+    accent: Rgba::hex(0x8b7bff), accent_text: Rgba::hex(0x0b0b12), danger: Rgba::hex(0xff5f6d),
+    shadow: rgba(0x000000, 150), selection: rgba(0x8b7bff, 70),
     ansi: ansi([
         0x323646, 0xf07a85, 0x7fd8a4, 0xebcb8b, 0x7aa2f7, 0xb69cff, 0x6fd3e0, 0xc8ccda, //
         0x686d82, 0xff959e, 0x9debbe, 0xf5dca6, 0x9ab8ff, 0xcdb8ff, 0x93e4ee, 0xeceef5,
@@ -116,31 +100,20 @@ const MIDNIGHT: Theme = Theme {
 };
 
 /// Light: warm paper with peach, lilac and sky light.
+#[rustfmt::skip]
 const DAWN: Theme = Theme {
-    name: "Dawn",
-    dark: false,
-    base: Rgba::hex(0xf4f1ec),
+    name: "Dawn", dark: false, base: Rgba::hex(0xf4f1ec), grain: 6,
     glows: [
         glow(0xffb38a, 120, (0.14, 0.18), (0.50, 0.45)),
         glow(0xc4b5fd, 110, (0.86, 0.30), (0.45, 0.42)),
         glow(0x93c5fd, 100, (0.50, 0.98), (0.60, 0.40)),
         UNUSED,
     ],
-    grain: 6,
-    surface: rgba(0xffffff, 242),
-    surface_hi: Rgba::hex(0xf1eff6),
-    surface_lo: Rgba::hex(0xe9e6ef),
-    glass: rgba(0xffffff, 178),
-    border: rgba(0x000000, 22),
-    highlight: rgba(0xffffff, 160),
-    text: Rgba::hex(0x16161d),
-    text_dim: Rgba::hex(0x62626f),
-    text_faint: Rgba::hex(0x9a9aa6),
-    accent: Rgba::hex(0x5b5bd6),
-    accent_text: Rgba::hex(0xffffff),
-    danger: Rgba::hex(0xd93a49),
-    shadow: rgba(0x1e1a33, 70),
-    selection: rgba(0x5b5bd6, 50),
+    surface: rgba(0xffffff, 242), surface_hi: Rgba::hex(0xf1eff6), surface_lo: Rgba::hex(0xe9e6ef),
+    glass: rgba(0xffffff, 178), border: rgba(0x000000, 22), highlight: rgba(0xffffff, 160),
+    text: Rgba::hex(0x16161d), text_dim: Rgba::hex(0x62626f), text_faint: Rgba::hex(0x9a9aa6),
+    accent: Rgba::hex(0x5b5bd6), accent_text: Rgba::hex(0xffffff), danger: Rgba::hex(0xd93a49),
+    shadow: rgba(0x1e1a33, 70), selection: rgba(0x5b5bd6, 50),
     ansi: ansi([
         0x2b2a33, 0xc0313e, 0x18794e, 0x8f5b00, 0x2d5bd0, 0x7b3fc9, 0x0f7484, 0x6c6b78, //
         0x5f5e6a, 0xa51f2c, 0x116b3f, 0x6f4500, 0x1f4bb8, 0x6430b0, 0x0b6170, 0x71707d,
@@ -148,26 +121,15 @@ const DAWN: Theme = Theme {
 };
 
 /// Ultra minimal: black, white and grays, no light.
+#[rustfmt::skip]
 const MONO: Theme = Theme {
-    name: "Mono",
-    dark: true,
-    base: Rgba::hex(0x000000),
+    name: "Mono", dark: true, base: Rgba::hex(0x000000), grain: 5,
     glows: [UNUSED; 4],
-    grain: 5,
-    surface: rgba(0x0a0a0a, 248),
-    surface_hi: Rgba::hex(0x161616),
-    surface_lo: Rgba::hex(0x050505),
-    glass: rgba(0x0a0a0a, 210),
-    border: rgba(0xffffff, 26),
-    highlight: rgba(0xffffff, 10),
-    text: Rgba::hex(0xf2f2f2),
-    text_dim: Rgba::hex(0x8a8a8a),
-    text_faint: Rgba::hex(0x4a4a4a),
-    accent: Rgba::hex(0xffffff),
-    accent_text: Rgba::hex(0x000000),
-    danger: Rgba::hex(0xff4d4d),
-    shadow: rgba(0x000000, 200),
-    selection: rgba(0xffffff, 50),
+    surface: rgba(0x0a0a0a, 248), surface_hi: Rgba::hex(0x161616), surface_lo: Rgba::hex(0x050505),
+    glass: rgba(0x0a0a0a, 210), border: rgba(0xffffff, 26), highlight: rgba(0xffffff, 10),
+    text: Rgba::hex(0xf2f2f2), text_dim: Rgba::hex(0x8a8a8a), text_faint: Rgba::hex(0x4a4a4a),
+    accent: Rgba::hex(0xffffff), accent_text: Rgba::hex(0x000000), danger: Rgba::hex(0xff4d4d),
+    shadow: rgba(0x000000, 200), selection: rgba(0xffffff, 50),
     ansi: ansi([
         0x2a2a2a, 0xe5787a, 0x8fcb9b, 0xe3c887, 0x8aa9d6, 0xc3a3d9, 0x86c5c9, 0xbdbdbd, //
         0x6a6a6a, 0xf29c9d, 0xadddb6, 0xefd9a6, 0xa9c1e6, 0xd5bde6, 0xa6d9dc, 0xf2f2f2,

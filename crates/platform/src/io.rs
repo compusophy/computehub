@@ -1,12 +1,13 @@
 //! The page beyond the canvas: [`Effect`]s applied, and the events they cause.
 
+use std::mem::ManuallyDrop;
 use std::rc::Rc;
 
-use js_sys::{Promise, Uint8Array};
+use js_sys::{Object, Promise, Reflect, Uint8Array};
 use wasm_bindgen::{JsCast, JsValue, closure::Closure};
 use web_sys::{
-    CompositionEvent, Document, Event as DomEvent, HtmlTextAreaElement, InputEvent, Response,
-    Storage,
+    AbortController, CompositionEvent, Document, Event as DomEvent, HtmlTextAreaElement,
+    InputEvent, ReadableStream, ReadableStreamDefaultReader, Response, Storage,
 };
 
 use crate::ctl::{Effect, is_relative_url};
@@ -19,15 +20,10 @@ border:0;padding:0;opacity:0;resize:none;overflow:hidden;font-size:16px;pointer-
 /// Appends the hidden `<textarea>` that all text input goes through.
 pub(crate) fn text_sink(document: &Document) -> Result<HtmlTextAreaElement, JsValue> {
     let sink: HtmlTextAreaElement = document.create_element("textarea")?.unchecked_into();
-    let attrs = [
-        ("style", SINK_STYLE),
-        ("autocapitalize", "off"),
-        ("autocomplete", "off"),
-        ("autocorrect", "off"),
-        ("spellcheck", "false"),
-        ("aria-hidden", "true"),
-        ("tabindex", "-1"),
-    ];
+    #[rustfmt::skip]
+    let attrs = [("style", SINK_STYLE), ("autocapitalize", "off"), ("autocomplete", "off"),
+        ("autocorrect", "off"), ("spellcheck", "false"), ("aria-hidden", "true"),
+        ("tabindex", "-1")];
     for (name, value) in attrs {
         sink.set_attribute(name, value)?;
     }
@@ -55,6 +51,8 @@ pub(crate) fn apply(s: &Rc<Shared>, effects: Vec<Effect>) {
             Effect::Word { pid, index, value } => proc::store(s, pid, &[], &[(index, value)]),
             Effect::Kill(pid) => proc::kill(s, pid),
             Effect::Wake(ms) => arm(s, &s.wake_timer, &s.wake_fn, ms),
+            Effect::Stream { id, url, headers, body } => stream(s, id, &url, headers, &body),
+            Effect::Abort(id) => _ = take(s, id).map(|a| a.abort()),
         }
     }
 }
@@ -118,14 +116,17 @@ fn fetch(s: &Rc<Shared>, id: u32, url: &str) {
 /// What runs when a fetch promise settles: `(state, fetch id, value)`.
 type Settled = fn(&Rc<Shared>, u32, JsValue);
 
+/// `f` as a promise callback for fetch or stream `id`: every one is this closure type.
+fn callback(s: &Rc<Shared>, id: u32, f: Settled) -> Closure<dyn FnMut(JsValue)> {
+    let s = s.clone();
+    Closure::new(move |v| f(&s, id, v))
+}
+
 /// Runs `ok` with what `p` resolves to, or fails fetch `id` with what it
-/// rejects with. Both callbacks are one closure type; only one runs.
+/// rejects with; only one runs.
 fn settle(s: &Rc<Shared>, id: u32, p: &Promise, ok: Settled) {
-    let cb = |f: Settled| {
-        let s = s.clone();
-        Closure::<dyn FnMut(JsValue)>::new(move |v| f(&s, id, v))
-    };
-    let (ok, err) = (cb(ok), cb(|s, id, e| fetched(s, id, Err(js_text(&e)))));
+    let err = callback(s, id, |s, id, e| fetched(s, id, Err(js_text(&e))));
+    let ok = callback(s, id, ok);
     let _ = p.then2(&ok, &err);
     ok.forget();
     err.forget();
@@ -188,4 +189,69 @@ pub(crate) fn flush_later(s: &Rc<Shared>) {
     for ev in evs {
         dispatch(s, ev);
     }
+}
+
+/// A stream ([`crate::Ctl::stream`]): its abort handle, status, body reader, and the callback
+/// its promises settle to (kept: one may yet run). Plain objects, not web-sys setters: less glue.
+pub(crate) struct Stream {
+    id: u32,
+    abort: AbortController,
+    status: u16,
+    reader: Option<ReadableStreamDefaultReader>,
+    cb: ManuallyDrop<Closure<dyn FnMut(JsValue)>>,
+}
+
+fn stream(s: &Rc<Shared>, id: u32, url: &str, headers: Vec<(&str, String)>, body: &[u8]) {
+    let Ok(abort) = AbortController::new() else { return };
+    let set = |o: &Object, k: &str, v: &JsValue| _ = Reflect::set(o, &k.into(), v);
+    let (init, map) = (Object::new(), Object::new());
+    headers.iter().for_each(|(k, v)| set(&map, k, &v.into()));
+    set(&init, "method", &"POST".into());
+    set(&init, "headers", &map);
+    set(&init, "body", &Uint8Array::from(body));
+    set(&init, "signal", &Reflect::get(&abort, &"signal".into()).unwrap_or_default());
+    let cb = ManuallyDrop::new(callback(s, id, on_stream));
+    let _ = s.window.fetch_with_str_and_init(url, init.unchecked_ref()).then2(&cb, &cb);
+    s.streams.borrow_mut().push(Stream { id, abort, status: 0, reader: None, cb });
+}
+
+/// The response (its status kept, its body read), a read (a chunk, then the next read), or a
+/// failure (an `Error`, as a rejection is).
+fn on_stream(s: &Rc<Shared>, id: u32, v: JsValue) {
+    if v.is_instance_of::<js_sys::Error>() {
+        return end(s, id, 0, "network");
+    }
+    let field = |k: &str| Reflect::get(&v, &k.into()).unwrap_or_default();
+    let mut list = s.streams.borrow_mut();
+    let Some(t) = list.iter_mut().find(|t| t.id == id) else { return };
+    let data = match &t.reader {
+        None => {
+            let body = field("body").unchecked_into::<ReadableStream>();
+            t.reader = body.is_truthy().then(|| body.get_reader().unchecked_into());
+            t.status = v.unchecked_ref::<Response>().status();
+            t.reader.as_ref().map(|_| Vec::new())
+        }
+        Some(_) if field("done").is_truthy() => None,
+        Some(_) => Some(Uint8Array::new(&field("value")).to_vec()),
+    };
+    let status = t.status;
+    drop(list);
+    let Some(data) = data else { return end(s, id, status, "") };
+    if !data.is_empty() {
+        dispatch(s, Event::Chunk { id, data });
+    }
+    // The next read, unless the chunk's handler aborted the stream.
+    if let Some(t) = s.streams.borrow().iter().find(|t| t.id == id) {
+        let _ = t.reader.as_ref().map(|r| r.read().then2(&t.cb, &t.cb));
+    }
+}
+
+/// Removes stream `id` if it is on; its abort handle.
+fn take(s: &Shared, id: u32) -> Option<AbortController> {
+    let i = s.streams.borrow().iter().position(|t| t.id == id)?;
+    Some(s.streams.borrow_mut().remove(i).abort)
+}
+
+fn end(s: &Rc<Shared>, id: u32, status: u16, error: &str) {
+    _ = take(s, id).map(|_| dispatch(s, Event::StreamEnd { id, status, error: error.into() }));
 }

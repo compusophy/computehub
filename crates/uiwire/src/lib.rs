@@ -3,10 +3,10 @@
 //! it in its own toolkit and theme and answers with [`Event`]s (one per `read()`
 //! of `/dev/events`, over 64 KiB in 64 KiB parts). [`client`] wraps both.
 //!
-//! Little-endian; a string is a `u32` byte length plus UTF-8, a `bool` a `u8`
-//! 0 or 1, a `char` a `u32`. Frame: `u8` [`VERSION`], `u32` seq, title, `u16`
-//! request count, the [`Request`]s, `u32` node count, the [`Node`]s in
-//! pre-order. Node: `u8` kind, `u32` id (0 = none), `u16` child count, fields,
+//! Little-endian; a string is a `u32` byte length plus UTF-8, bytes the same but
+//! raw, a `bool` a `u8` 0 or 1, a `char` a `u32`. Frame: `u8` [`VERSION`], `u32`
+//! seq, title, `u16` request count, the [`Request`]s, `u32` node count, the
+//! [`Node`]s in pre-order. Node: `u8` kind, `u32` id (0 = none), `u16` child count, fields,
 //! children. Request, Event: `u8` kind, fields. Kinds and [`Key`]s number the
 //! variants from 1 in order; [`Style`], [`Variant`] and [`Class`] from 0.
 //! Decoding never panics and is strict, so the encoding is canonical: anything
@@ -132,6 +132,10 @@ pub enum Request {
     Close,
     /// The preferred content size in logical px; honored on the first frame only.
     Size { w: u16, h: u16 },
+    /// Ask the AI: `body` is an OpenAI-style chat-completions request; AiData, AiEnd answer.
+    Ai { id: u32, body: String },
+    /// Stop AI request `id`.
+    AiCancel { id: u32 },
 }
 
 /// Something that happened in the window, host to program.
@@ -150,6 +154,12 @@ pub enum Event {
     Close,
     /// Enter in an Input.
     Submit { id: u32 },
+    /// The AI settings (never the key): after the first Resize and on every change.
+    Config { provider: String, model: String, has_key: u8 },
+    /// More of AI request `id`'s response body (SSE text), at most 32 KiB.
+    AiData { id: u32, data: Vec<u8> },
+    /// AI request `id` ended: the HTTP status (0: none) and the host's error, if any.
+    AiEnd { id: u32, status: u16, error: String },
 }
 
 /// The public `encode` and `decode` of each message, from its `put` and `get`.
@@ -304,6 +314,8 @@ impl Request {
             Self::Open { name } => o.u8(1).str(name),
             Self::Close => o.u8(2),
             Self::Size { w, h } => o.u8(3).u16(*w).u16(*h),
+            Self::Ai { id, body } => o.u8(4).u32(*id).str(body),
+            Self::AiCancel { id } => o.u8(5).u32(*id),
         }
     }
 
@@ -312,6 +324,8 @@ impl Request {
             1 => Self::Open { name: r.str()? },
             2 => Self::Close,
             3 => Self::Size { w: r.u16()?, h: r.u16()? },
+            4 => Self::Ai { id: r.u32()?, body: r.str()? },
+            5 => Self::AiCancel { id: r.u32()? },
             _ => return None,
         })
     }
@@ -328,6 +342,9 @@ impl Event {
             Self::Resize { w, h } => o.u8(4).u16(*w).u16(*h),
             Self::Close => o.u8(5),
             Self::Submit { id } => o.u8(6).u32(*id),
+            Self::Config { provider: p, model: m, has_key: k } => o.u8(7).str(p).str(m).u8(*k),
+            Self::AiData { id, data } => o.u8(8).u32(*id).bytes(data),
+            Self::AiEnd { id, status, error } => o.u8(9).u32(*id).u16(*status).str(error),
         }
     }
 
@@ -344,6 +361,9 @@ impl Event {
             4 => Self::Resize { w: r.u16()?, h: r.u16()? },
             5 => Self::Close,
             6 => Self::Submit { id: r.u32()? },
+            7 => Self::Config { provider: r.str()?, model: r.str()?, has_key: r.u8()? },
+            8 => Self::AiData { id: r.u32()?, data: r.bytes()?.to_vec() },
+            9 => Self::AiEnd { id: r.u32()?, status: r.u16()?, error: r.str()? },
             _ => return None,
         })
     }
@@ -358,24 +378,16 @@ impl Out {
         self
     }
 
-    fn u8(&mut self, v: u8) -> &mut Out {
-        self.put(&[v])
-    }
-
-    fn u16(&mut self, v: u16) -> &mut Out {
-        self.put(&v.to_le_bytes())
-    }
-
-    fn u32(&mut self, v: u32) -> &mut Out {
-        self.put(&v.to_le_bytes())
-    }
-
     fn len(&mut self, n: usize) -> &mut Out {
         self.u32(u32::try_from(n).unwrap_or(u32::MAX))
     }
 
+    fn bytes(&mut self, b: &[u8]) -> &mut Out {
+        self.len(b.len()).put(b)
+    }
+
     fn str(&mut self, s: &str) -> &mut Out {
-        self.len(s.len()).put(s.as_bytes())
+        self.bytes(s.as_bytes())
     }
 
     /// A node's kind, id and child count.
@@ -383,6 +395,22 @@ impl Out {
         self.u8(kind).u32(id).u16(u16::try_from(children).unwrap_or(u16::MAX))
     }
 }
+
+/// Each integer's write on [`Out`] and read on [`Reader`], little-endian.
+macro_rules! ints {
+    ($($t:ident)*) => {
+        impl Out {
+            $(fn $t(&mut self, v: $t) -> &mut Out { self.put(&v.to_le_bytes()) })*
+        }
+        impl Reader<'_> {
+            $(fn $t(&mut self) -> Option<$t> {
+                Some($t::from_le_bytes(self.take(size_of::<$t>())?.try_into().ok()?))
+            })*
+        }
+    };
+}
+
+ints!(u8 u16 u32);
 
 /// The unread input; every read is bounds-checked.
 struct Reader<'a>(&'a [u8]);
@@ -394,18 +422,6 @@ impl<'a> Reader<'a> {
         Some(head)
     }
 
-    fn u8(&mut self) -> Option<u8> {
-        self.take(1).map(|b| b[0])
-    }
-
-    fn u16(&mut self) -> Option<u16> {
-        Some(u16::from_le_bytes(self.take(2)?.try_into().ok()?))
-    }
-
-    fn u32(&mut self) -> Option<u32> {
-        Some(u32::from_le_bytes(self.take(4)?.try_into().ok()?))
-    }
-
     fn count(&mut self) -> Option<usize> {
         usize::try_from(self.u32()?).ok()
     }
@@ -414,8 +430,12 @@ impl<'a> Reader<'a> {
         self.u8().filter(|b| *b < 2).map(|b| b == 1)
     }
 
-    fn str(&mut self) -> Option<String> {
+    fn bytes(&mut self) -> Option<&'a [u8]> {
         let n = self.count()?;
-        core::str::from_utf8(self.take(n)?).ok().map(str::to_owned)
+        self.take(n)
+    }
+
+    fn str(&mut self) -> Option<String> {
+        core::str::from_utf8(self.bytes()?).ok().map(str::to_owned)
     }
 }

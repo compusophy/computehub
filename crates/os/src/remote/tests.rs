@@ -1,5 +1,7 @@
 use super::*;
+use crate::ai::{self, Ai, CHUNK};
 use gfx::DrawList;
+use platform::{Ctl, Effect as Fx};
 use ui::kernel::{Effect as K, Kernel, wire};
 use ui::{FontId, Hit, Request as R, THEMES, UiState};
 use uiwire::{Class, Span, mods};
@@ -21,7 +23,8 @@ impl Sys {
         fs.mkdir("/bin").and(fs.write(STUDIO, b"#!wasm bin/studio.wasm\n")).unwrap();
         let mut k = Kernel::new();
         k.set_isolated(true);
-        let r = Remote::new(STUDIO, ["studio", "edit", DEFAULT_FILE].map(String::from).into());
+        let argv = ["studio", "edit", DEFAULT_FILE].map(String::from).into();
+        let r = Remote::new(STUDIO, argv, &Ai::default());
         let mut s = Sys { r, k, fs, asked: Vec::new() };
         if start {
             s.ev(AppEvent::Resized { w: 600.0, h: 400.0 });
@@ -101,11 +104,14 @@ fn change(id: u32, version: u32, text: &str) -> Event {
 
 #[test]
 fn names_open_studio_and_the_first_size_starts_it() {
+    let open = |name: &str| open(name, &Ai::default());
     let argv = |name: &str| open(name).map(|a| (a.title(), a.icon(), a.preferred_size()));
     let studio = Some(("Studio \u{2014} counter.app".into(), STUDIO_ICON, Some((760.0, 540.0))));
     assert_eq!((argv("studio"), argv("studio:counter.app")), (studio.clone(), studio));
     assert_eq!(argv("/tmp/x.app"), Some(("x.app".into(), APP_ICON, None)));
     assert!(["studio:", "terminal", ".apps", ""].iter().all(|n| open(n).is_none()));
+    let assistant = Some(("Assistant".into(), ASSISTANT_ICON, Some((560.0, 600.0))));
+    assert_eq!(argv("assistant"), assistant);
     // Before a frame: a still note, the title its own; no process yet.
     let mut s = Sys::new(false);
     assert!(!s.r.wants_text_input() && s.k.procs().is_empty());
@@ -118,10 +124,12 @@ fn names_open_studio_and_the_first_size_starts_it() {
     s.k.message(&mut s.fs, 2, &wire::Msg::Ready { version: wire::VERSION }.encode());
     let (start, url) = (s.k.take_effects().pop(), ui::kernel::Load::Url("bin/studio.wasm".into()));
     assert!(matches!(start, Some(K::Start { pid: 2, program, .. }) if program == url));
-    // The size is its first event; the same size again is not news, a new one is.
+    // The size is its first event, the AI settings next; the same size again is not news,
+    // a new one is.
     s.ev(AppEvent::Resized { w: 640.0, h: 1e9 });
     s.ev(AppEvent::Resized { w: 500.0, h: 400.0 });
-    let sized = [Event::Resize { w: 640, h: 65_535 }, Event::Resize { w: 500, h: 400 }];
+    let config = Event::Config { provider: "gateway".into(), model: "".into(), has_key: 0 };
+    let sized = [Event::Resize { w: 640, h: 65_535 }, config, Event::Resize { w: 500, h: 400 }];
     assert_eq!(s.events(), sized);
     // Frames of other pids, and frames that do not decode, are dropped.
     let f = Frame { title: "Mine".into(), ..Frame::default() }.encode();
@@ -260,4 +268,60 @@ fn trees_draw_with_the_toolkit_and_fills_take_the_rest() {
     assert!(s.ev(AppEvent::Wheel { x: 10.0, y: 10.0, dy: 2000.0 }));
     assert_eq!(s.draw().1[0].rect.y, 400.0 - PAD - FIELD_H);
     assert!(!s.ev(AppEvent::Wheel { x: 10.0, y: 10.0, dy: 5.0 }));
+    // Following (the Assistant), a view at the bottom stays there as the content grows.
+    s.r.follow = true;
+    s.show(vec![Node::Spacer { px: 1500 }, input(5, "")], vec![]);
+    assert_eq!(s.draw().1[0].rect.y, 400.0 - PAD - FIELD_H);
+}
+
+#[test]
+fn ai_requests_stream_back_to_the_program_that_asked() {
+    let mut s = Sys::new(true);
+    let end = |id, status, error: &str| Event::AiEnd { id, status, error: error.into() };
+    // A frame's requests, then a pump: what the page is asked, what the program reads.
+    let ask = |s: &mut Sys, requests: Vec<Request>| {
+        s.show(vec![], requests);
+        let mut ctl = Ctl::default();
+        s.r.ai.pump(&mut ctl, &mut s.k);
+        (ctl.effects().to_vec(), s.events())
+    };
+    let ai = |id| Request::Ai { id, body: "{}".into() };
+    let config =
+        |p: &str, m: &str| Event::Config { provider: p.into(), model: m.into(), has_key: 1 };
+    // No key: the gateway is not asked. Saved settings (an empty model is the default) go to
+    // storage and to the program.
+    assert_eq!(ask(&mut s, vec![ai(1)]), (vec![], vec![end(1, 0, "no key")]));
+    let mut ctl = Ctl::default();
+    s.r.ai.configure(&mut ctl, "openrouter", Some("sk-or-1234".into()), "");
+    let stored =
+        [(ai::PROVIDER, "openrouter"), (ai::MODEL, ai::DEFAULT_MODEL), (ai::KEY, "sk-or-1234")];
+    assert_eq!(ctl.effects(), stored.map(|(k, v)| Fx::Store { key: k.into(), value: v.into() }));
+    let told = (vec![], vec![config("openrouter", ai::DEFAULT_MODEL)]);
+    assert_eq!((ask(&mut s, vec![]), s.r.ai.status().0.key_hint), (told, "1234".into()));
+    // Two at a time, the key in a header; the body back in pieces, then the end.
+    let auth = [("Authorization", "Bearer sk-or-1234"), ("Content-Type", "application/json")];
+    let url = "https://openrouter.ai/api/v1/chat/completions";
+    let headers: Vec<_> = auth.map(|(k, v)| (k, v.into())).into();
+    let stream =
+        |id| Fx::Stream { id, url: url.into(), headers: headers.clone(), body: b"{}".into() };
+    let busy = (vec![stream(1), stream(2)], vec![end(4, 0, "busy")]);
+    assert_eq!(ask(&mut s, vec![ai(2), ai(3), ai(4)]), busy);
+    let big = [vec![b'x'; CHUNK - 1], "\u{e9}".into()].concat();
+    let ended = platform::Event::StreamEnd { id: 1, status: 429, error: "".into() };
+    let chunk = platform::Event::Chunk { id: 1, data: big.clone() };
+    [chunk, ended.clone(), ended].into_iter().for_each(|ev| s.r.ai.heard(&mut s.k, ev));
+    let data = |data: &[u8]| Event::AiData { id: 2, data: data.to_vec() };
+    assert_eq!(ask(&mut s, vec![]).1, [data(&big[..CHUNK]), data(&big[CHUNK..]), end(2, 429, "")]);
+    // A cancel aborts the stream and ends the request at once.
+    let cancel = vec![Request::AiCancel { id: 3 }, Request::AiCancel { id: 2 }];
+    assert_eq!(ask(&mut s, cancel), (vec![Fx::Abort(2)], vec![end(3, 0, "cancelled")]));
+    // The mock is for localhost only, and takes no headers; closing aborts unanswered.
+    s.r.ai.configure(&mut Ctl::default(), "mock", None, "m");
+    assert_eq!(s.r.ai.status().0.provider, "gateway");
+    s.r.ai.0.borrow_mut().localhost = true;
+    s.r.ai.configure(&mut Ctl::default(), "mock", None, "m");
+    let mock = Fx::Stream { id: 3, url: "/mock/chat".into(), headers: vec![], body: b"{}".into() };
+    assert_eq!(ask(&mut s, vec![ai(5)]), (vec![mock], vec![config("mock", "m")]));
+    s.cx(|r, cx| r.closing(cx));
+    assert_eq!(ask(&mut s, vec![]), (vec![Fx::Abort(3)], vec![Event::Close]));
 }

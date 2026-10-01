@@ -8,8 +8,14 @@ fn term(cols: u16, rows: u16, bytes: &str) -> Term {
 }
 
 /// Feeds `bytes` to `t` and lends it back, for a check.
-fn fed<'a>(t: &'a mut Term, bytes: &str) -> &'a Term {
-    t.feed(bytes.as_bytes());
+fn fed(t: &mut Term, bytes: impl AsRef<[u8]>) -> &mut Term {
+    t.feed(bytes.as_ref());
+    t
+}
+
+/// Resizes `t` and lends it back.
+fn sized(t: &mut Term, cols: u16, rows: u16) -> &mut Term {
+    t.resize(cols, rows);
     t
 }
 
@@ -21,8 +27,7 @@ fn text(line: &[Cell]) -> String {
 
 /// The screen as text, rows joined with `|`.
 fn screen(t: &Term) -> String {
-    let rows: Vec<String> = (0..t.rows()).map(|r| text(t.row(r))).collect();
-    rows.join("|")
+    (0..t.rows()).map(|r| text(t.row(r))).collect::<Vec<_>>().join("|")
 }
 
 /// The screen after `bytes` in a new terminal.
@@ -47,66 +52,46 @@ fn wide_ok(line: &[Cell]) {
 
 #[test]
 fn screens_cursors_and_wrap() {
+    #[rustfmt::skip]
     let screens: &[(u16, u16, &str, &str)] = &[
         // Pending wrap: cleared by motion, kept by DECSC; no DECAWM overwrites.
-        (5, 3, "abcde\r\nx", "abcde|x|"),
-        (5, 3, "abcde\x08X", "abcXe||"),
-        (5, 3, "abcde\x1b[GX", "Xbcde||"),
-        (5, 3, "abcde\x1b[KX", "abcdX||"),
-        (3, 2, "abc\x1b7\x1b[H\x1b8d", "abc|d"),
-        (5, 3, "\x1b[?7labcdefg", "abcdg||"),
+        (5, 3, "abcde\r\nx", "abcde|x|"), (5, 3, "abcde\x08X", "abcXe||"),
+        (5, 3, "abcde\x1b[GX", "Xbcde||"), (5, 3, "abcde\x1b[KX", "abcdX||"),
+        (3, 2, "abc\x1b7\x1b[H\x1b8d", "abc|d"), (5, 3, "\x1b[?7labcdefg", "abcdg||"),
         // DEC line drawing, in G0 or G1; RIS and DECSTR go back to ASCII.
-        (10, 1, "\x1b(0lqwqk\x1b(Bq", "┌─┬─┐q"),
-        (10, 1, "\x1b)0a\x0ex\x0fx", "a│x"),
+        (10, 1, "\x1b(0lqwqk\x1b(Bq", "┌─┬─┐q"), (10, 1, "\x1b)0a\x0ex\x0fx", "a│x"),
         (40, 1, "\x1b(0`abcdefghijklmnopqrstuvwxyz{|}~_AZ", "◆▒␉␌␍␊°±␤␋┘┐┌└┼⎺⎻─⎼⎽├┤┴┬│≤≥π≠£· AZ"),
-        (5, 1, "\x1b(0\x1bcq", "q"),
-        (5, 1, "\x1b(0\x1b[!pq", "q"),
+        (5, 1, "\x1b(0\x1bcq", "q"), (5, 1, "\x1b(0\x1b[!pq", "q"),
         // Wide characters wrap whole; overwriting a half blanks the other.
-        (5, 2, "\x1b[?7labcd世", "abcd|"),
-        (1, 2, "世x", "|x"),
-        (5, 1, "世界\x1b[2Gx", " x界"),
-        (5, 1, "世界\x1b[Gx", "x 界"),
-        (5, 1, "a世界\x1b[3G世", "a 世"),
-        (9, 1, "e\u{301}\u{200d}\u{fe0f}x\u{85}", "ex"),
-        (9, 1, "😀🚀x", "😀🚀x"),
+        (5, 2, "\x1b[?7labcd世", "abcd|"), (1, 2, "世x", "|x"), (5, 1, "世界\x1b[2Gx", " x界"),
+        (5, 1, "世界\x1b[Gx", "x 界"), (5, 1, "a世界\x1b[3G世", "a 世"),
+        (9, 1, "e\u{301}\u{200d}\u{fe0f}x\u{85}", "ex"), (9, 1, "😀🚀x", "😀🚀x"),
         (6, 1, "abcd\x1b[G\x1b[4h世", "世abcd"),
         // Insert mode, REP (after a printed character, to the line's end), DECALN.
-        (5, 1, "abc\x1b[G\x1b[4hXY\x1b[4lZ", "XYZbc"),
-        (9, 1, "ab\x1b[3b", "abbbb"),
-        (9, 1, "a\r\x1b[3b", "a"),
-        (10, 3, "ab\x1b[65535b\x1b[9b", "abbbbbbbbb|b|"),
+        (5, 1, "abc\x1b[G\x1b[4hXY\x1b[4lZ", "XYZbc"), (9, 1, "ab\x1b[3b", "abbbb"),
+        (9, 1, "a\r\x1b[3b", "a"), (10, 3, "ab\x1b[65535b\x1b[9b", "abbbbbbbbb|b|"),
         (3, 2, "\x1b[2;2H\x1b#8", "EEE|EEE"),
     ];
     for &(cols, rows, bytes, want) in screens {
         assert_eq!(run(cols, rows, bytes), want, "{bytes:?}");
     }
+    #[rustfmt::skip]
     let cursors: &[(u16, u16, &str, (u16, u16))] = &[
         // Movement clamps to the screen.
-        (8, 3, "\x1b[99;99H", (2, 7)),
-        (8, 3, "\x1b[99C\x1b[2D\x1b[9B\x1b[A", (1, 5)),
-        (8, 3, "\x1b[3;5H\x1b[F", (1, 0)),
-        (8, 3, "\x1b[5E", (2, 0)),
-        (8, 3, "\x1b[2d\x1b[4`", (1, 3)),
-        (8, 3, "\x1b[;5H\x1b[3a\x1b[e", (1, 7)),
-        (5, 3, "ab\x1b[2J", (0, 2)),
-        (10, 3, "\x1b[2;4H\x1b[s\x1b[H\x1b[u", (1, 3)),
+        (8, 3, "\x1b[99;99H", (2, 7)), (8, 3, "\x1b[99C\x1b[2D\x1b[9B\x1b[A", (1, 5)),
+        (8, 3, "\x1b[3;5H\x1b[F", (1, 0)), (8, 3, "\x1b[5E", (2, 0)),
+        (8, 3, "\x1b[2d\x1b[4`", (1, 3)), (8, 3, "\x1b[;5H\x1b[3a\x1b[e", (1, 7)),
+        (5, 3, "ab\x1b[2J", (0, 2)), (10, 3, "\x1b[2;4H\x1b[s\x1b[H\x1b[u", (1, 3)),
         (9, 1, "😀🚀x", (0, 5)),
         // A region homes the cursor and stops CUU and CUD; IL goes to column 0.
-        (3, 5, "\x1b[5;5Hx\x1b[2;4r", (0, 0)),
-        (3, 5, "\x1b[2;4r\x1b[3H\x1b[9A", (1, 0)),
-        (3, 5, "\x1b[2;4r\x1b[3H\x1b[9B", (3, 0)),
-        (3, 5, "\x1b[2;4r\x1b[5H\x1b[9A", (1, 0)),
-        (3, 5, "\x1b[2;4r\x1b[H\x1b[9A", (0, 0)),
-        (3, 5, "\x1b[2;4r\x1b[3;3H\x1b[L", (2, 0)),
+        (3, 5, "\x1b[5;5Hx\x1b[2;4r", (0, 0)), (3, 5, "\x1b[2;4r\x1b[3H\x1b[9A", (1, 0)),
+        (3, 5, "\x1b[2;4r\x1b[3H\x1b[9B", (3, 0)), (3, 5, "\x1b[2;4r\x1b[5H\x1b[9A", (1, 0)),
+        (3, 5, "\x1b[2;4r\x1b[H\x1b[9A", (0, 0)), (3, 5, "\x1b[2;4r\x1b[3;3H\x1b[L", (2, 0)),
         // Tabs: default stops every 8, HTS, TBC, CBT and CHT.
-        (20, 1, "\t\t\t", (0, 19)),
-        (20, 1, "\x1b[4G\x1bH\x1b[G\t", (0, 3)),
-        (20, 1, "\x1b[3g\t", (0, 19)),
-        (20, 1, "\x1b[9G\x1b[g\x1b[G\t", (0, 16)),
-        (20, 1, "\x1b[20G\x1b[Z", (0, 16)),
-        (20, 1, "\x1b[20G\x1b[2Z", (0, 8)),
-        (20, 1, "\x1b[20G\x1b[9Z", (0, 0)),
-        (20, 1, "\x1b[2I", (0, 16)),
+        (20, 1, "\t\t\t", (0, 19)), (20, 1, "\x1b[4G\x1bH\x1b[G\t", (0, 3)),
+        (20, 1, "\x1b[3g\t", (0, 19)), (20, 1, "\x1b[9G\x1b[g\x1b[G\t", (0, 16)),
+        (20, 1, "\x1b[20G\x1b[Z", (0, 16)), (20, 1, "\x1b[20G\x1b[2Z", (0, 8)),
+        (20, 1, "\x1b[20G\x1b[9Z", (0, 0)), (20, 1, "\x1b[2I", (0, 16)),
     ];
     for &(cols, rows, bytes, want) in cursors {
         assert_eq!(term(cols, rows, bytes).cursor(), want, "{bytes:?}");
@@ -138,21 +123,20 @@ fn screens_cursors_and_wrap() {
 #[test]
 fn scroll_regions_and_erase() {
     let region = |extra: &str| run(3, 5, &format!("a\r\nb\r\nc\r\nd\r\ne\x1b[2;4r{extra}"));
-    for extra in ["\x1b[4H\n", "\x1b[4H\x1bD", "\x1b[4H\x1bE", "\x1b[2H\x1b[M", "\x1b[S"] {
-        assert_eq!(region(extra), "a|c|d||e", "{extra:?}");
+    // IL, DL, LF and RI outside the region, or a bad region, change nothing. In origin mode rows
+    // count from the top margin and stay in the region.
+    #[rustfmt::skip]
+    let cases = [
+        ("\x1b[4H\n", "a|c|d||e"), ("\x1b[4H\x1bD", "a|c|d||e"), ("\x1b[4H\x1bE", "a|c|d||e"),
+        ("\x1b[2H\x1b[M", "a|c|d||e"), ("\x1b[S", "a|c|d||e"), ("\x1b[2H\x1bM", "a||b|c|e"),
+        ("\x1b[3H\x1b[L", "a|b||c|e"), ("\x1b[3H\x1b[9L", "a|b|||e"), ("\x1b[2T", "a|||b|e"),
+        ("\x1b[2H\x1b[2M", "a|d|||e"), ("\x1b[5H\x1b[L\x1b[M\n", "a|b|c|d|e"),
+        ("\x1b[1H\x1bM", "a|b|c|d|e"), ("\x1b[3;3r\x1b[4;2r\x1b[5H\n", "a|b|c|d|e"),
+        ("\x1b[?6h\x1b[1;1HX", "a|X|c|d|e"), ("\x1b[?6h\x1b[9;1HX", "a|b|c|X|e"),
+    ];
+    for (extra, want) in cases {
+        assert_eq!(region(extra), want, "{extra:?}");
     }
-    assert_eq!(region("\x1b[2H\x1bM"), "a||b|c|e");
-    assert_eq!(region("\x1b[3H\x1b[L"), "a|b||c|e");
-    assert_eq!(region("\x1b[3H\x1b[9L"), "a|b|||e");
-    assert_eq!(region("\x1b[2H\x1b[2M"), "a|d|||e");
-    assert_eq!(region("\x1b[2T"), "a|||b|e");
-    // IL, DL, LF and RI outside the region, or a bad region, change nothing.
-    for extra in ["\x1b[5H\x1b[L\x1b[M\n", "\x1b[1H\x1bM", "\x1b[3;3r\x1b[4;2r\x1b[5H\n"] {
-        assert_eq!(region(extra), "a|b|c|d|e", "{extra:?}");
-    }
-    // Origin mode: rows count from the top margin and stay in the region.
-    assert_eq!(region("\x1b[?6h\x1b[1;1HX"), "a|X|c|d|e");
-    assert_eq!(region("\x1b[?6h\x1b[9;1HX"), "a|b|c|X|e");
     let mut t = term(3, 5, "\x1b[2;4r\x1b[?6h\x1b[2;2H\x1b[6n");
     assert_eq!(t.take_replies(), b"\x1b[2;2R");
     // Only a region starting at the top feeds the scrollback.
@@ -192,23 +176,13 @@ fn sgr() {
     t.feed(b"\x1b[38;5;300;38:2::1:2mN\x1b[>4;2mO\x1b[1;38;5mP");
     let (none, u, b) = (Attrs(0), Attrs::UNDERLINE, Attrs::BOLD);
     // L: 58 takes its arguments; M: empty is 0; N: bad colors are ignored.
+    #[rustfmt::skip]
     let expect = [
-        ('A', D, D, Attrs(0xFF)),
-        ('B', D, D, none),
-        ('C', I(1), I(2), none),
-        ('D', I(9), I(10), none),
-        ('E', I(196), Rgb(1, 2, 3), none),
-        ('F', Rgb(10, 20, 30), I(7), none),
-        ('G', Rgb(1, 2, 3), I(7), u),
-        ('H', D, D, none),
-        ('I', D, D, none),
-        ('J', D, D, u),
-        ('K', D, D, none),
-        ('L', D, D, b),
-        ('M', D, D, u),
-        ('N', Rgb(0, 1, 2), D, u),
-        ('O', Rgb(0, 1, 2), D, u),
-        ('P', Rgb(0, 1, 2), D, u | b),
+        ('A', D, D, Attrs(0xFF)), ('B', D, D, none), ('C', I(1), I(2), none),
+        ('D', I(9), I(10), none), ('E', I(196), Rgb(1, 2, 3), none),
+        ('F', Rgb(10, 20, 30), I(7), none), ('G', Rgb(1, 2, 3), I(7), u), ('H', D, D, none),
+        ('I', D, D, none), ('J', D, D, u), ('K', D, D, none), ('L', D, D, b), ('M', D, D, u),
+        ('N', Rgb(0, 1, 2), D, u), ('O', Rgb(0, 1, 2), D, u), ('P', Rgb(0, 1, 2), D, u | b),
     ];
     for (i, (ch, fg, bg, attrs)) in expect.into_iter().enumerate() {
         let c = t.row(0)[i];
@@ -242,8 +216,7 @@ fn alternate_screen_and_saved_cursor() {
     assert_eq!((t.cursor(), t.row(0)[0].attrs), ((0, 1), Attrs(0)));
     // A saved position past a shrink is clamped.
     let mut t = term(10, 3, "\x1b[3;9H\x1b7");
-    t.resize(4, 2);
-    assert_eq!(fed(&mut t, "\x1b8").cursor(), (1, 3));
+    assert_eq!(fed(sized(&mut t, 4, 2), "\x1b8").cursor(), (1, 3));
 }
 
 #[test]
@@ -261,8 +234,7 @@ fn replies_and_title() {
     assert_eq!(t.take_replies(), b"\x1b[3;4R\x1b[?62;22c");
     assert_eq!(fed(&mut t, "x").generation(), g + 1);
     // Unread replies are capped.
-    t.feed("\x1b[6n".repeat(20_000).as_bytes());
-    assert!(t.take_replies().len() <= 1 << 16);
+    assert!(fed(&mut t, "\x1b[6n".repeat(20_000)).take_replies().len() <= 1 << 16);
     // Titles lose controls, stop at 256 chars and survive RIS; other OSCs do nothing.
     let mut t = term(5, 1, "\x1b]0;hi\x07");
     assert_eq!(t.title(), "hi");
@@ -270,8 +242,7 @@ fn replies_and_title() {
     assert_eq!(fed(&mut t, "\x1b]2;x\u{9b}y\x08\x7fz\u{1b}\\").title(), "xyz");
     let long = format!("\x1b]0;{}\x07", "é".repeat(300));
     assert_eq!(fed(&mut t, &long).title().chars().count(), 256);
-    t.feed(b"\x1b]2;\xff\x07");
-    assert_eq!(t.title(), "\u{fffd}");
+    assert_eq!(fed(&mut t, b"\x1b]2;\xff\x07").title(), "\u{fffd}");
     t.feed(b"\x1b]52;c;aGk=\x07\x1b]1;icon\x07\x1b]8;;http://x\x07\x1b]10;?\x07\x1b]0\x07\x1bc");
     assert_eq!((t.take_replies(), t.title()), (Vec::new(), "\u{fffd}"));
 }
@@ -287,16 +258,13 @@ fn resize_keeps_the_cursor_row() {
     assert!(t.cursor_visible() && !t.alt_screen() && !t.bracketed_paste() && !t.app_cursor_keys());
     let mut t = term(5, 3, "abcde\r\nfghij\r\nklm\x1b[2;4H");
     let g = t.generation();
-    t.resize(3, 2);
-    check(&t, "abc|fgh", (1, 2));
+    check(sized(&mut t, 3, 2), "abc|fgh", (1, 2));
     assert!(t.generation() > g);
-    t.resize(6, 4);
-    check(&t, "abc|fgh||", (1, 2));
+    check(sized(&mut t, 6, 4), "abc|fgh||", (1, 2));
     assert_eq!(t.row(0).len(), 6);
     // The scroll region resets to the whole screen.
     let mut t = term(3, 4, "a\r\nb\x1b[1;2r");
-    t.resize(3, 3);
-    assert_eq!(screen(fed(&mut t, "\x1b[3H\nc")), "b||c");
+    assert_eq!(screen(fed(sized(&mut t, 3, 3), "\x1b[3H\nc")), "b||c");
     // A cut wide character is blanked; the alternate screen resizes too.
     let mut t = term(4, 1, "a世\x1b[?1049h世");
     t.resize(2, 1);
@@ -307,33 +275,26 @@ fn resize_keeps_the_cursor_row() {
     assert_eq!((t.cols(), t.rows()), (1000, 1));
     // Tab stops survive; new columns get the default ones.
     let mut t = term(10, 1, "\x1b[3g\x1b[5G\x1bH");
-    t.resize(30, 1);
-    assert_eq!(fed(&mut t, "\x1b[G\t\t\t").cursor(), (0, 24));
+    assert_eq!(fed(sized(&mut t, 30, 1), "\x1b[G\t\t\t").cursor(), (0, 24));
     // The top rows go into the scrollback, so the prompt stays on screen.
     let mut t = term(10, 6, "l1\r\nl2\r\nl3\r\nl4\r\nl5\r\n$ prompt");
-    t.resize(10, 3);
-    check(&t, "l4|l5|$ prompt", (2, 8));
+    check(sized(&mut t, 10, 3), "l4|l5|$ prompt", (2, 8));
     assert_eq!((t.scrollback_len(), text(t.scrollback_row(2)).as_str()), (3, "l3"));
-    t.resize(10, 5);
-    check(&t, "l4|l5|$ prompt||", (2, 8));
+    check(sized(&mut t, 10, 5), "l4|l5|$ prompt||", (2, 8));
     // Rows below the cursor are cut first.
     let mut t = term(10, 6, "a\r\nb\r\nc\r\nd\x1b[2H");
-    t.resize(10, 3);
-    check(&t, "a|b|c", (1, 0));
+    check(sized(&mut t, 10, 3), "a|b|c", (1, 0));
     assert_eq!(t.scrollback_len(), 0);
     // On the alternate screen, the main screen keeps its saved cursor's row.
     let mut t = term(10, 6, "l1\r\nl2\r\nl3\r\nl4\r\n$ \x1b[?1049h\x1b[Hvim");
-    t.resize(10, 2);
-    check(&t, "vim|", (0, 3));
+    check(sized(&mut t, 10, 2), "vim|", (0, 3));
     check(fed(&mut t, "\x1b[?1049l"), "l4|$", (1, 2));
     assert_eq!((t.scrollback_len(), text(t.scrollback_row(2)).as_str()), (3, "l3"));
 }
 
 #[test]
 fn scrollback_and_resets() {
-    let mut t = Term::new(10, 2);
-    let lines: String = (0..5010).map(|i| format!("{i}\r\n")).collect();
-    t.feed(lines.as_bytes());
+    let mut t = term(10, 2, &(0..5010).map(|i| format!("{i}\r\n")).collect::<String>());
     assert_eq!((t.scrollback_len(), screen(&t).as_str()), (SCROLLBACK, "5009|"));
     assert_eq!(text(t.scrollback_row(0)), "9");
     assert_eq!(text(t.scrollback_row(SCROLLBACK - 1)), "5008");
@@ -348,8 +309,7 @@ fn scrollback_and_resets() {
     check(&term(10, 3, "ab\x1b[65535b"), "abbbbbbbbb||", (0, 9));
     assert_eq!(term(10, 3, &format!("x{}", "\x1b[65535b".repeat(1000))).scrollback_len(), 498);
     // Modes are recorded; DECSTR resets some.
-    let mut t = Term::new(8, 3);
-    t.feed(b"\x1b[?25l\x1b[?2004h\x1b[?1h\x1b[?1002h\x1b[?1006h\x1b[?1004h");
+    let mut t = term(8, 3, "\x1b[?25l\x1b[?2004h\x1b[?1h\x1b[?1002h\x1b[?1006h\x1b[?1004h");
     assert!(!t.cursor_visible() && t.bracketed_paste() && t.app_cursor_keys());
     assert!(t.mouse == 1002 && t.mouse_sgr && t.focus);
     t.feed(b"\x1b[?1000l\x1b[!p");
@@ -380,10 +340,8 @@ fn keys_and_paste() {
         assert_eq!(key(k, "sca", false), format!("\x1b[1;8{x}").as_bytes());
     }
     // Editing keys and F5-F12: CSI n ~ and CSI n;m ~; F1-F4: SS3 P-S.
-    let tilde =
-        [Insert, Delete, PageUp, PageDown, F(5), F(6), F(7), F(8), F(9), F(10), F(11), F(12)];
-    let codes = [2, 3, 5, 6, 15, 17, 18, 19, 20, 21, 23, 24];
-    for (k, n) in tilde.into_iter().zip(codes) {
+    let tilde = [Insert, Delete, PageUp, PageDown].into_iter().chain((5..=12).map(F));
+    for (k, n) in tilde.zip([2, 3, 5, 6, 15, 17, 18, 19, 20, 21, 23, 24]) {
         assert_eq!(key(k, "", true), format!("\x1b[{n}~").as_bytes());
         assert_eq!(key(k, "c", false), format!("\x1b[{n};5~").as_bytes());
     }
@@ -394,24 +352,14 @@ fn keys_and_paste() {
     for (c, b) in "azC@ [\\]^_?".chars().zip([1, 26, 3, 0, 0, 27, 28, 29, 30, 31, 127]) {
         assert_eq!(key(Char(c), "c", false), [b], "ctrl {c}");
     }
+    #[rustfmt::skip]
     let cases: &[(Key, &str, &[u8])] = &[
-        (Enter, "", b"\r"),
-        (Enter, "a", b"\x1b\r"),
-        (Backspace, "", b"\x7f"),
-        (Backspace, "c", b"\x08"),
-        (Backspace, "a", b"\x1b\x7f"),
-        (Tab, "", b"\t"),
-        (Tab, "s", b"\x1b[Z"),
-        (Escape, "", b"\x1b"),
-        (Escape, "a", b"\x1b\x1b"),
-        (F(0), "", b""),
-        (F(13), "c", b""),
-        (Char('a'), "", b"a"),
-        (Char('A'), "s", b"A"),
-        (Char('\u{e9}'), "", "\u{e9}".as_bytes()),
-        (Char('1'), "c", b"1"),
-        (Char('x'), "a", b"\x1bx"),
-        (Char('c'), "sca", b"\x1b\x03"),
+        (Enter, "", b"\r"), (Enter, "a", b"\x1b\r"), (Backspace, "", b"\x7f"),
+        (Backspace, "c", b"\x08"), (Backspace, "a", b"\x1b\x7f"), (Tab, "", b"\t"),
+        (Tab, "s", b"\x1b[Z"), (Escape, "", b"\x1b"), (Escape, "a", b"\x1b\x1b"), (F(0), "", b""),
+        (F(13), "c", b""), (Char('a'), "", b"a"), (Char('A'), "s", b"A"),
+        (Char('\u{e9}'), "", "\u{e9}".as_bytes()), (Char('1'), "c", b"1"),
+        (Char('x'), "a", b"\x1bx"), (Char('c'), "sca", b"\x1b\x03"),
     ];
     for &(k, mods, want) in cases {
         assert_eq!(key(k, mods, false), want, "{k:?} {mods}");
@@ -446,21 +394,15 @@ fn fuzz() {
             match rand(12) {
                 0..=4 => {
                     chunk.extend_from_slice(b"\x1b[");
-                    if rand(3) == 0 {
-                        chunk.push(b"?>=<"[rand(4)]);
-                    }
+                    chunk.extend((rand(3) == 0).then(|| b"?>=<"[rand(4)]));
                     for k in 0..rand(6) {
-                        if k > 0 {
-                            chunk.push(if rand(5) == 0 { b':' } else { b';' });
-                        }
+                        chunk.extend((k > 0).then(|| if rand(5) == 0 { b':' } else { b';' }));
                         let v = [65535, rand(2000), rand(12), rand(12)][rand(4)];
                         if rand(6) > 0 {
                             chunk.extend_from_slice(v.to_string().as_bytes());
                         }
                     }
-                    if rand(8) == 0 {
-                        chunk.push(b"$! "[rand(3)]);
-                    }
+                    chunk.extend((rand(8) == 0).then(|| b"$! "[rand(3)]));
                     chunk.push(finals[rand(finals.len())]);
                 }
                 5..=7 => chunk.extend_from_slice(bits[rand(bits.len())].as_bytes()),

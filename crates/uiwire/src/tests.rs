@@ -37,10 +37,12 @@ fn sample() -> Frame {
         Node::Fill { id: 0, children: vec![code] },
     ];
     let requests = vec![Request::Open { name: "/apps/clock.app".into() }, Request::Close];
+    let ai =
+        vec![Request::Ai { id: 3, body: "{\"stream\":true}".into() }, Request::AiCancel { id: 3 }];
     Frame {
         seq: 7,
         title: "Studio é".into(),
-        requests: [requests, vec![Request::Size { w: 640, h: 480 }]].concat(),
+        requests: [requests, vec![Request::Size { w: 640, h: 480 }], ai].concat(),
         nodes: vec![Node::Col { id: 1, gap: 8, children }, text(Style::Success, "")],
     }
 }
@@ -54,6 +56,9 @@ fn events() -> Vec<Event> {
         Event::Resize { w: 800, h: 600 },
         Event::Close,
         Event::Submit { id: 4 },
+        Event::Config { provider: "gateway".into(), model: "zai/glm-5.3".into(), has_key: 1 },
+        Event::AiData { id: 3, data: vec![b'd', 0xC3, 0xFF] },
+        Event::AiEnd { id: 3, status: 429, error: "".into() },
     ]
 }
 
@@ -101,6 +106,9 @@ fn codes_and_layout_are_as_documented() {
     assert_eq!(frame.encode(), want);
     let key = Event::Key { id: 2, key: Key::Enter, mods: mods::ALT, ch: 'A' };
     assert_eq!(key.encode(), [3, 2, 0, 0, 0, 1, 4, 65, 0, 0, 0]);
+    // AI bytes need not be UTF-8 (a chunk may split a character).
+    let data = Event::AiData { id: 1, data: vec![0xC3] };
+    assert_eq!(data.encode(), [8, 1, 0, 0, 0, 1, 0, 0, 0, 0xC3]);
 }
 
 #[test]
@@ -134,7 +142,7 @@ fn set(mut bytes: Vec<u8>, at: usize, to: u8) -> Vec<u8> {
 fn malformations_fail() {
     let ok = sample().encode();
     // The version; not UTF-8 in the title; the node count, one off either way.
-    let at = 1 + 4 + 4 + "Studio é".len() + 2 + (1 + 4 + 15) + 1 + (1 + 4);
+    let at = 1 + 4 + 4 + "Studio é".len() + 2 + (1 + 4 + 15) + 1 + (1 + 4) + (9 + 15) + 5;
     assert_eq!(ok[at..at + 4], [12, 0, 0, 0]);
     for (i, to) in [(0, 2), (13, 0xFF), (at, 11), (at, 13)] {
         assert!(Frame::decode(&set(ok.clone(), i, to)).is_none(), "{i}");
@@ -172,7 +180,7 @@ fn malformations_fail() {
     assert!(key(8, 15, 'x' as u32).is_some());
     assert!(key(0, 0, 0).is_none() && key(9, 0, 0).is_none());
     assert!(key(1, 16, 0).is_none() && key(1, 0, 0xD800).is_none());
-    assert!(Event::decode(&[7]).is_none() && Request::decode(&[4]).is_none());
+    assert!(Event::decode(&[10]).is_none() && Request::decode(&[6]).is_none());
 }
 
 #[test]

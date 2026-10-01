@@ -1,8 +1,7 @@
-//! Black-box tests for `wm`, from its spec alone. Every command goes through
-//! `apply`, which checks the hash rules: `Noop` and `Err` leave everything
-//! observable untouched, anything else changes the hash. Layouts render as
-//! `id:x,y,w,h` bottom to top, the id tagged `^` when maximized, `@Snap` when
-//! snapped and `*` when focused.
+//! Black-box tests for `wm`, from its spec alone. Every command goes through `apply`, which checks
+//! the hash rules: `Noop` and `Err` leave everything observable untouched, anything else changes
+//! the hash. Layouts render as `id:x,y,w,h` bottom to top, the id tagged `^` when maximized,
+//! `@Snap` when snapped and `*` when focused.
 
 use std::collections::BTreeSet;
 use wm::Cmd::*;
@@ -39,15 +38,13 @@ fn op(n: u32) -> Res {
     Ok(Opened(WinId(n)))
 }
 
-/// Applies `cmd`, checking the hash rules; returns its result and views of
-/// everything observable before and after it.
+/// Applies `cmd`, checking the hash rules; its result and views of all observable state around it.
 fn apply(wm: &mut Wm, cmd: &Cmd) -> (Res, View, View) {
     let view = |wm: &Wm| {
         let wins = wm.windows().into_iter().map(|(w, s)| (w, s, wm.normal_rect(w))).collect();
         (wm.state_hash(), wm.area(), wm.focused(), wm.layout(), wins)
     };
-    let before = view(wm);
-    let res = wm.apply(cmd.clone());
+    let (before, res) = (view(wm), wm.apply(cmd.clone()));
     let after = view(wm);
     match res {
         Ok(Noop) | Err(_) => assert_eq!(after, before, "{cmd:?} changed state"),
@@ -566,8 +563,7 @@ fn random_runs_keep_invariants_and_replay() {
     for seed in 1..=12_u64 {
         let mut rng = Rng(seed);
         let area = rng.rect();
-        let mut wm = Wm::new(area);
-        let (mut live, mut next, mut log) = (Vec::new(), 1, Vec::new());
+        let (mut wm, mut live, mut next, mut log) = (Wm::new(area), Vec::new(), 1, Vec::new());
         for _ in 0..1500 {
             let cmd = rng.cmd(&live, next);
             let res = step(&mut wm, &mut live, &mut next, &cmd);

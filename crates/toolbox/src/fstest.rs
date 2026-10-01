@@ -113,14 +113,12 @@ fn creat(w: &Work) -> Check {
     io("write", io("create", new())?.write_all(b"hello\n"))?;
     fails("create again", new(), Some(AlreadyExists))?;
     fails("open a missing file", File::open(w.at("none")), Some(NotFound))?;
-    read(&w.at("a"), b"hello\n")?;
-    OK
+    read(&w.at("a"), b"hello\n").and(OK)
 }
 
 fn write(w: &Work) -> Check {
     io("write", fs::write(w.at("big"), data()))?;
-    read(&w.at("big"), &data())?;
-    OK
+    read(&w.at("big"), &data()).and(OK)
 }
 
 fn seek(w: &Work) -> Check {
@@ -141,8 +139,7 @@ fn seek(w: &Work) -> Check {
     io("write", f.write_all(b"!"))?;
     d[10..13].copy_from_slice(b"XYZ");
     d.extend(b"\0\0\0\0\0!");
-    read(&w.at("big"), &d)?;
-    OK
+    read(&w.at("big"), &d).and(OK)
 }
 
 fn trunc(w: &Work) -> Check {
@@ -157,8 +154,7 @@ fn trunc(w: &Work) -> Check {
     io("set_len 2", f.set_len(2))?;
     read(&p, b"sh")?;
     io("set_len 4", f.set_len(4))?;
-    read(&p, b"sh\0\0")?;
-    OK
+    read(&p, b"sh\0\0").and(OK)
 }
 
 fn stat(w: &Work) -> Check {
@@ -169,8 +165,7 @@ fn stat(w: &Work) -> Check {
     want(m.is_file() && !m.is_dir() && m.len() == 4, "a file of 4 bytes")?;
     let m = io("stat dir", fs::metadata(&w.dir))?;
     want(m.is_dir() && !m.is_file(), "a directory")?;
-    fails("stat a missing file", fs::metadata(w.at("none")), Some(NotFound))?;
-    OK
+    fails("stat a missing file", fs::metadata(w.at("none")), Some(NotFound)).and(OK)
 }
 
 /// 260 files with 243-byte names, and a directory: more than one 64 KiB
@@ -195,8 +190,7 @@ fn readdir(w: &Work) -> Check {
             _ => return Err(format!("listed {name}: new, or twice")),
         }
     }
-    same("entries missing", seen.iter().filter(|s| !**s).count() as u64, 0)?;
-    OK
+    same("entries missing", seen.iter().filter(|s| !**s).count() as u64, 0).and(OK)
 }
 
 /// Renames a file, onto a file and a directory; then `..` inside the tree
@@ -233,8 +227,7 @@ fn unlink(w: &Work) -> Check {
     io("unlink", fs::remove_file(w.at("big")))?;
     io("rmdir many", fs::remove_dir_all(w.at("many")))?;
     io("rmdir", fs::remove_dir(&w.dir))?;
-    fails("stat it", fs::metadata(&w.dir), Some(NotFound))?;
-    OK
+    fails("stat it", fs::metadata(&w.dir), Some(NotFound)).and(OK)
 }
 
 /// `<cols> <rows>\n`, both at least 1 when stdin is a terminal.

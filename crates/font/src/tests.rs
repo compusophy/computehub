@@ -30,19 +30,16 @@ fn reads_the_real_fonts() {
     // (font, units per em, ascender, descender, glyph count)
     let cases = [(INTER, 2048, 1984, -494, 121), (SEMI, 2048, 1984, -494, 121)];
     let more = [(MONO, 1000, 1020, -300, 461), (SYM_A, 1000, 1069, -630, 569)];
-    for (bytes, upem, asc, desc, glyphs) in
-        cases.into_iter().chain(more).chain([(SYM_B, 1000, 1480, -570, 104)])
-    {
+    let last = (SYM_B, 1000, 1480, -570, 104);
+    for (bytes, upem, asc, desc, glyphs) in cases.into_iter().chain(more).chain([last]) {
         let f = font(bytes);
         assert_eq!((f.metrics(), f.num_glyphs), ([upem, asc, desc, 0], glyphs));
     }
     let (inter, mono) = (font(INTER), font(MONO));
     assert_eq!(ids(&inter, "A ─"), [Some(1), Some(109), None]);
     assert_eq!(ids(&mono, "A ─\u{10FFFF}\u{FFFF}"), [Some(1), Some(180), Some(355), None, None]);
-    assert_eq!(
-        (ids(&font(SYM_A), "✻"), ids(&font(SYM_B), "⎿A")),
-        (vec![Some(229)], vec![Some(93), None])
-    );
+    assert_eq!(ids(&font(SYM_A), "✻"), [Some(229)]);
+    assert_eq!(ids(&font(SYM_B), "⎿A"), [Some(93), None]);
     assert_eq!((inter.advance(1), inter.advance(109)), (1413, 576));
     for c in "A ─éi".chars() {
         assert_eq!(mono.advance(mono.glyph_index(c).unwrap()), 600, "{c}");
@@ -62,9 +59,8 @@ fn reads_the_real_fonts() {
     let shift = |c: &[Point], dx: f32| c.iter().map(|p| (p.x + dx, p.y, p.on)).collect::<Vec<_>>();
     assert_eq!(shift(&o[2], 0.0), shift(&accent[0], 30.0));
     let err = |d: &[u8]| Font::parse(d.to_vec()).unwrap_err();
-    for header in [&b""[..], b"OTTO\0\0\0\0", b"ttcf\0\0\0\0", b"true"] {
-        assert_eq!(err(header), FontError::NotTrueType);
-    }
+    let headers = [&b""[..], b"OTTO\0\0\0\0", b"ttcf\0\0\0\0", b"true"];
+    assert_eq!(headers.map(err), [FontError::NotTrueType; 4]);
     let mut no_glyf = INTER.to_vec();
     let glyf = (12..).step_by(16).find(|&r| &INTER[r..r + 4] == b"glyf").unwrap();
     no_glyf[glyf..glyf + 4].copy_from_slice(b"gly_");

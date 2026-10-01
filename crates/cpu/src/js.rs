@@ -56,10 +56,6 @@ impl Host for Js {
         reply
     }
 
-    fn post(&mut self, msg: &[u8]) {
-        crate::post(msg);
-    }
-
     /// Into the ring, then the doorbell: CONS_BELL unless one is in flight. Full: sleeps on TAIL.
     fn console(&mut self, mut b: &[u8]) {
         while !b.is_empty() {
@@ -67,9 +63,7 @@ impl Host for Js {
             let (at, first, n) = span(head, tail as u32, b.len());
             let put = |at: u32, b: &[u8]| self.bytes.subarray(at, at + b.len() as u32).copy_from(b);
             put(RING_AT + at, &b[..first]);
-            if n > first {
-                put(RING_AT, &b[first..n]);
-            }
+            put(RING_AT, &b[first..n]);
             let _ = Atomics::store(&self.words, HEAD, head.wrapping_add(n as u32) as i32);
             if Atomics::compare_exchange(&self.words, BELL, 0, 1) == Ok(0) {
                 crate::post(&[CONS_BELL]);
@@ -111,22 +105,18 @@ impl Host for Js {
 /// Guest memory: a fresh view per access (`grow` detaches), checked first.
 pub struct GuestMem(pub WebAssembly::Memory);
 
-impl GuestMem {
-    fn view(&self, at: u32, len: u32) -> Result<Uint8Array, u16> {
-        let (buf, end) = (self.0.buffer(), at.checked_add(len).ok_or(EFAULT)?);
-        let fits = end <= buf.unchecked_ref::<ArrayBuffer>().byte_length();
-        fits.then(|| Uint8Array::new_with_byte_offset_and_length(&buf, at, len)).ok_or(EFAULT)
-    }
+fn view(m: &WebAssembly::Memory, at: u32, len: u32) -> Result<Uint8Array, u16> {
+    let (buf, end) = (m.buffer(), at.checked_add(len).ok_or(EFAULT)?);
+    let fits = end <= buf.unchecked_ref::<ArrayBuffer>().byte_length();
+    fits.then(|| Uint8Array::new_with_byte_offset_and_length(&buf, at, len)).ok_or(EFAULT)
 }
 
 impl Mem for GuestMem {
     fn read(&self, at: u32, len: u32) -> Result<Vec<u8>, u16> {
-        Ok(self.view(at, len)?.to_vec())
+        Ok(view(&self.0, at, len)?.to_vec())
     }
 
     fn write(&mut self, at: u32, d: &[u8]) -> Result<(), u16> {
-        let len = u32::try_from(d.len()).map_err(|_| EFAULT)?;
-        self.view(at, len)?.copy_from(d);
-        Ok(())
+        view(&self.0, at, u32::try_from(d.len()).map_err(|_| EFAULT)?).map(|v| v.copy_from(d))
     }
 }

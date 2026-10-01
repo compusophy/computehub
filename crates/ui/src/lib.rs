@@ -2,13 +2,11 @@
 //! re-exported), runtime [`Theme`]s, an immediate-mode widget builder and
 //! the [`App`] trait every window hosts. Pure Rust, no browser.
 //!
-//! A frame: the shell calls [`App::draw`] with a [`Ui`] over the window's
-//! content rect, collecting [`Hit`] regions and instances (and builds it again
-//! if [`TextSystem::take_atlas_reset`] says the atlas was cleared midway).
-//! Input comes back as [`AppEvent`]s routed by last frame's hits
-//! ([`hit_test`]); [`App::event`] returns whether to redraw, and an app asks
-//! for anything outside itself through its [`Cx`]. [`Code`] is the code
-//! editor widget.
+//! A frame: the shell calls [`App::draw`] with a [`Ui`] over the window's content rect, collecting
+//! [`Hit`] regions and instances (and builds it again if [`TextSystem::take_atlas_reset`] says the
+//! atlas was cleared midway). Input comes back as [`AppEvent`]s routed by last frame's hits
+//! ([`hit_test`]); [`App::event`] returns whether to redraw, and an app asks for anything outside
+//! itself through its [`Cx`]. [`Code`] is the code editor widget.
 
 #![forbid(unsafe_code)]
 
@@ -45,9 +43,8 @@ pub trait App {
     fn icon(&self) -> AppIcon {
         AppIcon::default()
     }
-    /// GUI process `pid` drew `frame` (uiwire bytes, unchecked). Every app
-    /// hears every frame and takes only its own process's; returns whether
-    /// to redraw.
+    /// GUI process `pid` drew `frame` (uiwire bytes, unchecked). Every app hears every frame and
+    /// takes only its own process's; returns whether to redraw.
     fn frame(&mut self, pid: u32, frame: &[u8], cx: &mut Cx<'_>) -> bool {
         let _ = (pid, frame, cx);
         false
@@ -101,22 +98,10 @@ pub enum AppEvent {
 /// A key by its physical position (`KeyboardEvent.code`); text comes
 /// separately as [`AppEvent::Text`]. `Enter` includes numpad Enter.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[rustfmt::skip]
 pub enum Key {
-    Enter,
-    Escape,
-    Backspace,
-    Delete,
-    Tab,
-    Space,
-    Left,
-    Right,
-    Up,
-    Down,
-    Home,
-    End,
-    PageUp,
-    PageDown,
-    Insert,
+    Enter, Escape, Backspace, Delete, Tab, Space, Left, Right, Up, Down, Home, End, PageUp,
+    PageDown, Insert,
     /// A function key, `F(1)` to `F(24)`.
     F(u8),
     /// A letter key as a lowercase ASCII letter, or a digit key (top row or
@@ -158,12 +143,8 @@ impl Key {
 /// Modifier keys held during a key press: `alt` is also Option, `meta` is
 /// Command or the Windows key.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
-pub struct Mods {
-    pub shift: bool,
-    pub ctrl: bool,
-    pub alt: bool,
-    pub meta: bool,
-}
+#[rustfmt::skip]
+pub struct Mods { pub shift: bool, pub ctrl: bool, pub alt: bool, pub meta: bool }
 
 /// Something an app asked the shell for, in order.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -178,22 +159,54 @@ pub enum Request {
     SetTheme(String),
     /// Resize the asking app's window to this content size, in logical px.
     Size(u16, u16),
+    /// Save the AI settings in the page's storage (never the VFS): `key`
+    /// `None` keeps the stored key, `Some("")` clears it.
+    AiConfig { provider: String, key: Option<String>, model: String },
 }
 
-/// What an app can reach while handling an event: the filesystem, the
-/// kernel (processes it spawns are owned by its window), the clock
-/// (milliseconds on the page clock) and requests to the shell.
+/// The AI settings as apps see them, never the key: `provider` is `"gateway"`, `"openrouter"` or
+/// `"mock"`; `key_hint` is `""` (no key) or the key's last 4 chars.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct AiStatus {
+    pub provider: String,
+    pub model: String,
+    pub key_hint: String,
+}
+
+impl AiStatus {
+    /// The status once `provider`, `key` (`None` keeps it) and `model` are saved.
+    pub fn saved(&self, provider: &str, key: Option<&str>, model: &str) -> AiStatus {
+        let last4 = |k: &str| k[k.char_indices().rev().nth(3).map_or(0, |c| c.0)..].to_string();
+        let key_hint = key.map_or_else(|| self.key_hint.clone(), last4);
+        AiStatus { provider: provider.to_string(), model: model.to_string(), key_hint }
+    }
+}
+
+/// What an app can reach while handling an event: the filesystem, the kernel (processes it spawns
+/// are owned by its window), the clock (milliseconds on the page clock), the AI settings, whether
+/// the page is served from localhost (dev-only choices such as the mock AI provider show), and
+/// requests to the shell.
 #[derive(Debug)]
 pub struct Cx<'a> {
     pub vfs: &'a mut vfs::Vfs,
     pub kernel: &'a mut kernel::Kernel,
     pub now_ms: f64,
+    pub ai: AiStatus,
+    pub localhost: bool,
     requests: Vec<Request>,
 }
 
 impl<'a> Cx<'a> {
     pub fn new(vfs: &'a mut vfs::Vfs, kernel: &'a mut kernel::Kernel, now_ms: f64) -> Cx<'a> {
-        Cx { vfs, kernel, now_ms, requests: Vec::new() }
+        let (ai, localhost, requests) = (AiStatus::default(), false, Vec::new());
+        Cx { vfs, kernel, now_ms, ai, localhost, requests }
+    }
+
+    /// Saves the AI settings ([`Request::AiConfig`]); [`Cx::ai`] follows at once.
+    pub fn ai_config(&mut self, provider: &str, key: Option<&str>, model: &str) {
+        self.ai = self.ai.saved(provider, key, model);
+        let (provider, model, key) = (provider.to_string(), model.to_string(), key.map(Into::into));
+        self.requests.push(Request::AiConfig { provider, key, model });
     }
 
     /// Opens an app (a registry name or a `.app` path) in a new tiled window.

@@ -1,11 +1,9 @@
 //! Studio: the applang editor's window.
 
-use std::io::ErrorKind;
-
+use crate::{Disk, NEW_APP, SAMPLES, View, file_name, problem, run::text};
 use applang::Span;
+use std::io::ErrorKind;
 use uiwire::{Event, Frame, Key, Node, Request, Style, Variant, mods};
-
-use crate::{Disk, NEW_APP, SAMPLES, View, file_name, problem};
 
 const RUN: u32 = 1;
 const SAVE: u32 = 2;
@@ -53,9 +51,8 @@ impl Studio {
             Ok(text) if text.len() > MAX_TEXT => self.block("the file is over 256 KiB".into()),
             Ok(text) => self.text = text,
             Err(e) if e.kind() == ErrorKind::NotFound => {
-                self.status = "new file".into();
                 let sample = SAMPLES.iter().find(|(p, _)| *p == self.path);
-                self.text = sample.map_or("", |s| s.1).into();
+                (self.status, self.text) = ("new file".into(), sample.map_or("", |s| s.1).into());
             }
             Err(e) => self.block(format!("cannot read it: {e}")),
         }
@@ -95,18 +92,15 @@ impl Studio {
             self.status = ["not run: ", why].concat();
             return;
         }
-        match applang::compile(&self.text) {
-            Err(d) => {
-                (self.problem, self.mark) = (Some(problem(&d, &self.text)), d.span);
-                self.status = "did not compile".into();
-            }
-            Ok(_) => {
-                (self.problem, self.mark) = (None, None);
-                if self.save(disk) {
-                    self.requests.push(Request::Open { name: self.path.clone() });
-                    self.status = "saved and running".into();
-                }
-            }
+        if let Err(d) = applang::compile(&self.text) {
+            (self.problem, self.mark) = (Some(problem(&d, &self.text)), d.span);
+            self.status = "did not compile".into();
+            return;
+        }
+        (self.problem, self.mark) = (None, None);
+        if self.save(disk) {
+            self.requests.push(Request::Open { name: self.path.clone() });
+            self.status = "saved and running".into();
         }
     }
 
@@ -155,17 +149,12 @@ impl View for Studio {
     fn frame(&mut self) -> Frame {
         let modified = if self.dirty { " (modified)" } else { "" };
         let dot = if self.status.is_empty() { "" } else { " · " };
-        let note = [&self.path, modified, dot, &self.status].concat();
+        let note = text(Style::Small, &[&self.path, modified, dot, &self.status].concat());
         let button = |id, variant, label: &str| Node::Button { id, variant, label: label.into() };
-        let toolbar = vec![
-            button(RUN, Variant::Primary, "Run"),
-            button(SAVE, Variant::Normal, "Save"),
-            button(NEW, Variant::Normal, "New"),
-            Node::Text { id: 0, style: Style::Small, text: note },
-        ];
-        let spans = spans(&self.text, self.mark);
-        let (version, text) = (self.version, self.text.clone());
-        let code = Node::Code { id: CODE, version, line_numbers: true, text, spans };
+        let (run, normal) = (button(RUN, Variant::Primary, "Run"), Variant::Normal);
+        let toolbar = vec![run, button(SAVE, normal, "Save"), button(NEW, normal, "New"), note];
+        let (spans, text) = (spans(&self.text, self.mark), self.text.clone());
+        let code = Node::Code { id: CODE, version: self.version, line_numbers: true, text, spans };
         let row = Node::Row { id: 0, gap: 8, children: toolbar };
         let mut nodes = vec![row, Node::Fill { id: 0, children: vec![code] }];
         let item = |text| Node::Item { id: PROBLEM, text, detail: "".into(), selected: false };
@@ -182,9 +171,10 @@ impl View for Studio {
 /// `text`'s highlight as at most [`MAX_SPANS`] wire spans, with `mark` (if
 /// non-empty and on char boundaries) an error over whatever it covers.
 pub(crate) fn spans(text: &str, mark: Option<Span>) -> Vec<uiwire::Span> {
-    let ok = |m: &Span| m.start < m.end && text.get(m.start..m.end).is_some();
-    let mark = mark.filter(ok);
-    let mut out = Vec::new();
+    let mark = mark.filter(|m| m.start < m.end && text.get(m.start..m.end).is_some());
+    // No mark is one past every token, and puts nothing.
+    let (ms, me) = mark.map_or((usize::MAX, usize::MAX), |m| (m.start, m.end));
+    let (mut out, mut marked) = (Vec::new(), false);
     let mut put = |start: usize, end: usize, class| {
         if start < end && out.len() < MAX_SPANS {
             // Both fit: the text is at most MAX_TEXT bytes.
@@ -192,27 +182,20 @@ pub(crate) fn spans(text: &str, mark: Option<Span>) -> Vec<uiwire::Span> {
             out.push(uiwire::Span { start, len, class });
         }
     };
-    let mut marked = false;
     use uiwire::Class as W;
     // applang's classes, in their order.
     const WIRE: [W; 7] =
         [W::Keyword, W::String, W::Number, W::Comment, W::Name, W::Punct, W::Error];
+    // Each token before the mark, then (once) the mark, then the token after it.
     for (s, class) in applang::highlight(text) {
-        let class = WIRE[class as usize];
-        match mark {
-            // Before the mark, after it, or cut around it.
-            Some(m) if s.end > m.start => {
-                put(s.start, s.end.min(m.start), class);
-                if !std::mem::replace(&mut marked, true) {
-                    put(m.start, m.end, uiwire::Class::Error);
-                }
-                put(s.start.max(m.end), s.end, class);
-            }
-            _ => put(s.start, s.end, class),
+        put(s.start, s.end.min(ms), WIRE[class as usize]);
+        if s.end > ms && !std::mem::replace(&mut marked, true) {
+            put(ms, me, W::Error);
         }
+        put(s.start.max(me), s.end, WIRE[class as usize]);
     }
-    if let Some(m) = mark.filter(|_| !marked) {
-        put(m.start, m.end, uiwire::Class::Error);
+    if !marked {
+        put(ms, me, W::Error);
     }
     out
 }

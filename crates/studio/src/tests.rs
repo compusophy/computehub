@@ -1,10 +1,7 @@
-use std::collections::BTreeMap;
-
-use uiwire::{Class, Key, Node, Request, Style, Variant, mods};
-
 use super::*;
-use crate::edit::spans;
-use crate::run::{EDIT, INPUT, TOO_BIG, text};
+use crate::{edit::spans, run::*};
+use std::collections::BTreeMap;
+use uiwire::{Class, Key, Node, Request, Style, Variant, mods};
 
 /// A disk in memory. Writes under `/ro/` fail, and so do reads under `/bad/`.
 type Mem = BTreeMap<String, String>;
@@ -16,7 +13,6 @@ impl Disk for Mem {
         }
         self.get(path).cloned().ok_or_else(|| io::Error::new(ErrorKind::NotFound, "no such file"))
     }
-
     fn write(&mut self, path: &str, text: &str) -> io::Result<()> {
         if path.starts_with("/ro/") {
             return Err(io::Error::new(ErrorKind::PermissionDenied, "read-only"));
@@ -24,7 +20,6 @@ impl Disk for Mem {
         self.insert(path.into(), text.into());
         Ok(())
     }
-
     fn exists(&mut self, path: &str) -> bool {
         self.contains_key(path)
     }
@@ -34,7 +29,6 @@ impl Disk for Mem {
 fn with(files: &[(&str, &str)]) -> Mem {
     SAMPLES.iter().chain(files).map(|(p, s)| (p.to_string(), s.to_string())).collect()
 }
-
 /// The events device: one event per read, then the end.
 fn feed(events: Vec<Vec<u8>>) -> impl Read {
     let none: Box<dyn Read> = Box::new(io::empty());
@@ -49,7 +43,6 @@ impl Write for Sink<'_> {
         self.0.push(bytes.to_vec());
         Ok(bytes.len())
     }
-
     fn flush(&mut self) -> io::Result<()> {
         Ok(())
     }
@@ -65,16 +58,13 @@ impl Win {
     fn new(args: &[&str], disk: Mem) -> Win {
         Win { view: view(&strings(args)).expect("a view"), disk }
     }
-
     /// Serves `events` over in-memory pipes, one per read; the frames sent.
     fn raw(&mut self, events: Vec<Vec<u8>>) -> Vec<Frame> {
         let mut sent = Vec::new();
         let mut ui = Client::new(feed(events), Sink(&mut sent));
         serve(&mut ui, self.view.as_mut(), &mut self.disk).unwrap();
-        drop(ui);
         sent.iter().map(|f| Frame::decode(f).expect("a frame that decodes")).collect()
     }
-
     /// One event; the frame it brought, if any.
     fn send(&mut self, ev: Event) -> Option<Frame> {
         let mut frames = self.raw(vec![ev.encode()]);
@@ -86,25 +76,19 @@ impl Win {
 fn strings(args: &[&str]) -> Vec<String> {
     args.iter().map(|a| a.to_string()).collect()
 }
-
 const RESIZE: Event = Event::Resize { w: 640, h: 480 };
-
 fn click(id: u32) -> Event {
     Event::Click { id }
 }
-
 fn change(id: u32, version: u32, text: &str) -> Event {
     Event::Change { id, version, text: text.into() }
 }
-
 fn key(key: Key, mods: u8, ch: char) -> Event {
     Event::Key { id: 4, key, mods, ch }
 }
-
 fn open(name: &str) -> Vec<Request> {
     vec![Request::Open { name: name.into() }]
 }
-
 /// Every Text's text, in order.
 fn texts(nodes: &[Node]) -> Vec<String> {
     let each = |n: &Node| match n {
@@ -113,12 +97,10 @@ fn texts(nodes: &[Node]) -> Vec<String> {
     };
     nodes.iter().flat_map(each).collect()
 }
-
 /// Studio's toolbar note.
 fn note(f: &Frame) -> String {
     texts(f.nodes[0].children()).concat()
 }
-
 /// Studio's Code node: version, text and spans.
 fn code(f: &Frame) -> (u32, &str, &[uiwire::Span]) {
     let Node::Code { version, text, spans, .. } = &f.nodes[1].children()[0] else {
@@ -126,7 +108,6 @@ fn code(f: &Frame) -> (u32, &str, &[uiwire::Span]) {
     };
     (*version, text, spans)
 }
-
 /// The problem rows under Studio's editor.
 fn problems(f: &Frame) -> Vec<&str> {
     let rows = f.nodes.iter().filter_map(|n| match n {
@@ -135,7 +116,6 @@ fn problems(f: &Frame) -> Vec<&str> {
     });
     rows.collect()
 }
-
 fn classes<'t>(text: &'t str, spans: &[uiwire::Span]) -> Vec<(&'t str, Class)> {
     let at = |s: &uiwire::Span| &text[s.start as usize..(s.start + s.len) as usize];
     spans.iter().map(|s| (at(s), s.class)).collect()
@@ -147,13 +127,11 @@ fn samples_compile_and_arguments_pick_the_view() {
         assert!(applang::compile(src).is_ok(), "{path}");
     }
     assert_eq!(SAMPLES[0].0, DEFAULT_FILE);
-    let titles: [(&[&str], &str); 5] = [
-        (&[], "Studio — counter.app"),
+    #[rustfmt::skip]
+    let titles: [(&[&str], &str); 5] = [(&[], "Studio — counter.app"),
         (&["edit", "/apps/greeter.app"], "Studio — greeter.app"),
         (&["edit", "clicker.app"], "Studio — clicker.app"),
-        (&["run", "/apps/clicker.app"], "clicker.app"),
-        (&["run", "x/studio.app"], "studio.app"),
-    ];
+        (&["run", "/apps/clicker.app"], "clicker.app"), (&["run", "x/studio.app"], "studio.app")];
     for (args, title) in titles {
         let f = Win::new(args, with(&[])).send(RESIZE).expect("a first frame");
         assert_eq!(f.title, title, "{args:?}");
@@ -207,19 +185,15 @@ fn studio_highlights_follows_edits_and_marks_problems() {
     assert!(problem.starts_with("E0302 3:7 "), "{problem}");
     assert_eq!(note(&f), "/apps/bad.app · did not compile");
     let (_, src, spans) = code(&f);
-    assert_eq!(classes(src, spans).last(), Some(&(";", Class::Punct)));
-    assert_eq!(classes(src, spans).iter().rev().nth(1), Some(&("nope", Class::Error)));
+    assert!(classes(src, spans).ends_with(&[("nope", Class::Error), (";", Class::Punct)]));
     // An edit takes the underline away at once; the problem stays until the next Run.
     let fixed = "state count = 0;\nlabel count;\nlabel count;";
     let f = w.send(change(4, 2, fixed)).unwrap();
-    assert!(code(&f).2.iter().all(|s| s.class != Class::Error));
-    assert_eq!(problems(&f).len(), 1);
+    assert!(code(&f).2.iter().all(|s| s.class != Class::Error) && problems(&f).len() == 1);
     // Ctrl+Enter: compiled, saved, then opened in a window.
     let f = w.send(key(Key::Enter, mods::CTRL, '\0')).unwrap();
-    assert_eq!(f.requests, open("/apps/bad.app"));
-    assert_eq!(w.disk["/apps/bad.app"], fixed);
-    assert!(problems(&f).is_empty());
-    assert_eq!(note(&f), "/apps/bad.app · saved and running");
+    assert_eq!((&f.requests, &w.disk["/apps/bad.app"][..]), (&open("/apps/bad.app"), fixed));
+    assert!(problems(&f).is_empty() && note(&f) == "/apps/bad.app · saved and running");
     // Columns count chars, not bytes; the lexer's error shows as typed.
     let f = w.send(change(4, 3, "label 1;\nlabel \"é\" $;")).unwrap();
     assert!(code(&f).2.contains(&uiwire::Span { start: 20, len: 1, class: Class::Error }));
@@ -245,8 +219,7 @@ fn keys_save_new_makes_untitled_apps_and_stale_text_is_never_saved() {
     assert_eq!(w.send(click(3)).unwrap().requests, open("studio:/apps/untitled-2.app"));
     // A save that fails says why and leaves the file modified; so does Run.
     let mut w = Win::new(&["edit", "/ro/x.app"], with(&[]));
-    w.send(change(4, 2, "label 1;"));
-    let f = w.send(click(2)).unwrap();
+    let f = (w.send(change(4, 2, "label 1;")), w.send(click(2)).unwrap()).1;
     assert_eq!(note(&f), "/ro/x.app (modified) · save failed: read-only");
     assert!(w.send(click(1)).unwrap().requests.is_empty());
     // Save and Run stay off while the text may be stale.
@@ -262,8 +235,7 @@ fn keys_save_new_makes_untitled_apps_and_stale_text_is_never_saved() {
     assert!(note(&f).ends_with("not saved: an edit was lost; edit again to send it"));
     assert_eq!(w.disk[DEFAULT_FILE], SAMPLES[0].1);
     // The next edit brings them back; one too big for a frame is lost.
-    w.send(change(4, 5, "label 5;"));
-    w.send(click(2));
+    let _ = (w.send(change(4, 5, "label 5;")), w.send(click(2)));
     assert_eq!(w.disk[DEFAULT_FILE], "label 5;");
     let big = "x".repeat(MAX_TEXT + 1);
     let f = w.send(change(4, 6, &big)).unwrap();
@@ -303,9 +275,8 @@ fn host_clicks_and_inputs_reach_the_app_and_serve_frames_until_close() {
     assert!(texts(&f.nodes)[2].starts_with("E0213 "), "{:?}", f.nodes);
     // Inputs round-trip.
     let mut w = Win::new(&["run", "/apps/greeter.app"], with(&[]));
-    let f = w.send(RESIZE).unwrap();
     let field = Node::Input { id: INPUT, value: String::new(), placeholder: "name".into() };
-    assert_eq!(f.nodes[1], field);
+    assert_eq!(w.send(RESIZE).unwrap().nodes[1], field);
     let f = w.send(change(INPUT, 3, "Ada")).unwrap();
     assert_eq!(texts(&f.nodes), ["What is your name?", "Hello, Ada!"]);
     assert!(matches!(&f.nodes[1], Node::Input { value, .. } if value == "Ada"));
@@ -331,8 +302,7 @@ fn host_shows_faults_files_that_cannot_run_and_renders_too_big() {
     let src = "state n = 0;\nlabel \"n = \" + n;\nbutton \"inc\" { n = n + 1; }\n\
                button \"spin\" { repeat 1000000 { n = n + 1; } }";
     let mut w = Win::new(&["run", "/apps/spin.app"], with(&[("/apps/spin.app", src)]));
-    w.send(click(1));
-    let f = w.send(click(2)).unwrap();
+    let f = (w.send(click(1)), w.send(click(2)).unwrap()).1;
     let Some(Node::Text { style: Style::Error, text: fault, .. }) = f.nodes.last() else {
         panic!("{:?}", f.nodes)
     };
@@ -399,8 +369,7 @@ fn spans_cut_tokens_around_the_mark_and_fs_reads_back() {
     let dir = std::env::temp_dir().join(format!("compusophy-studio-{}", std::process::id()));
     let file = dir.join("a").join("b.app");
     let path = file.to_str().unwrap();
-    assert!(!Fs.exists(path));
-    Fs.write(path, "label 1;").unwrap();
+    assert!(!Fs.exists(path) && Fs.write(path, "label 1;").is_ok());
     assert!(Fs.exists(path) && Fs.read(path).unwrap() == "label 1;");
     std::fs::write(path, b"\xff1").unwrap();
     assert_eq!(Fs.read(path).unwrap(), "\u{fffd}1");

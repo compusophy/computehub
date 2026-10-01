@@ -134,15 +134,15 @@ impl Kernel {
         if self.procs.iter().filter(|p| p.status.is_none()).count() >= wire::MAX_PROCS {
             return Err("too many programs are running");
         }
-        let (pid, argv0) = (self.last_pid.max(wire::HOME_PID) + 1, s.argv.first().cloned());
-        let (tty, stdout, cwd, roots, argv) = (s.tty, s.stdout, s.cwd, s.roots, s.argv);
+        let Spawn { argv, program, cwd, tty, stdout, roots } = s;
+        let (pid, argv0) = (self.last_pid.max(wire::HOME_PID) + 1, argv.first().cloned());
         let (role, env) = (wire::Role::Process, vec![]);
         let st = wire::Start { role, pid, tty, stdout, cwd, roots, argv, env };
         let msg = st.encode();
         if msg.len() > wire::MAX_START {
             return Err("argument list too long");
         }
-        let (owner, argv0, start) = (self.owner, argv0.unwrap_or_default(), Some((msg, s.program)));
+        let (owner, argv0, start) = (self.owner, argv0.unwrap_or_default(), Some((msg, program)));
         let roots = st.roots;
         self.procs.push(Process { pid, owner, argv0, start, roots, ..Process::default() });
         self.last_pid = pid;
@@ -214,11 +214,9 @@ impl Kernel {
 
     /// The console of `pid` is now `cols` x `rows`: stored in its SAB.
     pub fn resize(&mut self, pid: u32, cols: u16, rows: u16) {
-        if self.find(pid, true).is_some() {
-            for (index, n) in [(wire::COLS, cols), (wire::ROWS, rows)] {
-                self.effects.push(Effect::Word { pid, index, value: n.into() });
-            }
-        }
+        let runs = self.find(pid, true).is_some();
+        let words = [(wire::COLS, cols), (wire::ROWS, rows)].into_iter().filter(|_| runs);
+        self.effects.extend(words.map(|(index, n)| Effect::Word { pid, index, value: n.into() }));
     }
 
     /// The console output of `pid` so far, leaving none.
@@ -233,10 +231,8 @@ impl Kernel {
 
     /// The exit status of `pid` once it ended, once; then the pid is gone.
     pub fn reap(&mut self, pid: u32) -> Option<i32> {
-        let i = self.find(pid, false)?;
-        let status = self.procs[i].status?;
-        self.procs.remove(i);
-        Some(status)
+        let i = self.find(pid, false).filter(|&i| self.procs[i].status.is_some())?;
+        self.procs.remove(i).status
     }
 
     /// Every process not yet reaped, in pid order: pid, argv\[0\], whether it still runs.

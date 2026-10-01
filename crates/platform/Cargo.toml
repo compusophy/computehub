@@ -16,6 +16,8 @@ compusophy-gfx.workspace = true
 wasm-bindgen.workspace = true
 js-sys.workspace = true
 web-sys = { workspace = true, features = [
+    "AbortController",
+    "AbortSignal",
     "AddEventListenerOptions",
     "CompositionEvent",
     "CssStyleDeclaration",
@@ -36,6 +38,9 @@ web-sys = { workspace = true, features = [
     "Node",
     "Performance",
     "PointerEvent",
+    "ReadableStream",
+    "ReadableStreamDefaultReader",
+    "RequestInit",
     "Response",
     "Storage",
     "WebGl2RenderingContext",

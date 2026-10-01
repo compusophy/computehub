@@ -4,7 +4,8 @@
 //! cached, and unless `--plain` the page is cross-origin isolated, as
 //! deploy.sh makes it (programs need that). A path that could leave `<dir>`
 //! (a `.`, `..` or empty segment, a backslash or a drive colon) is a 404;
-//! paths are not percent-decoded, so `%2e` hides none.
+//! paths are not percent-decoded, so `%2e` hides none. `POST /mock/chat` is
+//! a mock AI provider for tests ([`sse`]).
 
 #![forbid(unsafe_code)]
 
@@ -49,15 +50,31 @@ fn fail(msg: &str) -> ! {
 /// Answers one request with `extra` headers, then closes the connection.
 fn handle(mut stream: TcpStream, root: &Path, extra: &str) -> io::Result<()> {
     stream.set_read_timeout(Some(Duration::from_secs(10)))?;
-    let mut reader = BufReader::new(stream.try_clone()?.take(16 * 1024));
-    let (mut line, mut header) = (String::new(), String::new());
+    let mut reader = BufReader::new(stream.try_clone()?.take(2 << 20));
+    let (mut line, mut header, mut len) = (String::new(), String::new(), 0);
     reader.read_line(&mut line)?;
-    // Skip the headers: nothing here depends on them.
+    // Of the headers only a body's length matters.
     while reader.read_line(&mut header)? > 0 && !header.trim_end().is_empty() {
+        if let Some(("content-length", n)) = header.to_ascii_lowercase().split_once(':') {
+            len = n.trim().parse().unwrap_or(0).min(1 << 20);
+        }
         header.clear();
     }
     let mut parts = line.split_whitespace();
     let (method, target) = (parts.next().unwrap_or(""), parts.next().unwrap_or(""));
+    if (method, target) == ("POST", "/mock/chat") {
+        let mut body = vec![0; len];
+        reader.read_exact(&mut body)?;
+        let head = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n";
+        write!(stream, "{head}{extra}\r\n")?;
+        // Uneven parts, apart in time: lines and characters split across reads.
+        for part in sse(&String::from_utf8_lossy(&body)).as_bytes().chunks(77) {
+            stream.write_all(part)?;
+            stream.flush()?;
+            thread::sleep(Duration::from_millis(20));
+        }
+        return Ok(());
+    }
     let head = method == "HEAD";
     let found = || resolve(root, target).and_then(|p| Some((mime(&p), fs::read(p).ok()?)));
     let (status, ty, body) = match (method == "GET" || head).then(found) {
@@ -90,20 +107,40 @@ fn resolve(root: &Path, target: &str) -> Option<PathBuf> {
     Some(out)
 }
 
-fn mime(path: &Path) -> &'static str {
-    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-    match ext.to_ascii_lowercase().as_str() {
-        "html" => "text/html; charset=utf-8",
-        "js" | "mjs" => "text/javascript; charset=utf-8",
-        "wasm" => "application/wasm",
-        "css" => "text/css; charset=utf-8",
-        "svg" => "image/svg+xml",
-        "png" => "image/png",
-        "ico" => "image/x-icon",
-        "json" => "application/json",
-        "txt" => "text/plain; charset=utf-8",
-        _ => "application/octet-stream",
+/// The mock's answer to a chat request `body`: chat.completion.chunk lines, a
+/// usage chunk and `[DONE]`. When the last message's content (else the body) says
+/// "app", a sentence and a fenced `app` block of Studio's counter, a line a
+/// chunk; else "Hello from the mock provider.", a word a chunk.
+fn sse(body: &str) -> String {
+    let last = body.rfind("\"content\"").map_or(body, |i| &body[i..]);
+    let pieces: Vec<&str> = if last.contains("app") {
+        let program = include_str!("../../../crates/studio/samples/counter.app");
+        let lines = program.split_inclusive('\n');
+        ["Here is a counter.\n\n", "```app\n"].into_iter().chain(lines).chain(["```\n"]).collect()
+    } else {
+        "Hello from the mock provider.".split_inclusive(' ').collect()
+    };
+    let head = r#"data: {"id":"mock","object":"chat.completion.chunk","created":0,"model":"mock","#;
+    let mut out = String::new();
+    for p in &pieces {
+        let p = p.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n");
+        out +=
+            &format!("{head}\"choices\":[{{\"index\":0,\"delta\":{{\"content\":\"{p}\"}}}}]}}\n\n");
     }
+    let usage =
+        format!("\"prompt_tokens\":{},\"completion_tokens\":{}", body.len() / 4, pieces.len());
+    out + &format!("{head}\"choices\":[],\"usage\":{{{usage}}}}}\n\ndata: [DONE]\n\n")
+}
+
+fn mime(path: &Path) -> &'static str {
+    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
+    #[rustfmt::skip]
+    let types = [("html", "text/html; charset=utf-8"), ("js", "text/javascript; charset=utf-8"),
+        ("mjs", "text/javascript; charset=utf-8"), ("wasm", "application/wasm"),
+        ("css", "text/css; charset=utf-8"), ("svg", "image/svg+xml"), ("png", "image/png"),
+        ("ico", "image/x-icon"), ("json", "application/json"),
+        ("txt", "text/plain; charset=utf-8")];
+    types.iter().find(|t| t.0 == ext).map_or("application/octet-stream", |t| t.1)
 }
 
 #[test]
@@ -127,4 +164,14 @@ fn responses_isolate_the_page() {
     assert_eq!(lines[0], "Cross-Origin-Opener-Policy: same-origin");
     assert_eq!(lines[1], "Cross-Origin-Embedder-Policy: require-corp");
     assert_eq!(lines[2..], ["Cross-Origin-Resource-Policy: same-origin"]);
+}
+
+#[test]
+fn the_mock_streams_hello_or_an_app() {
+    let hi = sse(r#"[{"role":"system","content":"apps"},{"role":"user","content":"hi"}]"#);
+    let lines: Vec<&str> = hi.split_terminator("\n\n").collect();
+    assert!(lines[0].ends_with(r#""choices":[{"index":0,"delta":{"content":"Hello "}}]}"#));
+    assert!(lines.len() == 7 && lines[5].contains(r#""usage":{"#) && lines[6] == "data: [DONE]");
+    let app = sse(r#"[{"role":"user","content":"a counter app"}]"#);
+    assert!(app.contains(r#":"```app\n"}"#) && app.contains(r#":"label \"Counter\";\n"}"#));
 }

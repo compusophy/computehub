@@ -1,6 +1,5 @@
-//! The code editor widget: text its owner edits in an [`Editor`], drawn in
-//! Mono with a line-number gutter, a caret and highlight spans in the theme's
-//! colors.
+//! The code editor widget: text its owner edits in an [`Editor`], drawn in Mono with a line-number
+//! gutter, a caret and highlight spans in the theme's colors.
 
 use gfx::RectF;
 use text::Editor;
@@ -14,9 +13,8 @@ pub const CODE_MAX: usize = 65_000;
 /// Space between the well and its text.
 const INSET: f32 = 6.0;
 
-/// A highlighted byte range of a [`Code`]'s text: start, length and class
-/// (0 plain, 1 keyword, 2 string, 3 number, 4 comment, 5 name, 6
-/// punctuation, 7 error, underlined).
+/// A highlighted byte range of a [`Code`]'s text: start, length and class (0 plain, 1 keyword, 2
+/// string, 3 number, 4 comment, 5 name, 6 punctuation, 7 error, underlined).
 pub type Span = (u32, u32, u8);
 /// A colored byte range of one line: start, end and class.
 type Run = (usize, usize, u8);
@@ -32,11 +30,10 @@ struct Geo {
     rows: usize,
 }
 
-/// A multi-line code editor. Arrows, Home, End, Page Up and Down move the
-/// caret; Enter keeps the indent, Tab types two spaces; a press places the
-/// caret and the wheel scrolls whole rows, taking the caret along. Each
-/// edit adds one to `version`. Spans color the text they were set for:
-/// after an edit, each line keeps its colors while its text is unchanged.
+/// A multi-line code editor. Arrows, Home, End, Page Up and Down move the caret; Enter keeps the
+/// indent, Tab types two spaces; a press places the caret and the wheel scrolls whole rows, taking
+/// the caret along. Each edit adds one to `version`. Spans color the text they were set for: after
+/// an edit, each line keeps its colors while its text is unchanged.
 #[derive(Clone, Debug, Default)]
 pub struct Code {
     pub ed: Editor,
@@ -170,9 +167,8 @@ impl Code {
         same(Some(i)).or_else(|| same(i.checked_add_signed(shift))).map_or(&[], |m| &m.1)
     }
 
-    /// Draws the editor filling `rect`: a well, the gutter (with
-    /// `numbers`), the colored text, and the caret if `focus`; a
-    /// [`Sense::Text`] hit for `id`. Scrolls to keep the caret in view.
+    /// Draws the editor filling `rect`: a well, the gutter (with `numbers`), the colored text, and
+    /// the caret if `focus`; a [`Sense::Text`] hit for `id`. Scrolls to keep the caret in view.
     pub fn draw(&mut self, ui: &mut Ui<'_>, id: WidgetId, rect: RectF, numbers: bool, focus: bool) {
         let (t, line_px, mono) = (ui.theme(), ui.px(1.0), ui.theme().mono());
         let ts = ui.text_system();

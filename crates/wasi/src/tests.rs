@@ -50,9 +50,6 @@ impl Host for Fake {
         }
         reply.unwrap_or((wire::EAGAIN, vec![]))
     }
-    fn post(&mut self, _: &[u8]) {
-        unreachable!("Proc posts nothing")
-    }
     fn console(&mut self, bytes: &[u8]) {
         self.out.push(bytes.to_vec());
     }
@@ -90,7 +87,6 @@ impl T {
     fn new(tty: Option<(u16, u16)>, env: &[&str]) -> T {
         T::with(Vfs::new(), start(tty, env))
     }
-
     /// Process `s` on `fs`, the kernel's side past its READY.
     fn with(fs: Vfs, s: Start) -> T {
         let (argv, cwd, tty, stdout) = (s.argv.clone(), s.cwd.clone(), s.tty, s.stdout.clone());
@@ -102,45 +98,37 @@ impl T {
         h.k.take_effects();
         T { p: Proc::new(&s, &mut h).unwrap(), m: vec![0; MEM as usize], h }
     }
-
     /// The errno of `f(a)`; panics on an exit.
     fn ok(&mut self, f: usize, a: &[u64]) -> u16 {
         self.p.call(f, a, &mut self.m, &mut self.h).unwrap()
     }
-
     /// The little-endian number in the `n` bytes at `at`.
     fn num(&self, at: usize, n: usize) -> u64 {
         self.m[at..][..n].iter().rev().fold(0, |v, &b| (v << 8) | u64::from(b))
     }
-
     fn put(&mut self, at: u64, b: &[u8]) {
         self.m[at as usize..][..b.len()].copy_from_slice(b);
     }
-
     /// The `n` bytes at [`BUF`].
     fn got(&self, n: usize) -> Vec<u8> {
         self.m[BUF as usize..][..n].to_vec()
     }
-
     /// path_open of `path` from directory fd `dir`: the new fd, or the errno.
     fn open(&mut self, dir: u64, path: &str, oflags: u64, fdflags: u64) -> Result<u64, u16> {
         self.put(PATH, path.as_bytes());
         let e = self.ok(PATH_OPEN, &[dir, 0, PATH, path.len() as u64, oflags, 0, 0, fdflags, 60]);
         if e == 0 { Ok(self.num(60, 4)) } else { Err(e) }
     }
-
     /// A call `f(dir, path, len)`: path_create_directory, _remove_directory or _unlink_file.
     fn at(&mut self, f: usize, dir: u64, path: &str) -> u16 {
         self.put(PATH, path.as_bytes());
         self.ok(f, &[dir, PATH, path.len() as u64])
     }
-
     /// fd_read/write (or pread/pwrite at `off`) of one iovec, `n` bytes at [`BUF`]: errno, count.
     fn io(&mut self, f: usize, fd: u64, n: u64, off: &[u64]) -> (u16, u64) {
         self.put(0, &[BUF as u32, n as u32].map(u32::to_le_bytes).concat());
         (self.ok(f, &[&[fd, 0, 1][..], off, &[64]].concat()), self.num(64, 4))
     }
-
     /// The dirents fd_readdir puts at [`BUF`] from `cookie`, in `len` bytes:
     /// `(d_next, d_ino, d_type, name)`, less a cut last one; and bufused.
     fn readdir(&mut self, fd: u64, len: u64, cookie: u64) -> (Vec<(u64, u64, u8, String)>, u64) {
@@ -153,7 +141,6 @@ impl T {
         };
         (core::iter::from_fn(&mut entry).collect(), used)
     }
-
     /// Checks that `sizes` and `get` copy out exactly `want`: count and
     /// size, the C strings back to back at 4096, their addresses at 64.
     fn strings(&mut self, sizes: usize, get: usize, want: &[&str]) {
@@ -237,8 +224,7 @@ fn the_console_is_a_tty_only_with_one_and_takes_writes_unless_stdout_is_a_file()
         assert_eq!(bad, [EBADF, EFAULT]);
     }
     let mut t = T::new(Some((80, 24)), &[]);
-    t.put(1000, b"hello");
-    t.put(2000, b" 42");
+    let _ = (t.put(1000, b"hello"), t.put(2000, b" 42"));
     t.put(0, &[1000, 5, u32::MAX, 0, 2000, 3].map(u32::to_le_bytes).concat());
     for fd in [1, 2, 0] {
         assert_eq!((t.ok(FD_WRITE, &[fd, 0, 3, 64]), t.num(64, 4)), (0, 8));
@@ -368,8 +354,7 @@ fn paths_resolve_lexically_from_their_directory_and_change_the_tree() {
     t.h.fs.write("/tmp/d/f", b"f").unwrap();
     // The path at PATH from fd 3 (/tmp), to the one at PATH + 64 from fd 5 (/home).
     let rename = |t: &mut T, from: &str, to: &str| {
-        t.put(PATH, from.as_bytes());
-        t.put(PATH + 64, to.as_bytes());
+        let _ = (t.put(PATH, from.as_bytes()), t.put(PATH + 64, to.as_bytes()));
         t.ok(PATH_RENAME, &[3, PATH, from.len() as u64, 5, PATH + 64, to.len() as u64])
     };
     assert_eq!((rename(&mut t, "d", "guest/d2"), rename(&mut t, "d", "x")), (0, ENOENT));
@@ -451,8 +436,7 @@ fn dev_holds_null_tty_winsize_draw_and_events() {
     assert_eq!(t.io(FD_READ, size, 9, &[]), (0, 0));
     assert_eq!((t.ok(FD_FILESTAT_GET, &[size, 256]), t.num(272, 1), t.num(288, 8)), (0, 2, 0));
     // A write to /dev/draw is one DRAW of the whole frame, at most 1 MiB.
-    t.put(BUF, b"fr");
-    t.put(BUF + 100, b"ame");
+    let _ = (t.put(BUF, b"fr"), t.put(BUF + 100, b"ame"));
     t.put(0, &[BUF as u32, 2, BUF as u32 + 100, 3].map(u32::to_le_bytes).concat());
     assert_eq!((t.ok(FD_WRITE, &[draw, 0, 2, 64]), t.num(64, 4)), (0, 5));
     assert_eq!(t.h.frames, [b"frame".to_vec()]);
@@ -460,8 +444,7 @@ fn dev_holds_null_tty_winsize_draw_and_events() {
     assert_eq!(t.ok(FD_WRITE, &[draw, 0, 1, 64]), E2BIG);
     assert_eq!([t.io(FD_READ, draw, 1, &[]).0, t.io(FD_PWRITE, draw, 1, &[0]).0], [EBADF, ESPIPE]);
     // A read takes one event; a part the guest did not take waits in the worker.
-    t.h.k.post_event(t.h.pid, b"abcdef");
-    t.h.k.post_event(t.h.pid, b"gh");
+    let _ = (t.h.k.post_event(t.h.pid, b"abcdef"), t.h.k.post_event(t.h.pid, b"gh"));
     t.h.ops.clear();
     assert_eq!((t.io(FD_READ, events, 4, &[]), t.got(4)), ((0, 4), b"abcd".to_vec()));
     assert_eq!((t.io(FD_READ, events, 0, &[]), t.io(FD_WRITE, events, 1, &[]).0), ((0, 0), EBADF));

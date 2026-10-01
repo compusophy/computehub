@@ -1,18 +1,16 @@
 //! Deterministic floating window manager for compusophyOS.
 //!
-//! [`Wm`] owns window geometry, stacking and focus, nothing else: no rendering,
-//! clocks, floats or hash-ordered collections. [`Wm::apply`] is the only
-//! mutator; the compositor draws [`Wm::layout`] bottom to top.
+//! [`Wm`] owns window geometry, stacking and focus, nothing else: no rendering, clocks, floats or
+//! hash-ordered collections. [`Wm::apply`] is the only mutator; the compositor draws
+//! [`Wm::layout`] bottom to top.
 //!
-//! Each window has a *normal rect* (its free geometry, which [`Cmd::Restore`]
-//! returns to) and a mode: free, snapped ([`Snap`]) or maximized; snapped and
-//! maximized rects derive from the area. The stack holds the visible windows
-//! bottom to top, and its top is focused. Ids start at 1 and are never reused.
-//! Normal rects are at least [`MIN_W`] x [`MIN_H`], at most the area's size
-//! where it is larger, keep [`VISIBLE_W`] px of width and the top edge inside
-//! the area. All math is integer on inputs clamped to [`MAX_COORD`], so nothing
-//! overflows; an error changes nothing; replaying the same commands on a
-//! `Wm::new` of the same area reproduces [`Wm::state_hash`].
+//! Each window has a *normal rect* (its free geometry, which [`Cmd::Restore`] returns to) and a
+//! mode: free, snapped ([`Snap`]) or maximized; snapped and maximized rects derive from the area.
+//! The stack holds the visible windows bottom to top, and its top is focused. Ids start at 1 and
+//! are never reused. Normal rects are at least [`MIN_W`] x [`MIN_H`], at most the area's size
+//! where it is larger, keep [`VISIBLE_W`] px of width and the top edge inside the area. All math
+//! is integer on inputs clamped to [`MAX_COORD`], so nothing overflows; an error changes nothing;
+//! replaying the same commands on a `Wm::new` of the same area reproduces [`Wm::state_hash`].
 
 #![forbid(unsafe_code)]
 
@@ -100,11 +98,10 @@ impl Snap {
 /// command restacks a visible window unless it says so.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Cmd {
-    /// Open a window, focused on top, [`CASCADE`] px right of and below the
-    /// focused window's top-left; where that crosses the area's right or bottom
-    /// edge, at the area's top-left plus `CASCADE`; centered if no window is
-    /// visible or neither fits. Each side of `size` (by default two thirds of
-    /// the area's) is clamped to the minimum and the area.
+    /// Open a window, focused on top, [`CASCADE`] px right of and below the focused window's
+    /// top-left; where that crosses the area's right or bottom edge, at the area's top-left plus
+    /// `CASCADE`; centered if no window is visible or neither fits. Each side of `size` (by
+    /// default two thirds of the area's) is clamped to the minimum and the area.
     Open { size: Option<(i32, i32)> },
     /// Close a window. If it was focused, the new top of the stack is.
     Close(WinId),
@@ -145,16 +142,14 @@ pub enum Outcome {
     Noop,
 }
 
-/// Why [`Wm::apply`] refused a command (no open window has this id); the
-/// state is left untouched.
+/// Why [`Wm::apply`] refused a command (no open window has this id); the state is untouched.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WmError {
     UnknownWindow(WinId),
 }
 
-/// Where one visible window goes: `rect` is the area when maximized, the snap's
-/// part of it when snapped, else the normal rect; `state` is never `Minimized`;
-/// `focused` holds for the top window only.
+/// Where one visible window goes: `rect` is the area when maximized, the snap's part of it when
+/// snapped, else the normal rect; `state` is never `Minimized`; `focused` holds for the top only.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Placement {
     pub win: WinId,
@@ -178,10 +173,9 @@ struct Win {
     mode: Mode,
 }
 
-/// A normal rect for normalized `r` in `a`: each side clamped to at least the
-/// minimum and at most the area (the minimum wins), then moved the least that
-/// keeps `VISIBLE_W` x `TITLE_H` of it inside, or, if `whole`, all of it that
-/// fits. The top edge never leaves the area's top.
+/// A normal rect for normalized `r` in `a`: each side clamped to at least the minimum and at most
+/// the area (the minimum wins), then moved the least that keeps `VISIBLE_W` x `TITLE_H` of it
+/// inside, or, if `whole`, all of it that fits. The top edge never leaves the area's top.
 fn fit(r: Rect, a: Rect, whole: bool) -> Rect {
     let (w, h) = (r.w.clamp(MIN_W, MIN_W.max(a.w)), r.h.clamp(MIN_H, MIN_H.max(a.h)));
     let (vw, vh) = if whole { (w.min(a.w), h.min(a.h)) } else { (0, 0) };
@@ -223,8 +217,7 @@ impl Wm {
                 true
             }
             Cmd::Focus(win) => {
-                self.index(win)?;
-                let raised = self.focused() != Some(win);
+                let raised = self.index(win).map(|_| self.focused() != Some(win))?;
                 self.hide(win);
                 self.stack.push(win);
                 raised
@@ -243,10 +236,7 @@ impl Wm {
                 let max = self.wins[self.index(win)?].mode == Mode::Max;
                 self.set_mode(win, if max { Mode::Free } else { Mode::Max })?
             }
-            Cmd::Minimize(win) => {
-                self.index(win)?;
-                self.hide(win)
-            }
+            Cmd::Minimize(win) => self.index(win).map(|_| self.hide(win))?,
             Cmd::SnapTo { win, snap } => self.set_mode(win, Mode::Snapped(snap))?,
             Cmd::FocusNext | Cmd::FocusPrev => {
                 let n = self.stack.len();
@@ -266,8 +256,7 @@ impl Wm {
         Ok(if changed { Outcome::Changed } else { Outcome::Noop })
     }
 
-    /// The visible windows bottom to top, as the compositor draws them; the
-    /// last one is focused.
+    /// The visible windows bottom to top, as the compositor draws them; the last one is focused.
     pub fn layout(&self) -> Vec<Placement> {
         let top = self.focused();
         let place = |w: &Win| {
@@ -338,11 +327,10 @@ impl Wm {
         self.index(win).ok().map(|i| &self.wins[i])
     }
 
-    /// Takes `win` off the stack; whether it was on it.
+    /// Takes `win` off the stack (it is there at most once); whether it was on it.
     fn hide(&mut self, win: WinId) -> bool {
-        let n = self.stack.len();
-        self.stack.retain(|&s| s != win);
-        self.stack.len() != n
+        let at = self.stack.iter().position(|&s| s == win);
+        at.map(|i| self.stack.remove(i)).is_some()
     }
 
     /// Frees window `i` at the normal rect `fit` makes of `r`.
@@ -357,16 +345,12 @@ impl Wm {
         let i = self.index(win)?;
         let changed = mem::replace(&mut self.wins[i].mode, mode) != mode;
         let shown = !self.stack.contains(&win);
-        if shown {
-            self.stack.push(win);
-        }
+        self.stack.extend(shown.then_some(win));
         Ok(changed || shown)
     }
 
     fn open(&mut self, size: Option<(i32, i32)>) -> Outcome {
-        let Some(next) = self.next.checked_add(1) else {
-            return Outcome::Noop;
-        };
+        let Some(next) = self.next.checked_add(1) else { return Outcome::Noop };
         let id = WinId(mem::replace(&mut self.next, next));
         let a = self.area;
         // a.w and a.h are at most MAX_COORD, so doubling them cannot overflow.

@@ -1,15 +1,10 @@
 use crate::{js::span, link::trim, link::wasi, sys::*};
-use wasi::{ARITY, FD_WRITE, NAMES, PROC_EXIT};
+use wasi::{ARITY, FD_WRITE};
 
 #[test]
-fn the_46_exports_link_by_wasi_id_and_arity_and_trap_text_is_trimmed() {
-    let mut seen = [false; 46];
-    for (id, name, arity) in EXPORTS.into_iter().chain([(PROC_EXIT, "proc_exit", 1)]) {
-        assert_eq!((NAMES[id], ARITY[id], seen[id]), (name, arity, false));
-        seen[id] = true;
-    }
+fn the_exports_pad_their_calls_and_link_by_wasi_name_and_trap_text_is_trimmed() {
     // Each pads its call to `crate::sys` to nine; before Start every call is ENOSYS.
-    assert!(seen.iter().all(|s| *s) && ARITY.iter().max() == Some(&9));
+    assert_eq!(ARITY.iter().max(), Some(&9));
     let calls = [fd_write(1, 8, 1, 16), path_open(3, 0, 64, 5, 1, 9, 0, 0, 72), sched_yield()];
     assert_eq!(calls, [kernel::wire::ENOSYS.into(); 3]);
     let p1 = "wasi_snapshot_preview1";

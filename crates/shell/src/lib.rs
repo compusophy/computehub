@@ -1,17 +1,15 @@
-//! The compusophyOS desktop: floating windows, a dock, a top bar and a
-//! launcher around a [`host::Host`], which runs one [`ui::App`] per window.
-//! No browser: [`Shell`] turns [`Input`] into wm commands and app events,
-//! draws into a [`gfx::DrawList`] and hands back what only the platform can
-//! do in a [`Response`].
+//! The compusophyOS desktop: floating windows, a dock, a top bar and a launcher around a
+//! [`host::Host`], which runs one [`ui::App`] per window. No browser: [`Shell`] turns [`Input`]
+//! into wm commands and app events, draws into a [`gfx::DrawList`] and hands back what only the
+//! platform can do in a [`Response`].
 //!
-//! Logical pixels, origin top-left; non-finite sizes and positions count as
-//! 0. Windows live in the work area, the screen below the [`BAR_H`] top bar
-//! less [`DOCK_CLEAR`] at the bottom, which every resize hands the wm; the
-//! windows' rects follow at once. The startup app (`welcome`, 680 x 480,
-//! centered, clamped to the work area) opens as soon as the work area is not
-//! empty: at [`Shell::new`] or at the first [`Input::Resize`] that makes it
-//! so. Bindings, pointer rules and motion are those of `DESIGN.md`. While
-//! anything moves, [`Shell::draw`] asks for the next frame; otherwise none.
+//! Logical pixels, origin top-left; non-finite sizes and positions count as 0. Windows live in the
+//! work area, the screen below the [`BAR_H`] top bar less [`DOCK_CLEAR`] at the bottom, which every
+//! resize hands the wm; the windows' rects follow at once. The startup app (`welcome`, 680 x 480,
+//! centered, clamped to the work area) opens as soon as the work area is not empty: at
+//! [`Shell::new`] or at the first [`Input::Resize`] that makes it so. Bindings, pointer rules and
+//! motion are those of `DESIGN.md`. While anything moves, [`Shell::draw`] asks for the next frame;
+//! otherwise none.
 
 #![forbid(unsafe_code)]
 
@@ -87,29 +85,14 @@ pub struct Shell {
 
 impl Shell {
     /// A desktop of `w` x `h` in the theme named `theme` (else the first).
+    #[rustfmt::skip]
     pub fn new(w: f32, h: f32, text: TextSystem, vfs: Vfs, reg: Registry, theme: &str) -> Shell {
         let size = (coord(w).max(0.0), coord(h).max(0.0));
-        let mut shell = Shell {
-            host: Host::new(Wm::new(work_area(size)), text, vfs, reg, theme),
-            pending: Vec::new(),
-            size,
-            pointer: None,
-            hover: None,
-            armed: None,
-            app_hover: None,
-            app_press: None,
-            grab: None,
-            last_title: None,
-            ime: None,
-            cursor: Cursor::Default,
-            clock: None,
-            dock: Vec::new(),
-            launcher: Default::default(),
-            motion: Default::default(),
-            instant: false,
-            startup: true,
-            scratch: DrawList::new(),
-        };
+        let host = Host::new(Wm::new(work_area(size)), text, vfs, reg, theme);
+        let mut shell = Shell { host, pending: Vec::new(), size, pointer: None, hover: None,
+            armed: None, app_hover: None, app_press: None, grab: None, last_title: None, ime: None,
+            cursor: Cursor::Default, clock: None, dock: Vec::new(), launcher: Default::default(),
+            motion: Default::default(), instant: false, startup: true, scratch: DrawList::new() };
         let mut out = Response::default();
         shell.start(&mut out);
         shell.settle(&mut out);
@@ -133,8 +116,7 @@ impl Shell {
         self.host.set_dpr(dpr);
     }
 
-    /// Sets the page clock (monotonic ms, if finite); call it before each
-    /// input and frame.
+    /// Sets the page clock (monotonic ms, if finite); call it before each input and frame.
     pub fn set_now(&mut self, now_ms: f64) {
         if now_ms.is_finite() {
             self.host.now_ms = now_ms;
@@ -148,6 +130,12 @@ impl Shell {
     /// The frame's clear color.
     pub fn clear_color(&self) -> Rgba {
         self.host.theme.current().base
+    }
+
+    /// The AI settings apps see (from the page's storage; never the key), and
+    /// whether the page is served from localhost (the mock provider shows).
+    pub fn set_ai(&mut self, ai: ui::AiStatus, localhost: bool) {
+        (self.host.ai, self.host.localhost) = (ai, localhost);
     }
 
     /// The kernel, for os to set up; its effects leave by [`Shell::take_effects`].
@@ -292,8 +280,7 @@ impl Shell {
         }
     }
 
-    /// Ends every event: settles, finds what is under the pointer, and fills
-    /// in the response.
+    /// Ends every event: settles, finds what is under the pointer, and fills in the response.
     fn finish(&mut self, before: Visuals, out: &mut Response) {
         self.settle(out);
         let under = self.pointer.and_then(|(x, y)| Some((self.hit(x, y)?, x, y)));

@@ -13,9 +13,9 @@
 #   system    dist/cpu/: the program worker (cpu.js, cpu_bg.wasm,
 #             worker.js), fetched when a program first runs or /home is
 #             restored. Cap 40 KB.
-#   programs  dist/bin/: the programs (toolbox.wasm, the test programs, and
-#             studio.wasm), each fetched when it first runs. Cap 64 KB per
-#             file: a program is downloaded on its own.
+#   programs  dist/bin/: the programs (toolbox.wasm, the test programs,
+#             studio.wasm and assistant.wasm), each fetched when it first
+#             runs. Cap 64 KB per file: a program is downloaded on its own.
 #   licenses  dist/licenses/: the font licenses, shipped but never fetched by
 #             the page. Not counted.
 #
