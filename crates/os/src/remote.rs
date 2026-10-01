@@ -10,6 +10,7 @@
 use std::mem;
 
 use gfx::RectF;
+use ui::icon::Glyph;
 use ui::kernel::{Spawn, wire::Stdout};
 use ui::{App, AppEvent, AppIcon, BUTTON_H, CARD_PAD, Code, Cx, FIELD_H, Key, Mods, PAD};
 use ui::{RADIUS_SM, Rgba, SPACING, Sense, TextStyle, TextSystem, Theme, Ui, WidgetId};
@@ -23,9 +24,9 @@ pub const STUDIO: &str = "/bin/studio";
 pub const ASSISTANT: &str = "/bin/assistant";
 pub const DEFAULT_FILE: &str = "/apps/counter.app";
 /// Studio's icon (braces on violet), and that of every `.app` it runs.
-pub const STUDIO_ICON: AppIcon = AppIcon { glyph: "{ }", hue: Rgba::hex(0x8b7bff) };
-pub const APP_ICON: AppIcon = AppIcon { glyph: "<>", hue: Rgba::hex(0xf59e0b) };
-pub const ASSISTANT_ICON: AppIcon = AppIcon { glyph: "AI", hue: Rgba::hex(0xa78bfa) };
+pub const STUDIO_ICON: AppIcon = AppIcon { glyph: Glyph::Studio, hue: Rgba::hex(0x8b7bff) };
+pub const APP_ICON: AppIcon = AppIcon { glyph: Glyph::Window, hue: Rgba::hex(0xf59e0b) };
+pub const ASSISTANT_ICON: AppIcon = AppIcon { glyph: Glyph::Assistant, hue: Rgba::hex(0xa78bfa) };
 /// Studio's sample apps, from its `samples/`, as `(path, source)`.
 pub const SAMPLES: [(&str, &str); 3] = [
     (DEFAULT_FILE, include_str!("../../studio/samples/counter.app")),

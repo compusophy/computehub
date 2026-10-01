@@ -124,7 +124,7 @@ impl Welcome {
             false => (icon_at.x + ICON + ICON_GAP, rect.y + (rect.h - text_h) / 2.0),
         };
         let icon_r = ui.snapped(icon_at);
-        kit::icon(ui, icon_r, *icon);
+        ui.app_icon(icon_r, *icon);
         let ty = ui.text_system().snap(ty);
         let w = rect.x + rect.w - tx;
         kit::lines(ui, &[*name], style, (tx, w), ty, false);

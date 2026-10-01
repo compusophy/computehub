@@ -5,7 +5,7 @@
 use gfx::{DrawList, RectF};
 use host::layout::{FIELD_H, PANEL_PAD as PAD, Panel, ROW_H};
 use host::motion::{Tween, Vis, replay};
-use host::paint::{ICON as TILE, cap_baseline, draw_icon, magnifier, px, sheen};
+use host::paint::{ICON as TILE, cap_baseline, magnifier, px, sheen};
 use host::search::Search;
 use ui::{FontId, TextStyle, Theme};
 
@@ -170,7 +170,7 @@ impl Shell {
         let label = TextStyle::new(FontId::Sans, 12.0, theme.text);
         let Some(place) = &e.place else {
             let icon = RectF::new(r.x + (r.w - TILE) / 2.0, r.y + 8.0, TILE, TILE);
-            draw_icon(list, text, icon, e.icon, &e.label, theme.shadow);
+            ui::icon::tile(list, text, icon, e.icon.glyph, e.icon.hue, theme);
             let name = text.ellipsize(&e.label, label, r.w - 8.0);
             let w = text.measure(&name, label);
             let x = text.snap(r.x + (r.w - w) / 2.0);
@@ -179,7 +179,7 @@ impl Shell {
             return;
         };
         let icon = RectF::new(r.x + 10.0, r.y + (r.h - ROW_ICON) / 2.0, ROW_ICON, ROW_ICON);
-        draw_icon(list, text, icon, e.icon, &e.label, theme.shadow);
+        ui::icon::tile(list, text, icon, e.icon.glyph, e.icon.hue, theme);
         let body = TextStyle::new(FontId::Sans, 14.0, theme.text);
         let x = r.x + 10.0 + ROW_ICON + 12.0;
         let lw = text.draw_text(list, x, cap_baseline(text, r.y, r.h, 14.0), &e.label, body);

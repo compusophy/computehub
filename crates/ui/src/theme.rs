@@ -162,10 +162,10 @@ const MONO: Theme = Theme {
 /// The built-in themes: Midnight (the default), Dawn and Mono.
 pub const THEMES: [Theme; 3] = [MIDNIGHT, DAWN, MONO];
 
-/// The theme named `name`, ignoring ASCII case; else the first of [`THEMES`].
+/// The theme named `name`, ignoring ASCII case; else the default, Mono.
 pub fn theme(name: &str) -> &'static Theme {
     let all: &'static [Theme; 3] = &THEMES;
-    all.iter().find(|t| t.name.eq_ignore_ascii_case(name)).unwrap_or(&all[0])
+    all.iter().find(|t| t.name.eq_ignore_ascii_case(name)).unwrap_or(&all[2])
 }
 
 impl Theme {

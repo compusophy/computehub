@@ -85,13 +85,15 @@ impl LocalTime {
 }
 
 /// Something only the platform can do: fetch `url` (page-relative) for
-/// [`Host::fetched`] with `id`, what the kernel asked for (workers, timer), or
-/// store a preference ([`ui::Request::Pref`]) in the page's storage.
+/// [`Host::fetched`] with `id`, what the kernel asked for (workers, timer),
+/// store a preference ([`ui::Request::Pref`]) in the page's storage, or send
+/// feedback ([`ui::Request::Feedback`]).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Effect {
     Fetch { id: u32, url: String },
     Kernel(kernel::Effect),
     Pref { key: String, value: String },
+    Feedback { kind: String, text: String, context: bool },
 }
 
 /// For the kernel: a worker's message or failure, the one-shot timer, the page hidden.
@@ -311,6 +313,9 @@ impl Host {
                     }
                     out.effects.push(Effect::Pref { key, value });
                 }
+                Request::Feedback { kind, text, context } => {
+                    out.effects.push(Effect::Feedback { kind, text, context });
+                }
                 Request::Size(w, h) => {
                     let (r, size) = (rect.unwrap_or_default(), window_size((w.into(), h.into())));
                     let rect = size.map(|(w, h)| Rect::new(r.x, r.y, w, h));
@@ -491,7 +496,7 @@ impl Host {
                 let fnv = |h: u32, b: u8| (h ^ u32::from(b)).wrapping_mul(16_777_619);
                 let hue = ui::theme::app_tint(e.name.bytes().fold(2_166_136_261, fnv));
                 let (name, place) = ([dir, "/", &e.name].concat(), [shown, "/", &e.name].concat());
-                let icon = AppIcon { glyph: "", hue };
+                let icon = AppIcon { glyph: ui::icon::Glyph::Window, hue };
                 out.push(search::Entry { label: app_label(&name), name, icon, place: Some(place) });
             }
         }

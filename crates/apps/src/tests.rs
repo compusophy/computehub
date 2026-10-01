@@ -1,6 +1,7 @@
 use super::terminal::grid_size;
 use super::*;
 use gfx::{DrawList, Instance, Kind, RectF, Rgba};
+use ui::icon::Glyph;
 use ui::{App, AppEvent, Cx, FontId, Hit, Key, Mods, Request, TextSystem, Ui, UiState, WidgetId};
 use ui::{THEMES, Theme};
 use vfs::Vfs;
@@ -283,9 +284,11 @@ fn inks(list: &DrawList) -> Vec<Rgba> {
 }
 
 /// Checks that every glyph of `list` is in a readable ink of `t` (never the
-/// faint one) or white on an icon, and every shape lies on device pixels.
+/// faint one) or an app icon's ink, and every shape lies on device pixels.
 fn refined(list: &DrawList, t: &Theme, dpr: f32, what: &str) {
-    let ok = [t.text, t.text_dim, t.accent, Rgba(255, 255, 255, 255), Rgba(0, 0, 0, 56)];
+    let icons = [kit::TERMINAL, kit::STUDIO, kit::SETTINGS, kit::WELCOME];
+    let mut ok = vec![t.text, t.text_dim, t.accent];
+    ok.extend(icons.map(|i| t.icon_colors(i.hue)[2]));
     inks(list).iter().for_each(|i| assert!(ok.contains(i), "{what} in {}: ink {i:?}", t.name));
     let on = |v: f32| ((v * dpr) - (v * dpr).round()).abs() < 1e-3;
     let kinds = [Kind::Fill, Kind::Border, Kind::Gradient].map(|k| k as u8 as f32);
@@ -304,13 +307,11 @@ fn apps_have_grids_titles_icons_and_sizes_and_are_refined_in_every_theme() {
     t.term.feed(b"\x1b]2;notes\x07");
     assert_eq!(t.title(), "Terminal — notes");
     assert!(t.wants_text_input() && open("launcher").is_none(), "the shell owns the launcher");
-    // Every icon's glyph is ASCII: the boot font has it.
     let sizes = [(720.0, 420.0), (W80, H24), (720.0, 520.0)];
-    let icons = [("c", 0xf472b6), (">_", 0x2dd4bf), ("::", 0x94a3b8)];
+    let icons = [(Glyph::Mark, 0xf472b6), (Glyph::Terminal, 0x2dd4bf), (Glyph::Cog, 0x94a3b8)];
     assert_eq!(NAMES, ["welcome", "terminal", "settings"]);
     for ((name, (glyph, hue)), size) in NAMES.iter().zip(icons).zip(sizes) {
         let (app, icon) = (open(name).unwrap(), ui::AppIcon { glyph, hue: Rgba::hex(hue) });
-        assert!(glyph.bytes().all(|b| b.is_ascii_graphic() || b == b' '), "{name}");
         assert_eq!((app.icon(), app.preferred_size()), (icon, Some(size)));
     }
     for dpr in [1.0, 1.5, 2.0] {

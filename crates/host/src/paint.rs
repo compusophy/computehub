@@ -1,13 +1,10 @@
 //! Drawing helpers: device pixels, centered capitals, lit edges, fading, icons, small glyphs.
 
 use gfx::{DrawList, Icon, RectF, Rgba};
-use ui::theme::mix;
-use ui::{AppIcon, FontId, TextStyle, TextSystem};
+use ui::TextSystem;
 
 /// The side an app icon is designed at.
 pub const ICON: f32 = 44.0;
-const WHITE: Rgba = Rgba(255, 255, 255, 255);
-const BLACK: Rgba = Rgba(0, 0, 0, 255);
 
 /// `v` logical pixels as whole device pixels, at least one.
 pub fn px(text: &TextSystem, v: f32) -> f32 {
@@ -29,36 +26,6 @@ pub fn sheen(list: &mut DrawList, r: RectF, radius: f32, line: f32, color: Rgba)
 
 pub fn faded(c: Rgba, a: f32) -> Rgba {
     c.with_alpha((f32::from(c.3) * a.clamp(0.0, 1.0)).round() as u8)
-}
-
-/// An app icon in the square `r`, as [`ui::Ui::tile`] draws one: the app's
-/// hue in a gradient, a white rim, a shadow, its glyph (or initial) in white.
-pub fn draw_icon(
-    list: &mut DrawList,
-    text: &mut TextSystem,
-    r: RectF,
-    icon: AppIcon,
-    label: &str,
-    shadow: Rgba,
-) {
-    let k = r.w / ICON;
-    let (radius, line) = (12.0 * k, px(text, 1.0));
-    list.shadow_offset(r, radius, 8.0 * k, 2.0 * k, shadow.with_alpha(shadow.3 / 2));
-    list.gradient(r, radius, mix(icon.hue, WHITE, 0.16), mix(icon.hue, BLACK, 0.16), 0.0);
-    list.border(r, radius, line, WHITE.with_alpha(36));
-    let first: String = label.chars().take(1).map(crate::search::upper).collect();
-    let glyph = if icon.glyph.is_empty() { first.as_str() } else { icon.glyph };
-    let bold = glyph.chars().all(|c| c.is_ascii_alphanumeric());
-    let font = if bold { FontId::SansBold } else { FontId::Mono };
-    let mut style = TextStyle::new(font, (80.0 * k).round() / 4.0, WHITE);
-    let (room, w) = (r.w - 16.0 * k, text.measure(glyph, style));
-    if w > room {
-        style.size = (style.size * room / w * 4.0).floor() / 4.0;
-    }
-    let w = text.measure(glyph, style);
-    let (x, base) = (r.x + (r.w - w) / 2.0, cap_baseline(text, r.y, r.h, style.size));
-    text.draw_text(list, x, base + line, glyph, style.with_color(BLACK.with_alpha(56)));
-    text.draw_text(list, x, base, glyph, style);
 }
 
 /// Window control `i`'s glyph on its circle `c`: minimize, maximize (or restore), close.

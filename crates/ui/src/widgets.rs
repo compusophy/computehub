@@ -2,7 +2,7 @@
 //! routes the pointer by. Rects, strokes and baselines land on device pixels.
 
 use gfx::{DrawList, RectF, Rgba};
-use text::{FontId, TextStyle, TextSystem};
+use text::{TextStyle, TextSystem};
 
 use crate::theme::{Theme, mix};
 
@@ -30,8 +30,6 @@ const BUTTON_PAD_X: f32 = 14.0;
 const FIELD_PAD_X: f32 = 12.0;
 /// Cap height of Inter and JetBrains Mono in ems: one-line controls center it.
 const CAP: f32 = 0.727;
-const WHITE: Rgba = Rgba(255, 255, 255, 255);
-const BLACK: Rgba = Rgba(0, 0, 0, 255);
 
 /// Names a widget across frames; the app picks the numbers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -401,45 +399,14 @@ impl<'a> Ui<'a> {
         self.sheen(r, RADIUS_LG, t.highlight);
     }
 
-    /// An app tile: `glyph` (or the label's first letter) on a gradient of
-    /// `hue`, and `label` below, ellipsized; a [`Sense::Click`] hit.
-    pub fn tile(&mut self, id: WidgetId, label: &str, glyph: &str, hue: Rgba) -> RectF {
-        let t = self.theme;
-        let r = self.place(TILE_W, TILE_H);
-        let (hover, down) = self.pointer(id);
-        if hover {
-            self.list.fill(r, RADIUS_LG, t.wash(down));
-        }
-        let at = RectF::new(r.x + (r.w - TILE_ICON) / 2.0, r.y + SPACING, TILE_ICON, TILE_ICON);
-        let icon = self.snapped(at);
-        let drop = RectF { y: icon.y + 2.0, ..icon };
-        self.list.shadow(drop, RADIUS_LG, 8.0, t.shadow.with_alpha(t.shadow.3 / 2));
-        self.gradient(icon, RADIUS_LG, mix(hue, WHITE, 0.16), mix(hue, BLACK, 0.16));
-        self.list.border(icon, RADIUS_LG, self.px(1.0), WHITE.with_alpha(36));
-        let first: String = label.chars().take(1).flat_map(char::to_uppercase).collect();
-        let glyph = if glyph.is_empty() { &first } else { glyph };
-        // White with a faint shadow: SansBold when all letters and digits,
-        // else Mono, shrunk to fit.
-        let bold = glyph.chars().all(char::is_alphanumeric);
-        let mut style =
-            TextStyle::new(if bold { FontId::SansBold } else { FontId::Mono }, 20.0, WHITE);
-        let w = self.text.measure(glyph, style);
-        if w > icon.w - 16.0 {
-            style.size = (style.size * (icon.w - 16.0) / w * 4.0).floor() / 4.0;
-        }
-        let x = icon.x + (icon.w - self.text.measure(glyph, style)) / 2.0;
-        let base = self.cap_baseline(icon, style);
-        let shade = style.with_color(BLACK.with_alpha(56));
-        self.text.draw_text(self.list, x, base + self.px(1.0), glyph, shade);
-        self.text.draw_text(self.list, x, base, glyph, style);
-        let style = t.small().with_color(t.text);
-        let name = self.text.ellipsize(label, style, r.w - SPACING);
-        let nw = self.text.measure(&name, style);
-        let band = RectF::new(r.x, icon.y + TILE_ICON + SPACING, r.w, 16.0);
-        let base = self.cap_baseline(band, style);
-        self.text.draw_text(self.list, r.x + (r.w - nw) / 2.0, base, &name, style);
-        self.hit(id, r, Sense::Click);
-        r
+    /// An app's icon tile in the square `r` ([`crate::icon::tile`]).
+    pub fn app_icon(&mut self, r: RectF, icon: crate::AppIcon) {
+        crate::icon::tile(self.list, self.text, r, icon.glyph, icon.hue, self.theme);
+    }
+
+    /// The vector glyph `g` in `color`, fitted to the square centered in `r`.
+    pub fn glyph(&mut self, r: RectF, g: crate::icon::Glyph, color: Rgba) {
+        crate::icon::draw(self.list, self.text, r, g, color);
     }
 
     /// `r` filled with its rounded corners in a vertical gradient.

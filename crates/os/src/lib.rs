@@ -173,7 +173,7 @@ impl Desktop {
     fn paint(&mut self, dpr: f32, ctl: &Ctl) -> (Rgba, bool) {
         let Some(shell) = &mut self.shell else {
             self.list.clear();
-            return (ui::THEMES[0].base, false);
+            return (ui::theme("").base, false);
         };
         shell.set_now(ctl.monotonic_ms());
         shell.set_dpr(dpr);
@@ -259,6 +259,8 @@ fn effect(fx: Effect, ctl: &mut Ctl, ai: &ai::Ai) {
         Effect::Kernel(K::Wake { ms }) => ctl.wake_in(ms),
         Effect::Kernel(K::Saved) => ctl.storage_set(HOME_KEY, "1"),
         Effect::Pref { key, value } => pref(&key, &value, ctl, ai),
+        // Sending feedback arrives with the telemetry change.
+        Effect::Feedback { .. } => {}
         // The host hands frames to the apps; none reach here.
         Effect::Kernel(K::Draw { .. }) => {}
     }

@@ -84,7 +84,7 @@ pub struct Shell {
 }
 
 impl Shell {
-    /// A desktop of `w` x `h` in the theme named `theme` (else the first).
+    /// A desktop of `w` x `h` in the theme named `theme` (else the default, Mono).
     #[rustfmt::skip]
     pub fn new(w: f32, h: f32, text: TextSystem, vfs: Vfs, reg: Registry, theme: &str) -> Shell {
         let size = (coord(w).max(0.0), coord(h).max(0.0));

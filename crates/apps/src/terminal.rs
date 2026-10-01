@@ -232,7 +232,7 @@ impl App for Terminal {
                 true
             }
             AppEvent::Click(_) | AppEvent::PointerDown { .. } | AppEvent::Tick { .. } => false,
-            AppEvent::Io => false,
+            AppEvent::Io | AppEvent::Ask(_) => false,
         };
         self.io(cx);
         redraw || self.term.generation() != before

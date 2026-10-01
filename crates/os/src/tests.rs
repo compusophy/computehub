@@ -173,7 +173,7 @@ fn shell_starts_at_the_first_usable_size() {
     }
     assert!(desk.missed_tick);
     // A frame before the shell clears to the default theme's base.
-    assert_eq!(desk.paint(1.0, &Ctl::default()), (ui::THEMES[0].base, false));
+    assert_eq!(desk.paint(1.0, &Ctl::default()), (ui::theme("").base, false));
     // Welcome opens, focused, and wants no text input.
     assert_eq!(send(&mut desk, resize(1280.0, 800.0)), ((true, false), vec![Fx::TextInput(false)]));
     // The startup window sits as it would at that size from the start.
@@ -185,7 +185,7 @@ fn shell_starts_at_the_first_usable_size() {
     assert_eq!(got.wm().layout().len(), 1);
     assert_eq!(got.vfs().read(remote::STUDIO), Ok(&b"#!wasm bin/studio.wasm\n"[..]));
     let started = (got.theme_name(), desk.saved, desk.parts.is_none());
-    assert_eq!(started, ("Midnight", "Midnight", true));
+    assert_eq!(started, ("Mono", "Mono", true));
 }
 
 #[test]
@@ -201,7 +201,7 @@ fn the_theme_comes_from_storage_and_goes_back_when_it_changes() {
     // Names match in any case, an unknown one is the default; none is written back.
     let (mut desk, writes) = stored("dawn");
     assert_eq!((shell(&desk).theme_name(), writes), ("Dawn", 1));
-    assert_eq!(shell(&stored("Solarized").0).theme_name(), "Midnight");
+    assert_eq!(shell(&stored("Solarized").0).theme_name(), "Mono");
     // The top bar's theme button (at the right) moves to the next theme, stored once.
     let (x, y) = (1280.0 - 12.0 - 7.0, shell::BAR_H / 2.0);
     let store = Fx::Store { key: THEME_KEY.into(), value: "Mono".into() };

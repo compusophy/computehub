@@ -2,7 +2,7 @@
 //! glass shelf centered at the bottom, with running dots and tooltips.
 
 use gfx::{DrawList, RectF};
-use host::paint::{ICON as TILE, cap_baseline, draw_icon, faded, px, sheen};
+use host::paint::{ICON as TILE, cap_baseline, faded, px, sheen};
 use host::{app_label, layout};
 use ui::{AppIcon, FontId, TextStyle, Theme};
 use wm::WinId;
@@ -50,7 +50,7 @@ impl Shell {
         for (i, (name, icon, wins)) in self.dock.iter().enumerate() {
             let t = self.dock_tile(i);
             let lifted = RectF { y: t.y - LIFT * self.motion.lift(name, now), ..t };
-            draw_icon(list, &mut self.host.text, lifted, *icon, &app_label(name), theme.shadow);
+            ui::icon::tile(list, &mut self.host.text, lifted, icon.glyph, icon.hue, theme);
             if !wins.is_empty() {
                 let mine = focused.is_some_and(|f| wins.contains(&f));
                 let dot = RectF::new(t.x + (TILE - DOT) / 2.0, t.y + TILE + 3.0, DOT, DOT);

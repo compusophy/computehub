@@ -328,43 +328,6 @@ fn cards_hold_their_content() {
 }
 
 #[test]
-fn tiles_draw_icon_glyph_and_label() {
-    let mut t = ts();
-    let rect = RectF::new(0.0, 0.0, 400.0, 400.0);
-    let hue = Rgba::hex(0x22d3ee);
-    for th in &THEMES {
-        let (r, list, hits) = frame(&mut t, th, rect, state(Some(3), None, false), |ui| {
-            ui.tile(WidgetId(3), "Terminal", ">_", hue)
-        });
-        assert_eq!(r, RectF::new(PAD, PAD, TILE_W, TILE_H));
-        assert_eq!((hits.len(), hits[0].rect, hits[0].sense), (1, r, Sense::Click));
-        assert_eq!(list.instances()[0].color, th.wash(false));
-        // The icon: one rounded gradient, lighter at the top.
-        let icon = [r.x + 18.0, r.y + SPACING, TILE_ICON, TILE_ICON];
-        let (grad, g) = (find(&list, 5.0, None), find(&list, 5.0, None)[0]);
-        assert_eq!((grad.len(), g.rect, g.radius, g.p0), (1, icon, RADIUS_LG, 0.0));
-        let light = |c: Rgba| u32::from(c.0) + u32::from(c.1) + u32::from(c.2);
-        assert!(light(g.color) > light(hue) && light(hue) > light(g.color2));
-        // The glyph in white Mono over its shadow, the label in text below.
-        let white = find(&list, 4.0, Some(WHITE));
-        assert_eq!(white.len(), 2);
-        assert!(white.iter().all(|g| g.rect[1] > icon[1] && g.rect[1] < icon[1] + 44.0));
-        let label = find(&list, 4.0, Some(th.text));
-        assert_eq!(label.len(), "Terminal".len());
-        assert!(label.iter().all(|g| g.rect[1] > icon[1] + 44.0 && g.rect[1] < r.y + r.h));
-    }
-    // A long label is cut to fit; an empty glyph shows the first letter.
-    let (r, list, _) = frame(&mut t, MIDNIGHT, rect, REST, |ui| {
-        ui.tile(WidgetId(1), "settings and more", "", Rgba::hex(0x6d5cff))
-    });
-    let label = find(&list, 4.0, Some(MIDNIGHT.text));
-    assert!(label.len() < "settingsandmore".len());
-    assert!(label.iter().all(|g| g.rect[0] >= r.x + 4.0 && g.rect[0] + g.rect[2] <= r.x + 76.0));
-    assert_eq!(find(&list, 4.0, Some(WHITE)).len(), 1);
-    assert!(find(&list, 0.0, Some(MIDNIGHT.wash(false))).is_empty());
-}
-
-#[test]
 fn everything_lands_on_device_pixels() {
     let mut t = ts();
     t.set_dpr(1.5);
@@ -374,10 +337,6 @@ fn everything_lands_on_device_pixels() {
         out.push(ui.button(WidgetId(1), "Odd width"));
         out.push(ui.text_field(WidgetId(2), "value", true, ""));
         out.push(ui.card(|ui| _ = ui.small("in a card")));
-        out.push(ui.row(|ui| {
-            ui.tile(WidgetId(3), "A", "A", Rgba::hex(0x6d5cff));
-            ui.tile(WidgetId(4), "B", "B", Rgba::hex(0x6d5cff));
-        }));
         out
     });
     let on_grid = |v: f32| ((v * 1.5).round() - v * 1.5).abs() < 1e-3;
@@ -393,7 +352,7 @@ fn everything_lands_on_device_pixels() {
 fn themes_are_complete_readable_and_glow() {
     assert_eq!(THEMES.map(|t| t.name), ["Midnight", "Dawn", "Mono"]);
     assert_eq!(THEMES.map(|t| t.dark), [true, false, true]);
-    for (name, want) in [("Midnight", 0), ("dawn", 1), ("MONO", 2), ("", 0), ("Neon", 0)] {
+    for (name, want) in [("Midnight", 0), ("dawn", 1), ("MONO", 2), ("", 2), ("Neon", 2)] {
         assert_eq!(theme(name), &THEMES[want], "{name}");
     }
     assert_eq!((THEMES[0].grain, THEMES[1].grain), (9, 6));
@@ -526,7 +485,7 @@ impl App for Echo {
 fn apps_and_their_context() {
     let mut app: Box<dyn App> = Box::new(Echo(0));
     assert!(!app.wants_text_input() && app.preferred_size().is_none());
-    assert_eq!(app.icon(), AppIcon { glyph: "", hue: Rgba::hex(0x64748b) });
+    assert_eq!(app.icon(), AppIcon { glyph: icon::Glyph::Window, hue: Rgba::hex(0x64748b) });
     let mut t = ts();
     let rect = RectF::new(0.0, 0.0, 300.0, 200.0);
     let (_, _, hits) = frame(&mut t, MIDNIGHT, rect, REST, |ui| app.draw(ui));

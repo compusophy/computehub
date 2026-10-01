@@ -54,7 +54,7 @@ impl App for Probe {
         Some([(400.0, 300.0), (5e3, 5e3), (f32::NAN, 100.0)][i])
     }
     fn icon(&self) -> AppIcon {
-        AppIcon { glyph: self.1, hue: Rgba::hex(0x123456) }
+        AppIcon { glyph: ui::icon::Glyph::Window, hue: Rgba(self.1.len() as u8, 1, 2, 255) }
     }
     fn frame(&mut self, pid: u32, frame: &[u8], _: &mut Cx<'_>) -> bool {
         let said = [&pid.to_string(), " ", &String::from_utf8_lossy(frame)].concat();
@@ -212,7 +212,9 @@ fn apps_get_icons_labels_themes_and_fonts_fetched_once_in_order() {
     assert_eq!((h.theme.current().name, h.launcher, h.wins.len()), ("Dawn", true, 2));
     assert!(h.theme.is_running(0.0));
     // Icons come from running apps, else from the registry, once.
-    let icon = |glyph| Some(AppIcon { glyph, hue: Rgba::hex(0x123456) });
+    let icon = |name: &str| {
+        Some(AppIcon { glyph: ui::icon::Glyph::Window, hue: Rgba(name.len() as u8, 1, 2, 255) })
+    };
     assert_eq!((h.icon("terminal"), *made.borrow()), (icon("terminal"), 2));
     assert_eq!((h.icon("sized"), h.icon("sized")), (icon("sized"), icon("sized")));
     assert_eq!((h.icon("nope"), h.icon("nope"), *made.borrow()), (None, None, 3));
@@ -329,7 +331,7 @@ fn tweens_ease_out_from_their_first_frame_replays_scale_and_themes_crossfade() {
     t.arm(1000.0);
     assert_eq!((t.at(1000.0).grain, t.at(1100.0).grain), (6, 5));
     assert_eq!((t.at(1200.0), t.is_running(1200.0)), (*mono, false));
-    assert_eq!(Themes::new("").current().name, "Midnight");
+    assert_eq!(Themes::new("").current().name, "Mono");
 }
 
 #[test]

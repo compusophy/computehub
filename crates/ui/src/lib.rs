@@ -44,6 +44,11 @@ pub trait App {
     fn icon(&self) -> AppIcon {
         AppIcon::default()
     }
+    /// Whether it is a small card (Welcome, About, Settings): on a wide screen it opens at its
+    /// preferred size, centered, never maximized as main apps' first windows are.
+    fn compact(&self) -> bool {
+        false
+    }
     /// GUI process `pid` drew `frame` (uiwire bytes, unchecked). Every app hears every frame and
     /// takes only its own process's; returns whether to redraw.
     fn frame(&mut self, pid: u32, frame: &[u8], cx: &mut Cx<'_>) -> bool {
@@ -56,18 +61,18 @@ pub trait App {
     }
 }
 
-/// An app's tile ([`Ui::tile`]): one to three chars (empty: the name's first
-/// letter) in white on a gradient of `hue`, such as `">_"` for a terminal.
+/// An app's icon: a vector glyph on a tile tinted by `hue` as the theme
+/// paints tiles ([`icon::tile`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct AppIcon {
-    pub glyph: &'static str,
+    pub glyph: icon::Glyph,
     pub hue: Rgba,
 }
 
 impl Default for AppIcon {
-    /// No glyph on slate gray.
+    /// A window on slate gray.
     fn default() -> AppIcon {
-        AppIcon { glyph: "", hue: Rgba::hex(0x64748b) }
+        AppIcon { glyph: icon::Glyph::Window, hue: Rgba::hex(0x64748b) }
     }
 }
 
@@ -94,6 +99,8 @@ pub enum AppEvent {
     /// A process this window owns has console output, exited or changed
     /// mode, or homed has a new note: see [`Cx::kernel`].
     Io,
+    /// A prompt from the desktop's everything bar, as if typed and sent.
+    Ask(String),
 }
 
 /// A key by its physical position (`KeyboardEvent.code`); text comes
@@ -163,6 +170,9 @@ pub enum Request {
     /// Set the preference `key` to `value` in the page's storage (never the VFS), such as
     /// [`AI_MODEL`]; the page ignores keys it does not know.
     Pref { key: String, value: String },
+    /// Send feedback the person typed: `kind` ("bug", "idea" or "love") and their `text`, with
+    /// the desktop's context (build, device, windows, recent events) if `context`.
+    Feedback { kind: String, text: String, context: bool },
 }
 
 /// The preference naming the model the AI answers with ([`AiStatus::model`]).
@@ -215,6 +225,12 @@ impl<'a> Cx<'a> {
 
     pub fn set_theme(&mut self, name: &str) {
         self.requests.push(Request::SetTheme(name.to_string()));
+    }
+
+    /// Sends the feedback the person typed ([`Request::Feedback`]).
+    pub fn feedback(&mut self, kind: &str, text: &str, context: bool) {
+        let (kind, text) = (kind.to_string(), text.to_string());
+        self.requests.push(Request::Feedback { kind, text, context });
     }
 
     /// Resizes the asking app's window to a `w` x `h` content area.
