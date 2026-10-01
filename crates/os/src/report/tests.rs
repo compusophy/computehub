@@ -21,11 +21,6 @@ fn streamed(ctl: &Ctl) -> Vec<(u32, String)> {
     posts.collect()
 }
 
-/// The outbox as `ctl` last stored it.
-fn stored(ctl: &Ctl) -> Option<String> {
-    ctl.storage_get(OUTBOX)
-}
-
 /// The sig of report `json`.
 fn sig_of(json: &str) -> &str {
     json[json.rfind(r#""sig":""#).expect("a sig") + 7..].trim_end_matches("\"}")
@@ -96,7 +91,7 @@ fn reports_wait_in_the_outbox_until_the_inbox_takes_them() {
         r#"{"kind":"feedback","title":"Idea: Dark mode for the dock","body":"Dark mode"#
     ));
     assert!(json.contains("windows  2 open") && sig_of(json).len() == 16, "{json}");
-    assert_eq!(stored(&ctl).as_deref(), Some(json.as_str()));
+    assert_eq!(ctl.storage_get(OUTBOX).as_deref(), Some(json.as_str()));
     // No inbox yet (503): it stays, held; the next report sends both, the first as it was.
     assert!(r.ended(&mut ctl, *id, 503));
     assert!(r.retell() && r.status(Default::default()).held);
@@ -112,7 +107,7 @@ fn reports_wait_in_the_outbox_until_the_inbox_takes_them() {
     assert!(r.outbox().len() == 1 && !r.status(Default::default()).held);
     // Refused for good (400): dropped.
     assert!(r.ended(&mut ctl, again[1].0, 400));
-    assert!(r.outbox().is_empty() && stored(&ctl).as_deref() == Some(""));
+    assert!(r.outbox().is_empty() && ctl.storage_get(OUTBOX).as_deref() == Some(""));
     // A new page finds what waited and sends it at once; the outbox keeps the newest 20.
     let mut ctl = Ctl::default();
     let lines: Vec<String> = (0..25).map(|i| report("feedback", &i.to_string(), "b", "")).collect();
@@ -157,7 +152,7 @@ fn errors_are_reported_once_a_session_unless_reports_are_off() {
     r.pref(&mut ctl, ui::REPORTS, "off");
     assert_eq!(ctl.storage_get(REPORTS).as_deref(), Some("off"));
     assert!(r.retell() && r.status(Default::default()).reports_off);
-    assert!(r.outbox().is_empty() && stored(&ctl).as_deref() == Some(""));
+    assert!(r.outbox().is_empty() && ctl.storage_get(OUTBOX).as_deref() == Some(""));
     let mut ctl = Ctl::default();
     r.proc_failed(8, "studio");
     r.feedback("bug", "Saw an error", true);
@@ -177,7 +172,7 @@ fn errors_are_reported_once_a_session_unless_reports_are_off() {
     r.ai_ended(502, "");
     r.pump(&mut ctl, phone);
     assert_eq!(streamed(&ctl), [(FIRST_ID | 1, love.clone())]);
-    assert!(stored(&ctl) == Some(love) && r.status(Default::default()).reports_off);
+    assert!(ctl.storage_get(OUTBOX) == Some(love) && r.status(Default::default()).reports_off);
 }
 
 #[test]

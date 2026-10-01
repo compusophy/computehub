@@ -61,7 +61,6 @@ fn shell(desk: &Desktop) -> &Shell {
     desk.shell.as_ref().expect("created")
 }
 
-/// The middle of the focused window.
 /// A bare spot in the focused window's content, just under its titlebar.
 fn focused_middle(desk: &Desktop) -> (f32, f32) {
     let layout = shell(desk).wm().layout();
@@ -195,12 +194,10 @@ fn shell_starts_at_the_first_usable_size() {
 #[test]
 fn the_theme_comes_from_storage_and_goes_back_when_it_changes() {
     let stored = |name: &str| {
-        let mut ctl = Ctl::default();
+        let (mut ctl, mut desk) = (Ctl::default(), fresh());
         ctl.storage_set(THEME_KEY, name);
-        let mut desk = fresh();
         desk.event(resize(1280.0, 800.0), &mut ctl);
-        let writes = ctl.effects().iter().filter(|f| matches!(f, Fx::Store { .. })).count();
-        (desk, writes)
+        (desk, ctl.effects().iter().filter(|f| matches!(f, Fx::Store { .. })).count())
     };
     // Names match in any case, an unknown one is the default; none is written back (the
     // other write is the first visit's mark).
@@ -210,9 +207,11 @@ fn the_theme_comes_from_storage_and_goes_back_when_it_changes() {
     // A new theme (Settings sets it) is stored once, after the event that set it.
     let store = Fx::Store { key: THEME_KEY.into(), value: "Mono".into() };
     assert!(desk.shell.as_mut().expect("created").set_theme("mono"));
-    let (_, fx) = send(&mut desk, Event::PointerMove { x: 9.0, y: 300.0 });
-    assert_eq!(shell(&desk).theme_name(), "Mono");
-    assert_eq!(fx.iter().filter(|f| **f == store).count(), 1, "{fx:?}");
+    let fx = send(&mut desk, Event::PointerMove { x: 9.0, y: 300.0 }).1;
+    assert_eq!(
+        (shell(&desk).theme_name(), fx.iter().filter(|f| **f == store).count()),
+        ("Mono", 1)
+    );
     for fx in [frame(&mut desk), send(&mut desk, Event::PointerMove { x: 9.0, y: 200.0 }).1] {
         assert!(fx.iter().all(|f| !matches!(f, Fx::Store { .. })), "{fx:?}");
     }
