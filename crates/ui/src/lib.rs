@@ -49,6 +49,12 @@ pub trait App {
     fn compact(&self) -> bool {
         false
     }
+    /// Whether it animates at `now_ms` (the page clock of [`UiState::now_ms`]): the shell draws
+    /// frames while a shown app does, and only then, so an idle desktop draws none.
+    fn animating(&self, now_ms: f64) -> bool {
+        let _ = now_ms;
+        false
+    }
     /// GUI process `pid` drew `frame` (uiwire bytes, unchecked). Every app hears every frame and
     /// takes only its own process's; returns whether to redraw.
     fn frame(&mut self, pid: u32, frame: &[u8], cx: &mut Cx<'_>) -> bool {
@@ -177,11 +183,18 @@ pub enum Request {
 
 /// The preference naming the model the AI answers with ([`AiStatus::model`]).
 pub const AI_MODEL: &str = "ai.model";
+/// The preference that is `"off"` when automatic error reports are ([`AiStatus::reports_off`]).
+pub const REPORTS: &str = "reports";
 
-/// The AI settings as apps see them: the model the AI answers with.
+/// What the page tells apps: the model the AI answers with, and how its reports fare.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct AiStatus {
     pub model: String,
+    /// Automatic error reports are off: the [`REPORTS`] preference.
+    pub reports_off: bool,
+    /// A report is waiting to be sent: the last one did not get through (offline, or the
+    /// inbox is not set up yet).
+    pub held: bool,
 }
 
 /// What an app can reach while handling an event: the filesystem, the kernel (processes it spawns
@@ -201,10 +214,14 @@ impl<'a> Cx<'a> {
         Cx { vfs, kernel, now_ms, ai: AiStatus::default(), requests: Vec::new() }
     }
 
-    /// Sets a preference ([`Request::Pref`]); for [`AI_MODEL`], [`Cx::ai`] follows at once.
+    /// Sets a preference ([`Request::Pref`]); for [`AI_MODEL`] and [`REPORTS`], [`Cx::ai`]
+    /// follows at once.
     pub fn pref(&mut self, key: &str, value: &str) {
         if key == AI_MODEL {
             self.ai.model = value.to_string();
+        }
+        if key == REPORTS {
+            self.ai.reports_off = value == "off";
         }
         self.requests.push(Request::Pref { key: key.to_string(), value: value.to_string() });
     }

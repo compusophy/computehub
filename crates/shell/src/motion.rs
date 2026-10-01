@@ -131,5 +131,11 @@ impl Shell {
             || self.host.theme.is_running(now)
             || self.touch.is_some_and(|t| !t.0.done)
             || self.fling.is_some()
+            || self
+                .host
+                .wm()
+                .layout()
+                .iter()
+                .any(|p| self.host.win(p.win).is_some_and(|w| w.app.animating(now)))
     }
 }

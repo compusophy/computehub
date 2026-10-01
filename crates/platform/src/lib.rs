@@ -17,12 +17,14 @@
 
 mod ctl;
 mod io;
+mod nav;
 mod proc;
 mod render;
 #[cfg(test)]
 mod tests;
 
 pub use ctl::{Ctl, Effect, Load, LocalTime};
+pub use nav::{Device, beacon, device};
 pub use render::Renderer;
 
 use std::cell::{Cell, RefCell};

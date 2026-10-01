@@ -188,11 +188,14 @@ fn corner(v: &mut Vec<(f32, f32)>, c: (f32, f32), r: f32, a: f32) {
     v.extend((0..=8).map(|i| (c.0 + r * at(i).cos(), c.1 + r * at(i).sin())));
 }
 
-/// The mark's rings, inside out: dot count, ring radius, dot radius. Counts run
-/// up the Fibonacci numbers from 8; each ring is 1/φ closer to the last and its
-/// dots 1/φ smaller (from a center dot of 80.08 and a first step of 190.74).
-fn rings() -> impl Iterator<Item = (usize, f32, f32)> {
-    let mut s = (5, 8, 0.0, 190.74, 80.08);
+/// The radius of the mark's center hole, in box units (its disc's is 500).
+pub const MARK_HOLE: f32 = 80.08;
+
+/// The mark's rings, inside out: dot count, ring radius, dot radius, in box units from the
+/// center. Counts run up the Fibonacci numbers from 8; each ring is 1/φ closer to the last and
+/// its dots 1/φ smaller (from the center hole, [`MARK_HOLE`], and a first step of 190.74).
+pub fn rings() -> impl Iterator<Item = (usize, f32, f32)> {
+    let mut s = (5, 8, 0.0, 190.74, MARK_HOLE);
     (0..7).map(move |_| {
         let (prev, n, r, step, dot) = s;
         s = (n, prev + n, r + step, step / PHI, dot / PHI);
@@ -204,7 +207,7 @@ fn rings() -> impl Iterator<Item = (usize, f32, f32)> {
 /// each ring's first dot at 12 o'clock and the rest clockwise.
 fn mark(o: &mut Outline) {
     circle(o, C, 500.0, true);
-    circle(o, C, 80.08, false);
+    circle(o, C, MARK_HOLE, false);
     for (n, r, dot) in rings() {
         for j in 0..n {
             let a = FRAC_PI_2 - TAU * j as f32 / n as f32;

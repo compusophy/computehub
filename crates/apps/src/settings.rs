@@ -1,21 +1,31 @@
-//! Settings: the themes, the AI model, and what compusophyOS is made of.
+//! Settings: the themes, the AI model, and what gets reported.
 
 use gfx::RectF;
-use ui::{AI_MODEL, App, AppEvent, AppIcon, CARD_PAD, Cx, PAD, RADIUS_LG, RADIUS_SM, Sense, Theme};
-use ui::{SPACING, THEMES, Ui, WidgetId};
+use ui::icon::Glyph;
+use ui::{AI_MODEL, App, AppEvent, AppIcon, CARD_PAD, Cx, PAD, RADIUS_LG, RADIUS_SM, REPORTS};
+use ui::{SPACING, Sense, THEMES, Theme, Ui, WidgetId};
 
 use crate::kit::{self, Scroll};
 
-const PAGES: [&str; 3] = ["Appearance", "AI", "About"];
-/// Widget ids: page `i`'s nav item is `NAV + i`, theme card `i` `THEME + i`, model `i` `MODEL + i`.
+const PAGES: [&str; 3] = ["Appearance", "AI", "Privacy"];
+/// Widget ids: page `i`'s nav item is `NAV + i`, theme card `i` `THEME + i`, model `i` `MODEL + i`;
+/// the reports switch and the feedback line.
 const NAV: u32 = 1;
 const THEME: u32 = 10;
 const MODEL: u32 = 20;
+const SWITCH: u32 = 30;
+const FEEDBACK: u32 = 31;
 /// The models on offer as (name, what it is best at, the value stored), the first the default.
 const MODELS: [(&str, &str, &str); 2] =
     [("GLM 5.3", "best answers", "zai/glm-5.3"), ("GLM 5.3 Flash", "fastest", "zai/glm-5.3-flash")];
 const NOTE: &str = "AI is free while compusophy is in beta, powered by GLM 5.3. Your prompts go \
 to the model through compusophy's server and are not stored there.";
+const REPORT: &str = "Send error reports automatically";
+const HOLDS: &str = "When something breaks (a program fails, the AI's server errs, or \
+compusophyOS itself crashes) a short report goes to compusophy: what failed, the build, your \
+browser and screen size, the theme, the apps open and the last 50 events, such as \u{201c}ai \
+503\u{201d}. Never your files, your prompts or anything you typed.";
+const TYPED: &str = "Feedback you write always sends: you choose what it says, and when.";
 /// The nav column's width, and the narrowest window with one (else tabs).
 const NAV_W: f32 = 172.0;
 const WIDE: f32 = 520.0;
@@ -28,34 +38,15 @@ const CARD_MAX: f32 = 216.0;
 const CARD_GAP: f32 = 16.0;
 const INSET: f32 = 6.0;
 const NAME_H: f32 = 34.0;
-/// Model rows: height and widest.
+/// Model rows: height and widest (the Privacy page's rows too).
 const ROW_H: f32 = 56.0;
 const ROW_MAX: f32 = 440.0;
 const CHECK: &str = "✓";
 
-const WHAT: &str = "A whole computer in one browser tab: Rust compiled to WebAssembly, every \
-pixel drawn by the GPU. Nothing to install, and your files never leave the tab.";
-const FONTS: &str = "Fonts: Inter, JetBrains Mono, and Noto Sans Symbols 1 and 2, under the SIL \
-Open Font License 1.1. Their license texts are at /licenses/ on the site.";
-const FORKS: &str = "fuel, lang, applang-syntax and applang are forks of litelite 0.2.0 \
-(commit 4f5e056, 2026-07-20), under Apache-2.0.";
-#[rustfmt::skip]
-const STACK: [(&str, &str); 19] = [
-    ("os", "The wasm entry point"), ("platform", "The browser boundary: canvas, WebGL2, input"),
-    ("shell", "The desktop: chrome, dock and keys"), ("host", "Windows and the apps in them"),
-    ("wm", "Window manager; deterministic"), ("apps", "Terminal, Welcome and Settings"),
-    ("studio", "Write, check and run apps"), ("guest", "The shell the Terminal runs"),
-    ("term", "Terminal screen model"), ("vt", "Terminal escape-sequence parser"),
-    ("ui", "Widgets, themes and the App trait"), ("text", "Fonts and glyphs on the atlas"),
-    ("font", "TrueType reader and rasterizer"), ("gfx", "Draw lists and the WebGL2 shaders"),
-    ("vfs", "In-memory filesystem; deterministic"), ("applang", "The tier 0 app language"),
-    ("applang-syntax", "applang's lexer and parser"), ("lang", "Diagnostics, lexer and parser kit"),
-    ("fuel", "Fuel and byte budgets"),
-];
-
-/// Settings: Appearance (each of [`THEMES`] as a miniature desktop; a click applies it), AI (a
-/// note on the free AI, and the models as rows; a click picks one, which the host stores) and
-/// About (version, stack, credits), by nav column or, narrow, tabs; tall pages scroll.
+/// Settings: Appearance (each of [`THEMES`] as a miniature desktop, the default first; a click
+/// applies it), AI (a note on the free AI, and the models as rows; a click picks one, which the
+/// host stores) and Privacy (the automatic reports switch, what a report holds, a way to send
+/// feedback), by nav column or, narrow, tabs; tall pages scroll.
 #[derive(Debug, Default)]
 pub struct Settings {
     /// The page shown, an index into [`PAGES`].
@@ -63,6 +54,10 @@ pub struct Settings {
     scroll: Scroll,
     /// The AI model as [`Cx::ai`] last said.
     pub(crate) model: String,
+    /// Whether automatic reports are off, as last set here or told by the host, and what the
+    /// host last told (it hears a change of ours only from the page, later).
+    pub(crate) reports_off: bool,
+    told: Option<bool>,
 }
 
 impl App for Settings {
@@ -79,15 +74,19 @@ impl App for Settings {
         let bottom = match self.page {
             0 => appearance(ui),
             1 => self.ai_page(ui),
-            _ => about(ui),
+            _ => self.privacy(ui),
         };
         ui.pop_clip();
         self.scroll.measure(bottom - top + 2.0 * PAD, view.h);
+        self.scroll.thumb(ui, view);
     }
 
     fn event(&mut self, ev: AppEvent, cx: &mut Cx<'_>) -> bool {
-        let fresh = self.model != cx.ai.model;
+        let fresh = self.model != cx.ai.model || self.told != Some(cx.ai.reports_off);
         self.model.clone_from(&cx.ai.model);
+        if self.told != Some(cx.ai.reports_off) {
+            (self.told, self.reports_off) = (Some(cx.ai.reports_off), cx.ai.reports_off);
+        }
         let changed = match ev {
             AppEvent::Click(WidgetId(id)) => self.click(id, cx),
             AppEvent::Wheel { dy, .. } => self.scroll.wheel(dy),
@@ -104,10 +103,14 @@ impl App for Settings {
     fn icon(&self) -> AppIcon {
         kit::SETTINGS
     }
+
+    fn compact(&self) -> bool {
+        true
+    }
 }
 
 impl Settings {
-    /// A click on widget `id`: a page, a theme or a model.
+    /// A click on widget `id`: a page, a theme, a model, the switch or the feedback line.
     fn click(&mut self, id: u32, cx: &mut Cx<'_>) -> bool {
         let page = id.wrapping_sub(NAV) as usize;
         if let Some(th) = THEMES.get(id.wrapping_sub(THEME) as usize) {
@@ -115,6 +118,12 @@ impl Settings {
         } else if let Some(model) = MODELS.get(id.wrapping_sub(MODEL) as usize) {
             cx.pref(AI_MODEL, model.2);
             self.model.clone_from(&cx.ai.model);
+        } else if id == SWITCH {
+            self.reports_off = !self.reports_off;
+            cx.pref(REPORTS, if self.reports_off { "off" } else { "on" });
+        } else if id == FEEDBACK {
+            cx.open("feedback");
+            return false;
         } else if page < PAGES.len() {
             let new = page != self.page;
             if new {
@@ -146,6 +155,45 @@ impl Settings {
         }
         ui.advance_to(bottom);
         bottom
+    }
+
+    /// The Privacy page from the cursor: the reports switch, what a report holds, and a line
+    /// that opens Feedback; returns its bottom.
+    fn privacy(&self, ui: &mut Ui<'_>) -> f32 {
+        let t = ui.theme();
+        ui.heading("Privacy");
+        let (r, (x, y)) = (ui.rect(), ui.cursor());
+        let w = (r.x + r.w - PAD - x).min(ROW_MAX);
+        let row = ui.snapped(RectF::new(x, y, w, ROW_H));
+        let id = WidgetId(SWITCH);
+        let (hover, down) = kit::pointer(ui, id);
+        let (fill, edge) = kit::card_colors(t, hover, down);
+        kit::raised(ui, row, RADIUS_LG, fill, edge);
+        let label = t.body();
+        let base = kit::cap_base(ui, row.y, row.h, label);
+        let room = row.w - 2.0 * CARD_PAD - 34.0 - 13.0;
+        let shown = ui.text_system().ellipsize(REPORT, label, room);
+        ui.text(row.x + CARD_PAD, base, &shown, label);
+        kit::switch(ui, row.inset(CARD_PAD), !self.reports_off);
+        ui.hit(id, row, Sense::Click);
+        ui.advance_to(row.y + row.h);
+        ui.space(SPACING);
+        ui.wrapped(HOLDS, t.small());
+        ui.wrapped(TYPED, t.small());
+        let (x, y) = ui.cursor();
+        let link = ui.snapped(RectF::new(x, y + SPACING, w, 44.0));
+        let (id, style) = (WidgetId(FEEDBACK), t.body().with_color(t.accent));
+        let (hover, down) = kit::pointer(ui, id);
+        if hover {
+            ui.fill(link, RADIUS_SM, t.wash(down));
+        }
+        let base = kit::cap_base(ui, link.y, link.h, style);
+        let end = ui.text(link.x + 8.0, base, "Send feedback", style);
+        let at = ui.snapped(RectF::new(link.x + 8.0 + end + 5.0, link.y + 16.0, 13.0, 13.0));
+        ui.glyph(at, Glyph::Chevron, t.accent);
+        ui.hit(id, link, Sense::Click);
+        ui.advance_to(link.y + link.h);
+        link.y + link.h
     }
 
     /// The nav column and the line right of it; returns the page's area.
@@ -248,11 +296,14 @@ fn appearance(ui: &mut Ui<'_>) -> f32 {
     let cw = ((avail - (n - 1.0) * CARD_GAP) / n).min(CARD_MAX).floor().max(2.0 * INSET);
     let ph = ((cw - 2.0 * INSET) * 0.625).round();
     let ch = INSET + ph + NAME_H;
-    for (i, th) in THEMES.iter().enumerate() {
-        let (col, row) = ((i % cols) as f32, (i / cols) as f32);
+    // The default first (Mono), then the rest as THEMES has them.
+    let first = THEMES.iter().position(|th| th.name == ui::theme("").name).unwrap_or(0);
+    let order = (0..THEMES.len()).map(|k| if k == 0 { first } else { k - usize::from(k <= first) });
+    for (n, i) in order.enumerate() {
+        let (col, row) = ((n % cols) as f32, (n / cols) as f32);
         let at = RectF::new(x + col * (cw + CARD_GAP), y + row * (ch + CARD_GAP), cw, ch);
         let card = ui.snapped(at);
-        theme_card(ui, i, card, th, ph);
+        theme_card(ui, i, card, &THEMES[i], ph);
     }
     let rows = THEMES.len().div_ceil(cols) as f32;
     let bottom = y + rows * ch + (rows - 1.0) * CARD_GAP;
@@ -341,38 +392,4 @@ fn miniature(ui: &mut Ui<'_>, p: RectF, th: &Theme, under: gfx::Rgba) {
     let k = ui.px((radius * 0.5).ceil());
     ui.border(p.inset(-k), radius + k, k, under);
     ui.border(p, radius, line, t.border);
-}
-
-/// The About page from the cursor; returns its bottom.
-fn about(ui: &mut Ui<'_>) -> f32 {
-    let t = ui.theme();
-    ui.heading("compusophyOS 0.2");
-    ui.wrapped(WHAT, t.body().with_color(t.text_dim));
-    ui.subheading("The stack");
-    ui.card(stack);
-    ui.subheading("Credits");
-    ui.label(FONTS);
-    ui.label(FORKS);
-    let r = ui.label("Author: compusophy");
-    r.y + r.h
-}
-
-/// The stack as a table: crate names in dim mono, roles beside or under them.
-fn stack(ui: &mut Ui<'_>) {
-    let t = ui.theme();
-    let (key, val) = (t.mono().with_color(t.text_dim), t.body());
-    let ((x, mut y), w) = (ui.cursor(), ui.width());
-    let ts = ui.text_system();
-    let widest = STACK.iter().map(|(k, _)| ts.measure(k, key)).fold(0.0, f32::max);
-    let (lh, a, d) = (ts.line_height(val), ts.ascent(val), ts.descent(val));
-    let kw = (widest + 20.0).ceil();
-    let beside = w >= kw + 240.0;
-    for (name, role) in STACK {
-        let base = ui.text_system().snap(y + (lh - a - d) / 2.0 + a);
-        ui.text(x, base, name, key);
-        let (vx, vy) = if beside { (x + kw, y) } else { (x, y + lh) };
-        let lines = ui.text_system().wrap(role, val, x + w - vx);
-        y = vy + kit::lines(ui, &lines, val, (vx, w), vy, false) + SPACING;
-    }
-    ui.advance_to(y - SPACING);
 }

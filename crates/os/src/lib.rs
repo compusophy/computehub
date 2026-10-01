@@ -16,6 +16,7 @@
 
 pub mod ai;
 pub mod remote;
+pub mod report;
 
 use gfx::{DrawList, RectF, Rgba};
 use platform::{App, Ctl, Event, Handled, Renderer};
@@ -48,6 +49,7 @@ const APPLETS: [&str; 9] =
 // The wasm entry point. A plain comment: a doc comment would ship in os.js.
 #[wasm_bindgen(start)]
 pub fn start() -> Result<(), JsValue> {
+    report::install();
     platform::run(Desktop::new()?)
 }
 
@@ -64,6 +66,8 @@ struct Desktop {
     /// The theme's name as storage has it, and the AI state the program windows share.
     saved: &'static str,
     ai: ai::Ai,
+    /// Notes, feedback and error reports, and the outbox.
+    report: report::Reports,
     list: DrawList,
 }
 
@@ -112,6 +116,9 @@ impl Desktop {
             shell.set_now(ctl.monotonic_ms());
         }
         let types = types_text(&ev);
+        if let Event::Resize { w, h, dpr } = ev {
+            self.report.screen = (w, h, dpr);
+        }
         let release =
             if let Event::PointerUp { x, y, button: 0 } = ev { Some((x, y)) } else { None };
         let r = match ev {
@@ -121,20 +128,34 @@ impl Desktop {
                 None => self.shell.as_mut().map(|s| s.fetched(id, result)),
             },
             ev @ (Event::Chunk { .. } | Event::StreamEnd { .. }) => {
+                // A report's answer is the report's; an AI request's failure is noted.
+                if let Event::StreamEnd { id, status, ref error } = ev {
+                    if self.report.ended(ctl, id, status) {
+                        return Handled::default();
+                    }
+                    if self.ai.streams(id) {
+                        self.report.ai_ended(status, error);
+                    }
+                }
                 if let Some(shell) = &mut self.shell {
                     self.ai.heard(shell.kernel_mut(), ev);
                 }
                 return Handled::default();
             }
             Event::Proc { pid, msg } => self.kernel(KernelIn::Msg { pid, msg }),
-            Event::ProcError { pid } => self.kernel(KernelIn::Error { pid }),
+            Event::ProcError { pid } => {
+                let procs = self.shell.as_mut().map(|s| s.kernel_mut().procs()).unwrap_or_default();
+                let argv0 = procs.iter().find(|p| p.0 == pid).map_or("", |p| p.1.as_str());
+                self.report.proc_failed(pid, argv0);
+                self.kernel(KernelIn::Error { pid })
+            }
             Event::Wake => self.kernel(KernelIn::Wake),
             Event::Hidden => self.kernel(KernelIn::Hidden),
             ev => input_of(ev).and_then(|input| self.input(input, ctl)),
         };
         let Some(r) = r else { return Handled::default() };
         let asked = r.text_input.is_some();
-        r.effects.into_iter().for_each(|fx| effect(fx, ctl, &self.ai));
+        apply(r.effects, ctl, &self.ai, &mut self.report);
         if let Some(on) = r.text_input {
             self.typing = on;
             ctl.set_text_input(on);
@@ -155,15 +176,18 @@ impl Desktop {
         self.shell.as_mut().map(|s| s.kernel(ev))
     }
 
-    /// Pumps AI and the shell's queued effects (twice: each can cause the other); stores a theme.
+    /// Pumps AI and the shell's queued effects (twice: each can cause the other), then reports;
+    /// stores a theme.
     fn flush(&mut self, ctl: &mut Ctl) {
         let Some(shell) = &mut self.shell else { return };
         for _ in 0..2 {
-            if self.ai.pump(ctl, shell.kernel_mut()) {
-                shell.set_ai(self.ai.status());
+            let told = self.ai.pump(ctl, shell.kernel_mut());
+            if self.report.retell() | told {
+                shell.set_ai(self.report.status(self.ai.status()));
             }
-            shell.take_effects().into_iter().for_each(|fx| effect(fx, ctl, &self.ai));
+            apply(shell.take_effects(), ctl, &self.ai, &mut self.report);
         }
+        self.report.pump(ctl, || context(shell));
         let theme = shell.theme_name();
         if theme != self.saved {
             self.saved = theme;
@@ -249,6 +273,18 @@ fn text_of<'a>(shell: &'a mut Option<Shell>, parts: &'a mut Parts) -> Option<&'a
     }
 }
 
+/// Applies `fx` in order, telemetry seeing feedback and preferences first.
+fn apply(fx: Vec<Effect>, ctl: &mut Ctl, ai: &ai::Ai, report: &mut report::Reports) {
+    for fx in fx {
+        match &fx {
+            Effect::Feedback { kind, text, context } => report.feedback(kind, text, *context),
+            Effect::Pref { key, value } => report.pref(ctl, key, value),
+            _ => {}
+        }
+        effect(fx, ctl, ai);
+    }
+}
+
 fn effect(fx: Effect, ctl: &mut Ctl, ai: &ai::Ai) {
     match fx {
         Effect::Fetch { id, url } => ctl.fetch(id, &url),
@@ -261,7 +297,7 @@ fn effect(fx: Effect, ctl: &mut Ctl, ai: &ai::Ai) {
         Effect::Kernel(K::Wake { ms }) => ctl.wake_in(ms),
         Effect::Kernel(K::Saved) => ctl.storage_set(HOME_KEY, "1"),
         Effect::Pref { key, value } => pref(&key, &value, ctl, ai),
-        // Sending feedback arrives with the telemetry change.
+        // Telemetry took it ([`apply`]): it goes at the next flush, which can say what is open.
         Effect::Feedback { .. } => {}
         // The host hands frames to the apps; none reach here.
         Effect::Kernel(K::Draw { .. }) => {}
@@ -283,6 +319,22 @@ fn prefs(ctl: &Ctl) -> shell::Prefs {
     let theme = ctl.storage_get(THEME_KEY).unwrap_or_default();
     let (dock, seen) = (ctl.storage_get("compusophy.dock"), ctl.storage_get("compusophy.seen"));
     shell::Prefs { theme, dock, seen: seen.is_some() }
+}
+
+/// Where a report comes from: the device, the theme, the windows open.
+fn context(shell: &Shell) -> report::Context {
+    let theme = shell.theme_name().to_string();
+    report::Context {
+        device: platform::device(),
+        theme,
+        windows: windows(shell),
+        ..Default::default()
+    }
+}
+
+/// The windows open as a report says them: their apps' names.
+fn windows(shell: &Shell) -> String {
+    shell.open_apps().join(", ")
 }
 
 /// A Start's program as the platform takes it.

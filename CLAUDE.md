@@ -60,17 +60,17 @@ crates/
              trait, Cx, the Code editor (re-exports text)
   vt/        VT/xterm escape parser        term/  terminal screen model
   guest/     the guest shell the Terminal runs
-  apps/      Terminal, Welcome, Settings
-  studio/    Studio, a wasip1 GUI program (dist/bin/): applang editor + AppHost
-  assistant/ the Assistant, a wasip1 GUI program: chat, builds verified apps
+  apps/      Welcome, Files, Settings, About, Feedback, Terminal
+  studio/    Studio (wasip1 GUI program): make apps by describing them, live
+  assistant/ the Assistant (wasip1 GUI program): chat; its AI code Studio shares
   uiwire/    remote UI protocol: GUI programs send widget trees, get events
   host/      wm + one app per window (placement); motion, frame geometry, search
   home/      dock, everything bar + launcher panel, desktop icons, menus, touch
   shell/     the desktop: top bar, window chrome, keys; wires host + home (no web deps)
   platform/  the browser boundary: canvas, WebGL2, input, textarea, fetch,
-             frames on demand, cursor, localStorage, program workers
-  os/        wasm entry: fonts, VFS, app registry, prefs, event glue, Remote
-             (the window of a GUI program), ai (streams /api/ai for programs)
+             frames on demand, localStorage, workers, beacon
+  os/        wasm entry: fonts, VFS, registry, prefs, event glue, Remote (a
+             program's window), ai (/api/ai), report (telemetry, outbox)
   kernel/    R2 kernel, deterministic: wire protocol, process table, consoles
              and file server (main), snap (/home), module
   wasi/      the kernel's worker half: WASI preview 1 Proc, fds, /dev

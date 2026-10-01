@@ -140,6 +140,12 @@ impl Shell {
         self.host.wm()
     }
 
+    /// The apps of the open windows, oldest first.
+    pub fn open_apps(&self) -> Vec<&str> {
+        let h = &self.host;
+        h.wins.iter().filter(|w| h.live(w.id)).map(|w| w.name.as_str()).collect()
+    }
+
     pub fn vfs(&self) -> &Vfs {
         &self.host.vfs
     }
