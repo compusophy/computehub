@@ -23,7 +23,7 @@ mesh of pooled compute across tabs and devices. Author handle: compusophy.
 3. **Caps:** ≤2,000 lines of Rust per crate (tests count), ≤25,000 total,
    this file ≤8,000 chars. At a cap: split, shrink, or delete. Never raise
    it.
-4. **Deterministic crates** (`wm`, `vfs`, `kernel`): no floats, no
+4. **Deterministic crates** (`wm`, `vfs`, `kernel`, `wasi`): no floats, no
    HashMap/HashSet, no clocks, no randomness. State must replay bit-for-bit
    and hash identically.
 5. **wasm32 always green:** `cargo check --workspace --target wasm32-unknown-unknown`.
@@ -54,18 +54,21 @@ crates/
              gradients, glows, grain), glyph atlas, the WebGL2 shaders
   text/      TextSystem: font slots, fallbacks, glyphs on the atlas
   ui/        immediate-mode widgets, themes (Midnight, Dawn, Mono), the App
-             trait, Cx (re-exports text)
+             trait, Cx, the Code editor (re-exports text)
   vt/        VT/xterm escape parser        term/  terminal screen model
   guest/     the guest shell the Terminal runs
   apps/      Terminal, Welcome, Settings
-  studio/    applang editor + AppHost (runs .app files)
+  studio/    Studio, a wasip1 GUI program (dist/bin/): applang editor + AppHost
+  uiwire/    remote UI protocol: GUI programs send widget trees, get events
   host/      wm + one app per window; motion, frame geometry, launcher search
   shell/     the desktop: top bar, dock, launcher, window chrome, keys (no web deps)
   platform/  the browser boundary: canvas, WebGL2, input, textarea, fetch,
              frames on demand, cursor, localStorage, program workers
-  os/        wasm entry: fonts, VFS, app registry, theme storage, event glue
-  kernel/    R2 kernel, deterministic: wire protocol, process table and
-             consoles (main), wasi (worker half), snap (/home), module
+  os/        wasm entry: fonts, VFS, app registry, theme storage, event glue,
+             Remote (the window of a GUI program)
+  kernel/    R2 kernel, deterministic: wire protocol, process table, consoles
+             and file server (main), snap (/home), module
+  wasi/      the kernel's worker half: WASI preview 1 Proc, fds, /dev
   cpu/       the program worker (cdylib; dist/cpu/): loader, WASI imports, homed
   toolbox/   test programs, one wasm32-wasip1 multicall binary (dist/bin/)
 assets/fonts/  Inter Regular (boot, in the wasm); deferred/ Inter SemiBold +
@@ -115,6 +118,16 @@ first opens). `build-web.sh` copies `assets/fonts/deferred/*.ttf` to
 `dist/fonts/deferred/`, `assets/fonts/lazy/*.ttf` to `dist/fonts/` and
 `assets/fonts/OFL-*.txt` to `dist/licenses/`. Regenerating the subsets:
 `assets/fonts/README.md`.
+
+## Safety (the owner runs unattended; never trigger an approval prompt)
+
+- Never delete with `rm -r`/`rm -rf`, `find -delete`, `Remove-Item -Recurse`
+  or `del /s`, and never `rm` a path built from a variable, a wildcard or an
+  absolute path. Leave scratch files where they are; overwrite outputs in
+  place. Only `scripts/deploy.sh` clears a folder, behind a fixed-path guard.
+- No `git reset --hard`, `git clean`, `git checkout -- <file>` or
+  history rewriting. If a command would need the owner's approval, find
+  another way or stop and report.
 
 ## Conventions
 

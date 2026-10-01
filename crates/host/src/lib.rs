@@ -1,13 +1,12 @@
-//! The compusophyOS app host: the [`wm::Wm`] and one [`ui::App`] per window,
-//! plus the pure parts the desktop shell builds on: [`motion`], window
-//! [`frame`] geometry, the dock and launcher [`layout`], the launcher's
-//! [`search`] and [`paint`] helpers. No browser.
+//! The compusophyOS app host, no browser: the [`wm::Wm`] and one [`ui::App`] per window, and the
+//! pure parts the shell builds on ([`motion`], [`frame`], [`layout`], [`search`], [`paint`]).
 //!
 //! [`Host`] changes the wm only through [`Host::apply`], delivers
 //! [`ui::AppEvent`]s and carries out the apps' [`ui::Request`]s; what only the
-//! platform can do comes back as [`Effect`]s in a [`Response`]. An app whose
-//! window the wm closed stays, deaf, until the shell has animated it away and
-//! calls [`Host::reap`].
+//! platform can do comes back as [`Effect`]s in a [`Response`]. GUI process
+//! frames go to every app's [`ui::App::frame`], never the platform. A closing
+//! window's app hears [`ui::App::closing`], then stays, deaf, while the shell
+//! animates it away, until [`Host::reap`] drops it and ends its processes.
 
 #![forbid(unsafe_code)]
 
@@ -35,9 +34,8 @@ const FONT_URLS: [&str; 2] = ["fonts/symbols-a.ttf", "fonts/symbols-b.ttf"];
 pub const THEME_MS: f32 = 200.0;
 pub const TITLEBAR_H: f32 = wm::TITLE_H as f32;
 
-/// One platform event, in logical pixels: a key down (repeats too) by its
-/// position, text typed or pasted or composed, the pointer (button 0 the
-/// primary), the wheel (`dy` > 0 scrolls down), a new size, a new minute.
+/// One platform event, in logical pixels: a key down by position (repeats too), text typed,
+/// pasted or composed, the pointer (button 0 primary), the wheel (`dy` > 0 down), size, time.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Input {
     Key { key: Key, mods: Mods },
@@ -51,8 +49,7 @@ pub enum Input {
     Tick { time: LocalTime },
 }
 
-/// A local date and time to the minute: `month` 1..=12, `weekday` 0..=6
-/// from Sunday, `hour` 0..=23.
+/// A local time to the minute: `month` 1..=12, `weekday` 0..=6 from Sunday, `hour` 0..=23.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct LocalTime {
     pub year: u16,
@@ -75,9 +72,7 @@ impl LocalTime {
     /// The date as the top bar shows it: `"Wed 1 Oct"`.
     pub fn date(&self) -> String {
         let mut date = [DAYS[usize::from(self.weekday % 7)], " "].concat();
-        if self.day >= 10 {
-            date.push(digit(self.day / 10));
-        }
+        date.extend((self.day >= 10).then(|| digit(self.day / 10)));
         date.extend([digit(self.day), ' ']);
         date + MONTHS[usize::from(self.month.clamp(1, 12) - 1)]
     }
@@ -106,8 +101,7 @@ pub enum KernelIn {
     Hidden,
 }
 
-/// The pointer's look: the arrow, an I-beam over text, an open hand over a
-/// titlebar (closed while a window moves), and the resize arrows.
+/// The pointer: arrow, I-beam on text, open hand on a titlebar (closed while moving), resizes.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Cursor {
     #[default]
@@ -121,8 +115,7 @@ pub enum Cursor {
     NeswResize,
 }
 
-/// What the platform should do after an input: draw, `preventDefault`, set
-/// text input and the cursor (when changed), carry out effects, animate.
+/// After an input: draw, `preventDefault`, text input and cursor (if changed), effects, animate.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Response {
     pub redraw: bool,
@@ -147,6 +140,13 @@ enum Load {
     Pending,
     Ready(Vec<u8>),
     Done,
+}
+
+/// What an app is handed: an event, a process's frame, or its window closing.
+enum Call<'a> {
+    Event(AppEvent),
+    Frame(u32, &'a [u8]),
+    Closing,
 }
 
 /// The window manager and the apps in its windows (closing ones too, by id),
@@ -187,9 +187,16 @@ impl Host {
         &self.wm
     }
 
-    /// Applies `cmd` to the wm; an error (a stale id) leaves it untouched.
+    /// Applies `cmd` to the wm (a stale id changes nothing); a closing window's app hears first.
     pub fn apply(&mut self, cmd: Cmd) {
-        _ = self.wm.apply(cmd);
+        _ = self.close_then(cmd, &mut Response::default());
+    }
+
+    fn close_then(&mut self, cmd: Cmd, out: &mut Response) -> bool {
+        if let Cmd::Close(win) = cmd {
+            self.call(win, Call::Closing, out);
+        }
+        self.wm.apply(cmd).is_ok()
     }
 
     /// Sets the device pixel ratio; a new one retells apps their sizes.
@@ -217,9 +224,7 @@ impl Host {
     /// Opens `name`, if the registry knows it, in a new focused window of
     /// `size`, else of the app's preferred content size, else the wm's default.
     pub fn open(&mut self, name: &str, size: Option<(i32, i32)>, out: &mut Response) {
-        let Some(app) = (self.registry)(name) else {
-            return;
-        };
+        let Some(app) = (self.registry)(name) else { return };
         let size = size.or_else(|| app.preferred_size().and_then(window_size));
         if let Ok(Outcome::Opened(id)) = self.wm.apply(Cmd::Open { size }) {
             let (name, hits) = (name.to_string(), Vec::new());
@@ -238,41 +243,58 @@ impl Host {
 
     /// Hands `ev` to the app of `win` if open, does what it asked, then pumps.
     pub fn deliver(&mut self, win: WinId, ev: AppEvent, out: &mut Response) {
-        self.event(win, ev, out);
+        self.call(win, Call::Event(ev), out);
         self.pump(out);
     }
 
-    /// After an app event or kernel input: `Io` to the windows the kernel woke
-    /// (at most 4 rounds), a moved [`Vfs::generation`] told, its effects out.
+    /// After an app event or kernel input, up to 4 rounds: `Io` to woken windows,
+    /// a moved [`Vfs::generation`] told, frames to the apps, other effects out.
     pub fn pump(&mut self, out: &mut Response) {
         for _ in 0..4 {
             let woken = self.kernel.take_woken();
-            // By index, not a collected Vec: fewer boot bytes; apps only add windows.
-            for i in 0..self.wins.len() {
-                let Some(win) = self.wins.get(i).map(|w| w.id) else { break };
+            self.each(out, |h, win, out| {
                 if woken.iter().any(|&o| o == win.0 || o == u32::MAX) {
-                    self.event(win, AppEvent::Io, out);
+                    h.call(win, Call::Event(AppEvent::Io), out);
+                }
+            });
+            if mem::replace(&mut self.generation, self.vfs.generation()) != self.generation {
+                self.kernel.vfs_changed();
+            }
+            for e in self.kernel.take_effects() {
+                match e {
+                    kernel::Effect::Draw { pid, frame } => self.each(out, |h, win, out| {
+                        h.call(win, Call::Frame(pid, &frame), out);
+                    }),
+                    e => out.effects.push(Effect::Kernel(e)),
                 }
             }
         }
-        if mem::replace(&mut self.generation, self.vfs.generation()) != self.generation {
-            self.kernel.vfs_changed();
-        }
-        for e in self.kernel.take_effects() {
-            out.effects.push(Effect::Kernel(e));
+    }
+
+    /// `f` for each window by index (fewer boot bytes than a Vec; apps only add windows).
+    fn each(&mut self, out: &mut Response, mut f: impl FnMut(&mut Host, WinId, &mut Response)) {
+        for i in 0..self.wins.len() {
+            let Some(win) = self.wins.get(i).map(|w| w.id) else { break };
+            f(self, win, out);
         }
     }
 
-    /// Hands `ev` to the app of `win` if open, owning what it spawns.
-    fn event(&mut self, win: WinId, ev: AppEvent, out: &mut Response) {
+    /// Hands `call` to the app of `win` if open, owning what it spawns; does what it asked.
+    fn call(&mut self, win: WinId, call: Call<'_>, out: &mut Response) {
         let shown = self.wm.layout().iter().any(|p| p.win == win);
-        let open = self.wm.normal_rect(win).is_some();
-        let Some(w) = self.wins.iter_mut().find(|w| w.id == win && open) else {
-            return;
-        };
+        let rect = self.wm.normal_rect(win);
+        let Some(w) = self.wins.iter_mut().find(|w| w.id == win && rect.is_some()) else { return };
         self.kernel.set_owner(win.0);
         let mut cx = Cx::new(&mut self.vfs, &mut self.kernel, self.now_ms);
-        out.redraw |= w.app.event(ev, &mut cx) && shown;
+        let redraw = match call {
+            Call::Event(ev) => w.app.event(ev, &mut cx),
+            Call::Frame(pid, frame) => w.app.frame(pid, frame, &mut cx),
+            Call::Closing => {
+                w.app.closing(&mut cx);
+                false
+            }
+        };
+        out.redraw |= redraw && shown;
         for request in cx.take_requests() {
             // Nothing more once the app closed itself.
             if !self.live(win) {
@@ -281,9 +303,15 @@ impl Host {
             match request {
                 Request::Open { name, .. } if name == "launcher" => self.launcher = true,
                 Request::Open { name, .. } => self.open(&name, None, out),
-                Request::CloseSelf => out.redraw |= self.wm.apply(Cmd::Close(win)).is_ok(),
+                Request::CloseSelf => out.redraw |= self.close_then(Cmd::Close(win), out),
                 Request::LoadFallbackFonts => self.load_fonts(out),
                 Request::SetTheme(name) => self.themes.push(name),
+                Request::Size(w, h) => {
+                    let (r, size) = (rect.unwrap_or_default(), window_size((w.into(), h.into())));
+                    let rect = size.map(|(w, h)| Rect::new(r.x, r.y, w, h));
+                    out.redraw |=
+                        rect.is_some_and(|rect| self.wm.apply(Cmd::Resize { win, rect }).is_ok());
+                }
             }
         }
     }
@@ -331,8 +359,7 @@ impl Host {
         }
     }
 
-    /// Tells the apps focus changes and new content sizes, then switches the
-    /// themes they asked for.
+    /// Tells apps focus changes and new content sizes, then switches to themes they asked for.
     pub fn settle(&mut self, out: &mut Response) {
         for _ in 0..8 {
             let focused = self.focused_app();
@@ -383,9 +410,7 @@ impl Host {
         theme: &Theme,
         state: UiState,
     ) {
-        let Some(w) = self.wins.iter_mut().find(|w| w.id == win) else {
-            return;
-        };
+        let Some(w) = self.wins.iter_mut().find(|w| w.id == win) else { return };
         w.hits.clear();
         if layout.w > 0.0 && layout.h > 0.0 {
             list.push_clip(clip);
@@ -420,8 +445,7 @@ impl Host {
         }
     }
 
-    /// A dock click: minimizes the app's focused window, else shows its top
-    /// or newest one, else opens it.
+    /// A dock click: minimizes the app's focused window, else shows its top or newest, or opens.
     pub fn toggle(&mut self, name: &str, out: &mut Response) {
         let mine = self.windows_of(name);
         let focused = self.wm.focused().filter(|w| mine.contains(w));
@@ -445,8 +469,7 @@ impl Host {
         apps.map(|(icon, wins, n)| (n, icon, wins)).collect()
     }
 
-    /// The launcher's entries: `apps` as tiles, then the `.app` files in
-    /// `/apps` and the guest's home (`~`).
+    /// The launcher's entries: `apps` as tiles, then the `.app` files in `/apps` and `~`.
     pub fn entries(&mut self, apps: &[&str]) -> Vec<search::Entry> {
         let mut out = Vec::new();
         for &n in apps {

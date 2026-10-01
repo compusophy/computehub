@@ -1,20 +1,20 @@
-//! compusophyOS: the wasm entry point.
-//!
-//! `start` runs a desktop on [`platform::run`]: the boot font, a [`Vfs`] with
-//! Studio's samples, and a [`Registry`] of [`apps::open`] then
-//! [`studio::open`]. The [`Shell`] is made at the first Resize that leaves a
-//! work area; until then input is dropped (a missed Tick is replayed) and
-//! frames clear to the default theme's base. The theme starts as
-//! `localStorage` names it under [`THEME_KEY`] and is stored when it changes.
+//! compusophyOS's wasm entry: `start` runs a desktop on [`platform::run`]
+//! with the boot font, a [`Vfs`] holding the `/bin` markers and Studio's
+//! samples, and a [`Registry`] of [`apps::open`] then [`remote::open`]. The
+//! [`Shell`] is made at the first Resize that leaves a work area; until then
+//! input is dropped (a missed Tick is replayed) and frames clear to the
+//! default theme's base. The theme is kept in `localStorage` ([`THEME_KEY`]).
 //!
 //! Fonts: boot (Inter Regular, in the wasm); deferred (Inter SemiBold and
 //! JetBrains Mono, fetched after the first frame under the top two fetch ids,
-//! which the shell, counting from 1, never reaches; a failure quietly leaves
-//! bold as Regular and mono cells empty); lazy (symbol fallbacks the shell
-//! fetches). A key-down that types text is never prevented while text input
-//! is on: text reaches apps only through the platform's textarea.
+//! which the shell never reaches; a failure leaves bold as Regular and mono
+//! cells empty); lazy (symbol fallbacks the shell fetches). A key-down that
+//! types text is never prevented while text input is on: text reaches apps
+//! only through the platform's textarea.
 
 #![forbid(unsafe_code)]
+
+pub mod remote;
 
 use gfx::{DrawList, RectF, Rgba};
 use platform::{App, Ctl, Event, Handled, Renderer};
@@ -32,11 +32,11 @@ const DEFERRED: [(u32, FontId, &str); 2] = [
     (u32::MAX, FontId::Mono, "fonts/deferred/JetBrainsMono-Regular.ttf"),
 ];
 
-/// The `localStorage` key that keeps the theme's name.
+/// The `localStorage` keys of the theme's name and of `"1"` once /home was saved.
 pub const THEME_KEY: &str = "compusophy.theme";
-/// The `localStorage` key that is `"1"` once /home was saved.
 pub const HOME_KEY: &str = "compusophy.home";
-/// The applets of `bin/toolbox.wasm`, each a `/bin` marker file.
+/// The applets of `bin/toolbox.wasm`, each a `/bin` marker file (as is
+/// Studio, [`remote::STUDIO`], for `bin/studio.wasm`).
 const APPLETS: [&str; 9] =
     ["hello", "rev", "wc", "spin", "nap", "fstest", "keys", "bench", "selftest"];
 
@@ -46,13 +46,13 @@ pub fn start() -> Result<(), JsValue> {
     platform::run(Desktop::new()?)
 }
 
+#[derive(Default)]
 struct Desktop {
     /// The text system and filesystem, until the shell takes them.
     parts: Parts,
     shell: Option<Shell>,
-    /// Whether a Tick came before the shell did.
+    /// Whether a Tick came before the shell did, and whether text input is on.
     missed_tick: bool,
-    /// Whether text input is on, as last asked of the platform.
     typing: bool,
     /// Which [`DEFERRED`] fonts are on their way; `None` before the first frame.
     deferred: Option<[bool; 2]>,
@@ -65,20 +65,15 @@ impl Desktop {
     fn new() -> Result<Desktop, String> {
         let text = TextSystem::new(SANS.to_vec())?;
         let mut vfs = Vfs::new();
-        studio::install_samples(&mut vfs);
         let _ = vfs.mkdir_all("/bin"); // Not mkdir: Vfs::new ships mkdir_all already.
         for name in APPLETS {
             let _ = vfs.write(&["/bin/", name].concat(), b"#!wasm bin/toolbox.wasm\n");
         }
-        Ok(Desktop {
-            parts: Some((text, vfs)),
-            shell: None,
-            missed_tick: false,
-            typing: false,
-            deferred: None,
-            saved: ui::THEMES[0].name,
-            list: DrawList::new(),
-        })
+        let _ = vfs.write(remote::STUDIO, b"#!wasm bin/studio.wasm\n");
+        for (path, src) in remote::SAMPLES {
+            let _ = vfs.write(path, src.as_bytes());
+        }
+        Ok(Desktop { parts: Some((text, vfs)), ..Desktop::default() })
     }
 
     /// Hands `input` to the shell, first making it at the first usable size.
@@ -126,9 +121,7 @@ impl Desktop {
             Event::Hidden => self.kernel(KernelIn::Hidden),
             ev => input_of(ev).and_then(|input| self.input(input, ctl)),
         };
-        let Some(r) = r else {
-            return Handled::default();
-        };
+        let Some(r) = r else { return Handled::default() };
         let asked = r.text_input.is_some();
         r.effects.into_iter().for_each(|fx| effect(fx, ctl));
         if let Some(on) = r.text_input {
@@ -151,12 +144,9 @@ impl Desktop {
         self.shell.as_mut().map(|s| s.kernel(ev))
     }
 
-    /// Passes on what the shell queued outside a response, and stores a
-    /// theme that changed.
+    /// Passes on what the shell queued outside a response; stores a changed theme.
     fn flush(&mut self, ctl: &mut Ctl) {
-        let Some(shell) = &mut self.shell else {
-            return;
-        };
+        let Some(shell) = &mut self.shell else { return };
         shell.take_effects().into_iter().for_each(|fx| effect(fx, ctl));
         let theme = shell.theme_name();
         if theme != self.saved {
@@ -178,9 +168,7 @@ impl Desktop {
     }
 
     /// After a frame: the next while animating, the deferred fonts after the
-    /// first, and what the shell queued. (Kernel::boot_home with the
-    /// [`HOME_KEY`] flag comes with step 4's homed: until then it does
-    /// nothing, and the call would cost boot bytes.)
+    /// first, what the shell queued. (No Kernel::boot_home until step 4's homed.)
     fn drawn(&mut self, animating: bool, ctl: &mut Ctl) {
         if animating {
             ctl.request_frame();
@@ -256,6 +244,8 @@ fn effect(fx: Effect, ctl: &mut Ctl) {
         Effect::Kernel(K::Kill { pid }) => ctl.kill(pid),
         Effect::Kernel(K::Wake { ms }) => ctl.wake_in(ms),
         Effect::Kernel(K::Saved) => ctl.storage_set(HOME_KEY, "1"),
+        // The host hands frames to the apps; none reach here.
+        Effect::Kernel(K::Draw { .. }) => {}
     }
 }
 
@@ -289,7 +279,7 @@ fn local(t: platform::LocalTime) -> LocalTime {
 
 /// Makes apps by name: the built-ins, then Studio and `.app` files.
 fn registry() -> Registry {
-    Box::new(|name| apps::open(name).or_else(|| studio::open(name)))
+    Box::new(|name| apps::open(name).or_else(|| remote::open(name)))
 }
 
 /// `a` then `b`, as one response.
@@ -303,8 +293,7 @@ fn merge(mut a: Response, b: Response) -> Response {
     a
 }
 
-/// The shell input for an event; `None` for key-ups, fetch results and the
-/// kernel's events.
+/// The shell input for an event; `None` for key-ups, fetches and kernel events.
 fn input_of(ev: Event) -> Option<Input> {
     Some(match ev {
         Event::Key { down: false, .. } | Event::Fetched { .. } => return None,
@@ -325,12 +314,10 @@ fn input_of(ev: Event) -> Option<Input> {
     })
 }
 
-/// The shell key for a key-down. With a `chord` (Ctrl, Alt or Meta) an ASCII
-/// letter `key` is that letter (AZERTY's Ctrl+Z is not Ctrl+W); a keypad key
-/// whose `key` names a key (NumLock off) is that key; `Backquote` is a
-/// backquote everywhere. Otherwise by `code`, or with no code (phone
-/// keyboards) by `key`: letters, digits and backquote as chars, `" "` as
-/// Space, named keys by name.
+/// The shell key for a key-down: by `code`, or with no code (phone keyboards)
+/// by `key`. With a `chord` (Ctrl, Alt or Meta) an ASCII letter `key` is that
+/// letter (AZERTY's Ctrl+Z is not Ctrl+W); a NumLock-off keypad key is the key
+/// it names; `Backquote` is a backquote everywhere.
 fn key_of(code: &str, key: &str, chord: bool) -> Key {
     let one = key.chars().next().filter(|c| c.len_utf8() == key.len());
     if let Some(c) = one.filter(|c| chord && c.is_ascii_alphabetic()) {
@@ -357,13 +344,10 @@ fn without_altgr(ctrl: bool, alt: bool, altgr: bool) -> (bool, bool) {
     (ctrl && !text, alt && !text)
 }
 
-/// Whether a key-down types into a focused textarea unless prevented: its
-/// `key` is text or owned by a dead key, IME or phone keyboard, and no Ctrl,
-/// Alt or Meta is held (AltGr is none).
+/// Whether a key-down types into a focused textarea unless prevented: its `key`
+/// is text or a dead key's, IME's or phone keyboard's, with no Ctrl, Alt or Meta.
 fn types_text(ev: &Event) -> bool {
-    let Event::Key { key, down: true, ctrl, alt, meta, altgr, .. } = ev else {
-        return false;
-    };
+    let Event::Key { key, down: true, ctrl, alt, meta, altgr, .. } = ev else { return false };
     let (ctrl, alt) = without_altgr(*ctrl, *alt, *altgr);
     // Named key values are ASCII words; text is one character or a cluster.
     let named = key.len() > 1 && key.bytes().all(|b| b.is_ascii_alphanumeric());

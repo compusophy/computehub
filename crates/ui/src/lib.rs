@@ -7,19 +7,22 @@
 //! if [`TextSystem::take_atlas_reset`] says the atlas was cleared midway).
 //! Input comes back as [`AppEvent`]s routed by last frame's hits
 //! ([`hit_test`]); [`App::event`] returns whether to redraw, and an app asks
-//! for anything outside itself through its [`Cx`].
+//! for anything outside itself through its [`Cx`]. [`Code`] is the code
+//! editor widget.
 
 #![forbid(unsafe_code)]
 
+mod code;
 pub mod theme;
 mod widgets;
 
+pub use code::{CODE_MAX, Code, Span, push_num};
 pub use gfx::Rgba;
 pub use kernel;
-pub use text::{ATLAS_SIZE, FontId, MAX_FALLBACKS, TextStyle, TextSystem};
+pub use text::{ATLAS_SIZE, Editor, FontId, MAX_FALLBACKS, TextStyle, TextSystem};
 pub use theme::{Glow, THEMES, Theme, theme};
 pub use widgets::{BUTTON_H, CARD_PAD, FIELD_H, PAD, RADIUS_LG, RADIUS_SM};
-pub use widgets::{Hit, Sense, Ui, UiState, WidgetId, hit_test};
+pub use widgets::{Hit, Sense, Ui, UiState, WidgetId, button_width, hit_test};
 pub use widgets::{SPACING, SPACING_LG, SPACING_MD, TILE_H, TILE_ICON, TILE_W};
 
 /// What every window hosts.
@@ -41,6 +44,17 @@ pub trait App {
     /// Its icon on launchers, docks and tiles.
     fn icon(&self) -> AppIcon {
         AppIcon::default()
+    }
+    /// GUI process `pid` drew `frame` (uiwire bytes, unchecked). Every app
+    /// hears every frame and takes only its own process's; returns whether
+    /// to redraw.
+    fn frame(&mut self, pid: u32, frame: &[u8], cx: &mut Cx<'_>) -> bool {
+        let _ = (pid, frame, cx);
+        false
+    }
+    /// The window is closing; the processes it owns end soon after.
+    fn closing(&mut self, cx: &mut Cx<'_>) {
+        let _ = cx;
     }
 }
 
@@ -162,6 +176,8 @@ pub enum Request {
     LoadFallbackFonts,
     /// Switch the desktop to the named theme (see [`theme()`]).
     SetTheme(String),
+    /// Resize the asking app's window to this content size, in logical px.
+    Size(u16, u16),
 }
 
 /// What an app can reach while handling an event: the filesystem, the
@@ -182,16 +198,7 @@ impl<'a> Cx<'a> {
 
     /// Opens an app (a registry name or a `.app` path) in a new tiled window.
     pub fn open(&mut self, name: &str) {
-        self.open_as(name, false);
-    }
-
-    /// Opens an app in a new floating window.
-    pub fn open_floating(&mut self, name: &str) {
-        self.open_as(name, true);
-    }
-
-    fn open_as(&mut self, name: &str, floating: bool) {
-        self.requests.push(Request::Open { name: name.to_string(), floating });
+        self.requests.push(Request::Open { name: name.to_string(), floating: false });
     }
 
     pub fn close_self(&mut self) {
@@ -205,6 +212,11 @@ impl<'a> Cx<'a> {
 
     pub fn set_theme(&mut self, name: &str) {
         self.requests.push(Request::SetTheme(name.to_string()));
+    }
+
+    /// Resizes the asking app's window to a `w` x `h` content area.
+    pub fn set_size(&mut self, w: u16, h: u16) {
+        self.requests.push(Request::Size(w, h));
     }
 
     /// The requests so far, oldest first, leaving none.

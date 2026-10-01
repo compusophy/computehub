@@ -16,7 +16,7 @@ WEB_DEPS="wasm-bindgen js-sys web-sys"
 LOCK_ALLOW="bumpalo cfg-if futures-core futures-task futures-util js-sys once_cell pin-project-lite proc-macro2 quote rustversion slab syn unicode-ident wasm-bindgen wasm-bindgen-macro wasm-bindgen-macro-support wasm-bindgen-shared web-sys"
 # Crates whose state must replay bit-for-bit: no floats, no hash-ordered or
 # randomly seeded collections, no clocks, no randomness.
-DETERMINISTIC_CRATES="wm vfs kernel"
+DETERMINISTIC_CRATES="wm vfs kernel wasi"
 DET_TOKENS="HashMap|HashSet|RandomState|DefaultHasher|Instant|SystemTime|UNIX_EPOCH|thread_rng"
 fail=0
 

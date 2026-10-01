@@ -13,8 +13,9 @@
 #   system    dist/cpu/: the program worker (cpu.js, cpu_bg.wasm,
 #             worker.js), fetched when a program first runs or /home is
 #             restored. Cap 40 KB.
-#   programs  dist/bin/: the test programs (toolbox.wasm), fetched when one
-#             first runs. Cap 64 KB.
+#   programs  dist/bin/: the programs (toolbox.wasm, the test programs, and
+#             studio.wasm), each fetched when it first runs. Cap 64 KB per
+#             file: a program is downloaded on its own.
 #   licenses  dist/licenses/: the font licenses, shipped but never fetched by
 #             the page. Not counted.
 #
@@ -36,11 +37,13 @@ fi
 
 fail=0
 
-# Prints each file of a group and its gzipped size; sets `sum` to the total.
+# Prints each file of a group and its gzipped size; sets `sum` to the total
+# and `sizes` to each file's size, in order.
 group() {
   local title=$1
   shift
   sum=0
+  sizes=()
   echo "$title"
   local f n
   for f in "$@"; do
@@ -48,6 +51,7 @@ group() {
     n=$((n))
     printf '  %-46s %8d bytes gzipped\n' "$f" "$n"
     sum=$((sum + n))
+    sizes+=("$n")
   done
 }
 
@@ -91,9 +95,9 @@ group "system (dist/cpu/, cap $SYSTEM_CAP bytes gzipped)" ${system[@]+"${system[
 system_sum=$sum
 printf '  %-46s %8d bytes gzipped (cap %d)\n' "system total" "$system_sum" "$SYSTEM_CAP"
 
-group "programs (dist/bin/, cap $PROGRAMS_CAP bytes gzipped)" ${programs[@]+"${programs[@]}"}
-programs_sum=$sum
-printf '  %-46s %8d bytes gzipped (cap %d)\n' "programs total" "$programs_sum" "$PROGRAMS_CAP"
+group "programs (dist/bin/, cap $PROGRAMS_CAP bytes gzipped per file)" ${programs[@]+"${programs[@]}"}
+program_sizes=(${sizes[@]+"${sizes[@]}"})
+printf '  %-46s %8d bytes gzipped (cap %d per file)\n' "programs total" "$sum" "$PROGRAMS_CAP"
 
 group "licenses (dist/licenses/, not counted)" ${licenses[@]+"${licenses[@]}"}
 printf '  %-46s %8d bytes gzipped (not counted)\n' "licenses total" "$sum"
@@ -114,10 +118,14 @@ if [ "$system_sum" -gt "$SYSTEM_CAP" ]; then
   echo "FAIL: the program worker is $system_sum bytes gzipped, over its cap of $SYSTEM_CAP" >&2
   fail=1
 fi
-if [ "$programs_sum" -gt "$PROGRAMS_CAP" ]; then
-  echo "FAIL: the test programs are $programs_sum bytes gzipped, over their cap of $PROGRAMS_CAP" >&2
-  fail=1
-fi
+i=0
+for f in ${programs[@]+"${programs[@]}"}; do
+  if [ "${program_sizes[$i]}" -gt "$PROGRAMS_CAP" ]; then
+    echo "FAIL: the program $f is ${program_sizes[$i]} bytes gzipped, over the per-file cap of $PROGRAMS_CAP" >&2
+    fail=1
+  fi
+  i=$((i + 1))
+done
 for f in ${stray[@]+"${stray[@]}"}; do
   echo "FAIL: $f is in no budget group (dist/ is boot, dist/fonts/deferred/ deferred, dist/fonts/ lazy, dist/cpu/ system, dist/bin/ programs, dist/licenses/ uncounted)" >&2
   fail=1

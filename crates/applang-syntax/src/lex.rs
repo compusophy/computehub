@@ -1,6 +1,5 @@
-//! The applang lexer: source text to spanned tokens on the `lang::lex`
-//! cursor. Tokens are `Copy`: `Ident` and `Str` text is re-sliced from the
-//! source by span, and strings are unescaped at parse.
+//! The applang lexer: source text to `Copy` spanned tokens on the `lang::lex`
+//! cursor; `Ident` and `Str` text is re-sliced by span, unescaped at parse.
 
 use lang::lex::{Cursor, ident_cont, ident_start};
 use lang::{Diag, Span};
@@ -36,10 +35,8 @@ const PUNCT: [(&str, TokKind); 20] = [
 
 /// A spanned token.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct Token {
-    pub kind: TokKind,
-    pub span: Span,
-}
+#[rustfmt::skip]
+pub(crate) struct Token { pub kind: TokKind, pub span: Span }
 
 impl lang::parse::Tok for Token {
     fn span(&self) -> Span {
@@ -47,8 +44,7 @@ impl lang::parse::Tok for Token {
     }
 }
 
-/// Lexes `src` into tokens ending with an `Eof` sentinel. Trivia:
-/// whitespace, `//` line comments and nested `/* */` block comments.
+/// Lexes `src` into tokens ending in `Eof`; whitespace, `//` and nested `/* */` are trivia.
 pub(crate) fn lex(src: &str) -> Result<Vec<Token>, Diag> {
     let mut cur = Cursor::new(src);
     let mut toks = Vec::new();
@@ -72,6 +68,43 @@ pub(crate) fn lex(src: &str) -> Result<Vec<Token>, Diag> {
         let start = cur.pos();
         let kind = next_kind(&mut cur, start)?;
         toks.push(Token { kind, span: cur.span_from(start) });
+    }
+}
+
+/// What a range of source is, for an editor's colors. Keywords include `true`
+/// and `false`; an unterminated comment runs to the end; Error is a bad token.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[rustfmt::skip]
+pub enum Class { Keyword, Str, Number, Comment, Name, Punct, Error }
+
+/// Every token and comment of `src` as classed byte ranges on char boundaries,
+/// in order. Never fails: a bad token is one [`Class::Error`] range.
+pub fn highlight(src: &str) -> Vec<(Span, Class)> {
+    let mut cur = Cursor::new(src);
+    let mut out = Vec::new();
+    loop {
+        cur.skip_ws();
+        let start = cur.pos();
+        let class =
+            if cur.skip_line_comment("//") || cur.skip_block_comment("/*", "*/") != Ok(false) {
+                Class::Comment
+            } else if cur.at_eof() {
+                return out;
+            } else {
+                match next_kind(&mut cur, start) {
+                    Ok(Int(_)) => Class::Number,
+                    Ok(Str) => Class::Str,
+                    Ok(Ident) => Class::Name,
+                    Ok(k) if KEYWORDS.iter().any(|&(_, kw)| kw == k) => Class::Keyword,
+                    Ok(_) => Class::Punct,
+                    Err(_) => Class::Error,
+                }
+            };
+        // Every arm consumed at least one char; this is only a backstop.
+        if cur.pos() == start {
+            cur.next_char();
+        }
+        out.push((cur.span_from(start), class));
     }
 }
 
@@ -126,8 +159,7 @@ fn str_literal(cur: &mut Cursor<'_>, start: usize) -> Result<TokKind, Diag> {
     }
 }
 
-/// Decodes a `Str` token's source (quotes included); the lexer already
-/// rejected every other escape.
+/// Decodes a `Str` token's source (quotes included); the lexer rejected bad escapes.
 pub(crate) fn unescape(quoted: &str) -> String {
     let mut out = String::with_capacity(quoted.len());
     let mut chars = quoted[1..quoted.len() - 1].chars();

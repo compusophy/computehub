@@ -1,0 +1,14 @@
+[package]
+name = "compusophy-uiwire"
+description = "The remote UI protocol: a GUI program describes its window as a widget tree, the desktop draws it with its own toolkit and theme and sends back events. Deterministic, bounds-checked encode and decode; std only."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[lib]
+name = "uiwire"
+
+[dependencies]

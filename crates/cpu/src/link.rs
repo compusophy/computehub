@@ -1,20 +1,18 @@
-//! The loader: fetch, [`kernel::module::cap_memory`], compile, link, then
-//! `Proc::new` and `_start`. A preview 1 function in [`NAMES`] links to cpu's
-//! own raw export of that name (`sys`), wasm to wasm at any arity; any other
-//! function to a stub that says what was called and returns ENOSYS; any other
-//! kind of import refuses the program. The guest never sees cpu's exports.
+//! The loader: fetch, [`kernel::module::cap_memory`], compile, link, then `Proc::new` and
+//! `_start`. A preview 1 function in [`NAMES`] links to cpu's own raw export of that name
+//! (`sys`), wasm to wasm at any arity; any other function to a stub that says what was called
+//! and returns ENOSYS; another import kind refuses the program. The guest never sees cpu's exports.
 
 use crate::{GuestMem, Proc, exit, with};
 use js_sys::{Function, Object, Promise, Reflect, Uint8Array, WebAssembly};
-use kernel::wasi::{Host, NAMES};
 use kernel::wire::{CANNOT_EXECUTE, ENOSYS, MEM_PAGES, NOT_FOUND, TRAPPED};
+use wasi::{Host, NAMES};
 use wasm_bindgen::prelude::*;
 use web_sys::Response;
 
 /// The WASI function id the function import `module.name` links to, if any.
 pub fn wasi(module: &str, name: &str) -> Option<usize> {
-    let id = NAMES.iter().position(|n| *n == name)?;
-    (module == "wasi_snapshot_preview1").then_some(id)
+    NAMES.iter().position(|n| *n == name).filter(|_| module == "wasi_snapshot_preview1")
 }
 
 /// Says `<argv0>: <why>` and exits with `status`, before the guest runs.
@@ -26,8 +24,13 @@ fn fail(status: i32, why: &str) {
 /// The message of a thrown value, less the expression JavaScriptCore appends.
 fn text(e: &JsValue) -> String {
     let message = Reflect::get(e, &"message".into()).ok().and_then(|m| m.as_string());
-    let text = message.or_else(|| e.as_string()).unwrap_or_default();
-    text.split(" (evaluating '").next().unwrap_or_default().into()
+    trim(message.or_else(|| e.as_string()).unwrap_or_default())
+}
+
+/// `m` up to ` (evaluating '`, found by bytes (a `str` pattern ships 2 KB).
+pub fn trim(mut m: String) -> String {
+    m.truncate(m.as_bytes().windows(14).position(|w| w == b" (evaluating '").unwrap_or(m.len()));
+    m
 }
 
 /// Fetches the page-relative `url` (the worker lives in `cpu/`), then runs it.
@@ -86,7 +89,7 @@ fn imports(m: &WebAssembly::Module) -> Result<Object, String> {
             return Err([&kind, " import ", &module, ".", &name].concat());
         }
         let f = match wasi(&module, &name) {
-            Some(id) => Reflect::get(&exports, &NAMES[id].into()).unwrap_or_default(),
+            Some(_) => Reflect::get(&exports, &name.as_str().into()).unwrap_or_default(),
             None => stub([&module, ".", &name, ": not supported\n"].concat()),
         };
         let key = JsValue::from(module);

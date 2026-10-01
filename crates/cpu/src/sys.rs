@@ -1,17 +1,17 @@
-//! The 46 `wasi_snapshot_preview1` imports as cpu.wasm's own exports, with
-//! WASI's exact core signatures in witx order (u32 is i32, u64 is i64, the
-//! errno an i32): wasm-bindgen keeps primitive-only exports at that raw ABI,
-//! so the guest calls them wasm to wasm. Each widens its arguments to u64
-//! for the Proc. No docs or JSDoc on the exports: they would ship in cpu.js.
+//! The 46 `wasi_snapshot_preview1` imports as cpu.wasm's own exports, with WASI's exact core
+//! signatures in witx order (u32 is i32, u64 is i64, the errno an i32): wasm-bindgen keeps
+//! primitive-only exports at that raw ABI, so the guest calls them wasm to wasm. No docs or
+//! JSDoc on the exports: they would ship in cpu.js.
 
 #![allow(clippy::too_many_arguments)]
 
-use kernel::wasi::*;
+use wasi::*;
 use wasm_bindgen::prelude::*;
 
-// Each entry is `ID name(argument types);`, in witx order; the arguments are
-// named a, b, c, .. in order.
+// Each entry is `ID name(argument types);`: its arguments, named a, b, c, .., widen to u64 and
+// the names left over pad its call to `crate::sys` (nine arguments) with zeros.
 macro_rules! sys {
+    (0 $unused:ident) => { 0 };
     ($($id:ident $name:ident($($t:ident)*);)+) => {
         /// `(id, name, arity)` of each export but proc_exit.
         #[cfg(test)]
@@ -25,7 +25,7 @@ macro_rules! sys {
     (@ $id:ident $name:ident [] [$($as:ident)*] [$($a:ident: $t:ident,)*]) => {
         #[wasm_bindgen(skip_jsdoc)]
         pub fn $name($($a: $t),*) -> u32 {
-            crate::sys($id, &[$(u64::from($a)),*])
+            crate::sys($id, $(u64::from($a),)* $(sys!(0 $as)),*)
         }
     };
 }
@@ -63,5 +63,5 @@ sys! {
 // proc_exit returns nothing.
 #[wasm_bindgen(skip_jsdoc)]
 pub fn proc_exit(code: u32) {
-    crate::sys(PROC_EXIT, &[code.into()]);
+    crate::sys(PROC_EXIT, code.into(), 0, 0, 0, 0, 0, 0, 0, 0);
 }

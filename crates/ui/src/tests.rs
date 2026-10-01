@@ -25,28 +25,18 @@ fn find(list: &DrawList, kind: f32, color: Option<Rgba>) -> Vec<Instance> {
     list.instances().iter().filter(hit).copied().collect()
 }
 
-fn glyphs(list: &DrawList) -> Vec<Instance> {
-    find(list, 4.0, None)
-}
-
-type Frame<R> = (R, DrawList, Vec<Hit>);
-
 /// Builds one frame in `th` and checks the `Ui` left no clip open.
-fn frame_in<R>(
+fn frame<R>(
     t: &mut TextSystem,
     th: &Theme,
     r: RectF,
     st: UiState,
     f: impl FnOnce(&mut Ui) -> R,
-) -> Frame<R> {
+) -> (R, DrawList, Vec<Hit>) {
     let (mut list, mut hits) = (DrawList::new(), Vec::new());
     let out = f(&mut Ui::new(&mut list, t, r, &mut hits, st, th));
     assert_eq!(list.clip(), RectF::new(-1e9, -1e9, 2e9, 2e9), "clips left open");
     (out, list, hits)
-}
-
-fn frame<R>(t: &mut TextSystem, r: RectF, st: UiState, f: impl FnOnce(&mut Ui) -> R) -> Frame<R> {
-    frame_in(t, MIDNIGHT, r, st, f)
 }
 
 fn state(hover: Option<u32>, pressed: Option<u32>, focused: bool) -> UiState {
@@ -76,7 +66,7 @@ fn contrast(a: Rgba, b: Rgba) -> f32 {
 fn widgets_stack_with_a_rhythm_and_register_hits() {
     let mut t = ts();
     let rect = RectF::new(100.0, 50.0, 400.0, 600.0);
-    let (rs, list, hits) = frame(&mut t, rect, REST, |ui| {
+    let (rs, list, hits) = frame(&mut t, MIDNIGHT, rect, REST, |ui| {
         assert_eq!((ui.width(), ui.rect(), ui.cursor()), (360.0, rect, (120.0, 70.0)));
         assert_eq!(ui.theme().name, "Midnight");
         let h = ui.heading("Settings");
@@ -124,7 +114,7 @@ fn widgets_stack_with_a_rhythm_and_register_hits() {
 fn rows_run_left_to_right() {
     let mut t = ts();
     let rect = RectF::new(0.0, 0.0, 600.0, 400.0);
-    let ((row, [a, b, c], after), _, hits) = frame(&mut t, rect, REST, |ui| {
+    let ((row, [a, b, c], after), _, hits) = frame(&mut t, MIDNIGHT, rect, REST, |ui| {
         let mut r = [RectF::default(); 3];
         let row = ui.row(|ui| {
             r[0] = ui.button(WidgetId(1), "One");
@@ -140,7 +130,7 @@ fn rows_run_left_to_right() {
     assert_eq!(row, RectF::new(PAD, PAD, c.x + c.w - PAD, b.h));
     assert_eq!((after.x, after.y, hits.len()), (PAD, PAD + b.h + SPACING, 2));
     // Nested rows, and custom content with the low-level calls.
-    let ((inner, below), list, hits) = frame(&mut t, rect, REST, |ui| {
+    let ((inner, (w, del), below), list, hits) = frame(&mut t, MIDNIGHT, rect, REST, |ui| {
         let mut inner = RectF::default();
         ui.row(|ui| {
             ui.label("x");
@@ -154,15 +144,22 @@ fn rows_run_left_to_right() {
         ui.fill(r, 4.0, WHITE);
         ui.border(r, 4.0, 1.0, WHITE);
         ui.gradient(r, 4.0, WHITE, WHITE);
+        ui.raised(r);
         assert!(ui.text(x, y + 20.0, "raw", SANS14) > 0.0);
         ui.list().glow(r, WHITE);
+        // A sub-Ui over `r`, unpadded, leaves this one's cursor alone.
+        let del = ui.within(r, |ui| (ui.width(), ui.button_danger(WidgetId(8), "Del")));
+        assert_eq!(ui.cursor(), (x, y));
         ui.hit(WidgetId(7), r, Sense::Scroll);
         ui.advance_to(y + 50.0);
-        (inner, ui.label("below"))
+        (inner, del, ui.label("below"))
     });
-    assert_eq!((inner.h, below.y), (BUTTON_H, PAD + BUTTON_H + SPACING + 50.0));
-    assert_eq!((hits.len(), hits[2].sense), (3, Sense::Scroll));
+    let y = PAD + BUTTON_H + SPACING;
+    assert_eq!((inner.h, below.y, w, del.x, del.y), (BUTTON_H, y + 50.0, 50.0, PAD, y));
+    assert_eq!(del.w, button_width(&mut t, MIDNIGHT, "Del"));
+    assert_eq!((hits.len(), hits[3].sense), (4, Sense::Scroll));
     assert!(list.len() >= 10 && find(&list, 5.0, None).len() == 1);
+    assert_eq!(find(&list, 0.0, Some(MIDNIGHT.surface_hi)).len(), 3);
 }
 
 #[test]
@@ -172,20 +169,23 @@ fn buttons_draw_their_states_and_hits_clip() {
     let (hover, down, away) =
         (state(Some(9), None, false), state(Some(9), Some(9), false), state(None, Some(9), false));
     for th in &THEMES {
-        let mut draw = |st: UiState, primary: bool| {
-            frame_in(&mut t, th, rect, st, |ui| match primary {
-                true => ui.button_primary(WidgetId(9), "Ok"),
-                false => ui.button(WidgetId(9), "Ok"),
+        let mut draw = |st: UiState, variant: u8| {
+            frame(&mut t, th, rect, st, |ui| match variant {
+                0 => ui.button(WidgetId(9), "Ok"),
+                1 => ui.button_primary(WidgetId(9), "Ok"),
+                _ => ui.button_danger(WidgetId(9), "Ok"),
             })
             .1
         };
         let fill = |list: &DrawList| list.instances()[0].color;
-        let plain = [REST, hover, down, away].map(|st| fill(&draw(st, false)));
+        let plain = [REST, hover, down, away].map(|st| fill(&draw(st, 0)));
         let hi = th.surface_hi;
         assert_eq!(plain, [hi, th.hover(hi), th.pressed(hi), hi], "{}", th.name);
-        let primary = [REST, hover, down].map(|st| fill(&draw(st, true)));
-        let a = |s| mix(th.accent, th.accent_text, s);
-        assert_eq!(primary, [th.accent, a(0.12), a(0.24)], "{}", th.name);
+        // Solid buttons (primary, danger) mix their color toward `accent_text`.
+        let [primary, danger] = [1, 2].map(|v| [REST, hover, down].map(|st| fill(&draw(st, v))));
+        for (fills, c) in [(primary, th.accent), (danger, th.danger)] {
+            assert_eq!(fills, [0.0, 0.12, 0.24].map(|s| mix(c, th.accent_text, s)), "{}", th.name);
+        }
         // Every state differs visibly from the one before it.
         let far = |x: Rgba, y: Rgba| {
             let d = |p: u8, q: u8| u32::from(p.abs_diff(q));
@@ -195,22 +195,22 @@ fn buttons_draw_their_states_and_hits_clip() {
         assert!(far(primary[0], primary[1]) && far(primary[1], primary[2]), "{}", th.name);
         // A 1 px border on plain buttons only, a top sheen on both, and the
         // label in the right ink.
-        let list = draw(REST, false);
+        let list = draw(REST, 0);
         assert_eq!(find(&list, 1.0, Some(th.border)).len(), 1);
         let sheen = find(&list, 1.0, Some(th.highlight));
         assert_eq!((sheen.len(), sheen[0].clip[3]), (1, 1.0));
         assert_eq!(find(&list, 4.0, Some(th.text)).len(), 2);
-        let list = draw(REST, true);
+        let list = draw(REST, 1);
         assert!(find(&list, 1.0, Some(th.border)).is_empty());
         assert_eq!(find(&list, 4.0, Some(th.accent_text)).len(), 2);
     }
     // Labels sit with their capitals centered.
-    let (b, list, _) = frame(&mut t, rect, REST, |ui| ui.button(WidgetId(1), "HI"));
-    let g = glyphs(&list);
+    let (b, list, _) = frame(&mut t, MIDNIGHT, rect, REST, |ui| ui.button(WidgetId(1), "HI"));
+    let g = find(&list, 4.0, None);
     let cap_top = g.iter().map(|i| i.rect[1]).fold(f32::MAX, f32::min);
     let base = g.iter().map(|i| i.rect[1] + i.rect[3]).fold(0.0, f32::max);
     assert!(((cap_top - b.y) - (b.y + b.h - base)).abs() <= 1.0, "{cap_top} {base}");
-    let (_, _, hits) = frame(&mut t, rect, REST, |ui| {
+    let (_, _, hits) = frame(&mut t, MIDNIGHT, rect, REST, |ui| {
         ui.push_clip(RectF::new(0.0, 0.0, 300.0, 40.0));
         ui.button(WidgetId(1), "Half"); // y 20..52: clipped at 40
         ui.button(WidgetId(2), "Gone"); // y 60..92: hidden
@@ -231,7 +231,7 @@ fn text_fields_scroll_and_show_a_caret() {
     let (mut t, th) = (ts(), MIDNIGHT);
     let rect = RectF::new(0.0, 0.0, 200.0, 100.0);
     let mut field = |st, value: &str, has| {
-        frame(&mut t, rect, st, |ui| ui.text_field(WidgetId(1), value, has, "Search"))
+        frame(&mut t, MIDNIGHT, rect, st, |ui| ui.text_field(WidgetId(1), value, has, "Search"))
     };
     let focused = state(None, None, true);
     let caret = |list: &DrawList| find(list, 0.0, Some(th.accent)).first().copied();
@@ -260,7 +260,7 @@ fn text_fields_scroll_and_show_a_caret() {
     let (f, list, _) = field(focused, long, true);
     let [cx, _, cw, _] = caret(&list).unwrap().rect;
     assert!(cx + cw <= f.x + f.w - 12.0 + 0.5 && cx > f.x + f.w - 24.0);
-    let g = glyphs(&list);
+    let g = find(&list, 4.0, None);
     assert!(g.len() < long.chars().filter(|c| *c != ' ').count());
     assert!(g.iter().all(|i| i.clip[0] == f.x + 12.0));
     assert!((text_end - (f.x + 12.0 + t.measure("hi", SANS14))).abs() <= 0.5);
@@ -271,22 +271,22 @@ fn labels_wrap_to_the_content_width() {
     let mut t = ts();
     let rect = RectF::new(0.0, 0.0, 240.0, 1000.0); // content 200 wide
     let text = "Wrapping keeps every line inside the window, between words.\nA new paragraph.";
-    let (r, list, _) = frame(&mut t, rect, REST, |ui| ui.label(text));
+    let (r, list, _) = frame(&mut t, MIDNIGHT, rect, REST, |ui| ui.label(text));
     let lines = t.wrap(text, SANS14, 200.0);
     assert!(lines.len() >= 4 && r.w <= 200.0 && r.h == lines.len() as f32 * 17.0);
-    let g = glyphs(&list);
+    let g = find(&list, 4.0, None);
     assert!(g.iter().all(|i| i.rect[0] >= 20.0 && i.rect[0] + i.rect[2] <= 221.0));
     let mut rows: Vec<i32> = g.iter().map(|i| (i.rect[1] as i32 - 20) / 17).collect();
     rows.dedup();
     assert_eq!(rows.len(), lines.len());
     // Lines outside the clip are measured but not drawn.
     let short = RectF::new(0.0, 0.0, 240.0, 50.0);
-    let (r2, list, _) = frame(&mut t, short, REST, |ui| ui.label(text));
-    let shown = glyphs(&list);
+    let (r2, list, _) = frame(&mut t, MIDNIGHT, short, REST, |ui| ui.label(text));
+    let shown = find(&list, 4.0, None);
     assert!(r2 == r && !shown.is_empty() && shown.len() < g.len());
     assert!(shown.iter().all(|i| i.rect[1] < 50.0));
     // Any style wraps the same way.
-    let (r3, list, _) = frame(&mut t, rect, REST, |ui| ui.wrapped(text, SANS14));
+    let (r3, list, _) = frame(&mut t, MIDNIGHT, rect, REST, |ui| ui.wrapped(text, SANS14));
     assert_eq!((r3, find(&list, 4.0, Some(WHITE)).len()), (r, g.len()));
 }
 
@@ -296,7 +296,7 @@ fn cards_hold_their_content() {
     let rect = RectF::new(0.0, 0.0, 400.0, 600.0);
     let mut runs = 0;
     let ((card, [label, button], after), list, hits) =
-        frame(&mut t, rect, state(Some(4), None, false), |ui| {
+        frame(&mut t, MIDNIGHT, rect, state(Some(4), None, false), |ui| {
             ui.label("before");
             let mut inner = [RectF::default(); 2];
             let card = ui.card(|ui| {
@@ -323,7 +323,7 @@ fn cards_hold_their_content() {
     assert!(list.instances().iter().position(inside).unwrap() > fill);
     assert_eq!(find(&list, 1.0, Some(th.border)).len(), 2);
     // An empty card is just its padding.
-    let (empty, _, _) = frame(&mut t, rect, REST, |ui| ui.card(|_| {}));
+    let (empty, _, _) = frame(&mut t, MIDNIGHT, rect, REST, |ui| ui.card(|_| {}));
     assert_eq!(empty.h, 2.0 * CARD_PAD);
 }
 
@@ -333,7 +333,7 @@ fn tiles_draw_icon_glyph_and_label() {
     let rect = RectF::new(0.0, 0.0, 400.0, 400.0);
     let hue = Rgba::hex(0x22d3ee);
     for th in &THEMES {
-        let (r, list, hits) = frame_in(&mut t, th, rect, state(Some(3), None, false), |ui| {
+        let (r, list, hits) = frame(&mut t, th, rect, state(Some(3), None, false), |ui| {
             ui.tile(WidgetId(3), "Terminal", ">_", hue)
         });
         assert_eq!(r, RectF::new(PAD, PAD, TILE_W, TILE_H));
@@ -354,7 +354,7 @@ fn tiles_draw_icon_glyph_and_label() {
         assert!(label.iter().all(|g| g.rect[1] > icon[1] + 44.0 && g.rect[1] < r.y + r.h));
     }
     // A long label is cut to fit; an empty glyph shows the first letter.
-    let (r, list, _) = frame(&mut t, rect, REST, |ui| {
+    let (r, list, _) = frame(&mut t, MIDNIGHT, rect, REST, |ui| {
         ui.tile(WidgetId(1), "settings and more", "", Rgba::hex(0x6d5cff))
     });
     let label = find(&list, 4.0, Some(MIDNIGHT.text));
@@ -369,7 +369,7 @@ fn everything_lands_on_device_pixels() {
     let mut t = ts();
     t.set_dpr(1.5);
     let rect = RectF::new(10.3, 20.7, 401.0, 900.0);
-    let (rects, list, _) = frame(&mut t, rect, state(None, None, true), |ui| {
+    let (rects, list, _) = frame(&mut t, MIDNIGHT, rect, state(None, None, true), |ui| {
         let mut out = vec![ui.heading("Title"), ui.label("text")];
         out.push(ui.button(WidgetId(1), "Odd width"));
         out.push(ui.text_field(WidgetId(2), "value", true, ""));
@@ -479,7 +479,7 @@ impl App for Echo {
         }
         self.0 += 1;
         cx.vfs.write("/tmp/clicks", &[self.0]).unwrap();
-        cx.open_floating("about");
+        cx.open("about");
         true
     }
 }
@@ -491,7 +491,7 @@ fn apps_and_their_context() {
     assert_eq!(app.icon(), AppIcon { glyph: "", hue: Rgba::hex(0x64748b) });
     let mut t = ts();
     let rect = RectF::new(0.0, 0.0, 300.0, 200.0);
-    let (_, _, hits) = frame(&mut t, rect, REST, |ui| app.draw(ui));
+    let (_, _, hits) = frame(&mut t, MIDNIGHT, rect, REST, |ui| app.draw(ui));
     let mut fs = vfs::Vfs::new();
     let mut kernel = kernel::Kernel::new();
     let mut cx = Cx::new(&mut fs, &mut kernel, 5.0);
@@ -499,12 +499,77 @@ fn apps_and_their_context() {
     assert!(app.event(AppEvent::Click(hits[0].id), &mut cx));
     cx.close_self();
     cx.load_fallback_fonts();
-    cx.open("files");
     cx.set_theme("Mono");
-    let want = "[Open { name: \"about\", floating: true }, CloseSelf, \
-        LoadFallbackFonts, Open { name: \"files\", floating: false }, SetTheme(\"Mono\")]";
+    let want = "[Open { name: \"about\", floating: false }, CloseSelf, LoadFallbackFonts, \
+        SetTheme(\"Mono\")]";
     assert_eq!(format!("{:?}", cx.take_requests()), want);
     assert!(cx.take_requests().is_empty() && cx.now_ms == 5.0);
     assert_eq!(fs.read("/tmp/clicks"), Ok(&[1][..]));
     assert_eq!(app.title(), "Echo 1");
+}
+
+#[test]
+fn code_edits_scrolls_and_colors_its_spans() {
+    let mut t = ts();
+    let mut c = Code::new("let a = \"s\";\n  x", 1);
+    c.set_spans(&[(0, 3, 1), (8, 3, 2), (15, 1, 7)]);
+    let rect = RectF::new(10.0, 10.0, 300.0, 120.0);
+    let (_, list, hits) = frame(&mut t, MIDNIGHT, rect, state(None, None, true), |ui| {
+        c.draw(ui, WidgetId(4), rect, true, true);
+    });
+    assert_eq!(hits, [Hit { id: WidgetId(4), rect, sense: Sense::Text }]);
+    let th = MIDNIGHT;
+    let ink = |c| find(&list, 4.0, Some(c)).len();
+    // `let` in the accent, `"s"` green, the gutter's 1 and 2, an underline.
+    assert_eq!((ink(th.accent), ink(th.ansi[2]), ink(th.text_dim) + ink(th.text_faint)), (3, 3, 2));
+    assert_eq!(find(&list, 0.0, Some(th.danger)).len(), 1);
+    // Edits move the version on; caret keys do not; others are not taken.
+    let v = c.version;
+    c.ed.set_caret(1, 3);
+    let keys = [Key::Enter, Key::Left, Key::F(2)].map(|k| (c.key(k), c.version - v));
+    assert_eq!(keys, [(Some(true), 1), (Some(false), 1), (None, 1)]);
+    assert!(c.insert("\ty") && !c.insert("\r"));
+    assert_eq!((c.ed.text(), c.version), ("let a = \"s\";\n  x\n   y ".to_string(), v + 2));
+    // Lines whose text is unchanged keep their colors, at the same place
+    // from the top or from the bottom; the edited line has none.
+    let kept = [(0, "let a = \"s\";"), (1, "  x")].map(|(i, l)| c.runs(i, 3, l));
+    assert_eq!(kept, [&[(0, 3, 1), (8, 11, 2)][..], &[(2, 3, 7)]]);
+    let mut d = Code::new("a\nb", 1);
+    d.set_spans(&[(0, 1, 1), (2, 1, 3)]);
+    d.insert("\n");
+    let kept = [(0, ""), (1, "a"), (2, "b")].map(|(i, l)| d.runs(i, 3, l));
+    assert_eq!(kept, [&[][..], &[(0, 1, 1)], &[(0, 1, 3)]]);
+    // Past CODE_MAX nothing is added, but text can still go.
+    c.set_text(&"x".repeat(CODE_MAX + 2), 9);
+    assert!(!c.insert("y"));
+    c.ed.set_caret(0, 1);
+    assert_eq!((c.key(Key::Backspace), c.ed.len(), c.version), (Some(true), CODE_MAX + 1, 10));
+    // Arrows wrap at line ends; Up and Down keep the column they aim for and
+    // stop at the first line's start and the last line's end.
+    use Key::*;
+    let mut c = Code::new("abcdef\nab\nabcdef", 0);
+    c.ed.set_caret(0, 6);
+    let keys = [Right, Left, Left, Down, Down, Down, Right, Home, Left, Up, Up, Left, End];
+    let carets = keys.map(|k| c.key(k).map(|_| c.ed.caret()));
+    let lines = [1, 0, 0, 1, 2, 2, 2, 2, 1, 0, 0, 0, 0];
+    let cols = [0, 6, 5, 2, 5, 6, 6, 0, 2, 2, 0, 0, 6];
+    let want: Vec<_> = lines.into_iter().zip(cols).map(Some).collect();
+    assert_eq!((carets.to_vec(), c.version), (want, 0));
+    // A press puts the caret at the nearest char boundary on the grid of 8 x
+    // 17 px cells from (16, 16), clamped into the text.
+    let mut c = Code::new("state x = 1;\nlabel x;", 0);
+    frame(&mut t, MIDNIGHT, rect, REST, |ui| c.draw(ui, WidgetId(4), rect, false, false));
+    let at = [(3.4, 1.5), (3.6, 0.3), (99.0, 9.0), (-1.0, -1.0), (f32::NAN, 1.2)].map(|(x, y)| {
+        c.click(16.0 + 8.0 * x, 16.0 + 17.0 * y);
+        c.ed.caret()
+    });
+    assert_eq!(at, [(1, 3), (0, 4), (1, 8), (0, 0), (1, 0)]);
+    // The wheel scrolls whole rows, and a press lands on the rows in view.
+    let mut c = Code::new(&"line\n".repeat(50), 0);
+    frame(&mut t, MIDNIGHT, rect, REST, |ui| c.draw(ui, WidgetId(4), rect, false, false));
+    assert!(c.contains(20.0, 20.0) && !c.contains(5.0, 5.0));
+    assert!(c.wheel(1000.0) && !c.wheel(f32::NAN));
+    assert!(c.top > 40 && c.ed.caret().0 >= c.top);
+    c.click(10.0 + 6.0, 10.0 + 6.0);
+    assert_eq!(c.ed.caret(), (c.top, 0));
 }

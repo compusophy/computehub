@@ -26,9 +26,8 @@ type Cmd = fn(&mut Guest, &[&str], u32, &mut Io<'_>, &mut Cx<'_>);
 /// Any number of operands.
 const ANY: usize = usize::MAX;
 
-/// Every command: its name, flag letters, fewest and most operands (flags
-/// included), synopsis (for `help` and usage errors), what it does (for
-/// `help`, which leaves out an empty one) and what it runs.
+/// Every command: name, flag letters, fewest and most operands (flags included), synopsis
+/// (for `help` and usage errors), what it does (for `help`; empty is left out), what it runs.
 #[rustfmt::skip]
 const COMMANDS: [(&str, &str, usize, usize, &str, &str, Cmd); 20] = [
     ("ls", "a", 0, ANY, "ls [-a] [path]", "list a directory; -a shows dot files", ls),
@@ -78,17 +77,16 @@ const COMMANDS: [(&str, &str, usize, usize, &str, &str, Cmd); 20] = [
     ("uname", "", 0, ANY, "uname [-a]", "print the system's name",
         |_, a, _, io, _| io.out(UNAME[usize::from(matches!(a, ["-a"]))])),
     ("exit", "", 0, ANY, "exit", "close this terminal", |_, _, _, _, cx| cx.close_self()),
-    ("help", "", 0, ANY, "", "", |g, _, _, io, _| help(io, g.cols)),
+    ("help", "", 0, ANY, "", "", |g, _, _, io, _| help(io, g.cols.into())),
 ];
 /// `help`'s sections: a title and the row of [`COMMANDS`] it starts at.
 const SECTIONS: [(&str, usize); 3] = [("Files", 0), ("Apps", 9), ("Shell", 13)];
 
 /// Writes the command list for a terminal `cols` wide: synopses in a column
 /// with descriptions beside them, or below them, indented, when narrow.
-fn help(io: &mut Io<'_>, cols: u16) {
+fn help(io: &mut Io<'_>, cols: usize) {
     let color = io.file.is_none();
     let [bold, cyan, end] = if color { ["\x1b[1m", "\x1b[36m", "\x1b[m"] } else { [""; 3] };
-    let cols = usize::from(cols);
     let syn = COMMANDS.iter().map(|r| r.4.len()).max().unwrap_or(0);
     // Two columns need room for a description of a few words.
     let lead = if cols >= syn + 4 + 24 { syn + 4 } else { 6 };
@@ -271,9 +269,8 @@ impl Guest {
         }
     }
 
-    /// The foreground program ended with `status`: a line break unless the
-    /// cursor is at column 0 (`col`), then the prompt, which shows a status
-    /// that is not 0. Typed-ahead text stays, as the shell's line.
+    /// The foreground program ended with `status`: a line break unless at column 0 (`col`),
+    /// then the prompt, marked by a nonzero status. Typed-ahead text stays as the shell's line.
     pub fn finished(&mut self, status: i32, col: u16) {
         self.out.push_str(if col > 0 { "\n" } else { "" });
         self.mark.clear();
@@ -334,8 +331,7 @@ impl Guest {
         self.redraw();
     }
 
-    /// Runs the line, and the next prompt follows; or, while a program runs,
-    /// sends it the line and a newline (ICRNL).
+    /// Runs the line, then a prompt; while a program runs, sends it the line and `\n` (ICRNL).
     fn enter(&mut self, cx: &mut Cx<'_>) {
         self.pos = self.line.len();
         self.redraw();
@@ -382,8 +378,7 @@ impl Guest {
         (self.browse, self.pos) = (next, self.line.len());
     }
 
-    /// Moves back to where the line starts (the prompt's start, or column
-    /// `base` of a program's input) and erases from there down.
+    /// Moves back to where the line starts (prompt, or column `base` of input), erases down.
     fn erase(&mut self) {
         self.out.push('\r');
         csi(&mut self.out, self.caret.0, 'A');
@@ -396,9 +391,8 @@ impl Guest {
         self.render();
     }
 
-    /// Draws the prompt and the line from column 0 (a program's input line
-    /// from column `base`, no prompt), then moves to the caret, wrapping as
-    /// the terminal does (a char that does not fit starts a row).
+    /// Draws the prompt and line from column 0 (a program's input from `base`, no prompt), then
+    /// moves to the caret, wrapping as the terminal does (a char that does not fit starts a row).
     pub fn render(&mut self) {
         const USER: &str = "guest@compusophy:";
         const GREEN: &str = "\x1b[1;32mguest@compusophy\x1b[m:\x1b[1;34m";
@@ -444,8 +438,9 @@ impl Guest {
         self.caret = at;
     }
 
-    /// Runs one command line; `>` or `>>` sends its stdout to a file. A word
-    /// that is no command starts a [`program`].
+    /// Runs one command line; `>` or `>>` sends its stdout to a file. Another word
+    /// starts a [`program`], after the redirect's file is made (`>` empties it),
+    /// as in POSIX: a path that cannot be written starts nothing.
     pub fn run(&mut self, line: &str, cx: &mut Cx<'_>) {
         let (words, redirect) = match parse(line) {
             Ok(parsed) => parsed,
@@ -455,6 +450,7 @@ impl Guest {
         let (cmd, screen) = (words.first().map_or("sh", String::as_str), String::new());
         let mut io = Io { cmd, screen, file };
         let args: Vec<&str> = words.iter().skip(1).map(String::as_str).collect();
+        let mut program = false;
         match COMMANDS.iter().find(|c| c.0 == cmd) {
             Some(&(_, ok, min, max, .., run)) if (min..=max).contains(&args.len()) => {
                 if let Some((f, operands)) = flags(&args, ok, &mut io) {
@@ -462,19 +458,20 @@ impl Guest {
                 }
             }
             Some(&(.., synopsis, _, _)) => io.err(&["usage: ", synopsis]),
-            None if words.is_empty() => {}
-            None => return self.exec(words, redirect, cx),
+            None => program = !words.is_empty(),
         }
-        if let (Some((path, append)), Some(data)) = (redirect, io.file.take()) {
+        if let (Some((path, append)), Some(data)) = (&redirect, io.file.take()) {
             io.cmd = "sh";
-            self.each(&[&path], &mut io, cx, Op::Write(data.as_bytes(), append));
+            self.each(&[path], &mut io, cx, Op::Write(data.as_bytes(), *append));
         }
         self.out.push_str(&io.screen);
+        if program && io.screen.is_empty() {
+            self.exec(words, redirect, cx);
+        }
     }
 
-    /// Starts the [`program`] `argv[0]` names in the foreground, its stdout
-    /// to the redirect's file if any (a bad path fails as the program opens
-    /// it); [`Guest::finished`] follows its end.
+    /// Starts the [`program`] `argv[0]` names in the foreground, its stdout to the
+    /// redirect's file by absolute path; [`Guest::finished`] follows its end.
     fn exec(&mut self, argv: Vec<String>, to: To, cx: &mut Cx<'_>) {
         let name = argv[0].clone();
         let program = match program(cx.vfs, &self.cwd, &name) {
@@ -638,11 +635,10 @@ fn flags<'a, 'b>(args: &'a [&'b str], ok: &str, io: &mut Io<'_>) -> Option<(u32,
 
 /// A redirect: its path, and whether it appends (`>>`).
 type To = Option<(String, bool)>;
-type Parsed = (Vec<String>, To);
 
 /// Splits a command line into words and a `>` or `>>` redirect (path,
 /// append). `'…'` is literal, `"…"` takes `\"` and `\\`, a bare `\` escapes.
-fn parse(line: &str) -> Result<Parsed, &'static str> {
+fn parse(line: &str) -> Result<(Vec<String>, To), &'static str> {
     let (mut words, mut redirect, mut to) = (Vec::new(), None, None);
     let mut word: Option<String> = None;
     // Trailing spaces end the last word (two, so a final `\` escapes one).

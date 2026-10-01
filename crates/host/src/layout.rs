@@ -1,5 +1,4 @@
-//! Where the dock and the launcher's panel (search field, grid of app tiles,
-//! list of files) sit on the screen.
+//! Where the dock and the launcher's panel (field, grid of app tiles, list of files) sit.
 
 use gfx::RectF;
 use ui::{TILE_H, TILE_W};
@@ -11,8 +10,7 @@ const DOCK_H: f32 = 60.0;
 const DOCK_MARGIN: f32 = 12.0;
 const DOCK_PAD: f32 = 8.0;
 const DOCK_GAP: f32 = 10.0;
-/// The launcher panel's largest size, margin, padding and grid columns;
-/// its field's and rows' heights.
+/// The launcher panel's largest size, margin, padding, grid columns, field and row heights.
 const PANEL_W: f32 = 600.0;
 const PANEL_H: f32 = 440.0;
 const PANEL_MARGIN: f32 = 24.0;
@@ -81,9 +79,8 @@ impl Panel {
     }
 
     pub fn list_top(&self) -> f32 {
-        let lines = self.tiles.div_ceil(self.cols()) as f32;
-        let grid =
-            if lines > 0.0 { lines * (TILE_H + LINE_GAP) - LINE_GAP + PANEL_PAD } else { 0.0 };
+        let n = self.tiles.div_ceil(self.cols()) as f32;
+        let grid = if n > 0.0 { n * (TILE_H + LINE_GAP) - LINE_GAP + PANEL_PAD } else { 0.0 };
         self.rect.y + 2.0 * PANEL_PAD + FIELD_H + grid
     }
 

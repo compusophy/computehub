@@ -1,5 +1,4 @@
-//! Window frame geometry: the controls, the resize edges and how a drag of
-//! one resizes, and where a dropped window snaps.
+//! Window frame geometry: controls, resize edges and drags, and where a dropped window snaps.
 
 use gfx::RectF;
 use wm::{Rect, Snap};
@@ -67,8 +66,7 @@ pub fn edge_cursor((dx, dy): (i8, i8)) -> Cursor {
     }
 }
 
-/// `r` with its `edge` dragged by `(dx, dy)`, at least the wm's minimum; a
-/// top edge stops at `top`.
+/// `r` with its `edge` dragged by `(dx, dy)`, at least the wm's minimum; the top stops at `top`.
 pub fn resized(r: Rect, (ex, ey): (i8, i8), (dx, dy): (f32, f32), top: i32) -> Rect {
     let (x, w) = grow(r.x, r.w, ex, dx, wm::MIN_W, -wm::MAX_COORD);
     let (y, h) = grow(r.y, r.h, ey, dy, wm::MIN_H, top);

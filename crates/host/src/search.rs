@@ -1,5 +1,4 @@
-//! The launcher's search: what a query keeps, best first, and a selection
-//! that moves through a grid of apps, then down a list of files.
+//! The launcher's search: what a query keeps, best first; a selection over apps, then files.
 
 use ui::{AppIcon, Key};
 

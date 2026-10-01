@@ -1,6 +1,6 @@
 [package]
 name = "compusophy-kernel"
-description = "The compusophyOS kernel: the wire protocol between the desktop and its program workers, the process table and consoles on the main thread, and the WASI preview 1 process half each worker runs. Pure and deterministic."
+description = "The compusophyOS kernel: the wire protocol between the desktop and its program workers, the process table, consoles and file server on the main thread, the /home snapshot format and the module rewriter. Pure and deterministic. Its worker half is compusophy-wasi."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

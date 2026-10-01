@@ -32,7 +32,7 @@
 
 mod eval;
 
-pub use applang_syntax::{Program, codes, compile};
+pub use applang_syntax::{Class, Program, codes, compile, highlight};
 pub use eval::Value;
 pub use lang::{Diag, Span};
 

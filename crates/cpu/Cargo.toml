@@ -1,6 +1,6 @@
 [package]
 name = "compusophy-cpu"
-description = "compusophyOS's virtual CPU: the worker module that loads and runs one wasm32-wasip1 program per Worker (or homed), linking its WASI imports to the kernel's process half."
+description = "compusophyOS's virtual CPU: the worker module that loads and runs one wasm32-wasip1 program per Worker (or homed), linking its WASI imports to the kernel's worker half (compusophy-wasi)."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -14,6 +14,7 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 compusophy-kernel.workspace = true
+compusophy-wasi.workspace = true
 wasm-bindgen.workspace = true
 js-sys.workspace = true
 web-sys = { workspace = true, features = [

@@ -21,8 +21,10 @@ members = [
     "crates/vt",
     "crates/term",
     "crates/kernel",
+    "crates/wasi",
     "crates/cpu",
     "crates/toolbox",
+    "crates/uiwire",
     "tools/serve",
 ]
 
@@ -58,6 +60,8 @@ compusophy-studio = { path = "crates/studio", version = "0.1.0" }
 compusophy-vt = { path = "crates/vt", version = "0.1.0" }
 compusophy-term = { path = "crates/term", version = "0.1.0" }
 compusophy-kernel = { path = "crates/kernel", version = "0.1.0" }
+compusophy-wasi = { path = "crates/wasi", version = "0.1.0" }
+compusophy-uiwire = { path = "crates/uiwire", version = "0.1.0" }
 
 # The browser boundary. Only `platform`, `os` and `cpu` may use these
 # (scripts/caps.sh).

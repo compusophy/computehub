@@ -2,9 +2,9 @@
 //! Atomics.wait never refuses in a worker), clocks, randomness, guest memory.
 
 use js_sys::{ArrayBuffer, Atomics, Int32Array, SharedArrayBuffer, Uint8Array, WebAssembly};
-use kernel::wasi::{Host, Mem};
 use kernel::wire::{BELL, COLS, CONS_BELL, EFAULT, ERRNO, HEAD, INPUT, LEN, MAX_PAYLOAD};
 use kernel::wire::{PAYLOAD_AT, RING_AT, RING_BYTES, ROWS, SLEEP, STATE, TAIL};
+use wasi::{Host, Mem};
 use wasm_bindgen::{JsCast, UnwrapThrowExt};
 use web_sys::{Crypto, Performance};
 

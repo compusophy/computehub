@@ -27,9 +27,8 @@ const NAME_GAP: f32 = 2.0;
 const ARROW_ROOM: f32 = 20.0;
 const ARROW: &str = "→";
 
-/// The first screen: a title, a line, three cards that open Terminal, Studio
-/// and Settings (stacked when narrow) and a hint, centered a little above the
-/// middle; a window too short scrolls with the wheel.
+/// The first screen: a title, a line, cards that open Terminal, Studio and Settings (stacked
+/// when narrow) and a hint, a little above the middle; a short window scrolls with the wheel.
 #[derive(Debug, Default)]
 pub struct Welcome {
     scroll: Scroll,
@@ -77,7 +76,7 @@ impl App for Welcome {
                 true => RectF::new(x + i as f32 * (cw + GAP), y, cw, ch),
                 false => RectF::new(x, y + i as f32 * (ch + GAP), cw, ch),
             };
-            let rect = kit::snapped(ui, at);
+            let rect = ui.snapped(at);
             self.card(ui, WidgetId(i as u32 + 1), rect, (card, &descs[i]), three);
         }
         y += cards_h + 24.0;
@@ -118,17 +117,13 @@ impl Welcome {
         let ts = ui.text_system();
         let (name_h, small_h) = (ts.line_height(style), ts.line_height(small));
         let text_h = name_h + NAME_GAP + desc.len() as f32 * small_h;
-        let (icon_at, tx, ty) = match tall {
-            true => {
-                let at = RectF::new(rect.x + CARD_PAD, rect.y + CARD_PAD, ICON, ICON);
-                (at, at.x, at.y + ICON + ICON_GAP)
-            }
-            false => {
-                let at = RectF::new(rect.x + CARD_PAD, rect.y + (rect.h - ICON) / 2.0, ICON, ICON);
-                (at, at.x + ICON + ICON_GAP, rect.y + (rect.h - text_h) / 2.0)
-            }
+        let y = if tall { rect.y + CARD_PAD } else { rect.y + (rect.h - ICON) / 2.0 };
+        let icon_at = RectF::new(rect.x + CARD_PAD, y, ICON, ICON);
+        let (tx, ty) = match tall {
+            true => (icon_at.x, icon_at.y + ICON + ICON_GAP),
+            false => (icon_at.x + ICON + ICON_GAP, rect.y + (rect.h - text_h) / 2.0),
         };
-        let icon_r = kit::snapped(ui, icon_at);
+        let icon_r = ui.snapped(icon_at);
         kit::icon(ui, icon_r, *icon);
         let ty = ui.text_system().snap(ty);
         let w = rect.x + rect.w - tx;

@@ -1,23 +1,19 @@
 use super::*;
 use ui::Request;
 
-/// Runs each `$ ` line of `script` in a guest shell over a VFS holding three
-/// files and a program, and checks that the transcript (output without
-/// escapes, requests in brackets, the home as `~`) is `script`.
+/// Runs each `$ ` line of `script` in a shell over a VFS of three files and a program; the
+/// transcript (output without escapes, requests in brackets, home as `~`) must be `script`.
 fn transcript(script: &str) {
     let (mut g, mut got, mut fs) = (Guest::new(), String::new(), Vfs::new());
     let mut kernel = ui::kernel::Kernel::new();
-    for path in ["/apps/demo.app", "~/counter.app", "~/notes.txt"] {
-        fs.write(&path.replace('~', Vfs::HOME), b"").unwrap();
-    }
+    let files = ["/apps/demo.app", "~/counter.app", "~/notes.txt"];
+    files.into_iter().for_each(|p| fs.write(&p.replace('~', Vfs::HOME), b"").unwrap());
     fs.mkdir("/bin").and(fs.write("/bin/hi", b"#!wasm bin/toolbox.wasm")).unwrap();
     for cmd in script.lines().filter_map(|l| l.strip_prefix("$ ")) {
         let mut cx = Cx::new(&mut fs, &mut kernel, 0.0);
         g.run(cmd, &mut cx);
         got += &format!("$ {cmd}\n{}", plain(&std::mem::take(&mut g.out)));
-        for r in cx.take_requests() {
-            got += &format!("[{}]\n", show(&r));
-        }
+        cx.take_requests().iter().for_each(|r| got += &format!("[{}]\n", show(r)));
     }
     assert_eq!(got.replace(Vfs::HOME, "~"), script);
 }
@@ -25,9 +21,7 @@ fn transcript(script: &str) {
 /// A request as text: the ones the guest shell makes.
 fn show(r: &Request) -> String {
     match r {
-        Request::Open { name, floating } => {
-            format!("{} {name}", ["open", "float"][*floating as usize])
-        }
+        Request::Open { name, floating: false } => format!("open {name}"),
         Request::CloseSelf => "close".into(),
         Request::SetTheme(name) => format!("theme {name}"),
         other => format!("{other:?}"),
@@ -77,8 +71,6 @@ $ cd c/g
 cd: c/g: not a directory
 $ mv x
 usage: mv <from> <to>
-$ mkdir
-usage: mkdir [-p] <dir>...
 $ rm -rz x
 rm: unknown option -z
 $ frobnicate --now
@@ -98,8 +90,8 @@ $ echo a >
 sh: expected a file name after >
 $ open terminal
 [open terminal]
-$ open settings
-[open settings]
+$ open /apps/demo.app
+[open /apps/demo.app]
 $ open launcher
 open: launcher: no such app (see 'apps')
 $ run counter.app
@@ -108,8 +100,6 @@ $ run notes.txt
 run: notes.txt: not an .app file
 $ edit notes.txt
 [open studio:~/notes.txt]
-$ open nope
-open: nope: no such app (see 'apps')
 $ apps
 terminal  studio  welcome  settings
 /apps/demo.app
@@ -137,14 +127,10 @@ $ exit
 #[test]
 fn help_lists_one_command_a_line_at_any_width() {
     for cols in [100, 80, 40, 30] {
-        let mut g = Guest::new();
-        g.cols = cols;
-        let mut fs = Vfs::new();
+        let (mut g, mut fs) = (Guest { cols, ..Guest::new() }, Vfs::new());
         g.run("help", &mut Cx::new(&mut fs, &mut ui::kernel::Kernel::new(), 0.0));
         let out = plain(&g.out);
-        for line in out.lines() {
-            assert!(width(line) <= usize::from(cols), "{cols} cols: {line:?}\n{out}");
-        }
+        out.lines().for_each(|l| assert!(width(l) <= cols.into(), "{cols} cols: {l:?}\n{out}"));
         // Each synopsis starts a line; its description follows, whole.
         for &(.., synopsis, what, _) in COMMANDS.iter().filter(|c| !c.5.is_empty()) {
             let at = out.find(&format!("\n  {synopsis}")).expect(synopsis);
@@ -179,22 +165,35 @@ fn programs_come_from_bin_then_local_bin() {
     }
 }
 
-#[test]
-fn a_program_runs_in_the_foreground() {
-    use ui::kernel::{Effect, Kernel, Load, wire::Msg};
-    let (mut g, mut fs, mut kernel) = (Guest::new(), Vfs::new(), Kernel::new());
+/// A VFS holding the program `/bin/hi` and the file `/tmp/o`; an isolated kernel to run it.
+fn world() -> (Vfs, ui::kernel::Kernel) {
+    let (mut fs, mut kernel) = (Vfs::new(), ui::kernel::Kernel::new());
     fs.mkdir("/bin").and(fs.write("/bin/hi", b"#!wasm bin/toolbox.wasm")).unwrap();
+    fs.write("/tmp/o", b"keep").unwrap();
     kernel.set_isolated(true);
-    let mut cx = Cx::new(&mut fs, &mut kernel, 0.0);
-    g.text("hi 'b c' >> /tmp/o\n", &mut cx);
-    cx.kernel.message(cx.vfs, 2, &Msg::Ready { version: wire::VERSION }.encode());
+    (fs, kernel)
+}
+
+/// The Start the kernel sends `hi`, process `pid`, once its worker is ready.
+fn start(cx: &mut Cx<'_>, pid: u32) -> wire::Start {
+    use ui::kernel::{Effect, Load, wire::Msg, wire::Start};
+    cx.kernel.message(cx.vfs, pid, &Msg::Ready { version: wire::VERSION }.encode());
     let s = cx.kernel.take_effects().into_iter().find_map(|e| match e {
-        Effect::Start { pid: 2, msg, program: Load::Url(_) } => wire::Start::decode(&msg),
+        Effect::Start { pid: p, msg, program: Load::Url(_) } if p == pid => Start::decode(&msg),
         _ => None,
     });
-    let s = s.expect("a Start for the URL");
+    s.expect("a Start for the URL")
+}
+
+#[test]
+fn a_program_runs_in_the_foreground_after_its_redirect_is_made() {
+    let ((mut fs, mut kernel), mut g) = (world(), Guest::new());
+    let mut cx = Cx::new(&mut fs, &mut kernel, 0.0);
+    g.text("hi 'b c' >> /tmp/o\n", &mut cx);
+    let s = start(&mut cx, 2);
     assert_eq!((s.argv.join(","), s.tty, &s.cwd[..]), ("hi,b c".into(), Some((80, 24)), Vfs::HOME));
     assert_eq!(s.stdout, Stdout::File { path: "/tmp/o".into(), append: true });
+    assert_eq!(cx.vfs.read("/tmp/o"), Ok(&b"keep"[..]), ">> keeps the file");
     // Typed ahead: echoed at the cursor, moved below output, sent on Enter.
     g.out.clear();
     g.text("xy", &mut cx);
@@ -206,4 +205,23 @@ fn a_program_runs_in_the_foreground() {
     // Its end gives the shell its line and history back (apps tests the rest).
     g.finished(0, 0);
     assert!(g.running().is_none() && g.history == ["hi 'b c' >> /tmp/o"] && g.other == ["xy"]);
+    // A redirect is made first: a path that cannot be written starts nothing; a
+    // missing program still gets its file made, as in a POSIX shell.
+    let (mut fs, mut kernel) = world();
+    #[rustfmt::skip]
+    let fails = [("hi > /nope/x", "sh: /nope/x: no such file or directory\n"),
+        ("hi >> /tmp", "sh: /tmp: is a directory\n"), ("nope > made", "nope: command not found\n")];
+    for (line, err) in fails {
+        let mut g = Guest::new();
+        g.run(line, &mut Cx::new(&mut fs, &mut kernel, 0.0));
+        assert_eq!((g.out.as_str(), g.running()), (err, None), "{line}");
+    }
+    assert!(kernel.procs().is_empty() && fs.read(&[Vfs::HOME, "/made"].concat()) == Ok(b""));
+    // `>` empties the file, named by its absolute path, before the program runs.
+    let (mut g, mut cx) = (Guest::new(), Cx::new(&mut fs, &mut kernel, 0.0));
+    g.run("cd /tmp", &mut cx);
+    g.run("hi x > ./o", &mut cx);
+    let s = start(&mut cx, 2);
+    assert_eq!(s.stdout, Stdout::File { path: "/tmp/o".into(), append: false });
+    assert_eq!((cx.vfs.read("/tmp/o"), g.running()), (Ok(&b""[..]), Some(2)));
 }

@@ -17,8 +17,7 @@ const H24: f32 = 436.0;
 const PROMPT: &str = "guest@compusophy:~$";
 const MIDNIGHT: &Theme = &THEMES[0];
 
-/// An app, the VFS and kernel its [`Cx`]s are made from, and helpers that
-/// show what it asked for as text.
+/// An app with the VFS and kernel its [`Cx`]s are made from; helpers show requests as text.
 struct Sim<A> {
     app: A,
     fs: Vfs,
@@ -57,13 +56,12 @@ impl<A: App> Sim<A> {
 }
 
 impl Sim<Terminal> {
-    /// A terminal resized to `w` x `h` (its first event, which asks for the
-    /// fonts), then drawn there with every font if `drawn`.
+    /// A terminal resized to `w` x `h` (its first event asks for fonts), drawn there if `drawn`.
     fn term(w: f32, h: f32, drawn: bool) -> Sim<Terminal> {
         let mut s = Sim::new(Terminal::default());
         assert_eq!(s.ev(AppEvent::Resized { w, h }), "fonts");
         if drawn {
-            draw(&mut s.app, &mut text_system(), RectF::new(0.0, 0.0, w, h), true);
+            draw(&mut s.app, &mut text_system(), RectF::new(0.0, 0.0, w, h), MIDNIGHT);
         }
         s
     }
@@ -95,18 +93,15 @@ impl Sim<Terminal> {
 /// A request as text.
 fn show(r: &Request) -> String {
     match r {
-        Request::Open { name, floating } => {
-            format!("{} {name}", ["open", "float"][*floating as usize])
-        }
-        Request::CloseSelf => "close".into(),
+        Request::Open { name, floating: false } => format!("open {name}"),
         Request::LoadFallbackFonts => "fonts".into(),
         Request::SetTheme(name) => format!("theme {name}"),
+        other => format!("{other:?}"),
     }
 }
 /// A row of cells as text, trailing blanks trimmed.
 fn text(cells: &[term::Cell]) -> String {
-    let s: String = cells.iter().filter(|c| c.width != 0).map(|c| c.ch).collect();
-    s.trim_end().to_string()
+    cells.iter().filter(|c| c.width != 0).map(|c| c.ch).collect::<String>().trim_end().into()
 }
 /// One frame of `app` in `r` with this pointer state, in `theme`.
 fn frame(app: &mut dyn App, ts: &mut TextSystem, r: RectF, state: UiState, theme: &Theme) -> Frame {
@@ -115,9 +110,9 @@ fn frame(app: &mut dyn App, ts: &mut TextSystem, r: RectF, state: UiState, theme
     (list, hits)
 }
 type Frame = (DrawList, Vec<Hit>);
-fn draw(app: &mut dyn App, ts: &mut TextSystem, r: RectF, focused: bool) -> Frame {
-    let state = UiState { focused, ..UiState::default() };
-    frame(app, ts, r, state, MIDNIGHT)
+/// A frame with the window focused.
+fn draw(app: &mut dyn App, ts: &mut TextSystem, r: RectF, theme: &Theme) -> Frame {
+    frame(app, ts, r, UiState { focused: true, ..UiState::default() }, theme)
 }
 /// A text system once the deferred fonts arrived.
 fn text_system() -> TextSystem {
@@ -134,7 +129,7 @@ fn hit(hits: &[Hit], id: u32) -> Hit {
 }
 
 #[test]
-fn terminal_line_editing_history_and_wheel() {
+fn terminal_line_editing_history_wheel_wrapping_and_greeting_at_first_grid() {
     let mut s = Sim::term(W80, H24, true);
     s.has("compusophyOS terminal — type 'help'.\nguest@compusophy:~$");
     s.line("echo one");
@@ -165,9 +160,7 @@ fn terminal_line_editing_history_and_wheel() {
     s.key(Key::Char('c'), CTRL);
     assert_eq!(s.line("theme dawn") + "," + &s.line("open settings"), "theme Dawn,open settings");
     // The wheel scrolls back by whole rows; a key snaps back.
-    for i in 0..30 {
-        s.line(&format!("echo line {i}"));
-    }
+    (0..30).for_each(|i| _ = s.line(&format!("echo line {i}")));
     let sb = s.app.term.scrollback_len();
     assert!(sb > 30, "{sb}");
     assert!(s.wheel(-17.0 * 3.0) && s.app.scroll == 3);
@@ -179,10 +172,7 @@ fn terminal_line_editing_history_and_wheel() {
     assert_eq!(s.app.scroll, 0, "a key snaps back");
     s.app.term.feed(b"\x1b[?1049h");
     assert!(!s.wheel(-34.0), "no scrollback on the alternate screen");
-}
-
-#[test]
-fn terminal_wraps_like_the_screen_and_greets_at_first_grid() {
+    // It wraps like the screen.
     let mut s = Sim::term(28.0 + 8.0 * 30.0, H24, true);
     let top = s.at().0;
     s.text("abcdefghijklmnop"); // the prompt is 20 wide
@@ -220,9 +210,7 @@ fn terminal_runs_programs_in_the_foreground() {
         s.kernel.message(&mut s.fs, pid, &msg.encode());
         s.both(AppEvent::Io).0
     };
-    // Output comes on Io with `\n` as CR LF, above the typed-ahead line, and
-    // the exit status is shown. (Terminal replies and live resizes reach the
-    // program from step 3 on.)
+    // Output comes on Io, `\n` as CR LF, above the typed-ahead line; the exit status shows.
     s.line("hi");
     s.text("ab");
     assert!(worker(&mut s, 2, Msg::ConsWrite { data: b"one\ntwo" }));
@@ -242,32 +230,6 @@ fn terminal_runs_programs_in_the_foreground() {
 }
 
 #[test]
-fn grid_title_and_icons() {
-    assert_eq!(grid_size(W80, H24, 8.0, 17.0), (80, 24));
-    assert_eq!(grid_size(0.0, -5.0, 8.0, 17.0), (1, 1));
-    assert_eq!(grid_size(f32::NAN, f32::INFINITY, 8.0, 17.0), (1, 500));
-    let mut t = Terminal::default();
-    assert_eq!((t.preferred_size(), t.title()), (Some((W80, H24)), "Terminal".into()));
-    t.term.feed(b"\x1b]2;notes\x07");
-    assert_eq!(t.title(), "Terminal — notes");
-    assert!(t.wants_text_input() && open("launcher").is_none(), "the shell owns the launcher");
-    // Every icon's glyph is ASCII: the boot font has it.
-    let icons: Vec<_> = NAMES
-        .iter()
-        .map(|&name| {
-            let app = open(name).unwrap();
-            let (icon, size) = (app.icon(), app.preferred_size().unwrap());
-            assert!(icon.glyph.bytes().all(|b| b.is_ascii_graphic() || b == b' '), "{name}");
-            (icon.glyph, icon.hue, size)
-        })
-        .collect();
-    let welcome = ("c", Rgba::hex(0xf472b6), (720.0, 420.0));
-    let terminal = (">_", Rgba::hex(0x2dd4bf), (W80, H24));
-    let settings = ("::", Rgba::hex(0x94a3b8), (720.0, 520.0));
-    assert_eq!(icons, [welcome, terminal, settings]);
-}
-
-#[test]
 fn terminal_draws_cells_in_every_theme() {
     let (mut ts, mut t) = (text_system(), Terminal::default());
     ts.add_fallback(SYM_A.to_vec()).unwrap();
@@ -277,25 +239,21 @@ fn terminal_draws_cells_in_every_theme() {
     let rect = RectF::new(10.0, 40.0, W80 + 160.0, H24);
     // Before Mono arrives: the same grid and fills, but no glyphs.
     let mut boot = TextSystem::new(SANS.to_vec()).unwrap();
-    let early = draw(&mut t, &mut boot, rect, true).0;
+    let early = draw(&mut t, &mut boot, rect, MIDNIGHT).0;
     assert_eq!((t.term.cols(), t.term.rows()), (100, 24));
     for theme in &THEMES {
-        let state = UiState { focused: true, ..UiState::default() };
-        let (list, hits) = frame(&mut t, &mut ts, rect, state, theme);
+        let (list, hits) = draw(&mut t, &mut ts, rect, theme);
         assert_eq!((t.term.cols(), t.term.rows(), hits.len()), (100, 24, 1));
-        // Every visible char but the hidden ones, the one in no font (a box)
-        // and the one under the cursor (none: it is past the text).
-        assert_eq!((of(&list, Kind::Glyph).count(), of(&list, Kind::Border).count()), (16, 1));
-        let red = of(&list, Kind::Glyph).filter(|i| i.color == theme.ansi[9]);
-        assert_eq!(red.count(), 3, "bold makes red bright");
-        let dim = of(&list, Kind::Glyph).filter(|i| i.color == theme.text.with_alpha(153));
-        assert_eq!(dim.count(), 3, "dim");
+        // Every visible char but the hidden ones and the one in no font (a box).
+        let ink = inks(&list);
+        assert_eq!((ink.len(), of(&list, Kind::Border).count()), (16, 1));
+        // Bold makes red bright; dim is dim; inverse puts the opaque surface in front.
+        let (red, dim, opaque) = (theme.ansi[9], theme.text.with_alpha(153), theme.surface);
+        let n = |c: Rgba| ink.iter().filter(|&&i| i == c).count();
+        assert_eq!([red, dim, opaque.with_alpha(255)].map(n), [3; 3]);
         let fills: Vec<_> = of(&list, Kind::Fill).map(|i| (i.rect, i.color)).collect();
         let has = |r: [f32; 4], color| fills.contains(&(r, color));
         assert!(has([56.0, 54.0, 24.0, 17.0], theme.text), "inverse: text behind");
-        let opaque = theme.surface.with_alpha(255);
-        let inverse = of(&list, Kind::Glyph).filter(|i| i.color == opaque).count();
-        assert_eq!(inverse, 3, "inverse: the surface in front");
         assert!(has([24.0, 71.0, 16.0, 17.0], Rgba(10, 20, 30, 255)));
         assert!(has([40.0, 71.0, 8.0, 17.0], theme.accent), "a steady block cursor");
         assert_eq!(fills.iter().filter(|f| f.0[3] == 1.0).count(), 4, "lines");
@@ -310,9 +268,8 @@ fn terminal_draws_cells_in_every_theme() {
     // On a char the block cursor shows it in the accent's own ink.
     let mut t = Terminal::default();
     t.term.feed(b"ab\x1b[D");
-    let list = draw(&mut t, &mut ts, rect, true).0;
-    let ink = of(&list, Kind::Glyph).filter(|i| i.color == MIDNIGHT.accent_text);
-    assert_eq!(ink.count(), 1);
+    let list = draw(&mut t, &mut ts, rect, MIDNIGHT).0;
+    assert_eq!(inks(&list).iter().filter(|&&i| i == MIDNIGHT.accent_text).count(), 1);
 }
 
 /// The glyph colors of a frame, in draw order.
@@ -323,49 +280,34 @@ fn inks(list: &DrawList) -> Vec<Rgba> {
 /// Checks that every glyph of `list` is in a readable ink of `t` (never the
 /// faint one) or white on an icon, and every shape lies on device pixels.
 fn refined(list: &DrawList, t: &Theme, dpr: f32, what: &str) {
-    let white = Rgba(255, 255, 255, 255);
-    let ok = [t.text, t.text_dim, t.accent, white, Rgba(0, 0, 0, 56)];
-    for ink in inks(list) {
-        assert!(ok.contains(&ink), "{what} in {}: ink {ink:?}", t.name);
-    }
+    let ok = [t.text, t.text_dim, t.accent, Rgba(255, 255, 255, 255), Rgba(0, 0, 0, 56)];
+    inks(list).iter().for_each(|i| assert!(ok.contains(i), "{what} in {}: ink {i:?}", t.name));
     let on = |v: f32| ((v * dpr) - (v * dpr).round()).abs() < 1e-3;
     let kinds = [Kind::Fill, Kind::Border, Kind::Gradient].map(|k| k as u8 as f32);
     for i in list.instances().iter().filter(|i| kinds.contains(&i.kind)) {
         let [x, y, w, h] = i.rect;
-        let edges = [x, y, x + w, y + h];
-        assert!(edges.iter().all(|&v| on(v)), "{what} in {}: {i:?} at {dpr}", t.name);
+        assert!([x, y, x + w, y + h].into_iter().all(on), "{what} in {}: {i:?} at {dpr}", t.name);
     }
 }
 
 #[test]
-fn welcome_cards_open_apps_and_wrap() {
-    let mut ts = text_system();
-    let mut s = Sim::new(Welcome::default());
-    let r = RectF::new(0.0, 36.0, 720.0, 420.0);
-    let hits = draw(&mut s.app, &mut ts, r, true).1;
-    assert_eq!(hits.iter().map(|h| h.id.0).collect::<Vec<_>>(), [1, 2, 3]);
-    let ys: Vec<f32> = hits.iter().map(|h| h.rect.y).collect();
-    assert!(ys.iter().all(|&y| y == ys[0]), "three across: {hits:?}");
-    let opened = [s.click(1), s.click(2), s.click(3)].join(",");
-    assert_eq!(opened, "open terminal,open studio,open settings");
-    assert!(!s.wheel(50.0), "it all fits");
-    assert!(!s.both(AppEvent::Key { key: Key::Enter, mods: NO }).0);
-    // Narrow: the cards stack, each across the content, all in the window.
-    let r = RectF::new(0.0, 0.0, 360.0, 720.0);
-    let hits = draw(&mut s.app, &mut ts, r, true).1;
-    let fits = |h: &Hit| h.rect.x >= 20.0 && h.rect.x + h.rect.w <= 340.0 && h.rect.w >= 300.0;
-    assert!(hits.len() == 3 && hits.iter().all(fits), "{hits:?}");
-    assert!(hits[0].rect.y < hits[1].rect.y && hits[1].rect.y < hits[2].rect.y);
-    // Short: it scrolls, and the cards move up with it.
-    let r = RectF::new(0.0, 0.0, 360.0, 300.0);
-    let y0 = draw(&mut s.app, &mut ts, r, true).1[0].rect.y;
-    assert!(s.wheel(40.0) && s.wheel(1e9) && !s.wheel(1.0));
-    let y1 = draw(&mut s.app, &mut ts, r, true).1[0].rect.y;
-    assert!(y1 < y0 - 40.0, "{y0} {y1}");
-}
-
-#[test]
-fn every_app_is_refined_in_every_theme() {
+fn apps_have_grids_titles_icons_and_sizes_and_are_refined_in_every_theme() {
+    let sizes = [(W80, H24), (0.0, -5.0), (f32::NAN, f32::INFINITY)];
+    assert_eq!(sizes.map(|(w, h)| grid_size(w, h, 8.0, 17.0)), [(80, 24), (1, 1), (1, 500)]);
+    let mut t = Terminal::default();
+    assert_eq!((t.preferred_size(), t.title()), (Some((W80, H24)), "Terminal".into()));
+    t.term.feed(b"\x1b]2;notes\x07");
+    assert_eq!(t.title(), "Terminal — notes");
+    assert!(t.wants_text_input() && open("launcher").is_none(), "the shell owns the launcher");
+    // Every icon's glyph is ASCII: the boot font has it.
+    let sizes = [(720.0, 420.0), (W80, H24), (720.0, 520.0)];
+    let icons = [("c", 0xf472b6), (">_", 0x2dd4bf), ("::", 0x94a3b8)];
+    assert_eq!(NAMES, ["welcome", "terminal", "settings"]);
+    for ((name, (glyph, hue)), size) in NAMES.iter().zip(icons).zip(sizes) {
+        let (app, icon) = (open(name).unwrap(), ui::AppIcon { glyph, hue: Rgba::hex(hue) });
+        assert!(glyph.bytes().all(|b| b.is_ascii_graphic() || b == b' '), "{name}");
+        assert_eq!((app.icon(), app.preferred_size()), (icon, Some(size)));
+    }
     for dpr in [1.0, 1.5, 2.0] {
         let mut ts = text_system();
         ts.set_dpr(dpr);
@@ -388,14 +330,36 @@ fn every_app_is_refined_in_every_theme() {
 }
 
 #[test]
-fn settings_switches_pages_and_themes() {
+fn welcome_cards_open_apps_and_wrap_and_settings_switches_pages_and_themes() {
     let mut ts = text_system();
+    let mut s = Sim::new(Welcome::default());
+    let r = RectF::new(0.0, 36.0, 720.0, 420.0);
+    let hits = draw(&mut s.app, &mut ts, r, MIDNIGHT).1;
+    assert_eq!(hits.iter().map(|h| h.id.0).collect::<Vec<_>>(), [1, 2, 3]);
+    let ys: Vec<f32> = hits.iter().map(|h| h.rect.y).collect();
+    assert!(ys.iter().all(|&y| y == ys[0]), "three across: {hits:?}");
+    let opened = [s.click(1), s.click(2), s.click(3)].join(",");
+    assert_eq!(opened, "open terminal,open studio,open settings");
+    assert!(!s.wheel(50.0), "it all fits");
+    assert!(!s.both(AppEvent::Key { key: Key::Enter, mods: NO }).0);
+    // Narrow: the cards stack, each across the content, all in the window.
+    let r = RectF::new(0.0, 0.0, 360.0, 720.0);
+    let hits = draw(&mut s.app, &mut ts, r, MIDNIGHT).1;
+    let fits = |h: &Hit| h.rect.x >= 20.0 && h.rect.x + h.rect.w <= 340.0 && h.rect.w >= 300.0;
+    assert!(hits.len() == 3 && hits.iter().all(fits), "{hits:?}");
+    assert!(hits[0].rect.y < hits[1].rect.y && hits[1].rect.y < hits[2].rect.y);
+    // Short: it scrolls, and the cards move up with it.
+    let r = RectF::new(0.0, 0.0, 360.0, 300.0);
+    let y0 = draw(&mut s.app, &mut ts, r, MIDNIGHT).1[0].rect.y;
+    assert!(s.wheel(40.0) && s.wheel(1e9) && !s.wheel(1.0));
+    let y1 = draw(&mut s.app, &mut ts, r, MIDNIGHT).1[0].rect.y;
+    assert!(y1 < y0 - 40.0, "{y0} {y1}");
+    // Settings switches pages and themes.
     let mut s = Sim::new(Settings::default());
     assert_eq!(s.app.title(), "Settings");
     let r = RectF::new(0.0, 36.0, 720.0, 520.0);
     for (i, theme) in THEMES.iter().enumerate() {
-        let state = UiState { focused: true, ..UiState::default() };
-        let (list, hits) = frame(&mut s.app, &mut ts, r, state, theme);
+        let (list, hits) = draw(&mut s.app, &mut ts, r, theme);
         let ids: Vec<u32> = hits.iter().map(|h| h.id.0).collect();
         assert_eq!(ids, [1, 2, 10, 11, 12], "nav, then the theme cards");
         // The current theme's card wears a 2 px accent ring outside it.
@@ -410,7 +374,7 @@ fn settings_switches_pages_and_themes() {
     }
     // Three across, then fewer as the window narrows.
     let mut rows = |s: &mut Sim<Settings>, w| {
-        let hits = draw(&mut s.app, &mut ts, RectF::new(0.0, 0.0, w, 900.0), true).1;
+        let hits = draw(&mut s.app, &mut ts, RectF::new(0.0, 0.0, w, 900.0), MIDNIGHT).1;
         let cards: Vec<f32> = hits.iter().filter(|h| h.id.0 >= 10).map(|h| h.rect.y).collect();
         1 + cards.windows(2).filter(|p| p[1] > p[0]).count()
     };
@@ -419,13 +383,13 @@ fn settings_switches_pages_and_themes() {
     // About: the version and the stack, taller than the window: it scrolls.
     assert!(!s.both(AppEvent::Click(WidgetId(1))).0, "already there");
     assert!(s.both(AppEvent::Click(WidgetId(2))).0 && s.app.page == 1);
-    let (list, hits) = draw(&mut s.app, &mut ts, r, true);
+    let (list, hits) = draw(&mut s.app, &mut ts, r, MIDNIGHT);
     assert_eq!(hits.len(), 2, "only the nav");
     assert!(inks(&list).len() > 400, "the stack and the credits");
     assert!(s.wheel(100.0) && s.wheel(1e9) && !s.wheel(5.0));
-    assert!(draw(&mut s.app, &mut ts, r, true).0.instances() != list.instances());
+    assert!(draw(&mut s.app, &mut ts, r, MIDNIGHT).0.instances() != list.instances());
     // A narrow window has tabs instead of the nav, and both still switch.
-    let tabs = draw(&mut s.app, &mut ts, RectF::new(0.0, 0.0, 360.0, 640.0), true).1;
+    let tabs = draw(&mut s.app, &mut ts, RectF::new(0.0, 0.0, 360.0, 640.0), MIDNIGHT).1;
     let (a, b) = (hit(&tabs, 1).rect, hit(&tabs, 2).rect);
     assert!(a.y == b.y && a.w == b.w && b.x > a.x, "{a:?} {b:?}");
     assert!(s.both(AppEvent::Click(WidgetId(1))).0 && s.app.page == 0);

@@ -56,6 +56,12 @@ pub struct Hit {
     pub sense: Sense,
 }
 
+/// The width of a button labeled `label` in theme `t`, on device pixels.
+pub fn button_width(text: &mut TextSystem, t: &Theme, label: &str) -> f32 {
+    let d = text.dpr();
+    ((text.measure(label, t.body()) + 2.0 * BUTTON_PAD_X) * d).ceil() / d
+}
+
 /// The topmost hit (the last registered) containing the point.
 pub fn hit_test(hits: &[Hit], x: f32, y: f32) -> Option<Hit> {
     hits.iter().rev().find(|h| h.rect.contains(x, y)).copied()
@@ -192,13 +198,13 @@ impl<'a> Ui<'a> {
     }
 
     /// `r` with every edge on the nearest device pixel.
-    fn snapped(&self, r: RectF) -> RectF {
+    pub fn snapped(&self, r: RectF) -> RectF {
         let (x, y) = (self.snap(r.x), self.snap(r.y));
         RectF::new(x, y, self.snap(r.x + r.w) - x, self.snap(r.y + r.h) - y)
     }
 
     /// A stroke of `v` logical pixels as whole device pixels, at least one.
-    fn px(&self, v: f32) -> f32 {
+    pub fn px(&self, v: f32) -> f32 {
         let d = self.text.dpr();
         (v * d).round().max(1.0) / d
     }
@@ -280,35 +286,39 @@ impl<'a> Ui<'a> {
     /// A button sized to its label that brightens under the pointer and sinks
     /// while held; a [`Sense::Click`] hit.
     pub fn button(&mut self, id: WidgetId, label: &str) -> RectF {
-        self.button_as(id, label, false)
+        self.button_as(id, label, None)
     }
 
     /// A button filled with the accent: the window's main action.
     pub fn button_primary(&mut self, id: WidgetId, label: &str) -> RectF {
-        self.button_as(id, label, true)
+        self.button_as(id, label, Some(self.theme.accent))
     }
 
-    fn button_as(&mut self, id: WidgetId, label: &str, primary: bool) -> RectF {
+    /// A button filled with the danger color: a destructive action.
+    pub fn button_danger(&mut self, id: WidgetId, label: &str) -> RectF {
+        self.button_as(id, label, Some(self.theme.danger))
+    }
+
+    fn button_as(&mut self, id: WidgetId, label: &str, solid: Option<Rgba>) -> RectF {
         let t = self.theme;
         let style = t.body();
         let tw = self.text.measure(label, style);
-        let d = self.text.dpr();
-        let r = self.place(((tw + 2.0 * BUTTON_PAD_X) * d).ceil() / d, BUTTON_H);
+        let w = button_width(self.text, t, label);
+        let r = self.place(w, BUTTON_H);
         let (hover, down) = self.pointer(id);
         let shift = [0.0, 0.12, 0.24][usize::from(hover) + usize::from(down)];
-        let (fill, ink) = match primary {
-            true => (mix(t.accent, t.accent_text, shift), t.accent_text),
-            false if down => (t.pressed(t.surface_hi), t.text),
-            false if hover => (t.hover(t.surface_hi), t.text),
-            false => (t.surface_hi, t.text),
+        let (fill, ink) = match solid {
+            Some(c) => (mix(c, t.accent_text, shift), t.accent_text),
+            None if down => (t.pressed(t.surface_hi), t.text),
+            None if hover => (t.hover(t.surface_hi), t.text),
+            None => (t.surface_hi, t.text),
         };
         self.list.fill(r, RADIUS_SM, fill);
-        if !primary {
+        if solid.is_none() {
             self.list.border(r, RADIUS_SM, self.px(1.0), t.border);
         }
-        let sheen =
-            if primary { t.highlight.with_alpha(t.highlight.3.min(40)) } else { t.highlight };
-        self.sheen(r, RADIUS_SM, sheen);
+        let sheen = t.highlight.3.min(if solid.is_some() { 40 } else { 255 });
+        self.sheen(r, RADIUS_SM, t.highlight.with_alpha(sheen));
         let base = self.cap_baseline(r, style);
         let x = r.x + (r.w - tw) / 2.0;
         self.text.draw_text(self.list, x, base, label, style.with_color(ink));
@@ -341,12 +351,9 @@ impl<'a> Ui<'a> {
         let tw = self.text.measure(value, style);
         let x = if tw + caret_w > inner.w { inner.x + inner.w - caret_w - tw } else { inner.x };
         self.list.push_clip(inner);
-        if value.is_empty() {
-            let style = style.with_color(t.text_faint);
-            self.text.draw_text(self.list, inner.x, base, hint, style);
-        } else {
-            self.text.draw_text(self.list, x, base, value, style);
-        }
+        let faint = (inner.x, hint, style.with_color(t.text_faint));
+        let (at, shown, ink) = if value.is_empty() { faint } else { (x, value, style) };
+        self.text.draw_text(self.list, at, base, shown, ink);
         if focus {
             let (a, d) = (self.text.ascent(style), self.text.descent(style));
             let caret = RectF::new(self.snap(x + tw), base - a, caret_w, a + d);
@@ -355,6 +362,15 @@ impl<'a> Ui<'a> {
         self.list.pop_clip();
         self.hit(id, r, Sense::Text);
         r
+    }
+
+    /// Runs `f` on a `Ui` over `rect` with no padding, drawing into this
+    /// one's list and hits, clipped as this one is (not to `rect`).
+    pub fn within<R>(&mut self, rect: RectF, f: impl FnOnce(&mut Ui<'_>) -> R) -> R {
+        let clip = self.list.clip();
+        let mut ui = Ui::new(self.list, self.text, clip, self.hits, self.state, self.theme);
+        ui.rect = rect;
+        f(&mut ui.padded(0.0))
     }
 
     /// A raised card across the width holding the items `f` adds, as in a
@@ -372,11 +388,17 @@ impl<'a> Ui<'a> {
             ui.bottom - y + CARD_PAD
         };
         let r = self.place(w, h);
+        self.raised(r);
+        f(&mut Ui::new(self.list, self.text, r, self.hits, self.state, t).padded(CARD_PAD));
+        r
+    }
+
+    /// A card's surface in `r`: a raised fill, its edge and a lit top.
+    pub fn raised(&mut self, r: RectF) {
+        let t = self.theme;
         self.list.fill(r, RADIUS_LG, t.surface_hi);
         self.list.border(r, RADIUS_LG, self.px(1.0), t.border);
         self.sheen(r, RADIUS_LG, t.highlight);
-        f(&mut Ui::new(self.list, self.text, r, self.hits, self.state, t).padded(CARD_PAD));
-        r
     }
 
     /// An app tile: `glyph` (or the label's first letter) on a gradient of

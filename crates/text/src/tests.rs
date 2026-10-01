@@ -116,9 +116,8 @@ fn atlas_cells_and_fallbacks() {
     assert!(list.instances()[0].kind == 1.0 && t.measure("✻", MONO13) > 0.0);
     t.add_fallback(SYM_A.to_vec()).unwrap();
     t.add_fallback(SYM_B.to_vec()).unwrap();
-    // Symbols A has U+273B at 750 units, wider than a cell; U+23BF is only in
-    // Symbols B. The built-ins stand in for each other: Inter lacks box
-    // drawing, and JetBrains Mono lacks the check mark Inter has.
+    // Symbols A has U+273B (750 units, wider than a cell), only Symbols B U+23BF;
+    // the built-ins stand in for each other: Inter lacks box drawing, Mono a check.
     assert!(near(t.measure("✻", MONO13), 750.0 * 13.0 / 1000.0));
     assert!(near(t.measure("✻", SANS14), 750.0 * 14.0 / 1000.0));
     assert!(near(t.measure("⎿", MONO13), 699.0 * 13.0 / 1000.0));
@@ -264,9 +263,8 @@ fn measures_draws_and_wraps() {
     assert_eq!(t.wrap("é ü", MONO13, 500.0), ["é ü"]);
     // Leading spaces before a long word leave no empty first line.
     assert_eq!(t.wrap("  verylongword", MONO13, 47.0), ["verylo", "ngword"]);
-    // `+`, `/` and `-` between letters or digits are break opportunities,
-    // kept at the end of the line; not between two digits, nor after a
-    // leading or doubled one.
+    // `+`, `/` and `-` between letters or digits are break opportunities, kept at
+    // the end of the line; not between two digits, nor after a leading or doubled one.
     assert_eq!(t.wrap("Alt+Shift+Enter", MONO13, 94.0), ["Alt+Shift+", "Enter"]);
     assert_eq!(t.wrap("Alt+Shift+Enter", MONO13, 63.0), ["Alt+", "Shift+", "Enter"]);
     assert_eq!(t.wrap("Alt+Shift+1-4", MONO13, 94.0), ["Alt+Shift+", "1-4"]);
@@ -282,4 +280,35 @@ fn measures_draws_and_wraps() {
     }
     let rejoined: Vec<&str> = lines.iter().flat_map(|l| l.split_whitespace()).collect();
     assert_eq!(long.split_whitespace().collect::<Vec<_>>(), rejoined);
+}
+
+#[test]
+fn editor_edits_across_lines() {
+    let mut e = Editor::new("row {\n  label 1;\n}");
+    assert_eq!((e.len(), e.is_empty(), Editor::default().is_empty()), (18, false, true));
+    // Each edit, then caret and text: Enter keeps the indent left of the caret,
+    // Backspace and Delete join lines at their ends, tabs become two spaces, \r and controls go.
+    type Edit = (fn(&mut Editor), (usize, usize), &'static str);
+    let edits: [Edit; 15] = [
+        (|e| e.set_caret(1, 99), (1, 10), "row {\n  label 1;\n}"),
+        (|e| e.newline(), (2, 2), "row {\n  label 1;\n  \n}"),
+        (|e| e.insert("label 2;"), (2, 10), "row {\n  label 1;\n  label 2;\n}"),
+        (|e| e.set_caret(2, 1), (2, 1), "row {\n  label 1;\n  label 2;\n}"),
+        (|e| e.newline(), (3, 1), "row {\n  label 1;\n \n  label 2;\n}"),
+        (|e| e.delete(true), (3, 0), "row {\n  label 1;\n \n label 2;\n}"),
+        (|e| e.delete(true), (2, 1), "row {\n  label 1;\n  label 2;\n}"),
+        (|e| e.set_caret(1, usize::MAX), (1, 10), "row {\n  label 1;\n  label 2;\n}"),
+        (|e| e.delete(false), (1, 10), "row {\n  label 1;  label 2;\n}"),
+        (|e| e.set_caret(0, 0), (0, 0), "row {\n  label 1;  label 2;\n}"),
+        (|e| e.delete(true), (0, 0), "row {\n  label 1;  label 2;\n}"),
+        (|e| e.insert("a\tb\r\nc\u{7}"), (1, 1), "a  b\ncrow {\n  label 1;  label 2;\n}"),
+        (|e| e.insert("éü"), (1, 3), "a  b\ncéürow {\n  label 1;  label 2;\n}"),
+        (|e| e.step(true), (1, 2), "a  b\ncéürow {\n  label 1;  label 2;\n}"),
+        (|e| e.delete(false), (1, 2), "a  b\ncérow {\n  label 1;  label 2;\n}"),
+    ];
+    for (edit, caret, text) in edits {
+        edit(&mut e);
+        assert_eq!((e.caret(), e.text()), (caret, text.to_string()));
+    }
+    assert_eq!(e.line_count(), 4);
 }

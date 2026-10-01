@@ -1,18 +1,14 @@
-//! The byte protocol between the main thread and a program's worker.
-//! Little-endian throughout; a `str` is a u16 length and UTF-8 bytes; `rest`
-//! is every remaining byte. The channel names the process, so requests carry
-//! no pid. Every decode goes through [`Reader`] and gives `None` for a bad
-//! message (answered with [`EINVAL`]), never a panic. Non-UTF-8 never
-//! crosses: the worker answers a guest's non-UTF-8 path with [`EILSEQ`]
-//! before encoding, so [`Reader::str`] treats it as a bad message.
+//! The byte protocol between the main thread and a program's worker; the
+//! channel names the process, so requests carry no pid. Little-endian; a `str`
+//! is a u16 length and UTF-8 (a guest's non-UTF-8 path is [`EILSEQ`] in the
+//! worker); `rest` is every remaining byte. A bad message decodes to `None`
+//! (answered with [`EINVAL`]), never a panic.
 //!
-//! The SAB of a process: 16 i32 words ([`STATE`] to [`BELL`]; 10 to 15 are
-//! reserved and 0), the reply payload at [`PAYLOAD_AT`], the console ring at
-//! [`RING_AT`]. STATE is 0 idle, 1 a reply is ready; COLS and ROWS are the
-//! window size; INPUT holds [`INPUT_READY`] and [`INPUT_EOF`]; SLEEP is never
-//! written; HEAD and TAIL count console bytes, wrapping; BELL is 1 while a
-//! CONS_BELL is in flight. A reply: payload, LEN and ERRNO, then STATE = 1
-//! and notify; the worker stores STATE = 0 before its next request.
+//! A process's SAB: 16 i32 words ([`STATE`] to [`BELL`], the rest 0), the reply
+//! payload at [`PAYLOAD_AT`], the console ring at [`RING_AT`]. A reply: payload,
+//! LEN, ERRNO, STATE = 1 and notify; the worker stores STATE = 0 before its next
+//! request. COLS, ROWS: the window; INPUT: [`INPUT_READY`], [`INPUT_EOF`]; SLEEP:
+//! never written; HEAD, TAIL: console bytes, wrapping; BELL: 1 while a CONS_BELL flies.
 
 use vfs::VfsError;
 
@@ -110,9 +106,8 @@ impl Writer {
         Writer(vec![op])
     }
 
-    /// A u16 length and the bytes. A string over 65,535 bytes is cut to its
-    /// longest prefix that fits on a char boundary, so callers bound theirs
-    /// first (paths by the Vfs limits, [`Start`] by [`MAX_START`]).
+    /// A u16 length and the bytes, cut to 65,535 on a char boundary: callers bound
+    /// theirs first (paths by the Vfs limits, [`Start`] by [`MAX_START`]).
     pub fn str(self, s: &str) -> Writer {
         let mut n = s.len().min(usize::from(u16::MAX));
         while !s.is_char_boundary(n) {
@@ -132,11 +127,9 @@ impl Writer {
     }
 }
 
-/// One message, borrowed from its bytes: worker to main (READY to EXIT; a
-/// CONS_WRITE is synthesized by the platform from the ring) or main to an
-/// async worker (REPLY, SAVE). Replies to the file ops carry: OPEN `u8 kind,
-/// u64 size`; READ the bytes; WRITE `u64 size`; LIST entries `{u8 kind, u64
-/// size, str name}`; CONS_READ the bytes; the others nothing.
+/// One message, borrowed: worker to main (READY to EXIT; the platform makes CONS_WRITE from
+/// the ring) or main to an async worker (REPLY, SAVE). Replies carry: OPEN `u8 kind, u64 size`;
+/// READ, CONS_READ the bytes; WRITE `u64 size`; LIST `{u8 kind, u64 size, str name}*`; others none.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Msg<'a> {
     Ready { version: u8 },
@@ -227,11 +220,9 @@ pub enum Stdout {
     File { path: String, append: bool },
 }
 
-/// The first message to a worker, after its READY: `u8 version | u8 role |
-/// u32 pid | u8 flags (bit0 tty) | u16 cols | u16 rows | u8 stdout (0
-/// console, 1 file, 2 file append) | str stdout_path | str cwd | u16 nroots,
-/// str* | u16 argc, str* | u16 envc, str*`. `env` holds `K=V` entries
-/// applied over the defaults.
+/// The first message to a worker, after its READY: `u8 version | u8 role | u32 pid | u8 flags
+/// (bit0 tty) | u16 cols | u16 rows | u8 stdout (0 console, 1 file, 2 append) | str stdout_path
+/// | str cwd | u16 nroots, str* | u16 argc, str* | u16 envc, str*`; `env`: `K=V` overrides.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Start {
     pub role: Role,
@@ -267,20 +258,15 @@ impl Start {
     /// path with console stdout, or a short or long message.
     pub fn decode(b: &[u8]) -> Option<Start> {
         let mut r = Reader(b);
-        if r.u8()? != VERSION {
-            return None;
-        }
+        (r.u8()? == VERSION).then_some(())?;
         let role = match r.u8()? {
             0 => Role::Process,
             1 => Role::Home,
             _ => return None,
         };
         let (pid, flags, size) = (r.u32()?, r.u8()?, (r.u16()?, r.u16()?));
-        let tty = match flags {
-            0 => None,
-            1 => Some(size),
-            _ => return None,
-        };
+        (flags < 2).then_some(())?;
+        let tty = (flags == 1).then_some(size);
         let (kind, path) = (r.u8()?, r.str()?);
         let stdout = match kind {
             0 if path.is_empty() => Stdout::Console,

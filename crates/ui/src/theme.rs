@@ -177,11 +177,10 @@ const MONO: Theme = Theme {
 /// The built-in themes: Midnight (the default), Dawn and Mono.
 pub const THEMES: [Theme; 3] = [MIDNIGHT, DAWN, MONO];
 
-static ALL: [Theme; 3] = THEMES;
-
 /// The theme named `name`, ignoring ASCII case; else the first of [`THEMES`].
 pub fn theme(name: &str) -> &'static Theme {
-    ALL.iter().find(|t| t.name.eq_ignore_ascii_case(name)).unwrap_or(&ALL[0])
+    let all: &'static [Theme; 3] = &THEMES;
+    all.iter().find(|t| t.name.eq_ignore_ascii_case(name)).unwrap_or(&all[0])
 }
 
 impl Theme {
@@ -234,16 +233,11 @@ impl Theme {
     /// 6 x 6 x 6 cube, 232-255 the gray ramp from 8 to 238.
     pub fn xterm(&self, i: u8) -> Rgba {
         const LEVELS: [u8; 6] = [0, 95, 135, 175, 215, 255];
+        let n = usize::from(i.wrapping_sub(16));
         match i {
             0..=15 => self.ansi[usize::from(i)],
-            16..=231 => {
-                let n = usize::from(i - 16);
-                Rgba(LEVELS[n / 36], LEVELS[n / 6 % 6], LEVELS[n % 6], 255)
-            }
-            _ => {
-                let v = 8 + 10 * (i - 232);
-                Rgba(v, v, v, 255)
-            }
+            16..=231 => Rgba(LEVELS[n / 36], LEVELS[n / 6 % 6], LEVELS[n % 6], 255),
+            _ => Rgba::hex(0x01_0101 * u32::from(8 + 10 * (i - 232))),
         }
     }
 
@@ -275,14 +269,8 @@ pub fn app_tint(id: u32) -> Rgba {
     let (v, s) = (0.9, 0.45);
     let c = v * s;
     let x = c * (1.0 - (h % 2.0 - 1.0).abs());
-    let (r, g, b) = match h as u32 {
-        0 => (c, x, 0.0),
-        1 => (x, c, 0.0),
-        2 => (0.0, c, x),
-        3 => (0.0, x, c),
-        4 => (x, 0.0, c),
-        _ => (c, 0.0, x),
-    };
+    let sixths = [(c, x, 0.0), (x, c, 0.0), (0.0, c, x), (0.0, x, c), (x, 0.0, c), (c, 0.0, x)];
+    let (r, g, b) = sixths[(h as usize).min(5)];
     let byte = |f: f32| ((f + v - c) * 255.0).round() as u8;
     Rgba(byte(r), byte(g), byte(b), 255)
 }

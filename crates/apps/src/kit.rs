@@ -1,5 +1,4 @@
-//! What the apps share: icons, a wheel-scrolled view, and drawing helpers
-//! that keep shapes and text on device pixels.
+//! What the apps share: icons, a wheel-scrolled view, helpers keeping text on device pixels.
 
 use gfx::RectF;
 use ui::theme::mix;
@@ -16,19 +15,6 @@ const BLACK: Rgba = Rgba(0, 0, 0, 255);
 /// Inter's cap height and x-height, in ems (JetBrains Mono's caps match).
 const CAP: f32 = 0.727;
 const X_HEIGHT: f32 = 0.546;
-
-/// `r` with every edge on the nearest device pixel.
-pub(crate) fn snapped(ui: &mut Ui<'_>, r: RectF) -> RectF {
-    let ts = ui.text_system();
-    let (x, y) = (ts.snap(r.x), ts.snap(r.y));
-    RectF::new(x, y, ts.snap(r.x + r.w) - x, ts.snap(r.y + r.h) - y)
-}
-
-/// `v` logical pixels as whole device pixels, at least one: a stroke.
-pub(crate) fn px(ui: &mut Ui<'_>, v: f32) -> f32 {
-    let d = ui.text_system().dpr();
-    (v * d).round().max(1.0) / d
-}
 
 /// The baseline that centers ink `ink` ems tall at `size` in a band `h` tall.
 pub(crate) fn centered_base(ui: &mut Ui<'_>, top: f32, h: f32, size: f32, ink: f32) -> f32 {
@@ -81,7 +67,7 @@ pub(crate) fn card_colors(t: &Theme, hover: bool, down: bool) -> (Rgba, Rgba) {
 
 /// A raised rounded rect: `fill`, a 1 px `edge`, and the theme's light top.
 pub(crate) fn raised(ui: &mut Ui<'_>, r: RectF, radius: f32, fill: Rgba, edge: Rgba) {
-    let (t, line) = (ui.theme(), px(ui, 1.0));
+    let (t, line) = (ui.theme(), ui.px(1.0));
     ui.fill(r, radius, fill);
     ui.border(r, radius, line, edge);
     ui.push_clip(RectF::new(r.x, r.y, r.w, line));
@@ -89,16 +75,15 @@ pub(crate) fn raised(ui: &mut Ui<'_>, r: RectF, radius: f32, fill: Rgba, edge: R
     ui.pop_clip();
 }
 
-/// An app icon in the square `r`: a shadowed rounded square in a gradient of
-/// its hue, and its glyph in white (SansBold if alphanumeric, else Mono),
-/// centered on its ink and shrunk to fit.
+/// An app icon in the square `r`: a shadowed gradient of its hue, its glyph in white
+/// (SansBold if alphanumeric, else Mono), centered on its ink and shrunk to fit.
 pub(crate) fn icon(ui: &mut Ui<'_>, r: RectF, icon: AppIcon) {
     let t = ui.theme();
     let radius = (r.w * 0.28).round();
-    let drop = RectF { y: r.y + px(ui, 1.0), ..r };
+    let drop = RectF { y: r.y + ui.px(1.0), ..r };
     ui.list().shadow(drop, radius, 6.0, t.shadow.with_alpha(t.shadow.3 / 2));
     ui.gradient(r, radius, mix(icon.hue, WHITE, 0.16), mix(icon.hue, BLACK, 0.16));
-    let line = px(ui, 1.0);
+    let line = ui.px(1.0);
     ui.border(r, radius, line, WHITE.with_alpha(36));
     let glyph = icon.glyph;
     let bold = glyph.chars().all(|c| c.is_ascii_alphanumeric());

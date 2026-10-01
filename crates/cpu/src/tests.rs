@@ -1,18 +1,25 @@
-use crate::{js::span, link::wasi, sys::EXPORTS};
-use kernel::wasi::{ARITY, FD_WRITE, NAMES, PROC_EXIT};
+use crate::{js::span, link::trim, link::wasi, sys::*};
+use wasi::{ARITY, FD_WRITE, NAMES, PROC_EXIT};
 
 #[test]
-fn the_exports_are_the_46_wasi_functions_by_id_and_arity() {
+fn the_46_exports_link_by_wasi_id_and_arity_and_trap_text_is_trimmed() {
     let mut seen = [false; 46];
     for (id, name, arity) in EXPORTS.into_iter().chain([(PROC_EXIT, "proc_exit", 1)]) {
         assert_eq!((NAMES[id], ARITY[id], seen[id]), (name, arity, false));
         seen[id] = true;
     }
-    assert!(seen.iter().all(|s| *s));
+    // Each pads its call to `crate::sys` to nine; before Start every call is ENOSYS.
+    assert!(seen.iter().all(|s| *s) && ARITY.iter().max() == Some(&9));
+    let calls = [fd_write(1, 8, 1, 16), path_open(3, 0, 64, 5, 1, 9, 0, 0, 72), sched_yield()];
+    assert_eq!(calls, [kernel::wire::ENOSYS.into(); 3]);
     let p1 = "wasi_snapshot_preview1";
     assert_eq!(wasi(p1, "fd_write"), Some(FD_WRITE));
     let others = [(p1, "fd_write2"), (p1, "__wbindgen_malloc"), ("wasi_unstable", "fd_write")];
     assert!(others.iter().all(|(m, n)| wasi(m, n).is_none()));
+    // Engine messages lose what JavaScriptCore appends.
+    let t = |s: &str| trim(s.into());
+    assert_eq!(t("x is not a function (evaluating 'x()')"), "x is not a function");
+    assert_eq!([t("ok"), t(" (evaluating '"), t("\u{e9} (evaluating '")], ["ok", "", "\u{e9}"]);
 }
 
 #[test]

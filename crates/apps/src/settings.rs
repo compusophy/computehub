@@ -30,31 +30,22 @@ const FONTS: &str = "Fonts: Inter, JetBrains Mono, and Noto Sans Symbols 1 and 2
 Open Font License 1.1. Their license texts are at /licenses/ on the site.";
 const FORKS: &str = "fuel, lang, applang-syntax and applang are forks of litelite 0.2.0 \
 (commit 4f5e056, 2026-07-20), under Apache-2.0.";
+#[rustfmt::skip]
 const STACK: [(&str, &str); 19] = [
-    ("os", "The wasm entry point"),
-    ("platform", "The browser boundary: canvas, WebGL2, input"),
-    ("shell", "The desktop: chrome, dock and keys"),
-    ("host", "Windows and the apps in them"),
-    ("wm", "Window manager; deterministic"),
-    ("apps", "Terminal, Welcome and Settings"),
-    ("studio", "Write, check and run apps"),
-    ("guest", "The shell the Terminal runs"),
-    ("term", "Terminal screen model"),
-    ("vt", "Terminal escape-sequence parser"),
-    ("ui", "Widgets, themes and the App trait"),
-    ("text", "Fonts and glyphs on the atlas"),
-    ("font", "TrueType reader and rasterizer"),
-    ("gfx", "Draw lists and the WebGL2 shaders"),
-    ("vfs", "In-memory filesystem; deterministic"),
-    ("applang", "The tier 0 app language"),
-    ("applang-syntax", "applang's lexer and parser"),
-    ("lang", "Diagnostics, lexer and parser kit"),
+    ("os", "The wasm entry point"), ("platform", "The browser boundary: canvas, WebGL2, input"),
+    ("shell", "The desktop: chrome, dock and keys"), ("host", "Windows and the apps in them"),
+    ("wm", "Window manager; deterministic"), ("apps", "Terminal, Welcome and Settings"),
+    ("studio", "Write, check and run apps"), ("guest", "The shell the Terminal runs"),
+    ("term", "Terminal screen model"), ("vt", "Terminal escape-sequence parser"),
+    ("ui", "Widgets, themes and the App trait"), ("text", "Fonts and glyphs on the atlas"),
+    ("font", "TrueType reader and rasterizer"), ("gfx", "Draw lists and the WebGL2 shaders"),
+    ("vfs", "In-memory filesystem; deterministic"), ("applang", "The tier 0 app language"),
+    ("applang-syntax", "applang's lexer and parser"), ("lang", "Diagnostics, lexer and parser kit"),
     ("fuel", "Fuel and byte budgets"),
 ];
 
-/// Settings: Appearance (each of [`THEMES`] as a miniature desktop; a click
-/// applies it) and About (version, stack, credits), as a nav column or, when
-/// narrow, tabs. A page taller than the window scrolls with the wheel.
+/// Settings: Appearance (each of [`THEMES`] as a miniature desktop; a click applies it) and
+/// About (version, stack, credits), by nav column or, narrow, tabs; tall pages scroll.
 #[derive(Debug, Default)]
 pub struct Settings {
     /// The page shown, an index into [`PAGES`].
@@ -69,11 +60,10 @@ impl App for Settings {
 
     fn draw(&mut self, ui: &mut Ui<'_>) {
         let r = ui.rect();
-        let (view, margin) =
-            if r.w >= WIDE { (self.nav(ui), MARGIN) } else { (self.tabs(ui), PAD) };
+        let (view, left) = if r.w >= WIDE { (self.nav(ui), MARGIN) } else { (self.tabs(ui), PAD) };
         ui.push_clip(view);
         let top = ui.text_system().snap(view.y + PAD - self.scroll.y);
-        ui.set_cursor(view.x + margin, top);
+        ui.set_cursor(view.x + left, top);
         let bottom = match self.page {
             0 => appearance(ui),
             _ => about(ui),
@@ -113,12 +103,12 @@ impl App for Settings {
 impl Settings {
     /// The nav column and the line right of it; returns the page's area.
     fn nav(&self, ui: &mut Ui<'_>) -> RectF {
-        let (r, t, line) = (ui.rect(), ui.theme(), kit::px(ui, 1.0));
+        let (r, t, line) = (ui.rect(), ui.theme(), ui.px(1.0));
         let sep = ui.text_system().snap(r.x + NAV_W);
         ui.fill(RectF::new(sep, r.y, line, r.h), 0.0, t.border);
         for i in 0..PAGES.len() {
             let y = r.y + 12.0 + i as f32 * (ITEM_H + 2.0);
-            let item = kit::snapped(ui, RectF::new(r.x + 12.0, y, NAV_W - 24.0, ITEM_H));
+            let item = ui.snapped(RectF::new(r.x + 12.0, y, NAV_W - 24.0, ITEM_H));
             self.item(ui, i, item, false);
         }
         RectF::new(sep + line, r.y, r.x + r.w - sep - line, r.h)
@@ -126,14 +116,14 @@ impl Settings {
 
     /// The pages as a segmented control on top; returns the page's area.
     fn tabs(&self, ui: &mut Ui<'_>) -> RectF {
-        let (r, t, line) = (ui.rect(), ui.theme(), kit::px(ui, 1.0));
-        let bar = kit::snapped(ui, RectF::new(r.x + PAD, r.y + 14.0, r.w - 2.0 * PAD, 36.0));
+        let (r, t, line) = (ui.rect(), ui.theme(), ui.px(1.0));
+        let bar = ui.snapped(RectF::new(r.x + PAD, r.y + 14.0, r.w - 2.0 * PAD, 36.0));
         ui.fill(bar, RADIUS_SM, t.surface_lo);
         ui.border(bar, RADIUS_SM, line, t.border);
         let seg = (bar.w - 8.0) / PAGES.len() as f32;
         for i in 0..PAGES.len() {
             let at = RectF::new(bar.x + 4.0 + i as f32 * seg, bar.y + 4.0, seg, bar.h - 8.0);
-            let item = kit::snapped(ui, at);
+            let item = ui.snapped(at);
             self.item(ui, i, item, true);
         }
         let y = bar.y + bar.h + 2.0;
@@ -178,7 +168,7 @@ fn appearance(ui: &mut Ui<'_>) -> f32 {
     for (i, th) in THEMES.iter().enumerate() {
         let (col, row) = ((i % cols) as f32, (i / cols) as f32);
         let at = RectF::new(x + col * (cw + CARD_GAP), y + row * (ch + CARD_GAP), cw, ch);
-        let card = kit::snapped(ui, at);
+        let card = ui.snapped(at);
         theme_card(ui, i, card, th, ph);
     }
     let rows = THEMES.len().div_ceil(cols) as f32;
@@ -195,12 +185,11 @@ fn theme_card(ui: &mut Ui<'_>, i: usize, card: RectF, th: &Theme, ph: f32) {
     let current = t.name == th.name;
     let (fill, edge) = kit::card_colors(t, hover, down);
     if current {
-        let (gap, wide) = (kit::px(ui, 3.0), kit::px(ui, 2.0));
+        let (gap, wide) = (ui.px(3.0), ui.px(2.0));
         ui.border(card.inset(-gap), RADIUS_LG + gap, wide, t.accent);
     }
     kit::raised(ui, card, RADIUS_LG, fill, edge);
-    let preview =
-        kit::snapped(ui, RectF::new(card.x + INSET, card.y + INSET, card.w - 2.0 * INSET, ph));
+    let preview = ui.snapped(RectF::new(card.x + INSET, card.y + INSET, card.w - 2.0 * INSET, ph));
     miniature(ui, preview, th, fill);
     let band = preview.y + preview.h;
     let band_h = card.y + card.h - band;
@@ -219,7 +208,7 @@ fn theme_card(ui: &mut Ui<'_>, i: usize, card: RectF, th: &Theme, ph: f32) {
 /// `th`'s desktop in small inside `p` (light, a window, a dock), its corners
 /// concentric with the card's, the light trimmed by a ring in `under`.
 fn miniature(ui: &mut Ui<'_>, p: RectF, th: &Theme, under: gfx::Rgba) {
-    let (t, line) = (ui.theme(), kit::px(ui, 1.0));
+    let (t, line) = (ui.theme(), ui.px(1.0));
     let radius = RADIUS_LG - INSET;
     ui.fill(p, radius, th.base);
     ui.push_clip(p);
@@ -231,11 +220,11 @@ fn miniature(ui: &mut Ui<'_>, p: RectF, th: &Theme, under: gfx::Rgba) {
     ui.list().grain(p, th.grain, 1.0);
     let u = p.w / 200.0;
     let at = RectF::new(p.x + 0.14 * p.w, p.y + 0.13 * p.h, 0.6 * p.w, 0.56 * p.h);
-    let win = kit::snapped(ui, at);
+    let win = ui.snapped(at);
     ui.list().shadow_offset(win, 4.0, 10.0 * u, 3.0 * u, th.shadow);
     ui.fill(win, 4.0, th.surface);
     let bar = (win.h * 0.2).round();
-    let divider = kit::snapped(ui, RectF::new(win.x, win.y + bar, win.w, line));
+    let divider = ui.snapped(RectF::new(win.x, win.y + bar, win.w, line));
     ui.fill(divider, 0.0, th.border);
     let (pad, stroke) = ((8.0 * u).round(), (3.0 * u).round().max(2.0));
     let bars = [
@@ -244,12 +233,12 @@ fn miniature(ui: &mut Ui<'_>, p: RectF, th: &Theme, under: gfx::Rgba) {
         (pad, bar + pad + 2.0 * stroke, 0.4, th.text_faint),
     ];
     for (dx, dy, frac, color) in bars {
-        let r = kit::snapped(ui, RectF::new(win.x + dx, win.y + dy, win.w * frac, stroke));
+        let r = ui.snapped(RectF::new(win.x + dx, win.y + dy, win.w * frac, stroke));
         ui.fill(r, stroke / 2.0, color);
     }
     let (bw, bh) = ((win.w * 0.26).round(), (2.4 * stroke).round());
     let at = RectF::new(win.x + win.w - pad - bw, win.y + win.h - pad - bh, bw, bh);
-    let button = kit::snapped(ui, at);
+    let button = ui.snapped(at);
     ui.fill(button, bh / 2.0, th.accent);
     ui.border(win, 4.0, line, th.border);
     // The dock: a glass pill of app colors.
@@ -257,16 +246,16 @@ fn miniature(ui: &mut Ui<'_>, p: RectF, th: &Theme, under: gfx::Rgba) {
     let (dot, gap) = ((7.0 * u).round().max(4.0), (4.0 * u).round().max(2.0));
     let (dw, dh) = (4.0 * dot + 3.0 * gap + 2.0 * gap + 2.0, dot + 2.0 * gap);
     let at = RectF::new(p.x + (p.w - dw) / 2.0, p.y + p.h - dh - (0.06 * p.h).round(), dw, dh);
-    let dock = kit::snapped(ui, at);
+    let dock = ui.snapped(at);
     ui.fill(dock, dh / 2.0, th.glass);
     ui.border(dock, dh / 2.0, line, th.border);
     for (k, icon) in dots.iter().enumerate() {
         let x = dock.x + gap + 1.0 + k as f32 * (dot + gap);
-        let r = kit::snapped(ui, RectF::new(x, dock.y + gap, dot, dot));
+        let r = ui.snapped(RectF::new(x, dock.y + gap, dot, dot));
         ui.fill(r, (dot * 0.3).round(), icon.hue);
     }
     ui.pop_clip();
-    let k = kit::px(ui, (radius * 0.5).ceil());
+    let k = ui.px((radius * 0.5).ceil());
     ui.border(p.inset(-k), radius + k, k, under);
     ui.border(p, radius, line, t.border);
 }

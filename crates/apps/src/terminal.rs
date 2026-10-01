@@ -11,11 +11,10 @@ const SIZE: f32 = 13.0;
 const INSET: f32 = 14.0;
 const BANNER: &str = "\x1b[1mcompusophyOS terminal\x1b[m — type 'help'.\n";
 
-/// A terminal window running [`guest::Guest`]: a Mono 13 px grid (the same
-/// before that font arrives), [`Theme::ansi`] colors, a steady accent block
-/// cursor (an outline when unfocused). The greeting waits for the first grid;
-/// the wheel scrolls back and any key snaps back. A program the shell starts
-/// runs in the foreground: its output comes on [`AppEvent::Io`].
+/// A terminal window running [`guest::Guest`]: a Mono 13 px grid (the same before that font
+/// arrives), [`Theme::ansi`] colors, a steady accent block cursor (an outline unfocused). The
+/// greeting waits for the first grid; the wheel scrolls back, any key snaps back. Programs the
+/// shell starts run in the foreground, their output on [`AppEvent::Io`].
 #[derive(Debug)]
 pub struct Terminal {
     pub(crate) term: Term,
@@ -39,15 +38,8 @@ pub(crate) fn grid_size(w: f32, h: f32, cell_w: f32, line_h: f32) -> (u16, u16) 
 
 impl Default for Terminal {
     fn default() -> Terminal {
-        Terminal {
-            term: Term::new(80, 24),
-            guest: Guest::new(),
-            started: false,
-            greet: false,
-            cell: (8.0, 17.0),
-            scroll: 0,
-            wheel: 0.0,
-        }
+        let (term, guest, cell) = (Term::new(80, 24), Guest::new(), (8.0, 17.0));
+        Terminal { term, guest, started: false, greet: false, cell, scroll: 0, wheel: 0.0 }
     }
 }
 
@@ -77,10 +69,8 @@ impl Terminal {
         self.print(out.as_bytes());
     }
 
-    /// While a program runs: shows its output (the typed-ahead line moves
-    /// below) and, once it ended, the prompt. Live resizes and the terminal's
-    /// replies come with step 3's console input: until then the kernel
-    /// ignores both, and the calls would cost boot bytes.
+    /// While a program runs: shows its output and, once it ended, the prompt.
+    /// No live resizes or terminal replies: the kernel ignores both until step 3.
     fn io(&mut self, cx: &mut Cx<'_>) {
         let Some(pid) = self.guest.running() else { return };
         let (raw, out) = (cx.kernel.mode(pid).raw, cx.kernel.take_output(pid));
@@ -112,8 +102,7 @@ impl Terminal {
         }
     }
 
-    /// After a key or text: shows the shell's output and snaps the view back,
-    /// returning whether it was scrolled.
+    /// After a key or text: shows the shell's output, snaps back; whether it was scrolled.
     fn typed(&mut self) -> bool {
         self.shell_output();
         std::mem::take(&mut self.scroll) > 0
@@ -132,17 +121,12 @@ impl Terminal {
         self.scroll != old
     }
 
-    /// Draws the visible rows (`scroll` back) and the cursor: background runs,
-    /// then glyphs and their lines.
-    fn paint(
-        &self,
-        ts: &mut TextSystem,
-        list: &mut DrawList,
-        (ox, oy): (f32, f32),
-        focused: bool,
-        t: &Theme,
-    ) {
+    /// Draws the visible rows (`scroll` back) inset in `r`, and the cursor:
+    /// background runs, then glyphs and their lines.
+    fn paint(&self, ts: &mut TextSystem, list: &mut DrawList, r: RectF, focused: bool, t: &Theme) {
         let ((cw, lh), asc) = (self.cell, ts.ascent(TextStyle::new(FontId::Mono, SIZE, t.text)));
+        let (ox, oy) = (ts.snap(r.x + INSET), ts.snap(r.y + INSET));
+        let shown = |c: &Cell| c.width != 0 && !c.attrs.contains(Attrs::HIDDEN);
         // Lines and the outline: whole device pixels, at least one.
         let one = ts.dpr().round().max(1.0) / ts.dpr();
         let term = &self.term;
@@ -164,12 +148,8 @@ impl Terminal {
                 }
                 x += n;
             }
-            for (x, c) in cells.iter().enumerate() {
-                if c.width == 0 || c.attrs.contains(Attrs::HIDDEN) {
-                    continue;
-                }
-                let fg = colors(c, t).0;
-                let left = ox + x as f32 * cw;
+            for (x, c) in cells.iter().enumerate().filter(|c| shown(c.1)) {
+                let (fg, left) = (colors(c, t).0, ox + x as f32 * cw);
                 let (w, base) = (cw * f32::from(c.width), y + asc);
                 ts.draw_cell_char(list, left, base, w, c.ch, SIZE, fg);
                 let line = |dy| RectF::new(left, base + dy, w, one);
@@ -187,13 +167,12 @@ impl Terminal {
         }
         let cell = term.row(cr).get(usize::from(cc)).copied().unwrap_or(Cell::BLANK);
         let w = cw * f32::from(cell.width.max(1));
-        let x = ox + f32::from(cc) * cw;
-        let r = RectF::new(x, oy + f32::from(cr) * lh, w, lh);
+        let r = RectF::new(ox + f32::from(cc) * cw, oy + f32::from(cr) * lh, w, lh);
         if !focused {
             return list.border(r, 0.0, one, t.accent);
         }
         list.fill(r, 0.0, t.accent);
-        if cell.width != 0 && !cell.attrs.contains(Attrs::HIDDEN) {
+        if shown(&cell) {
             ts.draw_cell_char(list, r.x, r.y + asc, w, cell.ch, SIZE, t.accent_text);
         }
     }
@@ -214,7 +193,6 @@ impl App for Terminal {
         let mut list = std::mem::take(ui.list());
         let ts = ui.text_system();
         let (cw, lh) = (ts.cell_width(SIZE), ts.snap((SIZE * 1.3).round()));
-        let (x, y) = (ts.snap(r.x + INSET), ts.snap(r.y + INSET));
         self.cell = (cw, lh);
         self.fit(grid_size(r.w, r.h, cw, lh));
         self.begin();
@@ -222,7 +200,7 @@ impl App for Terminal {
             self.scroll = 0;
         }
         self.scroll = self.scroll.min(self.term.scrollback_len());
-        self.paint(ts, &mut list, (x, y), focused, theme);
+        self.paint(ts, &mut list, r, focused, theme);
         *ui.list() = list;
     }
 
@@ -290,6 +268,5 @@ fn colors(c: &Cell, t: &Theme) -> (Rgba, Option<Rgba>) {
         true => (rgb(c.bg).unwrap_or(t.surface.with_alpha(255)), Some(fg)),
         false => (fg, rgb(c.bg)),
     };
-    let dim = is(Attrs::DIM);
-    (if dim { fg.with_alpha(153) } else { fg }, bg)
+    (if is(Attrs::DIM) { fg.with_alpha(153) } else { fg }, bg)
 }

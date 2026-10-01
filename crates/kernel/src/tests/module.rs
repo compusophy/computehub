@@ -3,12 +3,8 @@ use crate::module::cap_memory;
 
 /// A module of `(id, body)` sections, each under 128 bytes.
 fn module(sections: &[(u8, &[u8])]) -> Vec<u8> {
-    let mut m = b"\0asm\x01\0\0\0".to_vec();
-    for &(id, body) in sections {
-        m.extend([id, body.len() as u8]);
-        m.extend(body);
-    }
-    m
+    let body = sections.iter().flat_map(|&(id, b)| [&[id, b.len() as u8][..], b].concat());
+    [&b"\0asm\x01\0\0\0"[..], &body.collect::<Vec<u8>>()].concat()
 }
 
 /// One memory (count 1), then its limits; 4,096 is `0x80 0x20`.
@@ -42,8 +38,7 @@ fn leb_padding_is_reencoded_and_only_the_memory_section_changes() {
 
 #[test]
 fn shared_64_bit_oversized_and_imported_memories_are_refused() {
-    let refused =
-        |wasm: &[u8], why: &str| assert_eq!(cap_memory(wasm, 4_096), Err(why), "{wasm:?}");
+    let refused = |wasm: &[u8], why| assert_eq!(cap_memory(wasm, 4_096), Err(why), "{wasm:?}");
     refused(&mem(&[3, 1, 2]), "shared memory is not supported");
     refused(&mem(&[2, 1]), "shared memory is not supported");
     refused(&mem(&[4, 1]), "64-bit memory is not supported");

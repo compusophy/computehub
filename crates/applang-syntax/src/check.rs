@@ -1,7 +1,5 @@
-//! The static checker: name resolution and type checking. Each state's type
-//! comes from its literal, each local's from its initializer; after `check`
-//! the only runtime faults left are checked arithmetic, fuel and string
-//! bounds. It recurses without a guard, safely: the parser bounds AST depth.
+//! The static checker: names resolve and types come from literals and
+//! initializers. Unguarded recursion is safe: the parser bounds AST depth.
 
 use lang::{Diag, Span};
 
@@ -10,27 +8,18 @@ use crate::parse::{BinOp, Expr, Lit, Program, Stmt, UnOp, Widget};
 
 /// applang's static types; every expression has exactly one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Type {
-    Int,
-    Bool,
-    Str,
-}
+#[rustfmt::skip]
+enum Type { Int, Bool, Str }
 
 impl Type {
     fn name(self) -> &'static str {
-        match self {
-            Type::Int => "int",
-            Type::Bool => "bool",
-            Type::Str => "string",
-        }
+        ["int", "bool", "string"][self as usize]
     }
 }
 
 /// Typed scopes: block-scoped locals over the states.
-struct Scopes<'p> {
-    states: &'p [(String, Type)],
-    locals: Vec<(String, Type)>,
-}
+#[rustfmt::skip]
+struct Scopes<'p> { states: &'p [(String, Type)], locals: Vec<(String, Type)> }
 
 impl Scopes<'_> {
     fn get(&self, name: &str) -> Option<Type> {
@@ -68,6 +57,7 @@ pub(crate) fn check(program: &Program) -> Result<(), Diag> {
 
 fn widget(w: &Widget, states: &[(String, Type)]) -> Result<(), Diag> {
     let mut sc = Scopes { states, locals: Vec::new() };
+    let all = |ws: &[Widget]| ws.iter().try_for_each(|c| widget(c, states));
     match w {
         // Labels display any type; the value only has to have one.
         Widget::Label { value, .. } => expr(value, &sc).map(drop),
@@ -80,15 +70,13 @@ fn widget(w: &Widget, states: &[(String, Type)]) -> Result<(), Diag> {
             }
             None => Err(unknown(state, *state_span)),
         },
-        Widget::Row { children, .. } | Widget::Col { children, .. } => {
-            children.iter().try_for_each(|c| widget(c, states))
-        }
+        Widget::Row { children, .. } | Widget::Col { children, .. } => all(children),
         Widget::If { arms, els, .. } => {
             for (cond, body) in arms {
                 expect_type(cond, Type::Bool, "an `if` condition", &sc)?;
-                body.iter().try_for_each(|c| widget(c, states))?;
+                all(body)?;
             }
-            els.iter().try_for_each(|c| widget(c, states))
+            all(els)
         }
     }
 }
@@ -110,14 +98,9 @@ fn stmt(s: &Stmt, sc: &mut Scopes<'_>) -> Result<(), Diag> {
         Stmt::Assign { name, name_span, value, .. } => {
             let target = sc.get(name).ok_or_else(|| unknown(name, *name_span))?;
             let got = expr(value, sc)?;
-            if got != target {
-                let (t, g) = (target.name(), got.name());
-                return Err(mismatch(
-                    format!("`{name}` is {t}; cannot assign {g} to it"),
-                    value.span(),
-                ));
-            }
-            Ok(())
+            let (t, g) = (target.name(), got.name());
+            let msg = || format!("`{name}` is {t}; cannot assign {g} to it");
+            if got == target { Ok(()) } else { Err(mismatch(msg(), value.span())) }
         }
         Stmt::If { arms, els, .. } => {
             for (cond, body) in arms {
@@ -135,11 +118,8 @@ fn stmt(s: &Stmt, sc: &mut Scopes<'_>) -> Result<(), Diag> {
 
 fn expect_type(e: &Expr, want: Type, what: &str, sc: &Scopes<'_>) -> Result<(), Diag> {
     let got = expr(e, sc)?;
-    if got != want {
-        let msg = format!("{what} must be {}, got {}", want.name(), got.name());
-        return Err(mismatch(msg, e.span()));
-    }
-    Ok(())
+    let msg = || format!("{what} must be {}, got {}", want.name(), got.name());
+    if got == want { Ok(()) } else { Err(mismatch(msg(), e.span())) }
 }
 
 fn expr(e: &Expr, sc: &Scopes<'_>) -> Result<Type, Diag> {
@@ -159,8 +139,7 @@ fn expr(e: &Expr, sc: &Scopes<'_>) -> Result<Type, Diag> {
         Expr::Binary(op, l, r, sp) => {
             let (lt, rt) = (expr(l, sc)?, expr(r, sc)?);
             match (op, lt, rt) {
-                // `+` adds ints, and with any string operand concatenates
-                // (the other side displayed in).
+                // `+` adds ints; with a string operand it concatenates the other's display.
                 (Add, Int, Int) => Ok(Int),
                 (Add, Str, _) | (Add, _, Str) => Ok(Str),
                 (Sub | Mul | Div | Rem, Int, Int) => Ok(Int),

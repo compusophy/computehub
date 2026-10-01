@@ -1,7 +1,6 @@
-//! Motion: tweens along one ease-out curve, how a window shows while it
-//! moves ([`Vis`]), replaying a draw list scaled and faded, theme crossfades.
-//! A new tween waits for the next frame to arm it, so every animation's first
-//! frame shows its first step.
+//! Motion: tweens along one ease-out curve, how a window shows while it moves
+//! ([`Vis`]), draw-list replays scaled and faded, theme crossfades. A tween
+//! waits for the next frame to arm it, so every animation's first frame moves.
 
 use gfx::{DrawList, Icon, Kind, RectF, Rgba};
 use ui::theme::{Glow, THEMES, Theme, mix};
@@ -19,8 +18,7 @@ impl Lerp for f32 {
     }
 }
 
-/// The ease-out curve every animation follows: CSS
-/// `cubic-bezier(0.2, 0.8, 0.2, 1)`, 0 at `t <= 0` (and NaN), 1 at `t >= 1`.
+/// The ease-out curve: CSS `cubic-bezier(0.2, 0.8, 0.2, 1)`; 0 at `t <= 0` or NaN, 1 at `t >= 1`.
 pub fn ease(t: f32) -> f32 {
     if t.is_nan() || t <= 0.0 {
         return 0.0;
@@ -80,8 +78,7 @@ impl<T: Lerp> Tween<T> {
         self.to
     }
 
-    /// Heads for a new target from where it is at `now`, over `dur_ms`, from
-    /// the next [`Tween::arm`].
+    /// Heads for `to` from where it is at `now`, over `dur_ms`, from the next [`Tween::arm`].
     pub fn to(&mut self, to: T, now: f64, dur_ms: f32) {
         if to != self.to {
             (self.from, self.to, self.start, self.dur) = (self.value(now), to, None, dur_ms);
@@ -157,9 +154,7 @@ pub fn replay(dst: &mut DrawList, src: &DrawList, v: Vis) {
         RectF::new(ox + (x - ox) * s + v.dx, oy + (y - oy) * s + v.dy, w * s, h * s)
     };
     for i in src.instances() {
-        let Some(&kind) = KINDS.get(i.kind as usize) else {
-            continue;
-        };
+        let Some(&kind) = KINDS.get(i.kind as usize) else { continue };
         let (r, c, radius) = (rect(i.rect), faded(i.color, v.a), i.radius * s);
         dst.push_clip(rect(i.clip));
         match kind {
@@ -178,6 +173,7 @@ pub fn replay(dst: &mut DrawList, src: &DrawList, v: Vis) {
 
 /// `a` crossfaded `t` of the way to `b`: colors mixed, lights moved (or, on
 /// one side only, faded in place); the name and darkness are `b`'s.
+#[rustfmt::skip]
 pub fn blend(a: &Theme, b: &Theme, t: f32) -> Theme {
     let m = |x: Rgba, y: Rgba| mix(x, y, t);
     let glow = |g: Glow, h: Glow| {
@@ -191,25 +187,16 @@ pub fn blend(a: &Theme, b: &Theme, t: f32) -> Theme {
         Glow { cx: l(g.cx, h.cx), cy: l(g.cy, h.cy), rx: l(g.rx, h.rx), ry: l(g.ry, h.ry), color }
     };
     Theme {
-        name: b.name,
-        dark: b.dark,
-        base: m(a.base, b.base),
+        name: b.name, dark: b.dark, base: m(a.base, b.base),
         glows: [0, 1, 2, 3].map(|i| glow(a.glows[i], b.glows[i])),
         grain: f32::from(a.grain).lerp(f32::from(b.grain), t).round() as u8,
-        surface: m(a.surface, b.surface),
-        surface_hi: m(a.surface_hi, b.surface_hi),
-        surface_lo: m(a.surface_lo, b.surface_lo),
-        glass: m(a.glass, b.glass),
-        border: m(a.border, b.border),
-        highlight: m(a.highlight, b.highlight),
-        text: m(a.text, b.text),
-        text_dim: m(a.text_dim, b.text_dim),
-        text_faint: m(a.text_faint, b.text_faint),
-        accent: m(a.accent, b.accent),
-        accent_text: m(a.accent_text, b.accent_text),
-        danger: m(a.danger, b.danger),
-        shadow: m(a.shadow, b.shadow),
-        selection: m(a.selection, b.selection),
+        surface: m(a.surface, b.surface), surface_hi: m(a.surface_hi, b.surface_hi),
+        surface_lo: m(a.surface_lo, b.surface_lo), glass: m(a.glass, b.glass),
+        border: m(a.border, b.border), highlight: m(a.highlight, b.highlight),
+        text: m(a.text, b.text), text_dim: m(a.text_dim, b.text_dim),
+        text_faint: m(a.text_faint, b.text_faint), accent: m(a.accent, b.accent),
+        accent_text: m(a.accent_text, b.accent_text), danger: m(a.danger, b.danger),
+        shadow: m(a.shadow, b.shadow), selection: m(a.selection, b.selection),
         ansi: std::array::from_fn(|i| m(a.ansi[i], b.ansi[i])),
     }
 }

@@ -25,16 +25,12 @@ impl App for Probe {
     fn title(&self) -> String {
         self.1.to_uppercase()
     }
-
     fn draw(&mut self, ui: &mut Ui<'_>) {
         ui.hit(ui::WidgetId(1), ui.rect(), ui::Sense::Click);
     }
-
     fn event(&mut self, ev: E, cx: &mut Cx<'_>) -> bool {
         self.2.borrow_mut().push((self.0, ev.clone()));
-        let E::Text(cmds) = ev else {
-            return false;
-        };
+        let E::Text(cmds) = ev else { return false };
         for cmd in cmds.split(';') {
             match cmd.split_once(' ').unwrap_or((cmd, "")) {
                 ("open", arg) => cx.open(arg),
@@ -42,19 +38,26 @@ impl App for Probe {
                 ("fonts", _) => cx.load_fallback_fonts(),
                 ("theme", arg) => cx.set_theme(arg),
                 ("spawn", _) => _ = cx.kernel.spawn(spin()),
+                ("size", _) => cx.set_size(500, 300),
                 _ => {}
             }
         }
         true
     }
-
     fn preferred_size(&self) -> Option<(f32, f32)> {
         let i = ["sized", "huge", "nan"].iter().position(|n| *n == self.1)?;
         Some([(400.0, 300.0), (5e3, 5e3), (f32::NAN, 100.0)][i])
     }
-
     fn icon(&self) -> AppIcon {
         AppIcon { glyph: self.1, hue: Rgba::hex(0x123456) }
+    }
+    fn frame(&mut self, pid: u32, frame: &[u8], _: &mut Cx<'_>) -> bool {
+        let said = [&pid.to_string(), " ", &String::from_utf8_lossy(frame)].concat();
+        self.2.borrow_mut().push((self.0, E::Text(said)));
+        pid == self.0
+    }
+    fn closing(&mut self, _: &mut Cx<'_>) {
+        self.2.borrow_mut().push((self.0, E::Text("closing".into())));
     }
 }
 
@@ -110,12 +113,10 @@ fn apps_open_in_floating_windows() {
     assert_eq!(h.rect_of(1), Some(Rect::new(300, 134, 680, 480)));
     h.say(2, "open sized;open nope;open huge;open nan");
     assert_eq!(h.names()[2..], [(3, "sized", false), (4, "huge", false), (5, "nan", false)]);
-    // The wm places them; preferred sizes are content sizes, and sizes that
-    // are not finite are the wm's default.
+    // The wm places them: preferred sizes are content sizes; non-finite ones get the default.
     let mut wm = Wm::new(Rect::new(0, 32, 1280, 684));
-    for size in [Some((680, 480)), None, Some((402, 341)), Some((5002, 5041)), None] {
-        wm.apply(Cmd::Open { size }).unwrap();
-    }
+    let sizes = [Some((680, 480)), None, Some((402, 341)), Some((5002, 5041)), None];
+    sizes.into_iter().for_each(|size| _ = wm.apply(Cmd::Open { size }).unwrap());
     assert_eq!(h.wm().state_hash(), wm.state_hash());
     assert_eq!(h.rect_of(4), Some(Rect::new(0, 32, 1280, 684)));
     assert_eq!(h.focused_app(), Some(WinId(5)));
@@ -125,10 +126,18 @@ fn apps_open_in_floating_windows() {
     let evs = log.take();
     assert!(evs.contains(&(3, E::Resized { w: 400.0, h: 300.0 })));
     assert!(evs.contains(&(2, E::Focus(false))) && evs.contains(&(5, E::Focus(true))));
+    // Content is laid out, then clipped.
+    let (mut list, layout) = (DrawList::new(), RectF::new(10.0, 50.0, 400.0, 300.0));
+    let (clip, st) = (RectF::new(0.0, 0.0, 200.0, 100.0), UiState::default());
+    h.draw_content(&mut list, WinId(1), [layout, clip], &THEMES[1], st);
+    assert_eq!(h.win(WinId(1)).unwrap().hits[0].rect, RectF::new(10.0, 50.0, 190.0, 50.0));
+    h.draw_content(&mut list, WinId(1), [RectF::default(), clip], &THEMES[1], st);
+    assert!(h.win(WinId(1)).unwrap().hits.is_empty());
+    assert_eq!(list.clip(), RectF::new(-1e9, -1e9, 2e9, 2e9));
 }
 
 #[test]
-fn closed_apps_wait_to_be_reaped() {
+fn closed_apps_wait_to_be_reaped_and_their_processes_die_with_them() {
     let (mut h, log, _) = host();
     // A closed app asks for nothing more and hears nothing more.
     assert!(h.say(2, "close;fonts;open terminal").effects.is_empty());
@@ -146,10 +155,7 @@ fn closed_apps_wait_to_be_reaped() {
     h.reap(WinId(2));
     h.reap(WinId(9));
     assert_eq!(h.names(), [(1, "welcome", true)]);
-}
-
-#[test]
-fn processes_wake_their_window_and_die_with_it() {
+    // Processes wake their window and die with it.
     let (mut h, log, _) = host();
     h.kernel.set_isolated(true);
     let spawned = |pid| Effect::Kernel(kernel::Effect::Spawn { pid, sab: true });
@@ -169,7 +175,31 @@ fn processes_wake_their_window_and_die_with_it() {
 }
 
 #[test]
-fn apps_get_icons_and_labels_and_switch_the_theme() {
+fn frames_reach_every_app_and_closing_windows_hear_it_first() {
+    let (mut h, log, _) = host();
+    h.kernel.set_isolated(true);
+    h.say(2, "spawn");
+    // A frame goes to the apps, never to the platform; its reply does.
+    let mut out = Response::default();
+    h.kernel_in(KernelIn::Msg { pid: 2, msg: [&[0x20][..], b"hi"].concat() }, &mut out);
+    let reply = kernel::Effect::Reply { pid: 2, errno: 0, data: vec![] };
+    assert_eq!((out.effects, out.redraw), (vec![Effect::Kernel(reply)], true));
+    let said = |n: u32, t: &str| (n, E::Text(t.into()));
+    assert_eq!(log.take()[1..], [said(1, "2 hi"), said(2, "2 hi")]);
+    // Size resizes the window's content, keeping its corner.
+    let r = h.rect_of(2).unwrap();
+    h.say(2, "size");
+    assert_eq!(h.rect_of(2), Some(Rect::new(r.x, r.y, 502, 300 + TITLEBAR_H as i32 + 1)));
+    // Closing, by the wm or by the app itself, tells the app first, once.
+    log.take();
+    h.apply(Cmd::Close(WinId(2)));
+    h.say(1, "close");
+    h.apply(Cmd::Close(WinId(2)));
+    assert_eq!(log.take(), [said(2, "closing"), (1, E::Text("close".into())), said(1, "closing")]);
+}
+
+#[test]
+fn apps_get_icons_labels_themes_and_fonts_fetched_once_in_order() {
     let (mut h, _, made) = host();
     assert!(!h.launcher && !h.theme.is_running(0.0));
     h.say(1, "theme Dawn;open launcher;theme nope");
@@ -183,11 +213,7 @@ fn apps_get_icons_and_labels_and_switch_the_theme() {
     assert_eq!((h.icon("nope"), h.icon("nope"), *made.borrow()), (None, None, 3));
     let labels = ["terminal", "/apps/counter.app", "/tmp/éclair.app", ""].map(app_label);
     assert_eq!(labels, ["Terminal", "Counter", "Éclair", ""]);
-}
-
-#[test]
-fn fonts_are_fetched_once_and_added_in_order() {
-    let (mut h, _, _) = host();
+    // Fonts are fetched once and added in order.
     let fetch = |id, f| Effect::Fetch { id, url: format!("fonts/symbols-{f}.ttf") };
     assert_eq!(h.say(1, "fonts;fonts").effects, [fetch(1, "a"), fetch(2, "b")]);
     assert!(h.say(1, "fonts").effects.is_empty());
@@ -209,19 +235,7 @@ fn fonts_are_fetched_once_and_added_in_order() {
 }
 
 #[test]
-fn content_is_laid_out_then_clipped() {
-    let (mut h, _, _) = host();
-    let (mut list, layout) = (DrawList::new(), RectF::new(10.0, 50.0, 400.0, 300.0));
-    let (clip, st) = (RectF::new(0.0, 0.0, 200.0, 100.0), UiState::default());
-    h.draw_content(&mut list, WinId(1), [layout, clip], &THEMES[1], st);
-    assert_eq!(h.win(WinId(1)).unwrap().hits[0].rect, RectF::new(10.0, 50.0, 190.0, 50.0));
-    h.draw_content(&mut list, WinId(1), [RectF::default(), clip], &THEMES[1], st);
-    assert!(h.win(WinId(1)).unwrap().hits.is_empty());
-    assert_eq!(list.clip(), RectF::new(-1e9, -1e9, 2e9, 2e9));
-}
-
-#[test]
-fn tweens_ease_out_from_their_first_frame() {
+fn tweens_ease_out_from_their_first_frame_replays_scale_and_themes_crossfade() {
     assert_eq!([-1.0, f32::NAN, 0.0, 1.0, 9.0].map(ease), [0.0, 0.0, 0.0, 1.0, 1.0]);
     let samples: Vec<f32> = (1..10).map(|i| ease(i as f32 / 10.0)).collect();
     assert!(samples.windows(2).all(|w| w[0] < w[1]));
@@ -252,10 +266,7 @@ fn tweens_ease_out_from_their_first_frame() {
     let out = a.lerp(Vis { a: 0.0, s: 0.5, ..Vis::at(b) }, 0.5);
     assert_eq!((out.rect, out.s, out.a), (RectF::new(5.0, 5.0, 20.0, 30.0), 0.75, 0.75));
     assert_eq!(Vis { a: 0.0, ..a }.lerp(a, 0.5).a, 0.5);
-}
-
-#[test]
-fn replay_scales_moves_and_fades_every_kind() {
+    // Replays scale, move and fade every kind.
     let mut src = DrawList::new();
     let r = RectF::new(100.0, 100.0, 40.0, 20.0);
     src.push_clip(RectF::new(90.0, 90.0, 100.0, 100.0));
@@ -287,10 +298,7 @@ fn replay_scales_moves_and_fades_every_kind() {
     // Faded to nothing, nothing is drawn.
     replay(&mut dst, &src, Vis { a: 0.0, ..vis });
     assert_eq!(dst.len(), 8);
-}
-
-#[test]
-fn themes_crossfade_and_switch_by_name() {
+    // Themes crossfade and switch by name.
     let [mid, dawn, mono] = &THEMES;
     assert_eq!(blend(mid, dawn, 0.0).base, mid.base);
     assert_eq!((blend(mid, dawn, 1.0), blend(dawn, mid, 1.0)), (*dawn, *mid));
@@ -314,7 +322,7 @@ fn themes_crossfade_and_switch_by_name() {
 }
 
 #[test]
-fn frames_have_controls_edges_and_snap_zones() {
+fn frames_have_controls_edges_and_snap_zones_and_the_layout_places_the_dock_and_launcher() {
     use frame::*;
     let r = RectF::new(100.0, 50.0, 400.0, 300.0);
     let [min, max, close] = controls(r).unwrap();
@@ -340,10 +348,7 @@ fn frames_have_controls_edges_and_snap_zones() {
     let corners = [z(20.0, 20.0), z(1260.0, 790.0)];
     assert_eq!(corners, [snap(wm::Snap::TopLeft), snap(wm::Snap::BottomRight)]);
     assert_eq!(Zone::Max.rect(Rect::new(0, 32, 1280, 684)), Rect::new(0, 32, 1280, 684));
-}
-
-#[test]
-fn layout_places_the_dock_and_the_launcher() {
+    // The layout places the dock and the launcher.
     use layout::*;
     let screen = (1280.0, 800.0);
     assert_eq!(dock(4, screen), RectF::new(529.0, 728.0, 222.0, 60.0));
@@ -392,19 +397,14 @@ fn searches_rank_then_move_through_the_grid_then_the_list() {
     let apps = ["Terminal", "Studio", "Settings", "Welcome", "About"];
     let mut s = search(&apps, &["Clicker", "Counter", "Greeter", "Notes"]);
     assert_eq!((s.count(), s.get(5).unwrap().label.as_str(), s.get(9)), (9, "Clicker", None));
-    let walk = [(Key::Down, 4), (Key::Down, 5), (Key::Down, 6), (Key::Down, 7), (Key::Down, 8)];
-    let back =
-        [(Key::Down, 8), (Key::Up, 7), (Key::Up, 6), (Key::Up, 5), (Key::Up, 4), (Key::Up, 0)];
-    let more = [(Key::Up, 0), (Key::Right, 1), (Key::Down, 4), (Key::Left, 3)];
-    for (k, want) in walk.into_iter().chain(back).chain(more) {
-        assert!(s.key(k, 4));
-        assert_eq!(s.sel, want, "{k:?}");
+    let (d, u, want) = (Key::Down, Key::Up, [4, 5, 6, 7, 8, 8, 7, 6, 5, 4, 0, 0, 1, 4, 3]);
+    let keys = [d, d, d, d, d, d, u, u, u, u, u, u, Key::Right, d, Key::Left];
+    for (i, k) in keys.into_iter().enumerate() {
+        assert!(s.key(k, 4) && s.sel == want[i], "step {i}: {k:?} to {}", s.sel);
     }
     // The selected row stays on screen.
     s.fit = 2;
-    for _ in 0..5 {
-        s.key(Key::Down, 4);
-    }
+    (0..5).for_each(|_| _ = s.key(Key::Down, 4));
     assert_eq!((s.sel, s.first), (8, 2));
     s.scroll(-1e9, 40.0);
     assert_eq!(s.first, 0);
@@ -421,20 +421,18 @@ fn searches_rank_then_move_through_the_grid_then_the_list() {
     s.key(Key::Backspace, 4);
     assert_eq!((s.query.as_str(), s.count(), s.sel), ("te", 4, 0));
     let mut none = Search::new(Vec::new());
-    for k in [Key::Up, Key::Down, Key::Left, Key::Right, Key::Backspace] {
-        assert!(none.key(k, 4) && none.sel == 0);
-    }
+    let keys = [Key::Up, Key::Down, Key::Left, Key::Right, Key::Backspace];
+    assert!(keys.into_iter().all(|k| none.key(k, 4) && none.sel == 0));
 }
 
 #[test]
-fn glyphs_draw_on_whole_pixels() {
+fn glyphs_draw_on_whole_pixels_and_time_reads_as_the_bar_shows_it() {
     use paint::*;
     let (text, mut list) = (TextSystem::new(SANS.to_vec()).unwrap(), DrawList::new());
     let c = RectF::new(100.0, 14.0, 12.0, 12.0);
     let [fill, ink] = [Rgba(1, 1, 1, 255), Rgba(2, 2, 2, 255)];
-    for (i, maximized) in [(0, false), (1, false), (1, true), (2, false)] {
-        control_glyph(&mut list, &text, c, i, maximized, [fill, ink]);
-    }
+    let glyphs = [(0, false), (1, false), (1, true), (2, false)];
+    glyphs.into_iter().for_each(|(i, max)| control_glyph(&mut list, &text, c, i, max, [fill, ink]));
     let rects: Vec<[f32; 4]> = list.instances().iter().map(|i| i.rect).collect();
     let want = [103., 20., 6., 1., 103., 17., 6., 6., 105., 16., 5., 5., 102., 19., 5., 5.];
     assert_eq!(rects[..4].concat(), want);
@@ -448,10 +446,7 @@ fn glyphs_draw_on_whole_pixels() {
     let fades = (faded(ink, 0.5), faded(ink, 9.0), faded(ink, f32::NAN));
     assert_eq!(fades, (Rgba(2, 2, 2, 128), ink, Rgba(2, 2, 2, 0)));
     assert_eq!((px(&text, 1.0), px(&text, 0.2)), (1.0, 1.0));
-}
-
-#[test]
-fn local_time_reads_as_the_bar_shows_it() {
+    // Local time reads as the bar shows it.
     let t = LocalTime { year: 2026, month: 10, day: 1, weekday: 3, hour: 9, minute: 5 };
     assert_eq!((t.date(), t.clock()), ("Wed 1 Oct".to_string(), "09:05".to_string()));
     let odd = LocalTime { day: 31, month: 0, weekday: 9, hour: 23, minute: 59, ..t };

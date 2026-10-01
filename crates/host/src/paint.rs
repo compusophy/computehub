@@ -1,5 +1,4 @@
-//! Drawing helpers: device pixels, centered capitals, lit edges, fading, app
-//! icons and the desktop's small glyphs.
+//! Drawing helpers: device pixels, centered capitals, lit edges, fading, icons, small glyphs.
 
 use gfx::{DrawList, Icon, RectF, Rgba};
 use ui::theme::mix;
@@ -62,8 +61,7 @@ pub fn draw_icon(
     text.draw_text(list, x, base, glyph, style);
 }
 
-/// Window control `i`'s glyph on its circle `c`: minimize, maximize (or
-/// restore), close.
+/// Window control `i`'s glyph on its circle `c`: minimize, maximize (or restore), close.
 pub fn control_glyph(
     list: &mut DrawList,
     text: &TextSystem,

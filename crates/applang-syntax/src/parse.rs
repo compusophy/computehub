@@ -1,7 +1,6 @@
-//! The applang parser: tokens to the app AST on the `lang::parse` cursor.
-//! Widgets, statements, expressions and every binary fold enter the depth
-//! guard, so it bounds AST depth (nesting and operator spines), not just
-//! parser recursion. Every failure is a coded, spanned `Diag`.
+//! The applang parser: tokens to the app AST on the `lang::parse` cursor. Each
+//! widget, statement, expression and binary fold enters the depth guard, so
+//! it bounds AST depth (nesting and operator spines), not just recursion.
 
 use lang::parse::{DEFAULT_MAX_DEPTH, TokCursor};
 use lang::{Diag, Span};
@@ -24,13 +23,10 @@ impl BinOp {
 }
 
 #[derive(Debug)]
+#[rustfmt::skip]
 pub enum Expr {
-    Int(i64, Span),
-    Bool(bool, Span),
-    Str(String, Span),
-    Var(String, Span),
-    Unary(UnOp, Box<Expr>, Span),
-    Binary(BinOp, Box<Expr>, Box<Expr>, Span),
+    Int(i64, Span), Bool(bool, Span), Str(String, Span), Var(String, Span),
+    Unary(UnOp, Box<Expr>, Span), Binary(BinOp, Box<Expr>, Box<Expr>, Span),
 }
 
 impl Expr {
@@ -79,9 +75,8 @@ pub enum Widget {
     If { arms: Vec<(Expr, Vec<Widget>)>, els: Vec<Widget>, span: Span },
 }
 
-/// A compiled app: proof that the source parses and type-checks, since only
-/// [`crate::compile`] makes one. Its fields stay private, so no other crate
-/// can forge a tree the depth guard and the checker never saw:
+/// A compiled app: only [`crate::compile`] makes one, and its fields stay
+/// private, so no crate can forge a tree the guard and checker never saw:
 ///
 /// ```compile_fail,E0451
 /// let _ = applang_syntax::Program { states: Vec::new(), widgets: Vec::new() };
@@ -104,8 +99,7 @@ impl Program {
     }
 }
 
-/// Lexes and parses `src`. All `state` declarations come before the first
-/// widget. Crate-private: only checked programs leave the crate.
+/// Lexes and parses `src` (states before widgets); private: only checked programs leave.
 pub(crate) fn parse(src: &str) -> Result<Program, Diag> {
     let toks = lex(src)?;
     let mut cur = TokCursor::new(&toks);
@@ -149,7 +143,7 @@ fn state_decl(src: &str, t: &mut Toks<'_>) -> PResult<StateDecl> {
         (TokKind::True, false) => Lit::Bool(true),
         (TokKind::False, false) => Lit::Bool(false),
         (TokKind::Str, false) => Lit::Str(unescape(text(src, tok.span))),
-        _ => return Err(unexpected(src, t, "a literal (int, bool, or string)")),
+        _ => return Err(unexpected(src, t.peek(), "a literal (int, bool, or string)")),
     };
     t.advance();
     expect(src, t, TokKind::Semi, "`;`")?;
@@ -171,7 +165,7 @@ fn widget(src: &str, t: &mut Toks<'_>, next_id: &mut u32) -> PResult<Widget> {
                 t.advance();
                 let text_tok = t
                     .eat(|x| x.kind == TokKind::Str)
-                    .ok_or_else(|| unexpected(src, t, "a string button label"))?;
+                    .ok_or_else(|| unexpected(src, t.peek(), "a string button label"))?;
                 let (body, end) = braced(src, t, &mut stmt)?;
                 let (text, id) = (unescape(text(src, text_tok.span)), *next_id);
                 *next_id += 1;
@@ -197,7 +191,7 @@ fn widget(src: &str, t: &mut Toks<'_>, next_id: &mut u32) -> PResult<Widget> {
                 let (arms, els, end) = if_chain(src, t, &mut |s, t| widget(s, t, next_id))?;
                 Ok(Widget::If { arms, els, span: span(end) })
             }
-            _ => Err(unexpected(src, t, "a widget (label, button, input, row, col, if)")),
+            _ => Err(unexpected(src, t.peek(), "a widget (label, button, input, row, col, if)")),
         }
     })
 }
@@ -210,7 +204,7 @@ fn braced<T>(src: &str, t: &mut Toks<'_>, item: Item<'_, T>) -> PResult<(Vec<T>,
     let mut items = Vec::new();
     while t.peek().kind != TokKind::RBrace {
         if t.at_last() {
-            return Err(unexpected(src, t, "`}`"));
+            return Err(unexpected(src, t.peek(), "`}`"));
         }
         items.push(item(src, t)?);
     }
@@ -218,14 +212,11 @@ fn braced<T>(src: &str, t: &mut Toks<'_>, item: Item<'_, T>) -> PResult<(Vec<T>,
     Ok((items, end))
 }
 
-/// `if C { } else if C { } else { }`, iteratively: flat in the AST and in
-/// guard depth. Returns the arms, the else body and the end offset.
-#[allow(clippy::type_complexity)]
-fn if_chain<T>(
-    src: &str,
-    t: &mut Toks<'_>,
-    item: Item<'_, T>,
-) -> PResult<(Vec<(Expr, Vec<T>)>, Vec<T>, usize)> {
+/// An if chain's arms, its else body and its end offset.
+type Chain<T> = (Vec<(Expr, Vec<T>)>, Vec<T>, usize);
+
+/// `if C { } else if C { } else { }`, iteratively: flat in the AST and in guard depth.
+fn if_chain<T>(src: &str, t: &mut Toks<'_>, item: Item<'_, T>) -> PResult<Chain<T>> {
     let mut arms = Vec::new();
     loop {
         t.advance(); // the `if`
@@ -270,22 +261,19 @@ fn stmt(src: &str, t: &mut Toks<'_>) -> PResult<Stmt> {
                 let (body, end) = braced(src, t, &mut stmt)?;
                 Ok(Stmt::Repeat { count, body, span: span(end.end) })
             }
-            _ => Err(unexpected(src, t, "a statement")),
+            _ => Err(unexpected(src, t.peek(), "a statement")),
         }
     })
 }
 
 /// Binary operators by precedence, loosest first.
+#[rustfmt::skip]
 const LADDER: &[&[(TokKind, BinOp)]] = &[
     &[(TokKind::OrOr, BinOp::Or)],
     &[(TokKind::AndAnd, BinOp::And)],
     &[(TokKind::EqEq, BinOp::Eq), (TokKind::BangEq, BinOp::Ne)],
-    &[
-        (TokKind::Lt, BinOp::Lt),
-        (TokKind::LtEq, BinOp::Le),
-        (TokKind::Gt, BinOp::Gt),
-        (TokKind::GtEq, BinOp::Ge),
-    ],
+    &[(TokKind::Lt, BinOp::Lt), (TokKind::LtEq, BinOp::Le),
+      (TokKind::Gt, BinOp::Gt), (TokKind::GtEq, BinOp::Ge)],
     &[(TokKind::Plus, BinOp::Add), (TokKind::Minus, BinOp::Sub)],
     &[(TokKind::Star, BinOp::Mul), (TokKind::Slash, BinOp::Div), (TokKind::Percent, BinOp::Rem)],
 ];
@@ -294,9 +282,8 @@ fn expr(src: &str, t: &mut Toks<'_>) -> PResult<Expr> {
     t.guarded(|t| binary(src, t, 0))
 }
 
-/// One precedence level. Each fold deepens the AST's left spine, which eval
-/// and drop glue recurse through, so each charges one guard entry, all
-/// released when the level completes.
+/// One precedence level. Each fold deepens the left spine eval and drop glue
+/// recurse through, so it charges a guard entry until the level completes.
 fn binary(src: &str, t: &mut Toks<'_>, level: usize) -> PResult<Expr> {
     if level == LADDER.len() {
         return unary(src, t);
@@ -357,7 +344,7 @@ fn primary(src: &str, t: &mut Toks<'_>) -> PResult<Expr> {
             *inner.span_mut() = Span::new(sp.start, end);
             inner
         }
-        _ => return Err(unexpected_tok(src, &tok, "an expression")),
+        _ => return Err(unexpected(src, &tok, "an expression")),
     })
 }
 
@@ -369,15 +356,11 @@ fn ident(src: &str, t: &mut Toks<'_>, what: &str) -> PResult<(String, Span)> {
 fn expect(src: &str, t: &mut Toks<'_>, kind: TokKind, what: &str) -> PResult<Span> {
     match t.eat(|x| x.kind == kind) {
         Some(tok) => Ok(tok.span),
-        None => Err(unexpected(src, t, what)),
+        None => Err(unexpected(src, t.peek(), what)),
     }
 }
 
-fn unexpected(src: &str, t: &Toks<'_>, what: &str) -> PErr {
-    unexpected_tok(src, t.peek(), what)
-}
-
-fn unexpected_tok(src: &str, tok: &Token, what: &str) -> PErr {
+fn unexpected(src: &str, tok: &Token, what: &str) -> PErr {
     let found = match tok.kind {
         TokKind::Eof => "end of input".to_string(),
         _ => format!("`{}`", text(src, tok.span)),

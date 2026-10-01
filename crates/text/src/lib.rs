@@ -8,8 +8,12 @@
 //! - Glyphs are rasterized at `size * dpr`, cached, and placed on device
 //!   pixels (the atlas samples 1:1). A full atlas is cleared and
 //!   [`TextSystem::take_atlas_reset`] asks for the frame again.
+//! - [`Editor`] is the text buffer behind `ui`'s code editor.
 
 #![forbid(unsafe_code)]
+
+mod edit;
+pub use edit::Editor;
 
 use font::{Bitmap, Font};
 use gfx::{Atlas, DrawList, RectF, Rgba};
@@ -93,14 +97,9 @@ fn parse(name: &str, bytes: Vec<u8>) -> Result<Font, String> {
 impl TextSystem {
     /// Parses the boot face, Sans; an error starts with `sans`.
     pub fn new(sans: Vec<u8>) -> Result<TextSystem, String> {
-        Ok(TextSystem {
-            faces: vec![Some(parse("sans", sans)?), None, None],
-            cache: Vec::new(),
-            atlas: Atlas::new(ATLAS_SIZE, ATLAS_SIZE),
-            bitmap: Bitmap::default(),
-            dpr: 1.0,
-            reset: false,
-        })
+        let faces = vec![Some(parse("sans", sans)?), None, None];
+        let (cache, atlas) = (Vec::new(), Atlas::new(ATLAS_SIZE, ATLAS_SIZE));
+        Ok(TextSystem { faces, cache, atlas, bitmap: Bitmap::default(), dpr: 1.0, reset: false })
     }
 
     /// Fills slot `id`, dropping its cached glyphs; an error names the slot.

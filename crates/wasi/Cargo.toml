@@ -1,0 +1,16 @@
+[package]
+name = "compusophy-wasi"
+description = "The worker half of the compusophyOS kernel: the WASI preview 1 process each program worker runs, its fd table, preopens and /dev, turning calls into kernel wire requests. Pure and deterministic."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[lib]
+name = "wasi"
+
+[dependencies]
+compusophy-kernel.workspace = true
+compusophy-vfs.workspace = true

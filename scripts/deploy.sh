@@ -10,7 +10,16 @@ cd "$(dirname "$0")/.."
 bash scripts/build-web.sh
 bash scripts/budget.sh
 
-rm -rf .vercel/output
+# Clears Vercel's prebuilt output folder so a removed file never ships. It
+# accepts exactly this one path, relative to the repo root, and nothing else.
+out=.vercel/output
+if [ "$out" != ".vercel/output" ] || [ ! -f Cargo.toml ]; then
+  echo "refusing to clear $out" >&2
+  exit 1
+fi
+if [ -d .vercel/output ]; then
+  find ./.vercel/output -mindepth 1 -delete
+fi
 mkdir -p .vercel/output/static
 cp -R dist/. .vercel/output/static/
 # Every response: no other site keeps a handle on the page's window or

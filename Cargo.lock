@@ -46,6 +46,7 @@ name = "compusophy-cpu"
 version = "0.1.0"
 dependencies = [
  "compusophy-kernel",
+ "compusophy-wasi",
  "js-sys",
  "wasm-bindgen",
  "web-sys",
@@ -100,10 +101,11 @@ version = "0.1.0"
 dependencies = [
  "compusophy-apps",
  "compusophy-gfx",
+ "compusophy-guest",
  "compusophy-platform",
  "compusophy-shell",
- "compusophy-studio",
  "compusophy-ui",
+ "compusophy-uiwire",
  "compusophy-vfs",
  "compusophy-wm",
  "wasm-bindgen",
@@ -135,10 +137,8 @@ name = "compusophy-studio"
 version = "0.1.0"
 dependencies = [
  "compusophy-applang",
- "compusophy-gfx",
  "compusophy-lang",
- "compusophy-ui",
- "compusophy-vfs",
+ "compusophy-uiwire",
 ]
 
 [[package]]
@@ -171,12 +171,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "compusophy-uiwire"
+version = "0.1.0"
+
+[[package]]
 name = "compusophy-vfs"
 version = "0.1.0"
 
 [[package]]
 name = "compusophy-vt"
 version = "0.1.0"
+
+[[package]]
+name = "compusophy-wasi"
+version = "0.1.0"
+dependencies = [
+ "compusophy-kernel",
+ "compusophy-vfs",
+]
 
 [[package]]
 name = "compusophy-wm"

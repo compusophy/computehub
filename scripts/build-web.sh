@@ -4,7 +4,7 @@
 # web/index.html, the deferred fonts in dist/fonts/deferred/, the lazy fonts
 # in dist/fonts/ and the font licenses in dist/licenses/; then the program
 # worker (the cpu crate, its glue and web/worker.js) in dist/cpu/ and the
-# test programs (the toolbox crate, for wasm32-wasip1) in dist/bin/.
+# programs (the toolbox and studio crates, for wasm32-wasip1) in dist/bin/.
 # scripts/budget.sh measures the result;
 # `cargo run -p serve --release -- dist 8080` serves it.
 set -euo pipefail
@@ -65,7 +65,10 @@ if [ ! -f "$wasm" ]; then
   exit 1
 fi
 
-rm -rf dist
+mkdir -p dist
+# Nothing here deletes files: outputs have fixed names and are overwritten in
+# place, and scripts/budget.sh rejects any file in dist/ that belongs to no
+# budget group, so a stale leftover cannot ship unnoticed.
 # The glue's flags: TextEncoder.encodeInto only (every engine that runs this
 # page has it; the fallback path costs glue), and no producers section.
 bindgen=(--target web --no-typescript --encode-into always --remove-producers-section)
@@ -94,8 +97,12 @@ opts=(--low-memory-unused)
 pipelines=("-Oz" "-Oz -Oz")
 # Runs wasm-opt on the module $1 in place, if it is installed and helps:
 # of the input and each pipeline's output, keeps whichever gzips smallest.
+scratch="$target_dir/wasm-opt-scratch"
+mkdir -p "$scratch"
 optimize() {
-  local f=$1 in="${1%.wasm}.in.wasm" out="${1%.wasm}.opt.wasm" best gz p
+  local f=$1 best gz p
+  # Scratch copies live in target/ (overwritten each run, never deleted).
+  local in="$scratch/in.wasm" out="$scratch/opt.wasm"
   if ! command -v wasm-opt >/dev/null 2>&1; then
     echo "WARNING: wasm-opt not found (install binaryen); $f stays unoptimized"
     return
@@ -116,9 +123,7 @@ optimize() {
     else
       echo "WARNING: wasm-opt $p failed on $f"
     fi
-    rm -f "$out"
   done
-  rm -f "$in"
 }
 optimize dist/os_bg.wasm
 
@@ -141,15 +146,19 @@ cargo build -p compusophy-cpu --release --target wasm32-unknown-unknown
 wasm-bindgen "${bindgen[@]}" --out-dir dist/cpu --out-name cpu "$target_dir/wasm32-unknown-unknown/release/cpu.wasm"
 optimize dist/cpu/cpu_bg.wasm
 cp web/worker.js dist/cpu/
-# The test programs, fetched when one first runs: a std binary for WASI.
+# The programs, each fetched when it first runs: std binaries for WASI, the
+# test programs (toolbox.wasm) and Studio (studio.wasm), in one cargo run.
 rustup target list --installed 2>/dev/null | tr -d '\r' | grep -qx wasm32-wasip1 || { echo "ERROR: run: rustup target add wasm32-wasip1" >&2; exit 1; }
-cargo build -p compusophy-toolbox --release --target wasm32-wasip1
-mkdir -p dist/bin && cp "$target_dir/wasm32-wasip1/release/toolbox.wasm" dist/bin/
-optimize dist/bin/toolbox.wasm
+cargo build -p compusophy-toolbox -p compusophy-studio --bins --release --target wasm32-wasip1
+mkdir -p dist/bin
+for p in toolbox studio; do
+  cp "$target_dir/wasm32-wasip1/release/$p.wasm" dist/bin/
+  optimize "dist/bin/$p.wasm"
+done
 
 # dist/ is what visitors download, so it gets scripts/caps.sh's privacy check
 # too (same patterns; -a because the wasm and fonts are binary). A leaky
-# bundle is deleted rather than left where a deploy could pick it up.
+# bundle fails the build, and scripts/deploy.sh stops on a failed build.
 # One home path belongs in the bundle: the OS's own guest home
 # (vfs::Vfs::HOME), which names no account on the build machine. It is an
 # alternative of its own so that the longest match reports it whole, and is
@@ -157,9 +166,8 @@ optimize dist/bin/toolbox.wasm
 leaks=$(LC_ALL=C grep -r -a -o -E '[A-Za-z]:[/\\]+Users[/\\]|/home/[g]uest|/home/[A-Za-z]|/Users/[A-Za-z]|[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+\.[A-Za-z0-9.-]*[A-Za-z]{2,}' dist \
   | LC_ALL=C grep -a -v -E '^[^:]*:/home/[g]uest$' || true)
 if [ -n "$leaks" ]; then
-  echo "ERROR: dist/ holds a local path or email address; deleted it:" >&2
+  echo "ERROR: dist/ holds a local path or email address; do not deploy it:" >&2
   printf '%s\n' "$leaks" | cut -c1-160 >&2
-  rm -rf dist
   exit 1
 fi
 
