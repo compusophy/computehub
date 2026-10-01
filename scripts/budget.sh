@@ -5,8 +5,10 @@
 #
 #   boot      the files directly in dist/ (page, glue, wasm with the boot
 #             font inside): everything a visitor downloads before the first
-#             frame. Cap 168 KB (150 KB until R4, the desktop compusophy
-#             asked for: vector icons, menus, the everything bar, touch).
+#             frame. Cap 180 KB (150 KB until R4, the desktop compusophy
+#             asked for: vector icons, menus, the everything bar, touch,
+#             About, Feedback, Files, telemetry). Next: those apps move to
+#             lazily fetched modules, and the cap comes back down.
 #   deferred  dist/fonts/deferred/: Inter SemiBold and JetBrains Mono, which
 #             the page fetches right after its first frame. Cap 30 KB.
 #   lazy      the other files in dist/fonts/: the symbol fonts a terminal
@@ -26,7 +28,7 @@
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
-BOOT_CAP=$((168 * 1024))
+BOOT_CAP=$((180 * 1024))
 DEFERRED_CAP=$((30 * 1024))
 LAZY_CAP=$((60 * 1024))
 SYSTEM_CAP=$((40 * 1024))

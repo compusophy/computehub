@@ -46,7 +46,7 @@ they can, in CI.
 
    | budget | cap |
    |---|---|
-   | boot: every top-level file in `dist/` (page, glue, wasm with the boot font) | 168 KB |
+   | boot: every top-level file in `dist/` (page, glue, wasm with the boot font) | 180 KB |
    | deferred: `dist/fonts/deferred/`, fetched right after the first frame | 30 KB |
    | lazy: the rest of `dist/fonts/`, fetched when a terminal first opens | 60 KB |
    | licenses: `dist/licenses/`, never fetched by the page | not counted |
