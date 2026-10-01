@@ -1,18 +1,18 @@
 //! Fingers: scrolling what a finger holds as the wheel does, flinging it on, and long presses
-//! (see `home::touch`).
+//! (see `home::touch`), which pick icons up.
 
 use host::{content_rect, rectf};
 use ui::AppEvent;
 use wm::WinId;
 
+use crate::desktop::Target;
 use crate::{Response, Shell};
 
-/// What a finger scrolls: nothing, a window's content (pressed at a point), or the launcher.
+/// What a finger scrolls: nothing, or a window's content (pressed at a point).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum Scroll {
     None,
     Win(WinId, (f32, f32)),
-    Launcher,
 }
 
 impl Shell {
@@ -20,10 +20,6 @@ impl Shell {
     pub(crate) fn scroll(&mut self, s: Scroll, dy: f32, out: &mut Response) -> bool {
         match s {
             Scroll::None => false,
-            Scroll::Launcher => {
-                self.scroll_launcher(dy);
-                self.launcher.open
-            }
             Scroll::Win(win, (x, y)) => {
                 let Some(c) = self.placement(win).map(|p| content_rect(rectf(p.rect))) else {
                     return false;
@@ -48,14 +44,19 @@ impl Shell {
         }
     }
 
-    /// A finger held still long enough is a secondary press where it went down: its press into
-    /// content is over, and if that opens a menu, so is the button it holds.
+    /// A finger held still long enough picks up the icon under it (its menu waits for it to
+    /// lift unmoved), else is a secondary press where it went down: its press into content is
+    /// over, and if that opens a menu, so is the button it holds.
     pub(crate) fn hold(&mut self, out: &mut Response) {
         let now = self.host.now_ms;
         let Some((finger, _)) = &mut self.touch else { return };
         if finger.held(now) {
             let (at, menu) = (finger.at, self.menu.is_some());
             (self.app_press, self.down, self.grab) = (None, None, None);
+            if let (Some(Target::Icon(i)), false) = (self.hit(at.0, at.1), menu) {
+                (self.carry, self.armed, out.redraw) = (self.pick(i, at, true), None, true);
+                return;
+            }
             self.secondary(at, true, out);
             if !menu && self.menu.is_some() {
                 self.armed = None;

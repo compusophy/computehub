@@ -237,15 +237,15 @@ impl Theme {
     }
 
     /// The backdrop over `screen`: the base, each used glow filling its
-    /// ellipse's bounding box, then the grain.
-    pub fn draw_backdrop(&self, list: &mut DrawList, screen: RectF) {
+    /// ellipse's bounding box, then the grain (each `seed` a pattern).
+    pub fn draw_backdrop(&self, list: &mut DrawList, screen: RectF, seed: f32) {
         list.fill(screen, 0.0, self.base);
         for g in self.glows.iter().filter(|g| g.color.3 > 0) {
             let (rx, ry) = (g.rx * screen.w, g.ry * screen.h);
             let (cx, cy) = (screen.x + g.cx * screen.w, screen.y + g.cy * screen.h);
             list.glow(RectF::new(cx - rx, cy - ry, 2.0 * rx, 2.0 * ry), g.color);
         }
-        list.grain(screen, self.grain, 1.0);
+        list.grain(screen, self.grain, seed);
     }
 }
 

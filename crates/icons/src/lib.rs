@@ -9,6 +9,8 @@
 //! - Coverage is `min(1, |winding|)`: every solid runs counter-clockwise and
 //!   every hole clockwise, so holes punch through and overlapping solids merge.
 //! - Arcs are quadratic segments of at most π / 8, within 0.02% of round.
+//!
+//! A `.app` file has no glyph of its own: [`sigil`] draws one from a hash of its name.
 
 #![forbid(unsafe_code)]
 
@@ -32,7 +34,7 @@ type Outline = Vec<Vec<Point>>;
 pub enum Glyph {
     /// compusophy's logo: 365 dots in Fibonacci rings, on nothing (the background shows).
     Mark,
-    /// The launcher: a ring around a dot.
+    /// The AI button: a ring around a dot.
     Apps,
     /// Settings: an eight-tooth gear.
     Cog,
@@ -56,15 +58,17 @@ pub enum Glyph {
     Chevron,
     /// An X.
     Close,
+    /// Feedback in the top bar: a beetle.
+    Bug,
 }
 
 impl Glyph {
     /// Every glyph, in order.
     #[rustfmt::skip]
-    pub const ALL: [Glyph; 14] = {
+    pub const ALL: [Glyph; 15] = {
         use Glyph::*;
         [Mark, Apps, Cog, Studio, Assistant, Terminal, Folder, Home, File, Window, Feedback,
-            About, Chevron, Close]
+            About, Chevron, Close, Bug]
     };
 
     /// The function that appends this glyph's contours to its argument.
@@ -85,6 +89,7 @@ impl Glyph {
             About => about,
             Chevron => chevron,
             Close => close,
+            Bug => bug,
         }
     }
 }
@@ -128,10 +133,20 @@ fn arc(v: &mut Vec<Point>, c: (f32, f32), r: f32, a0: f32, a1: f32) {
 
 /// A disc of radius `r` around `c`, or a round hole.
 fn circle(o: &mut Outline, c: (f32, f32), r: f32, solid: bool) {
+    oval(o, c, (r, r), solid);
+}
+
+/// An ellipse of radii `(rx, ry)` around `c`, solid or a hole: a unit circle stretched (its
+/// quadratic segments stay exact under the stretch).
+fn oval(o: &mut Outline, c: (f32, f32), (rx, ry): (f32, f32), solid: bool) {
     let mut v = Vec::new();
-    arc(&mut v, c, r, 0.0, TAU);
+    arc(&mut v, (0.0, 0.0), 1.0, 0.0, TAU);
     v.pop(); // the contour closes itself
-    add(o, v, solid);
+    add(
+        o,
+        v.into_iter().map(|p| Point { x: c.0 + p.x * rx, y: c.1 + p.y * ry, ..p }).collect(),
+        solid,
+    );
 }
 
 /// A stroke around a center line of radius `r` from angle `a0` to `a1`, butt-ended.
@@ -353,6 +368,107 @@ fn chevron(o: &mut Outline) {
 fn close(o: &mut Outline) {
     stroke(o, &[(215.0, 215.0), (785.0, 785.0)]);
     stroke(o, &[(215.0, 785.0), (785.0, 215.0)]);
+}
+
+/// A beetle from above: an oval shell split down the middle, a round head on it, three legs a
+/// side (up, out, down) and two antennae.
+fn bug(o: &mut Outline) {
+    let (c, r) = ((C.0, 390.0), (180.0, 250.0));
+    oval(o, c, (r.0 + H, r.1 + H), true);
+    oval(o, c, (r.0 - H, r.1 - H), false);
+    rect(o, C.0 - H, c.1 - r.1, C.0 + H, c.1 + r.1);
+    circle(o, (C.0, 745.0), 80.0, true);
+    for s in [-1.0, 1.0] {
+        let x = |d: f32| C.0 + s * d;
+        for (y0, y1) in [(500.0, 600.0), (390.0, 390.0), (280.0, 180.0)] {
+            stroke(o, &[(x(140.0), y0), (x(350.0), y1)]);
+        }
+        stroke(o, &[(x(30.0), 790.0), (x(110.0), 900.0)]);
+    }
+}
+
+/// The sigil of `seed` (a hash of a `.app` file's name): sacred geometry in the glyphs' weight
+/// on `n` = 5 to 9 points, the first at 12 o'clock, in one of five families, each four ways:
+///
+/// - a star: the deepest star polygon {n/k}, solid, its heart cut out (1/φ of its inner
+///   radius) or not; or in a ring, its points touching it or not;
+/// - a rosette: n dots, each 1/φ of what would touch, around a dot 1/φ smaller; or in a ring;
+///   turned half a step or not;
+/// - a polygon: a triangle to a heptagon of strokes, turned half a step or not; around a dot
+///   1/φ² of its inside, or empty;
+/// - a sun: n rays around a dot, or shorter ones around a disc; turned half a step or not;
+/// - a constellation: n dots joined as the star {n/k}, or as a polygon; around a dot or not.
+///
+/// A seed is always the same shape.
+pub fn sigil(seed: u32, o: &mut Outline) {
+    let mut s = seed ^ (seed >> 16);
+    s = (s.wrapping_mul(0x7feb_352d) ^ (s >> 15)).wrapping_mul(0x846c_a68b);
+    s ^= s >> 16;
+    o.clear();
+    let (family, a, b) = (s / 5 % 5, s / 25 % 2 == 1, s / 50 % 2 == 1);
+    let n = 5 + s % 5 - if family == 2 { 2 } else { 0 };
+    let (step, k) = (PI / n as f32, (n - 1) / 2);
+    let at = |r: f32, a: f32| (C.0 + r * a.cos(), C.1 + r * a.sin());
+    // The n points' angles, counter-clockwise from 12 o'clock, `half` a step on if asked.
+    let angles = |half: bool| {
+        let a0 = FRAC_PI_2 + if half { step } else { 0.0 };
+        (0..n).map(move |i| a0 + 2.0 * step * i as f32)
+    };
+    let ring = |o: &mut Outline| {
+        circle(o, C, 440.0, true);
+        circle(o, C, 440.0 - STROKE, false);
+    };
+    if a && family < 2 {
+        ring(o);
+    }
+    match family {
+        0 => {
+            let r = match (a, b) {
+                (true, true) => 440.0 - STROKE,
+                (true, false) => 440.0 - 2.0 * STROKE,
+                (false, _) => 460.0,
+            };
+            let inner = r * (step * k as f32).cos() / (step * (k - 1) as f32).cos();
+            let pts = (0..2 * n).map(|i| {
+                let (x, y) = at(if i % 2 == 0 { r } else { inner }, FRAC_PI_2 + step * i as f32);
+                pt(x, y)
+            });
+            add(o, pts.collect(), true);
+            if b && !a {
+                circle(o, C, inner / PHI, false);
+            }
+        }
+        1 => {
+            let r = if a { 255.0 } else { 340.0 };
+            let dot = r * step.sin() / PHI;
+            angles(b).for_each(|x| circle(o, at(r, x), dot, true));
+            circle(o, C, dot / PHI, true);
+        }
+        2 => {
+            // Each corner's miter reaches 470, whatever its angle.
+            let r = 470.0 - H / (FRAC_PI_2 - step).sin();
+            frame(o, &angles(a).map(|x| at(r, x)).collect::<Vec<_>>());
+            if b {
+                circle(o, C, (r * step.cos() - H) / (PHI * PHI), true);
+            }
+        }
+        3 => {
+            let (r0, dot) = if a { (270.0, 170.0) } else { (200.0, 200.0 / PHI) };
+            angles(b).for_each(|x| stroke(o, &[at(r0, x), at(450.0, x)]));
+            circle(o, C, dot, true);
+        }
+        _ => {
+            let pts: Vec<_> = angles(false).map(|x| at(380.0, x)).collect();
+            let hop = if a { 1 } else { k as usize };
+            for (i, &p) in pts.iter().enumerate() {
+                stroke(o, &[p, pts[(i + hop) % pts.len()]]);
+            }
+            pts.iter().for_each(|&p| circle(o, p, 75.0, true));
+            if b {
+                circle(o, C, 75.0, true);
+            }
+        }
+    }
 }
 
 #[cfg(test)]

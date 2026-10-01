@@ -380,7 +380,7 @@ fn themes_are_complete_readable_and_glow() {
     }
     let mut list = DrawList::new();
     let screen = RectF::new(0.0, 0.0, 1000.0, 500.0);
-    THEMES[0].draw_backdrop(&mut list, screen);
+    THEMES[0].draw_backdrop(&mut list, screen, 1.0);
     let i = list.instances();
     let kinds: Vec<f32> = i.iter().map(|i| i.kind).collect();
     assert_eq!(kinds, [0.0, 6.0, 6.0, 6.0, 7.0]);
@@ -391,7 +391,7 @@ fn themes_are_complete_readable_and_glow() {
     assert_eq!(i[1].color, THEMES[0].glows[0].color);
     assert_eq!((i[4].rect, i[4].color.3), ([0.0, 0.0, 1000.0, 500.0], 9));
     list.clear();
-    THEMES[2].draw_backdrop(&mut list, screen);
+    THEMES[2].draw_backdrop(&mut list, screen, 1.0);
     let kinds: Vec<f32> = list.instances().iter().map(|i| i.kind).collect();
     assert_eq!(kinds, [0.0, 7.0]);
 }
@@ -432,6 +432,18 @@ fn icon_tiles_are_readable_and_crisp() {
     assert!(
         tile(&mut t, mono).instances()[2].uv == i[2].uv && t.atlas_mut().take_dirty().is_none()
     );
+    // A `.app` file's tile: the same plate, its seed's sigil in the ink; each seed its own.
+    let sigil = |t: &mut TextSystem, seed| {
+        let mut list = DrawList::new();
+        icon::sigil_tile(&mut list, t, RectF::new(10.2, 20.1, 50.0, 44.0), seed, hue, mono);
+        list
+    };
+    let (a, b) = (sigil(&mut t, 1), sigil(&mut t, 2));
+    assert_eq!(
+        (kinds(&a), a.instances()[0].rect, a.instances()[2].color),
+        (kinds(&list), [x, y, w, h], mono.text)
+    );
+    assert!(a.instances()[2].uv != b.instances()[2].uv && a.instances()[2].uv != i[2].uv);
 }
 
 #[test]
@@ -507,7 +519,9 @@ fn apps_and_their_context() {
     assert!(cx.take_requests().is_empty() && cx.now_ms == 5.0);
     assert_eq!(cx.ai, AiStatus { model: "m".into(), ..AiStatus::default() });
     cx.pref(REPORTS, "off");
-    assert!(cx.ai.reports_off && !cx.ai.held);
+    assert!(cx.ai.reports_off && !cx.ai.held && cx.grain);
+    cx.pref(GRAIN, "off");
+    assert!(!cx.grain);
     assert_eq!(fs.read("/tmp/clicks"), Ok(&[1][..]));
     assert_eq!(app.title(), "Echo 1");
 }

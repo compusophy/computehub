@@ -39,8 +39,9 @@ pub const THEME_KEY: &str = "compusophy.theme";
 pub const HOME_KEY: &str = "compusophy.home";
 /// The preferences kept as `compusophy.<key>`: the AI model (which the AI hub keeps, see [`ai`]),
 /// the dock's favorites (registry names, comma-separated), `"1"` once Welcome was shown on a
-/// first visit, and `"off"` to stop automatic error reports. Other keys are dropped.
-pub const PREFS: [&str; 4] = [ui::AI_MODEL, "dock", "seen", "reports"];
+/// first visit, `"off"` to stop automatic error reports, the home screen's order (as the dock's)
+/// and `"off"` to still the grain. Other keys are dropped.
+pub const PREFS: [&str; 6] = [ui::AI_MODEL, "dock", "seen", "reports", "home.order", ui::GRAIN];
 /// The applets of `bin/toolbox.wasm`, each a `/bin` marker file (as are the
 /// GUI programs, such as [`remote::STUDIO`] for `bin/studio.wasm`).
 const APPLETS: [&str; 9] =
@@ -205,15 +206,18 @@ impl Desktop {
         };
         shell.set_now(ctl.monotonic_ms());
         shell.set_dpr(dpr);
+        shell.set_reduced_motion(ctl.reduced_motion());
         let animating = shell.draw(&mut self.list);
         (shell.clear_color(), animating)
     }
 
-    /// After a frame: the next while animating, the deferred fonts after the
-    /// first, what the shell queued. (No Kernel::boot_home until step 4's homed.)
+    /// After a frame: the next while animating (else the living grain's, by timer), the
+    /// deferred fonts after the first, what the shell queued.
     fn drawn(&mut self, animating: bool, ctl: &mut Ctl) {
         if animating {
             ctl.request_frame();
+        } else if let Some(ms) = self.shell.as_ref().and_then(Shell::grain_in) {
+            ctl.frame_in(ms);
         }
         if self.deferred.is_none() {
             self.deferred = Some([true; 2]);
@@ -316,11 +320,13 @@ fn pref(key: &str, value: &str, ctl: &mut Ctl, ai: &ai::Ai) {
     }
 }
 
-/// What the shell starts from: the stored theme, favorites and first-visit mark.
+/// What the shell starts from: the stored theme, favorites, home screen order, first-visit
+/// mark and grain.
 fn prefs(ctl: &Ctl) -> shell::Prefs {
-    let theme = ctl.storage_get(THEME_KEY).unwrap_or_default();
-    let (dock, seen) = (ctl.storage_get("compusophy.dock"), ctl.storage_get("compusophy.seen"));
-    shell::Prefs { theme, dock, seen: seen.is_some() }
+    let get = |key: &str| ctl.storage_get(&["compusophy.", key].concat());
+    let (theme, seen) = (ctl.storage_get(THEME_KEY).unwrap_or_default(), get("seen").is_some());
+    let grain_off = get(ui::GRAIN).as_deref() == Some("off");
+    shell::Prefs { theme, dock: get("dock"), home: get("home.order"), seen, grain_off }
 }
 
 /// Where a report comes from: the device, the theme, the windows open.

@@ -1,5 +1,6 @@
-//! The compusophyOS app host, no browser: the [`wm::Wm`] and one [`ui::App`] per window, and the
-//! pure parts the shell builds on ([`motion`], [`frame`], [`search`], [`paint`]).
+//! The compusophyOS app host, no browser: the [`wm::Wm`] and one [`ui::App`] per window, the
+//! apps of the home screen ([`Host::home`]), and the pure parts the shell builds on ([`motion`],
+//! [`frame`], [`paint`]).
 //!
 //! Where a window opens ([`Host::open`]): on a narrow work area (under [`NARROW`] px) maximized,
 //! as every window there stays; else a [`ui::App::compact`] app at its preferred size, centered,
@@ -18,7 +19,6 @@
 pub mod frame;
 pub mod motion;
 pub mod paint;
-pub mod search;
 
 use std::mem;
 
@@ -170,8 +170,6 @@ pub struct Host {
     pub wins: Vec<Win>,
     pub now_ms: f64,
     pub theme: Themes,
-    /// An app asked for the launcher (opened `"launcher"`).
-    pub launcher: bool,
     /// Themes apps asked for, switched to when the apps settle.
     themes: Vec<String>,
     /// The lazy fonts, by fetch id less one.
@@ -182,6 +180,9 @@ pub struct Host {
     icons: Vec<(String, Option<AppIcon>)>,
     /// What apps see in [`Cx::ai`]: os sets it; an [`ui::AI_MODEL`] preference updates it.
     pub ai: AiStatus,
+    /// Whether the backdrop's grain lives, as apps see it in [`Cx::grain`]; the shell sets it
+    /// from the page, a [`ui::GRAIN`] preference updates it.
+    pub grain: bool,
     /// The windows maximized only because the work area is narrow, with their snap and normal
     /// rect from before, put back when it widens.
     forced: Vec<(WinId, Option<Snap>, Rect)>,
@@ -191,10 +192,10 @@ impl Host {
     #[rustfmt::skip]
     pub fn new(wm: Wm, text: TextSystem, vfs: Vfs, registry: Registry, theme: &str) -> Host {
         let (wins, fonts, icons, theme) = (Vec::new(), Vec::new(), Vec::new(), Themes::new(theme));
-        let (now_ms, launcher, themes, focus) = (0.0, false, Vec::new(), None);
+        let (now_ms, themes, focus) = (0.0, Vec::new(), None);
         let (ai, forced) = (AiStatus::default(), Vec::new());
         Host { generation: vfs.generation(), kernel: Kernel::new(), wm, text, vfs, registry, wins,
-            now_ms, theme, launcher, themes, fonts, focus, icons, ai, forced }
+            now_ms, theme, themes, fonts, focus, icons, ai, grain: true, forced }
     }
 
     pub fn wm(&self) -> &Wm {
@@ -274,15 +275,6 @@ impl Host {
         out.redraw = true;
     }
 
-    /// The everything bar asked `text`: shows the Assistant (opening it if need be), which hears
-    /// it as [`AppEvent::Ask`].
-    pub fn ask(&mut self, text: &str, out: &mut Response) {
-        self.show("assistant", out);
-        if let Some(&win) = self.windows_of("assistant").last() {
-            self.deliver(win, AppEvent::Ask(text.to_string()), out);
-        }
-    }
-
     /// Drops the app of `win` once its window is closed, killing what it ran.
     pub fn reap(&mut self, win: WinId) {
         if self.wm.normal_rect(win).is_none() {
@@ -336,7 +328,7 @@ impl Host {
         let Some(w) = self.wins.iter_mut().find(|w| w.id == win && rect.is_some()) else { return };
         self.kernel.set_owner(win.0);
         let mut cx = Cx::new(&mut self.vfs, &mut self.kernel, self.now_ms);
-        cx.ai = self.ai.clone();
+        (cx.ai, cx.grain) = (self.ai.clone(), self.grain);
         let redraw = match call {
             Call::Event(ev) => w.app.event(ev, &mut cx),
             Call::Frame(pid, frame) => w.app.frame(pid, frame, &mut cx),
@@ -352,7 +344,6 @@ impl Host {
                 break;
             }
             match request {
-                Request::Open { name, .. } if name == "launcher" => self.launcher = true,
                 Request::Open { name, .. } => self.open(&name, None, out),
                 Request::CloseSelf => out.redraw |= self.close_then(Cmd::Close(win), out),
                 Request::LoadFallbackFonts => self.load_fonts(out),
@@ -360,6 +351,9 @@ impl Host {
                 Request::Pref { key, value } => {
                     if key == ui::AI_MODEL {
                         self.ai.model = value.clone();
+                    }
+                    if key == ui::GRAIN {
+                        self.grain = value != "off";
                     }
                     out.effects.push(Effect::Pref { key, value });
                 }
@@ -505,17 +499,24 @@ impl Host {
         }
     }
 
-    /// The icon of the app `name`, running or not.
+    /// The icon of the app `name`, running or not; a `.app` file's on its name's hue.
     pub fn icon(&mut self, name: &str) -> Option<AppIcon> {
-        if let Some(w) = self.wins.iter().find(|w| w.name == name) {
-            return Some(w.app.icon());
-        }
-        if let Some(known) = self.icons.iter().find(|i| i.0 == name) {
-            return known.1;
-        }
-        let icon = (self.registry)(name).map(|app| app.icon());
-        self.icons.push((name.to_string(), icon));
-        icon
+        let icon = match self.wins.iter().find(|w| w.name == name) {
+            Some(w) => Some(w.app.icon()),
+            None => match self.icons.iter().find(|i| i.0 == name) {
+                Some(known) => known.1,
+                None => {
+                    let icon = (self.registry)(name).map(|app| app.icon());
+                    self.icons.push((name.to_string(), icon));
+                    icon
+                }
+            },
+        };
+        let hue = |icon: AppIcon| match sigil(name) {
+            Some(seed) => AppIcon { hue: ui::theme::app_tint(seed), ..icon },
+            None => icon,
+        };
+        icon.map(hue)
     }
 
     /// The open windows of `name`: those opened as `name`, and as `name:<arg>` (Studio on a
@@ -559,53 +560,45 @@ impl Host {
         apps.map(|(icon, wins, n)| (n, icon, wins)).collect()
     }
 
-    /// The launcher's entries: `apps` as tiles (those the registry knows), then the `.app` files
-    /// in `~/apps`, `~` and `/apps`.
-    pub fn entries(&mut self, apps: &[&str]) -> Vec<search::Entry> {
+    /// The apps of the home screen: those of `apps` the registry knows, then the person's own,
+    /// the `.app` files in `~/apps`.
+    pub fn home(&mut self, apps: &[&str]) -> Vec<Entry> {
         let mut out = Vec::new();
-        self.entries_of(apps, &mut out);
-        let mine = [Vfs::HOME, "/apps"].concat();
-        for (dir, shown) in [(&*mine, "~/apps"), (Vfs::HOME, "~"), ("/apps", "/apps")] {
-            self.app_files(dir, shown, &mut out);
-        }
-        out
-    }
-
-    /// The desktop's icons: Home (Files at `~`), Welcome, About and Feedback (those the registry
-    /// knows), then the person's own apps: the `.app` files in `~/apps`.
-    pub fn desktop(&mut self) -> Vec<search::Entry> {
-        let mut out = Vec::new();
-        self.entries_of(&["files", "welcome", "about", "feedback"], &mut out);
-        if let Some(home) = out.first_mut().filter(|e| e.name == "files") {
-            (home.label, home.icon.glyph) = ("Home".into(), ui::icon::Glyph::Home);
-        }
-        self.app_files(&[Vfs::HOME, "/apps"].concat(), "~/apps", &mut out);
-        out
-    }
-
-    /// The apps of `names` the registry knows.
-    fn entries_of(&mut self, names: &[&str], out: &mut Vec<search::Entry>) {
-        for &name in names {
+        for &name in apps {
             if let Some(icon) = self.icon(name) {
                 let (name, label) = (name.to_string(), app_label(name));
-                out.push(search::Entry { name, label, icon, place: None });
+                out.push(Entry { name, label, icon, sigil: None });
             }
         }
+        let dir = [Vfs::HOME, "/apps"].concat();
+        for e in self.vfs.list(&dir).unwrap_or_default() {
+            if !e.is_dir && e.name.ends_with(".app") {
+                let name = [&dir, "/", &e.name].concat();
+                let (seed, glyph) = (sigil(&name), ui::icon::Glyph::Window);
+                let icon = AppIcon { glyph, hue: ui::theme::app_tint(seed.unwrap_or(0)) };
+                out.push(Entry { label: app_label(&name), name, icon, sigil: seed });
+            }
+        }
+        out
     }
+}
 
-    /// The `.app` files in `dir` (shown as in `shown`), each a window on a hue of its name.
-    fn app_files(&self, dir: &str, shown: &str, out: &mut Vec<search::Entry>) {
-        for e in self.vfs.list(dir).unwrap_or_default() {
-            if e.is_dir || !e.name.ends_with(".app") {
-                continue;
-            }
-            let fnv = |h: u32, b: u8| (h ^ u32::from(b)).wrapping_mul(16_777_619);
-            let hue = ui::theme::app_tint(e.name.bytes().fold(2_166_136_261, fnv));
-            let (name, place) = ([dir, "/", &e.name].concat(), [shown, "/", &e.name].concat());
-            let icon = AppIcon { glyph: ui::icon::Glyph::Window, hue };
-            out.push(search::Entry { label: app_label(&name), name, icon, place: Some(place) });
-        }
-    }
+/// An app on the home screen: its registry name or `.app` path, what it is called, its icon,
+/// and a `.app` file's sigil ([`sigil`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Entry {
+    pub name: String,
+    pub label: String,
+    pub icon: AppIcon,
+    pub sigil: Option<u32>,
+}
+
+/// The seed of the sigil a `.app` file shows for a glyph (and of its hue): FNV-1a of its file
+/// name, for a window name that is a `.app` path (`"studio:<path>"` is Studio's).
+pub fn sigil(name: &str) -> Option<u32> {
+    let file = name.rsplit('/').next().filter(|f| f.ends_with(".app") && app_of(name) == name)?;
+    let fnv = |h: u32, b: u8| (h ^ u32::from(b)).wrapping_mul(16_777_619);
+    Some(file.bytes().fold(2_166_136_261, fnv))
 }
 
 /// The app a window name opens: `"studio"` for `"studio:/apps/x.app"`, else the name (a path
@@ -634,7 +627,16 @@ fn window_size((w, h): (f32, f32)) -> Option<(i32, i32)> {
 pub fn app_label(name: &str) -> String {
     let base = name.rsplit('/').next().unwrap_or(name);
     let mut chars = base.strip_suffix(".app").unwrap_or(base).chars();
-    chars.next().map(search::upper).into_iter().chain(chars).collect()
+    chars.next().map(upper).into_iter().chain(chars).collect()
+}
+
+/// `c` in upper case if a small letter with a Latin-1 capital (not `ß`, `ÿ`). Not
+/// `to_uppercase`: core's Unicode tables cost the boot kilobytes.
+pub fn upper(c: char) -> char {
+    match c {
+        'a'..='z' | 'à'..='ö' | 'ø'..='þ' => char::from(c as u8 - 32),
+        _ => c,
+    }
 }
 
 #[cfg(test)]

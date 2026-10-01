@@ -195,6 +195,15 @@ fn square(o: &mut Vec<Vec<Point>>) {
     o.push(vec![p(100.0, 100.0), p(900.0, 100.0), p(900.0, 900.0), p(100.0, 900.0)]);
 }
 
+static SEEDS: AtomicUsize = AtomicUsize::new(0);
+
+/// A square `seed` px wide from the box's corner, counting its rasterizations.
+fn seeded(seed: u32, o: &mut Vec<Vec<Point>>) {
+    SEEDS.fetch_add(1, Ordering::Relaxed);
+    let (p, s) = (|x, y| Point { x, y, on: true }, seed as f32);
+    o.push(vec![p(0.0, 0.0), p(s, 0.0), p(s, s), p(0.0, s)]);
+}
+
 #[test]
 fn vectors_are_cached_and_drawn_on_device_pixels() {
     let (mut t, mut list) = (ts(), DrawList::new());
@@ -230,6 +239,13 @@ fn vectors_are_cached_and_drawn_on_device_pixels() {
     // The cleared atlas lost the small one: it comes back in a fresh slot.
     t.draw_vector(&mut list, r, 7, square, WHITE);
     assert_eq!((list.len(), SQUARES.load(Ordering::Relaxed)), (5, 4));
+    // Seeded shapes are cached by seed, apart from the ids: seed 7 is not shape 7.
+    list.clear();
+    for seed in [7, 7, 500, 7] {
+        t.draw_seeded(&mut list, r, seed, seeded, WHITE);
+    }
+    let w: Vec<f32> = glyphs(&list).iter().map(|g| g.rect[2] * 2.0).collect();
+    assert_eq!((w, SEEDS.load(Ordering::Relaxed)), (vec![1.0, 1.0, 25.0, 1.0], 2));
 }
 
 #[test]

@@ -44,6 +44,7 @@ impl App for Probe {
             match cmd.split_once(' ').unwrap_or((cmd, "")) {
                 ("theme", name) => cx.set_theme(name),
                 ("open", name) => cx.open(name),
+                ("grain", value) => cx.pref("grain", value),
                 _ => {}
             }
         }
@@ -88,9 +89,9 @@ fn desk() -> (Shell, Log) {
     (s, log)
 }
 
-/// The everything bar's middle on a 1280 x 800 screen, and Home's icon.
-const BAR: (f32, f32) = (640.0, 765.0);
-const HOME: (f32, f32) = (57.0, 105.0);
+/// The AI button's middle on a 1280 x 800 screen, and the first icon's (Studio's).
+const AI: (f32, f32) = (640.0, 755.0);
+const STUDIO: (f32, f32) = (57.0, 105.0);
 
 /// Test drivers.
 impl Shell {
@@ -149,6 +150,10 @@ impl Shell {
     fn tile_at(&self, i: usize) -> (f32, f32) {
         (self.dock_tile(i).x + 22.0, self.dock_tile(i).y + 22.0)
     }
+    /// The home screen's labels, in order.
+    fn labels_home(&self) -> Vec<&str> {
+        self.icons.iter().map(|e| &*e.label).collect()
+    }
     /// The open menu's labels, and where its item `label` is.
     fn labels(&self) -> Vec<&str> {
         self.menu.as_ref().map_or(Vec::new(), |m| m.0.items.iter().map(|i| i.0).collect())
@@ -163,12 +168,13 @@ impl Shell {
 #[test]
 fn welcome_opens_on_a_first_visit_once_there_is_a_work_area() {
     let (mut s, _) = desk_of(1280.0, 800.0);
-    assert_eq!(s.wm().area(), Rect::new(0, 44, 1280, 619));
-    assert_eq!(s.rect(1), Some(Rect::new(300, 113, 680, 480)));
+    assert_eq!(s.wm().area(), Rect::new(0, 44, 1280, 671));
+    assert_eq!(s.rect(1), Some(Rect::new(300, 139, 680, 480)));
     assert_eq!((s.names(), s.theme_name()), (vec!["welcome"], "Midnight"));
     assert_eq!(s.take_effects(), [Effect::Pref { key: "seen".into(), value: "1".into() }]);
+    // The dock holds no favorites at first: only what runs.
     let dock: Vec<&str> = s.dock.iter().map(|d| &*d.0).collect();
-    assert_eq!(dock, ["studio", "assistant", "terminal", "files", "settings", "welcome"]);
+    assert_eq!((dock, s.favs.len()), (vec!["welcome"], 0));
     // The window fades in from its first frame; then frames stop.
     assert!(s.animating() && s.at(5000.0) && s.at(5100.0) && !s.at(5180.0));
     let r = s.input(Input::PointerLeave);
@@ -177,10 +183,10 @@ fn welcome_opens_on_a_first_visit_once_there_is_a_work_area() {
     assert_eq!(s.input(Input::PointerLeave), Response::default());
     // Made before the screen has a size, it opens at the first size that leaves a work area,
     // as it would have from the start; on a phone, maximized.
-    let (big, phone) = (Rect::new(300, 113, 680, 480), Rect::new(0, 44, 600, 219));
+    let (big, phone) = (Rect::new(300, 139, 680, 480), Rect::new(0, 44, 600, 271));
     for (w, h, want) in [(1280.0, 800.0, big), (600.0, 400.0, phone)] {
         let (mut s, _) = desk_of(0.0, 0.0);
-        for (w, h) in [(0.0, 0.0), (1280.0, 180.0), (0.4, 800.0)] {
+        for (w, h) in [(0.0, 0.0), (1280.0, 129.0), (0.4, 800.0)] {
             s.input(Input::Resize { w, h });
             assert!(s.wm().layout().is_empty());
         }
@@ -249,7 +255,7 @@ fn windows_open_placed_for_the_screen_and_stay_full_on_a_phone() {
     let (mut s, _) = desk();
     // Among other windows a main app opens large, cascaded from the area's corner.
     s.say(1, "open studio");
-    assert_eq!(s.rect(2), Some(Rect::new(28, 72, 1088, 526)));
+    assert_eq!(s.rect(2), Some(Rect::new(28, 72, 1088, 570)));
     // Alone, it opens maximized; restored, it is large and centered, not small.
     s.k(Char('q'), "a");
     s.k(Char('q'), "a");
@@ -260,17 +266,17 @@ fn windows_open_placed_for_the_screen_and_stay_full_on_a_phone() {
         Some((State::Maximized, s.wm().area()))
     );
     s.k(Down, "a");
-    assert_eq!(s.rect(3), Some(Rect::new(96, 90, 1088, 526)));
+    assert_eq!(s.rect(3), Some(Rect::new(96, 94, 1088, 570)));
     // On a phone every window is full; titlebars do not drag; the controls are a fingertip wide.
     s.input(Input::Resize { w: 390.0, h: 800.0 });
     s.say(3, "open settings");
     let full: Vec<_> = s.wm().layout().iter().map(|p| (p.state, p.rect)).collect();
-    assert_eq!(full, [(State::Maximized, Rect::new(0, 44, 390, 619)); 2]);
+    assert_eq!(full, [(State::Maximized, Rect::new(0, 44, 390, 671)); 2]);
     s.rest(1000.0);
     assert_eq!(s.to((100.0, 60.0)).cursor, None);
     s.drag((100.0, 60.0), (200.0, 300.0));
     s.k(Left, "a");
-    assert_eq!(s.wm().layout()[1].rect, Rect::new(0, 44, 390, 619));
+    assert_eq!(s.wm().layout()[1].rect, Rect::new(0, 44, 390, 671));
     // No maximize there: minimize takes its place, beside close.
     assert_eq!(
         [(350.0, 80.0), (330.0, 50.0), (280.0, 50.0)].map(|(x, y)| s.hit(x, y)),
@@ -292,14 +298,14 @@ fn windows_open_placed_for_the_screen_and_stay_full_on_a_phone() {
 #[test]
 fn titlebars_drag_and_double_click() {
     let (mut s, log) = desk();
-    let title = (400.0, 130.0);
+    let title = (400.0, 156.0);
     assert_eq!(s.to(title).cursor, Some(Cursor::Grab));
     assert_eq!(s.down(title).cursor, Some(Cursor::Grabbing));
     // Under 4 px of travel nothing moves; then the window follows.
-    assert!(!s.to((402.0, 131.0)).redraw);
-    let r = s.to((500.0, 230.0));
-    assert!(r.redraw && !r.animating && s.rect(1) == Some(Rect::new(400, 213, 680, 480)));
-    assert_eq!(s.up((500.0, 230.0)).cursor, Some(Cursor::Grab));
+    assert!(!s.to((402.0, 157.0)).redraw);
+    let r = s.to((500.0, 256.0));
+    assert!(r.redraw && !r.animating && s.rect(1) == Some(Rect::new(400, 239, 680, 480)));
+    assert_eq!(s.up((500.0, 256.0)).cursor, Some(Cursor::Grab));
     // Two presses within 350 ms maximize, two more restore; further apart
     // they are two clicks.
     let (max, up) = (State::Maximized, State::Normal);
@@ -312,7 +318,7 @@ fn titlebars_drag_and_double_click() {
         assert!(s.click(at).animating);
         assert_eq!(s.placement(WinId(1)).unwrap().state, state);
     }
-    assert_eq!(s.rect(1), Some(Rect::new(400, 213, 680, 480)));
+    assert_eq!(s.rect(1), Some(Rect::new(400, 239, 680, 480)));
     assert!(log.take().iter().all(|e| matches!(e.1, E::Focus(_) | E::Resized { .. })));
 }
 
@@ -357,10 +363,10 @@ fn edges_resize_with_their_cursors() {
     let cursors = [
         ((300.0, 300.0), Cursor::EwResize),
         ((980.0, 300.0), Cursor::EwResize),
-        ((600.0, 114.0), Cursor::NsResize),
-        ((298.0, 114.0), Cursor::NwseResize),
-        ((979.0, 592.0), Cursor::NwseResize),
-        ((975.0, 114.0), Cursor::NeswResize),
+        ((600.0, 140.0), Cursor::NsResize),
+        ((298.0, 140.0), Cursor::NwseResize),
+        ((979.0, 618.0), Cursor::NwseResize),
+        ((975.0, 140.0), Cursor::NeswResize),
         ((600.0, 400.0), Cursor::Default),
     ];
     for (at, c) in cursors {
@@ -370,10 +376,10 @@ fn edges_resize_with_their_cursors() {
     // The left edge moves, the right one stays, the size stays legal, and
     // the top edge stops under the bar.
     let drags = [
-        ((300.0, 300.0), (250.0, 300.0), Rect::new(250, 113, 730, 480)),
-        ((250.0, 300.0), (900.0, 300.0), Rect::new(660, 113, 320, 480)),
-        ((800.0, 113.0), (800.0, 0.0), Rect::new(660, 44, 320, 549)),
-        ((980.0, 593.0), (1100.0, 700.0), Rect::new(660, 44, 440, 619)),
+        ((300.0, 300.0), (250.0, 300.0), Rect::new(250, 139, 730, 480)),
+        ((250.0, 300.0), (900.0, 300.0), Rect::new(660, 139, 320, 480)),
+        ((800.0, 139.0), (800.0, 0.0), Rect::new(660, 44, 320, 575)),
+        ((980.0, 619.0), (1100.0, 700.0), Rect::new(660, 44, 440, 656)),
     ];
     for (from, to, want) in drags {
         s.drag(from, to);
@@ -413,7 +419,7 @@ fn controls_minimize_maximize_and_close() {
     // It flies into its dock tile: drawn until it gets there.
     assert!(s.animating());
     s.rest(1000.0);
-    s.click(s.tile_at(5));
+    s.click(s.tile_at(0));
     assert_eq!(s.wm().focused(), Some(WinId(1)));
     s.rest(1000.0);
     // Closing fades it out, then drops the app and kills what it ran.
@@ -428,51 +434,75 @@ fn controls_minimize_maximize_and_close() {
 #[test]
 fn the_dock_opens_minimizes_and_focuses_and_keeps_the_persons_favorites() {
     let (mut s, log) = desk();
-    assert!(s.to(s.tile_at(2)).redraw && s.animating());
-    // Terminal opens, minimizes and comes back; then welcome is focused and minimized.
+    // Welcome runs: its tile, right of the AI button, minimizes it and brings it back.
+    assert!(s.dock_tile(0).x > AI.0 + 28.0 && s.to(s.tile_at(0)).redraw && s.animating());
     let (m, n) = (State::Minimized, State::Normal);
-    let steps = [(2, [n, n], 2), (2, [n, m], 1), (2, [n, n], 2), (5, [n, n], 1), (5, [m, n], 2)];
-    for (tile, states, focus) in steps {
-        s.click(s.tile_at(tile));
-        let got: Vec<State> = s.wm().windows().iter().map(|w| w.1).collect();
-        assert_eq!((&got[..], s.wm().focused()), (&states[..], Some(WinId(focus))));
+    for (state, focus) in [(m, None), (n, Some(WinId(1)))] {
+        s.click(s.tile_at(0));
+        assert_eq!((s.wm().windows()[0].1, s.wm().focused()), (state, focus));
     }
-    assert_eq!(s.names(), ["welcome", "terminal"]);
-    // The gap between tiles splits; the shelf's ends and the hairlines' gaps are bare.
-    let d = s.dock_rect();
-    let hits = [55.0, 56.0, 2.0, 272.0].map(|x| s.hit(d.x + x, d.y + 30.0));
-    assert_eq!(
-        hits.map(|h| h.unwrap()),
-        [Target::Dock(0), Target::Dock(1), Target::Shelf, Target::Shelf]
-    );
     assert!(log.take().iter().all(|e| !matches!(e.1, E::Click(_))));
-    // The favorites come from the page (those the registry knows show); the menu changes them.
-    let prefs = Prefs { dock: Some("terminal,nope".into()), seen: true, ..Prefs::default() };
+    // The favorites come from the page (those the registry knows show), left of the button; the
+    // gap between tiles splits, a wing's ends are bare; menus change them.
+    let prefs = Prefs { dock: Some("terminal,nope,files".into()), seen: true, ..Prefs::default() };
     let (mut s, _) = desk_with(1280.0, 800.0, prefs);
-    assert_eq!((s.dock.len(), s.favs.len(), &*s.dock[0].0), (1, 2, "terminal"));
+    assert_eq!((s.dock.len(), s.favs.len(), &*s.dock[0].0), (2, 3, "terminal"));
+    let d = s.strip.wings[0];
+    assert!(d.x + d.w < AI.0 - 28.0);
+    let hits = [55.0, 56.0, 2.0].map(|x| s.hit(d.x + x, d.y + 30.0).unwrap());
+    assert_eq!(hits, [Target::Dock(0), Target::Dock(1), Target::Shelf]);
     s.right(s.tile_at(0));
     assert_eq!(s.labels(), ["Open", "Remove from dock"]);
     let pref = |v: &str| vec![Effect::Pref { key: "dock".into(), value: v.into() }];
-    assert_eq!(s.click(s.item("Remove from dock")).effects, pref("nope"));
-    assert_eq!((s.menu.is_none(), s.dock.len(), s.favs.len()), (true, 0, 1));
-    s.right(HOME);
-    assert_eq!(s.click(s.item("Keep in dock")).effects, pref("nope,files"));
-    s.right(s.tile_at(0));
+    assert_eq!(s.click(s.item("Remove from dock")).effects, pref("nope,files"));
+    assert_eq!((s.menu.is_none(), s.dock.len(), s.favs.len()), (true, 1, 2));
+    s.right(STUDIO);
+    assert_eq!(s.click(s.item("Add to dock")).effects, pref("nope,files,studio"));
+    s.right(s.tile_at(1));
     s.click(s.item("Open"));
-    s.right(s.tile_at(0));
+    s.right(s.tile_at(1));
     assert_eq!(s.labels(), ["New window", "Remove from dock", "Close"]);
     s.k(Down, "");
     s.k(Enter, "");
-    assert_eq!(s.names(), ["files", "files"]);
-    s.right(s.tile_at(0));
+    assert_eq!(s.names(), ["studio", "studio"]);
+    s.right(s.tile_at(1));
     s.click(s.item("Close"));
     assert!(s.names().is_empty());
-    // The Apps button, last, shows the launcher; a press on the veil hides it.
-    s.rest(1000.0);
-    s.click(s.tile_at(1));
-    assert!(s.launcher.open && s.launcher.focus && s.launcher.search.query.is_empty());
-    s.click(s.tile_at(1));
-    assert!(!s.launcher.open && !s.launcher.focus);
+}
+
+#[test]
+fn the_ai_button_shows_the_assistant() {
+    let (mut s, log) = desk();
+    // Bottom center, under no window; named while hovered.
+    assert_eq!(s.hit(AI.0, AI.1), Some(Target::Ai));
+    assert!(s.to(AI).redraw && s.animating());
+    // A click shows the Assistant: opens it, then brings it back; so does Alt+Space.
+    s.click(AI);
+    assert_eq!((s.names(), s.wm().focused()), (vec!["welcome", "assistant"], Some(WinId(2))));
+    for show in [
+        Input::PointerUp { x: AI.0, y: AI.1, button: 0 },
+        Input::Key { key: Space, mods: Mods { alt: true, ..Mods::default() } },
+    ] {
+        s.host.apply(Cmd::Focus(WinId(1)));
+        if matches!(show, Input::PointerUp { .. }) {
+            s.down(AI);
+        }
+        assert!(s.input(show).redraw);
+        assert_eq!((s.names().len(), s.wm().focused()), (2, Some(WinId(2))));
+    }
+    // Its menu (a right click, or a finger held on it) asks the Assistant too.
+    s.host.apply(Cmd::Close(WinId(2)));
+    s.right(AI);
+    assert_eq!(s.labels(), ["Ask the Assistant"]);
+    s.click(s.item("Ask the Assistant"));
+    assert_eq!(s.names(), ["welcome", "assistant"]);
+    assert!(log.take().iter().all(|e| !matches!(e.1, E::Click(_))));
+    // The work area keeps its place as the dock fills and empties.
+    let area = s.wm().area();
+    s.k(Enter, "a");
+    s.right(s.tile_at(1));
+    s.click(s.item("Add to dock"));
+    assert_eq!((s.wm().area(), s.favs.len()), (area, 1));
 }
 
 #[test]
@@ -488,18 +518,18 @@ fn menus_open_where_pressed_follow_the_keys_and_act() {
     s.k(Escape, "");
     assert!(s.menu.is_none());
     s.right((600.0, 640.0));
-    s.to(HOME);
-    assert!(s.down(HOME).redraw && s.menu.is_none());
-    s.up(HOME);
+    s.to(STUDIO);
+    assert!(s.down(STUDIO).redraw && s.menu.is_none());
+    s.up(STUDIO);
     assert_eq!(s.names(), ["welcome"]);
-    // Hover and the arrows select; Enter does it: Ask focuses the everything bar.
+    // Hover and the arrows select; Enter does it: Ask shows the Assistant.
     s.right((600.0, 640.0));
     s.to(s.item("Settings"));
     assert_eq!(s.menu.as_ref().unwrap().0.sel, Some(3));
     s.k(Up, "");
-    let r = s.k(Enter, "");
-    assert_eq!((r.text_input, s.launcher.focus, s.menu.is_none()), (Some(true), true, true));
-    s.k(Escape, "");
+    s.k(Enter, "");
+    assert_eq!((s.names(), s.menu.is_none()), (vec!["welcome", "assistant"], true));
+    s.k(Char('q'), "a");
     // A click on an item: a terminal opens.
     s.right((600.0, 640.0));
     s.click(s.item("Open Terminal"));
@@ -510,21 +540,21 @@ fn menus_open_where_pressed_follow_the_keys_and_act() {
     s.right((600.0, 90.0));
     assert_eq!(
         (s.labels(), s.wm().focused()),
-        (vec!["Minimize", "Maximize", "Close"], Some(WinId(2)))
+        (vec!["Minimize", "Maximize", "Close"], Some(WinId(3)))
     );
     s.click(s.item("Maximize"));
     s.right((600.0, 60.0));
     assert_eq!(s.labels(), ["Minimize", "Restore", "Close"]);
     s.click(s.item("Close"));
     assert_eq!(s.names(), ["welcome"]);
-    // An icon's: open it, or keep it in the dock; a right press inside a menu does nothing.
+    // An icon's: open it, or add it to the dock; a right press inside a menu does nothing.
     s.right((57.0, 297.0));
-    assert_eq!(s.labels(), ["Open", "Keep in dock"]);
+    assert_eq!(s.labels(), ["Open", "Add to dock"]);
     s.right(s.item("Open"));
     s.click(s.item("Open"));
-    assert_eq!(s.names(), ["welcome", "about"]);
-    // Nothing for a window's content, the top bar or the everything bar.
-    for at in [(640.0, 400.0), (640.0, 20.0), BAR] {
+    assert_eq!(s.names(), ["welcome", "terminal"]);
+    // Nothing for a window's content or the top bar.
+    for at in [(640.0, 400.0), (640.0, 20.0)] {
         s.right(at);
         assert!(s.menu.is_none(), "{at:?}");
     }
@@ -559,11 +589,35 @@ fn a_finger_held_still_long_presses_and_its_press_does_nothing_more() {
     assert!(!s.up((600.0, 640.0)).gesture);
     s.set_now(9000.0);
     assert!(!s.at(9000.0) && s.menu.is_none());
-    // Held on what has no menu (the everything bar), it still acts when it lifts.
-    s.push(BAR, 0, true);
+    // Held on what has no menu (Settings in the top bar), it still acts when it lifts.
+    let cog = (1280.0 - 27.0, 22.0);
+    s.push(cog, 0, true);
     s.at(9600.0);
-    let r = s.up(BAR);
-    assert_eq!((s.menu.is_none(), r.text_input, s.launcher.focus), (true, Some(true), true));
+    s.up(cog);
+    assert_eq!((s.menu.is_none(), s.names()), (true, vec!["welcome", "settings"]));
+    // Held on an icon, it picks it up, no menu yet: lifted unmoved, the icon's menu; moved
+    // 8 px, a drag, which a mouse starts at 4. A finger on the bare desktop draws no box.
+    s.set_now(10_000.0);
+    s.push(STUDIO, 0, true);
+    s.at(10_600.0);
+    assert!(s.carry.as_ref().is_some_and(|c| c.lifted && !c.moved) && s.menu.is_none());
+    s.up(STUDIO);
+    assert_eq!((s.carry.is_none(), s.labels()), (true, vec!["Open", "Add to dock"]));
+    s.k(Escape, "");
+    s.set_now(11_000.0);
+    s.push(STUDIO, 0, true);
+    s.at(11_600.0);
+    s.to((STUDIO.0 + 7.0, STUDIO.1));
+    assert!(!s.carry.as_ref().unwrap().moved);
+    s.to((STUDIO.0, STUDIO.1 + 192.0));
+    s.up((STUDIO.0, STUDIO.1 + 192.0));
+    assert_eq!(
+        (s.menu.is_none(), &s.labels_home()[..3]),
+        (true, &["Assistant", "Terminal", "Studio"][..])
+    );
+    s.push((600.0, 640.0), 0, true);
+    s.to((400.0, 500.0));
+    assert!(s.lasso.is_none() && s.up((400.0, 500.0)).gesture);
 }
 
 #[test]
@@ -616,107 +670,139 @@ fn fingers_scroll_what_they_hold_and_fling_it_on() {
     s.to((at.0, at.1 - 100.0));
     s.up((at.0, at.1 - 100.0));
     assert_eq!(wheels(&log), [20.0]);
-    // The launcher's list scrolls by finger, a row at a time.
-    for i in 0..20 {
-        _ = s.host.vfs.write(&format!("/apps/a{i}.app"), b"");
-    }
-    s.k(Space, "a");
-    s.rest(1000.0);
-    let row = s.panel().row(1);
-    let at = (row.x + 100.0, row.y + 10.0);
-    s.push(at, 0, true);
-    s.to((at.0, at.1 - 9.0));
-    s.to((at.0, at.1 - 100.0));
-    assert_eq!(s.launcher.search.first, 2);
 }
 
 #[test]
-fn the_everything_bar_opens_apps_or_asks_the_assistant() {
-    let (mut s, log) = desk();
-    // A tap focuses it, asking for the keyboard; typing shows the panel above it, the Ask row
-    // first, the first app named by what was typed selected.
-    let r = s.click(BAR);
-    assert_eq!((r.text_input, s.launcher.focus, s.launcher.open), (Some(true), true, false));
-    assert_eq!(s.click(BAR).text_input, Some(true));
-    s.input(Input::Text("st".into()));
-    let l = &s.launcher.search;
-    assert!(s.launcher.open && l.ask() && l.get(l.sel).is_some_and(|e| e.name == "studio"));
-    assert!(s.panel().rect.y + s.panel().rect.h <= home::field::rect(s.size).y);
-    let r = s.k(Enter, "");
-    assert_eq!((s.names(), r.text_input), (vec!["welcome", "studio"], Some(false)));
-    assert!(!s.launcher.open && !s.launcher.focus);
-    // Words no app starts with select the Ask row: Enter asks the Assistant, opening it.
-    s.click(BAR);
-    s.input(Input::Text("build me a clock".into()));
-    assert_eq!(s.launcher.search.sel, 0);
-    s.k(Enter, "");
-    assert_eq!(s.names(), ["welcome", "studio", "assistant"]);
-    assert!(log.take().contains(&("assistant", E::Ask("build me a clock".into()))));
-    // A click on the Ask row asks too.
-    s.click(BAR);
-    s.input(Input::Text("hi".into()));
-    s.rest(1000.0);
-    let a = s.panel().ask_row();
-    s.click((a.x + 40.0, a.y + 20.0));
-    assert!(log.take().contains(&("assistant", E::Ask("hi".into()))) && s.names().len() == 3);
-    // Escape clears and blurs; a press elsewhere takes the keys away; so does the veil.
-    s.click(BAR);
-    s.input(Input::Text("x".into()));
-    s.k(Escape, "");
-    assert!(!s.launcher.open && !s.launcher.focus);
-    s.click(BAR);
-    s.click((600.0, 640.0));
-    assert!(!s.launcher.focus);
-    // Alt+Space shows every app, the bar focused; with no query Enter opens the first.
-    let r = s.k(Space, "a");
-    assert_eq!((r.text_input, s.launcher.open, s.launcher.search.sel), (Some(true), true, 0));
-    s.input(Input::Text("zzz".into()));
-    s.k(Backspace, "");
-    s.k(Backspace, "");
-    s.k(Backspace, "");
-    assert!(s.launcher.open && !s.launcher.search.ask());
-    s.k(Enter, "");
-    assert_eq!(s.names().last(), Some(&"studio"));
-    // An app can ask for the launcher; its tiles open what they show; paste stays the browser's.
-    s.rest(1000.0);
-    s.say(1, "open launcher");
-    s.input(Input::PointerLeave);
-    assert!(s.launcher.open);
-    s.rest(1000.0);
-    let t = s.panel().tile(2);
-    s.click((t.x + 40.0, t.y + 40.0));
-    assert_eq!(s.names().last(), Some(&"terminal"));
-    s.k(Space, "a");
-    assert!(!s.k(Char('v'), "c").consumed);
-}
-
-#[test]
-fn the_desktop_shows_icons_and_the_top_bar_its_buttons() {
+fn the_home_screen_shows_every_app_and_the_top_bar_its_buttons() {
     let (mut s, _) = desk();
-    let icons: Vec<&str> = s.icons.iter().map(|e| &*e.label).collect();
-    assert_eq!(icons, ["Home", "Welcome", "About", "Feedback"]);
-    // Icons light up under the pointer and open with a click (Home is Files at ~).
+    let all =
+        ["Studio", "Assistant", "Terminal", "Files", "Settings", "Feedback", "About", "Welcome"];
+    assert_eq!(s.labels_home(), all);
+    // Icons light up under the pointer and open with a click.
     assert_eq!(
-        (s.hit(HOME.0, HOME.1), s.hit(200.0, 640.0)),
+        (s.hit(STUDIO.0, STUDIO.1), s.hit(200.0, 640.0)),
         (Some(Target::Icon(0)), Some(Target::Desktop))
     );
-    assert!(s.to(HOME).redraw && !s.to((HOME.0 + 5.0, HOME.1)).redraw);
+    assert!(s.to(STUDIO).redraw && !s.to((STUDIO.0 + 5.0, STUDIO.1)).redraw);
     s.click((57.0, 201.0));
-    assert_eq!((s.names(), s.wm().focused()), (vec!["welcome"], Some(WinId(1))));
-    s.click(HOME);
-    assert_eq!((s.names(), s.wm().focused()), (vec!["welcome", "files"], Some(WinId(2))));
-    // A new app saved to ~/apps shows up.
+    assert_eq!((s.names(), s.wm().focused()), (vec!["welcome", "assistant"], Some(WinId(2))));
+    // A new app saved to ~/apps shows up last, with its sigil, and stays last: the order is kept.
     let mine = [Vfs::HOME, "/apps"].concat();
     s.host.vfs.mkdir_all(&mine).unwrap();
     s.host.vfs.write(&[&mine, "/clock.app"].concat(), b"").unwrap();
-    assert!(s.input(Input::PointerLeave).redraw && s.icons.len() == 5);
-    // The mark shows Welcome; the right buttons Feedback and Settings.
+    let r = s.input(Input::PointerLeave);
+    let order = "studio,assistant,terminal,files,settings,feedback,about,welcome,".to_string()
+        + &mine
+        + "/clock.app";
+    assert_eq!(r.effects, [Effect::Pref { key: "home.order".into(), value: order }]);
+    assert!(r.redraw && s.labels_home()[8] == "Clock" && s.icons[8].sigil.is_some());
+    // The mark shows Welcome; the right buttons Feedback (a bug) and Settings.
     s.click((27.0, 22.0));
     assert_eq!(s.wm().focused(), Some(WinId(1)));
     s.click((1280.0 - 71.0, 22.0));
     s.click((1280.0 - 27.0, 22.0));
     s.click((1280.0 - 27.0, 22.0));
-    assert_eq!(s.names(), ["welcome", "files", "feedback", "settings"]);
+    assert_eq!(s.names(), ["welcome", "assistant", "feedback", "settings"]);
+}
+
+/// The middle of the icon in cell `i` of a 1280 x 800 desktop.
+fn cell(i: usize) -> (f32, f32) {
+    let r = home::icons::cell(i, RectF::new(0.0, 44.0, 1280.0, 671.0), false);
+    (r.x + r.w / 2.0, r.y + 30.0)
+}
+
+#[test]
+fn icons_move_by_drag_and_the_person_keeps_the_order() {
+    let (mut s, log) = desk();
+    // A mouse carries an icon once it travels 4 px: it follows the pointer, the others slide.
+    s.to(cell(0));
+    s.down(cell(0));
+    s.to((cell(0).0 + 3.0, cell(0).1));
+    assert!(s.carry.as_ref().is_some_and(|c| !c.lifted));
+    let r = s.to(cell(3));
+    assert_eq!(
+        (r.redraw, r.cursor, s.carry.as_ref().map(|c| c.slot)),
+        (true, Some(Cursor::Grabbing), Some(3))
+    );
+    assert!(s.animating() && s.hit(cell(3).0, cell(3).1) == Some(Target::Desktop));
+    // Dropped: there it stays, and the order is kept; nothing opened.
+    let r = s.up(cell(3));
+    assert_eq!(&s.labels_home()[..4], ["Assistant", "Terminal", "Files", "Studio"]);
+    let order = "assistant,terminal,files,studio,settings,feedback,about,welcome";
+    assert_eq!(r.effects, [Effect::Pref { key: "home.order".into(), value: order.into() }]);
+    assert!(s.names() == ["welcome"] && log.take().iter().all(|e| !matches!(e.1, E::Click(_))));
+    // Escape, or the pointer leaving, puts a carried icon back; dropped where it was, no change.
+    for cancel in [Input::Key { key: Escape, mods: Mods::default() }, Input::PointerLeave] {
+        s.down(cell(0));
+        s.to(cell(6));
+        assert!(s.input(cancel).redraw && s.carry.is_none());
+        assert!(s.up(cell(6)).effects.is_empty() && s.names() == ["welcome"]);
+    }
+    s.drag(cell(1), (cell(1).0 + 9.0, cell(1).1));
+    assert!(s.take_effects().is_empty() && s.labels_home()[1] == "Terminal");
+    // The order comes back from the page: unknown names dropped, new apps last, nothing kept yet.
+    let home = Some("welcome,gone,terminal".into());
+    let (mut s, _) = desk_with(1280.0, 800.0, Prefs { home, seen: true, ..Prefs::default() });
+    let want =
+        ["Welcome", "Terminal", "Studio", "Assistant", "Files", "Settings", "Feedback", "About"];
+    assert!(s.labels_home() == want && s.take_effects().is_empty());
+}
+
+#[test]
+fn a_box_selects_icons_which_open_and_move_together() {
+    let (mut s, _) = desk();
+    // From the bare desktop a mouse draws a box; the icons it touches are selected.
+    s.to((5.0, 50.0));
+    s.down((5.0, 50.0));
+    let r = s.to((95.0, 260.0));
+    assert!(r.redraw && s.selected == ["studio", "assistant", "terminal"]);
+    s.up((95.0, 260.0));
+    // A click on the bare desktop clears it; Escape too.
+    s.click((600.0, 640.0));
+    assert!(s.selected.is_empty());
+    s.drag((5.0, 50.0), (95.0, 260.0));
+    s.k(Escape, "");
+    assert!(s.selected.is_empty());
+    // Enter opens what is selected, and the selection ends.
+    s.drag((5.0, 50.0), (95.0, 160.0));
+    assert!(s.k(Enter, "").consumed && s.selected.is_empty());
+    assert_eq!(s.names(), ["welcome", "studio", "assistant"]);
+    // Dragging a selected icon carries the selection: they land together, in their order.
+    s.k(Char('q'), "a");
+    s.k(Char('q'), "a");
+    s.drag((5.0, 50.0), (95.0, 160.0));
+    s.drag(cell(1), cell(5));
+    let order =
+        ["Terminal", "Files", "Settings", "Feedback", "About", "Studio", "Assistant", "Welcome"];
+    assert_eq!(s.labels_home(), order);
+}
+
+#[test]
+fn the_grain_lives_eight_times_a_second_by_timer_unless_told_not_to() {
+    let (mut s, _) = desk();
+    s.rest(1000.0);
+    // Each 125 ms a new pattern; the next frame by a timer, never a frame loop.
+    let frame = |s: &mut Shell, t: f64| {
+        s.set_now(t);
+        let mut list = DrawList::new();
+        let animating = s.draw(&mut list);
+        let grain =
+            list.instances().iter().find(|i| i.kind == Kind::Grain as u8 as f32).map(|i| i.p0);
+        (grain.unwrap(), animating, s.grain_in())
+    };
+    let [a, b, c] = [10_000.0, 10_100.0, 10_125.0].map(|t| frame(&mut s, t));
+    assert_eq!(
+        (a.1, a.2, b.0 == a.0, b.2, c.0 == a.0, c.2),
+        (false, Some(125), true, Some(25), false, Some(125))
+    );
+    // Not while the page asks for reduced motion, nor once Settings turned it off: then still.
+    s.set_reduced_motion(true);
+    assert_eq!((frame(&mut s, 10_300.0), frame(&mut s, 10_500.0).0), ((0.0, false, None), 0.0));
+    s.set_reduced_motion(false);
+    s.say(1, "grain off");
+    assert!(!s.host.grain && s.grain_in().is_none());
+    let (s, _) = desk_with(1280.0, 800.0, Prefs { grain_off: true, ..Prefs::default() });
+    assert_eq!(s.grain_in(), None);
 }
 
 #[test]

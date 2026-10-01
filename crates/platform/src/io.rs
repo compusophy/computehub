@@ -51,6 +51,7 @@ pub(crate) fn apply(s: &Rc<Shared>, effects: Vec<Effect>) {
             Effect::Word { pid, index, value } => proc::store(s, pid, &[], &[(index, value)]),
             Effect::Kill(pid) => proc::kill(s, pid),
             Effect::Wake(ms) => arm(s, &s.wake_timer, &s.wake_fn, ms),
+            Effect::FrameIn(ms) => arm(s, &s.frame_timer, &s.frame_fn, ms),
             Effect::Stream { id, url, headers, body } => stream(s, id, &url, headers, &body),
             Effect::Abort(id) => _ = take(s, id).map(|a| a.abort()),
         }

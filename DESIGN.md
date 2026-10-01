@@ -51,7 +51,7 @@ they can, in CI.
    | lazy: the rest of `dist/fonts/`, fetched when a terminal first opens | 60 KB |
    | licenses: `dist/licenses/`, never fetched by the page | not counted |
    | first frame after the wasm arrives | 100 ms |
-   | idle | zero frames: one only on input or while an animation runs |
+   | idle | zero frames: one only on input or while an animation runs; the one opt-out exception, the living grain, 8 a second by timer |
 
 5. **Deterministic core.** `wm` and `vfs` (and the kernel to come) use
    integer math, no clocks, no hash-ordered collections and no randomness:
@@ -89,8 +89,9 @@ frame: os → shell::draw → gfx::DrawList → platform::Renderer: one draw cal
 | `guest` | the shell the Terminal runs over the VFS |
 | `apps` | Terminal, Welcome, Settings |
 | `studio` | the applang editor, and `AppHost`, which runs `.app` files |
-| `host` | the wm plus one app per window; motion, frame geometry, launcher search |
-| `shell` | the desktop around `host`: bar, dock, launcher, chrome, keys |
+| `host` | the wm plus one app per window, the home screen's apps; motion, frame geometry |
+| `home` | the home grid in the person's order, the AI button and the dock's wings, menus, touch |
+| `shell` | the desktop around `host`: bar, home screen, chrome, keys |
 | `platform` | the browser boundary: canvas, WebGL2, input, textarea, fetch, storage, cursor |
 | `os` | the wasm entry: fonts, VFS, the app registry, theme storage, event glue |
 | `tools/serve` | dev-only static server for `dist/`, never shipped |
@@ -108,7 +109,11 @@ one. Forked crates keep their Apache-2.0 license and note their origin.
   glyph atlas.
 - Frames are on demand: an input that changes the screen asks for one; an
   animation asks for the next from inside each frame and stops asking when
-  it ends. The only timer is the minute tick behind the clock.
+  it ends. The timers are the minute tick behind the clock, the kernel's
+  wake, and the living grain's: while the desktop is idle the backdrop's
+  grain takes a new pattern 8 times a second, each frame asked for by a
+  timer (never a frame loop). It is still under `prefers-reduced-motion`,
+  on a hidden page, and when Settings → Appearance → Living grain is off.
 
 ### Text
 
@@ -129,10 +134,10 @@ one. Forked crates keep their Apache-2.0 license and note their origin.
 ### The desktop
 
 - Bottom to top: the wallpaper (the theme's base color, up to four soft
-  glows and grain), the windows, the dock, the top bar, the launcher,
-  tooltips.
-- **Top bar** (32 px): the mark at the left opens the launcher; the date
-  and time sit in the middle; Settings and the theme switch at the right.
+  glows and grain), the home screen's icons, the windows, the bottom strip,
+  the top bar, carried icons, menus, tooltips.
+- **Top bar** (44 px): the mark at the left opens Welcome; the date and
+  time sit in the middle; Feedback (a bug) and Settings at the right.
 - **Windows** float in a stack; focus is the top of it. A 40 px titlebar
   carries minimize, maximize and close at the right, as on Windows. Drag a
   titlebar to move (a maximized or snapped window comes back to its normal
@@ -145,17 +150,29 @@ one. Forked crates keep their Apache-2.0 license and note their origin.
   every window stays on screen. When the screen changes size, windows shrink
   and move the least to fit inside it. Every change is a `wm::Cmd`, so
   window state replays and hashes.
-- **Dock**: Terminal, Studio and Settings pinned, then the other running
-  apps, with a dot under each running one and a tooltip on hover. A click
-  opens, focuses or minimizes; windows minimize into their tile.
-- **Launcher** (the mark, or Alt+Space): a search field, the built-in apps
-  as tiles and the `.app` files as a list. Typing filters both, the arrows
-  move, Enter or a click opens.
+- **Home screen**: every app is an icon behind the windows (Studio,
+  Assistant, Terminal, Files, Settings, Feedback, About, Welcome, then each
+  `~/apps/*.app`, newest last), down the columns from the top left on a
+  wide screen, in rows of four on a phone; there is no other list. A
+  `.app` file's icon is its sigil, sacred geometry made from its name. A
+  click opens; a mouse dragged 4 px carries an icon, and the others slide
+  aside; a finger held 500 ms picks one up: moved 8 px it drags, lifted
+  unmoved it opens the icon's menu. A mouse dragged on the bare desktop
+  draws a box that selects the icons it touches; Enter opens them, dragging
+  one carries them all. The order is kept (`home.order`).
+- **AI button**: bottom center, where the early iPad's home button was, a
+  round of glass with the ring and dot. It shows the Assistant (Alt+Space
+  too); its menu asks the Assistant. Later it listens.
+- **Dock**: two glass wings beside the AI button: the favorites to its left
+  (none at first; "Add to dock" from any app's menu), the other running
+  apps to its right, a dot under each running one and a tooltip on hover.
+  A click opens, focuses or minimizes; windows minimize into their tile.
+  The strip's place never changes, so neither does the work area.
 - **Keys** (`mod` is Alt or Meta, without Ctrl):
 
   | keys | action |
   |---|---|
-  | mod+Space | show or hide the launcher |
+  | mod+Space, mod+A | show the Assistant |
   | mod+Enter | open a terminal |
   | mod+Q | close the focused window |
   | mod+Up | maximize or restore |
@@ -166,8 +183,8 @@ one. Forked crates keep their Apache-2.0 license and note their origin.
 - **Motion**: one ease-out curve, CSS `cubic-bezier(0.2, 0.8, 0.2, 1)`.
   Windows open (fade and grow from 96%, 180 ms), close (140 ms), minimize
   and come back (220 ms), and glide when they maximize, restore or snap
-  (200 ms); dock tiles lift (120 ms), the launcher fades in (160 ms),
-  themes crossfade (200 ms). Drags and resizes follow the pointer exactly.
+  (200 ms); dock tiles lift (120 ms), icons slide aside (180 ms), themes
+  crossfade (200 ms). Drags and resizes follow the pointer exactly.
 - **Themes**: Midnight (the default: near-black `#07080C` with violet, cyan
   and magenta light), Dawn (warm paper with peach, lilac and sky light) and
   Mono (black, white and grays, no light). A theme is plain data: backdrop,

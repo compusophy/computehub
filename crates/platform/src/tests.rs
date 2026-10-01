@@ -102,20 +102,22 @@ fn ctl_queues_requests_in_order() {
     ctl.abort(3);
     ctl.set_text_input(false);
     ctl.stream(3, "https://h/p", vec![], vec![1]);
+    ctl.frame_in(125);
     let store = |k: &str, v: &str| Effect::Store { key: k.to_owned(), value: v.to_owned() };
     #[rustfmt::skip]
     let want = [Effect::TextInput(true), Effect::Fetch { id: 2, url: a }, Effect::RequestFrame,
         store("theme", "dusk"), Effect::Cursor("nwse-resize"), Effect::Fetch { id: 1, url: b },
         store("theme", "dawn"), store("dock", "left"), Effect::Abort(3), Effect::TextInput(false),
-        Effect::Stream { id: 3, url: "https://h/p".into(), headers: vec![], body: vec![1] }];
+        Effect::Stream { id: 3, url: "https://h/p".into(), headers: vec![], body: vec![1] },
+        Effect::FrameIn(125)];
     assert_eq!(ctl.effects(), want);
     // A queued write reads back, the newest first; natively nothing else is
     // stored, the clocks are neutral and the page is not isolated.
     let got = ["theme", "dock", "Theme"].map(|k| ctl.storage_get(k));
     assert_eq!(got, [Some("dawn".into()), Some("left".into()), None]);
     assert_eq!(Ctl::default().storage_get("theme"), None);
-    let neutral = (ctl.monotonic_ms(), ctl.local_time(), ctl.isolated());
-    assert_eq!(neutral, (0.0, LocalTime::EPOCH, false));
+    let neutral = (ctl.monotonic_ms(), ctl.local_time(), ctl.isolated(), ctl.reduced_motion());
+    assert_eq!(neutral, (0.0, LocalTime::EPOCH, false, false));
 }
 
 #[test]

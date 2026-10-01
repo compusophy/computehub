@@ -26,6 +26,7 @@ pub enum Effect {
     Word { pid: u32, index: u32, value: i32 },
     Kill(u32),
     Wake(u32),
+    FrameIn(u32),
     Stream { id: u32, url: String, headers: Vec<(&'static str, String)>, body: Vec<u8> },
     Abort(u32),
 }
@@ -116,6 +117,10 @@ impl Ctl {
         kill(pid: u32) => Effect::Kill(pid);
         /// Arms the one-shot timer, replacing it: [`crate::Event::Wake`] in `ms`.
         wake_in(ms: u32) => Effect::Wake(ms);
+        /// Asks for one frame in `ms` (a timer, then [`Ctl::request_frame`]), replacing the last
+        /// such timer: a slow animation's next frame, with no frame loop between. A hidden page
+        /// draws no frame until it shows again.
+        frame_in(ms: u32) => Effect::FrameIn(ms);
         /// POSTs `body` with `headers` to `url` (any: the caller vouches for it); the body
         /// streams back as [`crate::Event::Chunk`]s, then a [`crate::Event::StreamEnd`].
         stream(id: u32, url: &str, headers: Vec<(&'static str, String)>, body: Vec<u8>) =>
@@ -164,6 +169,16 @@ impl Ctl {
             return LocalTime::EPOCH;
         }
         LocalTime::of(&js_sys::Date::new_0())
+    }
+
+    /// Whether the person asks for reduced motion (`prefers-reduced-motion: reduce`); false
+    /// natively.
+    pub fn reduced_motion(&self) -> bool {
+        let query = "(prefers-reduced-motion: reduce)";
+        cfg!(target_arch = "wasm32")
+            && crate::window()
+                .and_then(|w| w.match_media(query).ok().flatten())
+                .is_some_and(|m| m.matches())
     }
 
     /// Whether the page is cross-origin isolated, so workers can share

@@ -1,12 +1,10 @@
 use gfx::{DrawList, Kind, RectF, Rgba};
-use host::search::{Entry, Search};
 use ui::{AppIcon, Key, THEMES, TextSystem};
 
-use super::dock::{Look, Shelf, favorites, pin};
+use super::dock::{Look, Spot, Strip, favorites, pin};
+use super::icons;
 use super::menu::{Item, Menu};
-use super::panel::Panel;
 use super::touch::{Fling, Touch, decay};
-use super::{field, icons};
 
 const SANS: &[u8] = include_bytes!("../../../assets/fonts/Inter-Regular.ttf");
 
@@ -64,42 +62,59 @@ fn fingers_scroll_past_eight_px_long_press_when_still_and_fling_on() {
 }
 
 #[test]
-fn the_dock_keeps_favorites_and_lays_out_groups() {
+fn the_strip_centers_the_ai_button_between_the_docks_wings() {
     let names = |s: &[&str]| s.iter().map(|n| n.to_string()).collect::<Vec<_>>();
-    assert_eq!(favorites(None), names(&["studio", "assistant", "terminal", "files", "settings"]));
-    assert_eq!(favorites(Some("terminal,,studio,terminal")), names(&["terminal", "studio"]));
-    assert_eq!(favorites(Some("")), names(&[]));
+    assert_eq!(
+        (favorites(None), favorites(Some("terminal,,studio,terminal"))),
+        (names(&[]), names(&["terminal", "studio"]))
+    );
     let mut f = favorites(Some("a"));
     assert!(pin(&mut f, "b", true) && !pin(&mut f, "b", true));
     assert!(!pin(&mut f, "x,y", true) && !pin(&mut f, "", true));
     assert!(pin(&mut f, "a", false) && !pin(&mut f, "a", false) && f == names(&["b"]));
-    // Five favorites, a hairline, one other app, a hairline, the Apps button.
-    let s = Shelf::new(5, 1, 1280.0, 600.0);
-    assert_eq!((s.rect, s.tile), (RectF::new(441.0, 600.0, 398.0, 64.0), 44.0));
     assert_eq!(
-        (&s.xs[..], &s.lines[..]),
-        (&[449.0, 501.0, 553.0, 605.0, 657.0, 722.0, 787.0][..], &[711.5, 776.5][..])
+        (super::joined(&names(&["a", "b,c", "d"])), super::names("d,,a,d")),
+        ("a,d".into(), names(&["d", "a"]))
     );
-    assert_eq!(s.tile(6), RectF::new(787.0, 608.0, 44.0, 44.0));
-    let at = |x| s.at(x, 620.0);
+    // Two favorites to the left of the button, one running app to its right.
+    let s = Strip::new(2, 1, (1280.0, 800.0));
+    assert_eq!((s.button, s.tile), (RectF::new(612.0, 727.0, 56.0, 56.0), 44.0));
     assert_eq!(
-        [at(496.0), at(497.0), at(711.0), at(800.0)],
-        [Some(Some(0)), Some(Some(1)), Some(None), Some(Some(6))]
+        s.wings,
+        [RectF::new(487.0, 723.0, 112.0, 64.0), RectF::new(681.0, 723.0, 60.0, 64.0)]
     );
-    assert_eq!((s.at(440.0, 620.0), s.at(500.0, 599.0)), (None, None));
-    // No other apps: one hairline; none at all: the Apps button alone.
-    assert_eq!(Shelf::new(2, 0, 1280.0, 0.0).lines.len(), 1);
-    assert_eq!(Shelf::new(0, 0, 1280.0, 0.0).lines.len(), 0);
-    assert_eq!(Shelf::new(0, 2, 1280.0, 0.0).lines.len(), 1);
-    // A phone shrinks the tiles (not below 28) to fit.
-    let phone = Shelf::new(5, 2, 375.0, 0.0);
-    assert_eq!((phone.tile, phone.rect.w, phone.rect.h), (32.0, 354.0, 52.0));
-    assert_eq!(Shelf::new(20, 0, 375.0, 0.0).tile, 28.0);
-    // Drawn: the dot of the focused app in the accent, the others' dim; the Apps button washed.
+    assert_eq!(
+        (&s.xs[..], s.tile(2)),
+        (&[495.0, 547.0, 689.0][..], RectF::new(689.0, 731.0, 44.0, 44.0))
+    );
+    let at = |x, y| s.at(x, y);
+    assert_eq!(
+        [at(640.0, 750.0), at(500.0, 740.0), at(543.0, 740.0), at(489.0, 740.0), at(700.0, 700.0)],
+        [Some(Spot::Button), Some(Spot::Tile(0)), Some(Spot::Tile(1)), Some(Spot::Wing), None]
+    );
+    // None at all: the button alone, where it always is; no wing to hit.
+    let alone = Strip::new(0, 0, (1280.0, 800.0));
+    assert_eq!((alone.button, alone.wings[0].w, alone.wings[1].w), (s.button, 0.0, 0.0));
+    assert_eq!((alone.at(560.0, 750.0), alone.at(720.0, 750.0)), (None, None));
+    // A phone shrinks the tiles until the fuller wing fits beside the button (not below 21).
+    let phone = Strip::new(1, 3, (390.0, 844.0));
+    let right = phone.wings[1];
+    assert_eq!((phone.tile, phone.button.x, right.x + right.w), (39.0, 167.0, 385.0));
+    assert_eq!(Strip::new(0, 9, (390.0, 844.0)).tile, 21.0);
+    // Drawn: the wings and tiles, the focused app's dot in the accent, the others' dim; the
+    // button's glass, washed while held.
     let (mut list, mut text, t) = (DrawList::new(), text(), &THEMES[0]);
-    let look = |running, focused| Look { icon: AppIcon::default(), lift: 0.0, running, focused };
-    s.draw(&mut list, &mut text, t, &[look(true, true), look(true, false)], Some(true));
-    assert!(fills(&list, t.accent) && fills(&list, t.text_dim) && fills(&list, t.wash(true)));
+    let look = |running, focused| Look {
+        icon: AppIcon::default(),
+        sigil: None,
+        lift: 0.0,
+        running,
+        focused,
+    };
+    s.draw(&mut list, &mut text, t, &[look(true, true), look(true, false), look(false, false)]);
+    assert!(fills(&list, t.accent) && fills(&list, t.text_dim) && fills(&list, t.glass));
+    s.draw_button(&mut list, &mut text, t, Some(true));
+    assert!(fills(&list, t.wash(true)));
 }
 
 #[test]
@@ -138,7 +153,7 @@ fn menus_open_on_screen_and_follow_the_keys() {
 
 #[test]
 fn icons_fill_columns_wide_and_rows_of_four_narrow() {
-    let a = RectF::new(0.0, 44.0, 1280.0, 619.0);
+    let a = RectF::new(0.0, 44.0, 1280.0, 671.0);
     let cells = [0, 5, 6, 7].map(|i| icons::cell(i, a, false));
     let at = |c: RectF| (c.x, c.y, c.w, c.h);
     assert_eq!(
@@ -161,60 +176,57 @@ fn icons_fill_columns_wide_and_rows_of_four_narrow() {
         at(icons::cell(3, RectF::new(0.0, 0.0, 400.0, 50.0), false)),
         (280.0, 13.0, 89.0, 96.0)
     );
-    // Drawn: the wash while hovered, the label in up to two lines.
-    let (mut list, mut text, t) = (DrawList::new(), text(), &THEMES[1]);
-    let label = "A rather long application name";
-    icons::draw(&mut list, &mut text, t, cells[0], (AppIcon::default(), label), Some(false));
-    assert!(fills(&list, t.wash(false)));
-    let glyphs =
-        |l: &DrawList| l.instances().iter().filter(|i| i.kind == Kind::Glyph as u8 as f32).count();
-    let rows = |l: &DrawList| {
-        let mut ys: Vec<i32> = l
-            .instances()
-            .iter()
-            .filter(|i| i.kind == Kind::Glyph as u8 as f32)
-            .map(|i| i.rect[1] as i32 / 10)
-            .collect();
-        ys.dedup();
-        ys.len()
-    };
-    assert!(glyphs(&list) > 10 && rows(&list) >= 2);
+    // A drop goes to the nearest cell of one more than the others; past the end, the end.
+    let slots = [(60.0, 110.0), (150.0, 120.0), (60.0, 290.0), (900.0, 700.0)];
+    assert_eq!(slots.map(|p| icons::slot(8, a, false, p)), [0, 6, 2, 8]);
+    assert_eq!(icons::slot(3, phone, true, (330.0, 110.0)), 3);
 }
 
 #[test]
-fn the_bar_and_the_panel_sit_at_the_bottom() {
-    assert_eq!(super::CLEAR, 137.0);
-    let f = field::rect((1280.0, 800.0));
-    assert_eq!((f, field::rect((375.0, 812.0)).x), (RectF::new(360.0, 743.0, 560.0, 44.0), 16.0));
-    // The Ask row, two rows of tiles, three files: as tall as that, above the bar.
-    let p = Panel::new(1280.0, f, 44.0, true, 5, 3);
-    assert_eq!((p.rect, p.cols()), (RectF::new(340.0, 336.0, 600.0, 399.0), 4));
+fn the_persons_order_survives_new_apps_and_moves() {
+    let names = |s: &str| super::names(s);
+    let apps = || names("studio,assistant,terminal,files,clock.app");
+    // The stored order first (unknown names dropped), new apps after, in their default order.
+    let arranged = |order: &str| {
+        let (got, new) = icons::arrange(&names(order), apps(), |n| n.as_str());
+        (super::joined(&got), new)
+    };
     assert_eq!(
-        (p.ask_row(), p.tile(0), p.tile(4).y),
-        (RectF::new(353.0, 349.0, 574.0, 44.0), RectF::new(385.0, 401.0, 80.0, 84.0), 493.0)
+        arranged("terminal,gone,studio"),
+        ("terminal,studio,assistant,files,clock.app".into(), true)
     );
-    assert_eq!((p.row(0), p.fit()), (RectF::new(353.0, 590.0, 574.0, 44.0), 3));
-    let at = |x, y| p.at(x, y, 0, 3);
+    assert!(!arranged("files,assistant,clock.app,studio,terminal").1);
+    // Carried icons land together at the slot among the rest, in their own order.
+    let moved = |carried: &[usize], slot| {
+        let order = icons::moved(5, carried, slot);
+        order.iter().map(|&i| ["a", "b", "c", "d", "e"][i]).collect::<Vec<_>>().join(",")
+    };
     assert_eq!(
-        [at(400.0, 360.0), at(400.0, 420.0), at(400.0, 600.0), at(345.0, 600.0), at(10.0, 10.0)],
-        [Some(Some(0)), Some(Some(1)), Some(Some(6)), Some(None), None]
+        [moved(&[3], 0), moved(&[0], 4), moved(&[1, 4], 1), moved(&[1], 9)],
+        ["d,a,b,c,e", "b,c,d,e,a", "a,b,e,c,d", "a,c,d,e,b"]
     );
-    assert_eq!(p.at(400.0, 640.0, 2, 4), Some(Some(9)));
-    // Files only; the Ask row only; a phone's full-width sheet; no room.
-    let q = Panel::new(1280.0, f, 44.0, false, 0, 2);
-    assert_eq!((q.rect.y, q.row(0).y), (621.0, 634.0));
-    assert_eq!(Panel::new(1280.0, f, 44.0, true, 0, 0).rect.h, 70.0);
-    let n = Panel::new(375.0, field::rect((375.0, 812.0)), 44.0, false, 8, 40);
-    assert_eq!((n.rect.x, n.rect.w, n.rect.y, n.cols()), (0.0, 375.0, 52.0, 4));
-    assert_eq!(Panel::new(1280.0, RectF::new(0.0, 50.0, 10.0, 44.0), 44.0, true, 3, 3).rect.h, 0.0);
-    // Drawn: the bar with its caret in the accent while focused; the selection's ring.
-    let (mut list, mut text, t) = (DrawList::new(), text(), &THEMES[0]);
-    field::draw(&mut list, &mut text, t, f, "hi", true, None);
-    assert!(fills(&list, t.accent));
-    let entry =
-        |n: &str| Entry { name: n.into(), label: n.into(), icon: AppIcon::default(), place: None };
-    let mut s = Search::new(vec![entry("studio"), entry("terminal")]);
-    s.type_text("t");
-    p.draw(&mut list, &mut text, t, &s, Some((0, true)));
-    assert!(fills(&list, t.wash(true)) && s.sel == 1);
+    // Drawn: selected, the accent's ring and wash; carried, larger and shadowed; a `.app` file's
+    // tile shows its sigil, not its glyph.
+    let (mut list, mut text, t) = (DrawList::new(), text(), &THEMES[1]);
+    let r = icons::cell(0, RectF::new(0.0, 44.0, 1280.0, 671.0), false);
+    let state = icons::State { selected: true, ..Default::default() };
+    icons::draw(&mut list, &mut text, t, r, (AppIcon::default(), None, "Clock"), state);
+    assert!(fills(&list, t.accent.with_alpha(31)));
+    let kind = |l: &DrawList, k: Kind| {
+        l.instances()
+            .iter()
+            .filter(|i| i.kind == k as u8 as f32)
+            .map(|i| (i.rect[2], i.uv))
+            .collect::<Vec<_>>()
+    };
+    let mut lifted = DrawList::new();
+    let state = icons::State { lift: 1.0, ..Default::default() };
+    icons::draw(&mut lifted, &mut text, t, r, (AppIcon::default(), Some(7), "Clock"), state);
+    let (tile, big) = (kind(&list, Kind::Gradient)[0].0, kind(&lifted, Kind::Gradient)[0].0);
+    assert!(big > tile && kind(&lifted, Kind::Shadow).len() > kind(&list, Kind::Shadow).len());
+    let glyph = |l: &DrawList| kind(l, Kind::Glyph).into_iter().find(|g| g.0 > 20.0).map(|g| g.1);
+    assert_ne!(glyph(&lifted), glyph(&list));
+    icons::draw_box(&mut list, &text, t, (300.0, 200.0), (100.0, 400.0));
+    assert_eq!(list.instances().last().map(|i| i.rect), Some([100.0, 200.0, 200.0, 200.0]));
+    assert_eq!(super::CLEAR, 85.0);
 }

@@ -253,7 +253,7 @@ fn fonts_load_in_groups_and_frames_come_only_while_something_moves() {
         assert!(send(&mut desk, Event::PointerMove { x: 9.0, y: 300.0 }).0.0);
         let mut ctl = Ctl::default();
         desk.drawn(false, &mut ctl);
-        assert_eq!(ctl.effects(), []);
+        assert_eq!(ctl.effects(), [Fx::FrameIn(125)]); // but the living grain's, by timer
         let (h, fx) = send(&mut desk, fetched(bold, Ok(got)));
         assert_eq!((h.1, fx, has(&mut desk, FontId::SansBold)), (false, vec![], want));
     }
@@ -378,7 +378,7 @@ fn programs_reach_the_kernel_and_its_effects_the_page() {
     ctl.storage_set(ai::MODEL, "openai/gpt-x");
     ctl.storage_set("compusophy.dock", "terminal");
     ctl.storage_set("compusophy.seen", "1");
-    let want = shell::Prefs { theme: String::new(), dock: Some("terminal".into()), seen: true };
+    let want = shell::Prefs { dock: Some("terminal".into()), seen: true, ..Default::default() };
     assert_eq!(prefs(&ctl), want);
     desk.event(resize(1280.0, 800.0), &mut ctl);
     assert_eq!(desk.ai.status().model, ai::DEFAULT_MODEL);

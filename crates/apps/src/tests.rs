@@ -399,7 +399,7 @@ fn settings_switches_pages_and_themes_the_default_first() {
     let r = RectF::new(0.0, 36.0, 720.0, 520.0);
     for (i, theme) in THEMES.iter().enumerate() {
         let (list, hits) = draw(&mut s.app, &mut ts, r, theme);
-        assert_eq!(ids(&hits), [1, 2, 3, 12, 10, 11], "nav, then Mono and the others");
+        assert_eq!(ids(&hits), [1, 2, 3, 12, 10, 11, 32], "nav, Mono and the others, the grain");
         // The current theme's card wears a 2 px accent ring outside it.
         let card = hit(&hits, 10 + i as u32).rect;
         let ring = |b: &&Instance| b.color == theme.accent && b.p0 == 2.0;
@@ -413,7 +413,7 @@ fn settings_switches_pages_and_themes_the_default_first() {
     // Three across, then fewer as the window narrows.
     let mut rows = |s: &mut Sim<Settings>, w| {
         let hits = draw(&mut s.app, &mut ts, RectF::new(0.0, 0.0, w, 900.0), MIDNIGHT).1;
-        let cards: Vec<f32> = hits.iter().filter(|h| h.id.0 >= 10).map(|h| h.rect.y).collect();
+        let cards: Vec<f32> = hits.iter().filter(|h| h.id.0 / 10 == 1).map(|h| h.rect.y).collect();
         1 + cards.windows(2).filter(|p| p[1] > p[0]).count()
     };
     assert_eq!([rows(&mut s, 720.0), rows(&mut s, 560.0), rows(&mut s, 360.0)], [1, 2, 2]);
@@ -424,6 +424,24 @@ fn settings_switches_pages_and_themes_the_default_first() {
     let (a, b) = (hit(&tabs, 1).rect, hit(&tabs, 3).rect);
     assert!(a.y == b.y && a.w == b.w && b.x > a.x, "{a:?} {b:?}");
     assert!(s.both(AppEvent::Click(WidgetId(3))).0 && s.app.page == 2);
+}
+
+#[test]
+fn settings_switches_the_living_grain() {
+    let (mut fs, mut kernel, mut ts) = (Vfs::new(), ui::kernel::Kernel::new(), text_system());
+    let mut app = Settings::default();
+    // The switch shows what the host says, and flips it: the preference and what apps see.
+    for (grain, want) in [(true, "pref grain=off"), (false, "pref grain=on")] {
+        let mut cx = Cx::new(&mut fs, &mut kernel, 0.0);
+        cx.grain = grain;
+        let r = RectF::new(0.0, 36.0, 720.0, 520.0);
+        app.event(AppEvent::Focus(true), &mut cx);
+        let list = draw(&mut app, &mut ts, r, MIDNIGHT).0;
+        let on = of(&list, Kind::Fill).any(|i| i.rect[2] == 34.0 && i.color == MIDNIGHT.accent);
+        assert!(on == grain && app.event(AppEvent::Click(WidgetId(32)), &mut cx));
+        let reqs: Vec<String> = cx.take_requests().iter().map(show).collect();
+        assert_eq!((reqs.join("; ").as_str(), cx.grain, app.still), (want, !grain, grain));
+    }
 }
 
 #[test]

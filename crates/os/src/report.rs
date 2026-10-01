@@ -342,10 +342,11 @@ impl Reports {
     }
 
     /// A preference an app set: the reports switch is stored and followed (off, the automatic
-    /// reports still held are dropped); each is noted, the dock's favorites by their [`app`].
+    /// reports still held are dropped); each is noted, the dock's favorites and the home
+    /// screen's order by their [`app`].
     pub fn pref(&mut self, ctl: &mut Ctl, key: &str, value: &str) {
         let mut said = value.to_string();
-        if key == "dock" {
+        if key == "dock" || key == "home.order" {
             said = split(value, b',').into_iter().map(app).collect::<Vec<_>>().join(",");
         }
         note(&["pref ", key, " ", &said].concat());

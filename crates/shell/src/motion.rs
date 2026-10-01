@@ -1,6 +1,7 @@
-//! Motion: where each window, dock tile and the snap preview are heading,
+//! Motion: where each window, dock tile, home screen icon and the snap preview are heading,
 //! when tweens start, and whether anything still moves (or must be watched).
 
+use gfx::RectF;
 use host::motion::{Tween, Vis, docked};
 use host::rectf;
 use wm::WinId;
@@ -15,22 +16,30 @@ const DOCK_MS: f32 = 220.0;
 const MOVE_MS: f32 = 200.0;
 const LIFT_MS: f32 = 120.0;
 const PREVIEW_MS: f32 = 160.0;
+const SLIDE_MS: f32 = 180.0;
 const OPEN_SCALE: f32 = 0.96;
 
-/// The tweens of every window (closing and minimized too), each dock tile's
-/// lift (0 to 1, by app name), and the snap preview.
+/// The tweens of every window (closing and minimized too), each dock tile's lift (0 to 1, by
+/// app name) and the AI button's, the snap preview, and each home screen icon's cell (in the
+/// icons' order).
 #[derive(Default)]
 pub(crate) struct Motion {
     pub wins: Vec<(WinId, Tween<Vis>)>,
     pub lifts: Vec<(String, Tween<f32>)>,
-    pub apps: Tween<f32>,
+    pub ai: Tween<f32>,
     pub preview: Tween<Vis>,
+    pub cells: Vec<Tween<Vis>>,
 }
 
 impl Motion {
     /// How lifted the dock tile of `name` is at `now`.
     pub(crate) fn lift(&self, name: &str, now: f64) -> f32 {
         self.lifts.iter().find(|l| l.0 == name).map_or(0.0, |l| l.1.value(now))
+    }
+
+    /// Where icon `i` shows at `now`.
+    pub(crate) fn cell(&self, i: usize, now: f64) -> Option<RectF> {
+        self.cells.get(i).map(|c| c.value(now).rect)
     }
 }
 
@@ -75,9 +84,27 @@ impl Shell {
         self.motion.wins.retain(|e| host.win(e.0).is_some());
         self.sync_lifts(now);
         self.sync_preview(now);
+        self.sync_cells(now);
     }
 
-    /// Each dock tile's lift, and the Apps button's, heads up while hovered, else down.
+    /// Each icon heads for its cell (a new one, or all on a new screen size, at once); carried
+    /// ones wait.
+    fn sync_cells(&mut self, now: f64) {
+        let (a, narrow, cells) = (rectf(self.host.wm().area()), self.host.narrow(), self.cells());
+        let m = &mut self.motion.cells;
+        m.truncate(cells.len());
+        for (i, cell) in cells.into_iter().enumerate() {
+            let to = Vis::at(home::icons::cell(cell.unwrap_or(i), a, narrow));
+            match m.get_mut(i) {
+                None => m.push(Tween::new(to)),
+                Some(_) if cell.is_none() => {}
+                Some(t) if self.instant => *t = Tween::new(to),
+                Some(t) => t.to(to, now, SLIDE_MS),
+            }
+        }
+    }
+
+    /// Each dock tile's lift, and the AI button's, heads up while hovered, else down.
     fn sync_lifts(&mut self, now: f64) {
         let hovered = match self.hover {
             Some(Target::Dock(i)) => self.dock.get(i).map(|d| d.0.as_str()),
@@ -90,8 +117,8 @@ impl Shell {
         for (name, t) in &mut self.motion.lifts {
             t.to(f32::from(u8::from(hovered == Some(name.as_str()))), now, LIFT_MS);
         }
-        let apps = f32::from(u8::from(self.hover == Some(Target::Apps)));
-        self.motion.apps.to(apps, now, LIFT_MS);
+        let ai = f32::from(u8::from(self.hover == Some(Target::Ai)));
+        self.motion.ai.to(ai, now, LIFT_MS);
     }
 
     fn sync_preview(&mut self, now: f64) {
@@ -114,9 +141,9 @@ impl Shell {
         let m = &mut self.motion;
         m.wins.iter_mut().for_each(|w| w.1.arm(now));
         m.lifts.iter_mut().for_each(|l| l.1.arm(now));
-        m.apps.arm(now);
+        m.cells.iter_mut().for_each(|c| c.arm(now));
+        m.ai.arm(now);
         m.preview.arm(now);
-        self.launcher.t.arm(now);
         self.host.theme.arm(now);
     }
 
@@ -125,9 +152,9 @@ impl Shell {
         let (now, m) = (self.host.now_ms, &self.motion);
         m.wins.iter().any(|w| w.1.is_running(now))
             || m.lifts.iter().any(|l| l.1.is_running(now))
-            || m.apps.is_running(now)
+            || m.cells.iter().any(|c| c.is_running(now))
+            || m.ai.is_running(now)
             || m.preview.is_running(now)
-            || self.launcher.t.is_running(now)
             || self.host.theme.is_running(now)
             || self.touch.is_some_and(|t| !t.0.done)
             || self.fling.is_some()

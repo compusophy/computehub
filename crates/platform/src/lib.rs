@@ -8,8 +8,9 @@
 //!
 //! Frames are on demand, with no render loop: a redraw or [`Ctl::request_frame`] requests one
 //! `requestAnimationFrame` unless one is pending. The flag clears before [`App::frame`] runs, so an
-//! animation asks on every frame and the first that does not ask is the last. The timers are the
-//! minute tick behind [`Event::Tick`] and the one-shot [`Ctl::wake_in`]. While the WebGL context is
+//! animation asks on every frame and the first that does not ask is the last; a slow one asks for
+//! its next by [`Ctl::frame_in`]. The timers are the minute tick behind [`Event::Tick`], the
+//! one-shot [`Ctl::wake_in`] and that frame timer. While the WebGL context is
 //! lost frames are skipped; on restore the renderer is rebuilt. Program workers ([`Ctl::spawn`])
 //! and streams ([`Ctl::stream`]) are heard like DOM events.
 
@@ -154,6 +155,8 @@ pub fn run<A: App + 'static>(app: A) -> Result<(), JsValue> {
         procs: RefCell::new(Vec::new()),
         wake_fn: handler(me, 0, |s, _, _| _ = dispatch(s, Event::Wake)),
         wake_timer: Cell::new(None),
+        frame_fn: handler(me, 0, |s, _, _| request_frame(s)),
+        frame_timer: Cell::new(None),
         streams: RefCell::new(Vec::new()),
     });
 
@@ -205,6 +208,9 @@ struct Shared {
     /// The one-shot timer of [`Ctl::wake_in`]: its callback and handle.
     wake_fn: Function,
     wake_timer: Cell<Option<i32>>,
+    /// The frame timer of [`Ctl::frame_in`]: its callback and handle.
+    frame_fn: Function,
+    frame_timer: Cell<Option<i32>>,
     streams: RefCell<Vec<io::Stream>>,
 }
 

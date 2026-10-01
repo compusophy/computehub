@@ -1,5 +1,5 @@
 //! The top bar: compusophy's mark at the left (Welcome), the date and time in the middle (the
-//! time alone on a phone), Feedback and Settings at the right.
+//! time alone on a phone), Feedback (a bug) and Settings at the right.
 
 use gfx::{DrawList, RectF};
 use host::paint::{cap_baseline, px};
@@ -47,7 +47,7 @@ impl Shell {
             }
             let (side, glyph, ink) = match target {
                 Target::Mark => (MARK, Glyph::Mark, theme.text),
-                Target::Feedback => (GLYPH, Glyph::Feedback, theme.text),
+                Target::Feedback => (GLYPH, Glyph::Bug, theme.text),
                 _ => (GLYPH, Glyph::Cog, theme.text),
             };
             ui::icon::draw(list, text, square(r, side), glyph, ink);

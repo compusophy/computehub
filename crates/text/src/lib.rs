@@ -27,7 +27,7 @@ pub const MAX_FALLBACKS: usize = 8;
 /// Glyphs above this many device pixels per em (and vector shapes wider) are not drawn.
 const MAX_PX: f32 = 1000.0;
 const BUILTIN: usize = 3;
-/// The cache's face index for vector shapes: past any font slot.
+/// The cache's face index for vector shapes (seeded ones one less): past any font slot.
 const VECTOR: u64 = 0xffff;
 /// JetBrains Mono's metrics and advance, for an empty Mono.
 const MONO_METRICS: [i32; 4] = [1000, 1020, -300, 0];
@@ -69,7 +69,7 @@ struct Slot {
 
 /// The faces (slots in [`FontId`] order, then fallbacks), a glyph cache
 /// sorted by face, glyph and px per em in 64ths (vectors: face `0xffff`, id
-/// and side in px), and its atlas.
+/// and side in px; seeded ones face `0xfffe`, seed and side), and its atlas.
 pub struct TextSystem {
     faces: Vec<Option<Font>>,
     cache: Vec<(u64, Option<Slot>)>,
@@ -384,12 +384,38 @@ impl TextSystem {
         outline: fn(&mut Vec<Vec<Point>>),
         color: Rgba,
     ) {
+        let key = (VECTOR << 48) | (u64::from(id) << 32);
+        self.shape(list, r, key, &|o| outline(o), color);
+    }
+
+    /// Draws the shape `outline` makes from `seed` (as [`TextSystem::draw_vector`] draws one),
+    /// cached under the seed: one function must make every seeded shape.
+    pub fn draw_seeded(
+        &mut self,
+        list: &mut DrawList,
+        r: RectF,
+        seed: u32,
+        outline: fn(u32, &mut Vec<Vec<Point>>),
+        color: Rgba,
+    ) {
+        let key = ((VECTOR - 1) << 48) | (u64::from(seed) << 16);
+        self.shape(list, r, key, &|o| outline(seed, o), color);
+    }
+
+    /// A vector shape cached under `key` and its side in device pixels.
+    fn shape(
+        &mut self,
+        list: &mut DrawList,
+        r: RectF,
+        key: u64,
+        outline: &dyn Fn(&mut Vec<Vec<Point>>),
+        color: Rgba,
+    ) {
         let (d, side) = (self.dpr, (r.w.min(r.h) * self.dpr).round());
         if !(1.0..=MAX_PX).contains(&side) {
             return;
         }
-        let key = (VECTOR << 48) | (u64::from(id) << 32) | side as u64;
-        let slot = self.cached(key, |t| {
+        let slot = self.cached(key | side as u64, |t| {
             let mut o = Vec::new();
             outline(&mut o);
             font::render_outline(&o, side / 1000.0, &mut t.bitmap).ok()?;

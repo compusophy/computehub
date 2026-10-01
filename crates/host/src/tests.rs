@@ -6,7 +6,6 @@ use kernel::wire::{Msg, Stdout, VERSION};
 use ui::{App, AppEvent as E, THEMES, Ui};
 
 use super::motion::{Lerp, Themes, Tween, Vis, blend, ease, replay};
-use super::search::{Entry, Search, rank};
 use super::*;
 
 const SANS: &[u8] = include_bytes!("../../../assets/fonts/Inter-Regular.ttf");
@@ -191,36 +190,32 @@ fn windows_a_narrow_area_maximized_come_back_as_they_were_when_it_widens() {
 }
 
 #[test]
-fn the_desktop_lists_home_and_the_persons_apps_and_asks_reach_the_assistant() {
-    let (mut h, log, _) = host();
+fn the_home_screen_lists_every_app_and_the_persons_own_with_their_sigils() {
+    let (mut h, _, _) = host();
     let mine = [Vfs::HOME, "/apps"].concat();
     h.vfs.mkdir_all(&mine).unwrap();
     for f in [&*[&mine, "/notes.app"].concat(), &[Vfs::HOME, "/x.app"].concat(), "/apps/demo.app"] {
         h.vfs.write(f, b"x").unwrap();
     }
-    // Home is Files at ~ (with the home glyph); the demos in /apps are never shown.
-    let icons = h.desktop();
-    let got: Vec<_> = icons.iter().map(|e| (&*e.name, &*e.label, e.place.is_some())).collect();
+    // The apps the registry knows, in the order asked, then ~/apps's (never ~'s or /apps's).
+    let apps = h.home(&["files", "nope", "welcome", "about"]);
+    let got: Vec<_> = apps.iter().map(|e| (&*e.name, &*e.label, e.sigil.is_some())).collect();
     let notes = [&mine, "/notes.app"].concat();
-    let want = [("files", "Home", false), ("welcome", "Welcome", false)];
-    assert_eq!(got, [&want[..], &[("about", "About", false), (&notes, "Notes", true)]].concat());
-    assert_eq!(icons[0].icon.glyph, ui::icon::Glyph::Home);
-    // The launcher: apps the registry knows, then ~/apps, ~ and /apps.
-    let places: Vec<_> = h.entries(&["terminal", "nope"]).into_iter().map(|e| e.place).collect();
-    let place = |p: &str| Some(p.to_string());
+    let want =
+        [("files", "Files", false), ("welcome", "Welcome", false), ("about", "About", false)];
+    assert_eq!(got, [&want[..], &[(&notes, "Notes", true)]].concat());
+    // A `.app` file's sigil and hue come from its file name, wherever it is and whoever draws it.
+    let seed = sigil("notes.app");
+    assert!(seed.is_some() && seed == sigil(&notes) && seed != sigil("/apps/x.app"));
     assert_eq!(
-        places,
-        [None, place("~/apps/notes.app"), place("~/x.app"), place("/apps/demo.app")]
+        (sigil("studio:/apps/notes.app"), sigil("files"), sigil("/apps/notes.ap")),
+        (None, None, None)
     );
-    // Asking opens the Assistant once, which hears each question.
-    let mut out = Response::default();
-    h.ask("hi", &mut out);
-    h.apply(Cmd::Minimize(WinId(3)));
-    h.ask("again", &mut out);
-    // (Probes are numbered as made: listing icons made some.)
-    let asked: Vec<_> = log.take().into_iter().filter(|e| matches!(e.1, E::Ask(_))).collect();
-    assert_eq!(asked, [(5, E::Ask("hi".into())), (5, E::Ask("again".into()))]);
-    assert_eq!((h.wins.len(), h.wm().focused()), (3, Some(WinId(3))));
+    let hue = ui::theme::app_tint(seed.unwrap());
+    assert_eq!(
+        (apps[3].icon.hue, h.icon("/apps/counter.app").map(|i| i.hue)),
+        (hue, Some(ui::theme::app_tint(sigil("counter.app").unwrap())))
+    );
 }
 
 #[test]
@@ -288,10 +283,10 @@ fn frames_reach_every_app_and_closing_windows_hear_it_first() {
 #[test]
 fn apps_get_icons_labels_themes_and_fonts_fetched_once_in_order() {
     let (mut h, _, made) = host();
-    assert!(!h.launcher && !h.theme.is_running(0.0));
+    assert!(!h.theme.is_running(0.0));
     h.say(1, "theme Dawn;open launcher;theme nope");
     h.settle(&mut Response::default());
-    assert_eq!((h.theme.current().name, h.launcher, h.wins.len()), ("Dawn", true, 2));
+    assert_eq!((h.theme.current().name, h.wins.len()), ("Dawn", 2));
     assert!(h.theme.is_running(0.0));
     // Icons come from running apps, else from the registry, once.
     let icon = |name: &str| {
@@ -321,12 +316,14 @@ fn apps_get_icons_labels_themes_and_fonts_fetched_once_in_order() {
     let (mut h, _, _) = host();
     h.text.add_fallback(SYM_A.to_vec()).unwrap();
     assert!(h.say(1, "fonts").effects.is_empty());
-    // Apps see the AI settings; preferences leave as effects, the AI model's updating them.
+    // Apps see the AI settings; preferences leave as effects, the AI model's and the grain's
+    // updating what apps see.
     h.ai.model = "m".into();
     let pref = |k: &str, v: &str| Effect::Pref { key: k.into(), value: v.into() };
-    let prefs = [pref("seen", "m"), pref("ai.model", "l"), pref("dock", "left")];
-    assert_eq!(h.say(1, "seen;pref ai.model=l;pref dock=left").effects, prefs);
-    assert_eq!(h.ai.model, "l");
+    let prefs =
+        [pref("seen", "m"), pref("ai.model", "l"), pref("dock", "left"), pref("grain", "off")];
+    assert_eq!(h.say(1, "seen;pref ai.model=l;pref dock=left;pref grain=off").effects, prefs);
+    assert_eq!((h.ai.model.as_str(), h.grain), ("l", false));
 }
 
 #[test]
@@ -451,71 +448,6 @@ fn frames_have_controls_edges_and_snap_zones() {
     let corners = [z(20.0, 20.0), z(1260.0, 790.0)];
     assert_eq!(corners, [snap(wm::Snap::TopLeft), snap(wm::Snap::BottomRight)]);
     assert_eq!(Zone::Max.rect(Rect::new(0, 32, 1280, 684)), Rect::new(0, 32, 1280, 684));
-}
-
-/// A search over apps, then files, by label.
-fn search(apps: &[&str], files: &[&str]) -> Search {
-    let entry = |(label, file): (&&str, bool)| {
-        let (name, place) = (label.to_lowercase(), file.then(|| "/apps".to_string()));
-        Entry { name, label: label.to_string(), icon: AppIcon::default(), place }
-    };
-    let all = apps.iter().map(|l| (l, false)).chain(files.iter().map(|l| (l, true)));
-    Search::new(all.map(entry).collect())
-}
-
-#[test]
-fn searches_rank_then_move_through_the_grid_then_the_list() {
-    let ranks = [rank("", "Terminal"), rank("TRM", "terminal"), rank("al", "Terminal")];
-    assert_eq!(ranks, [Some(0), Some(0), Some(6)]);
-    assert_eq!((rank("x", "Terminal"), rank("ÉC", "éclair")), (None, Some(0)));
-    // Best first, ties in order.
-    let mut s = search(&["Studio", "Terminal", "Settings", "About"], &[]);
-    assert_eq!(s.tiles, [0, 1, 2, 3]);
-    s.type_text("t");
-    assert_eq!(s.tiles, [1, 0, 2, 3]);
-    s.key(Key::Backspace, 4);
-    s.type_text("s");
-    assert_eq!(s.tiles, [0, 2]);
-    let apps = ["Terminal", "Studio", "Settings", "Welcome", "About"];
-    let mut s = search(&apps, &["Clicker", "Counter", "Greeter", "Notes"]);
-    assert_eq!((s.count(), s.get(5).unwrap().label.as_str(), s.get(9)), (9, "Clicker", None));
-    let (d, u, want) = (Key::Down, Key::Up, [4, 5, 6, 7, 8, 8, 7, 6, 5, 4, 0, 0, 1, 4, 3]);
-    let keys = [d, d, d, d, d, d, u, u, u, u, u, u, Key::Right, d, Key::Left];
-    for (i, k) in keys.into_iter().enumerate() {
-        assert!(s.key(k, 4) && s.sel == want[i], "step {i}: {k:?} to {}", s.sel);
-    }
-    // The selected row stays on screen.
-    s.fit = 2;
-    (0..5).for_each(|_| _ = s.key(Key::Down, 4));
-    assert_eq!((s.sel, s.first), (8, 2));
-    s.scroll(-9);
-    assert_eq!(s.first, 0);
-    s.scroll(9);
-    assert_eq!(s.first, 2);
-    assert!(!s.key(Key::Enter, 4) && s.first == 2);
-    // A query puts the Ask row first, and selects the first app named by it, else the Ask row.
-    s.type_text("ter\u{7}");
-    assert_eq!((s.query.as_str(), &s.tiles[..], &s.rows[..]), ("ter", &[0][..], &[6, 7][..]));
-    assert!(s.ask() && s.get(0).is_none() && s.count() == 4 && s.sel == 1);
-    assert_eq!((&*s.get(1).unwrap().label, &*s.get(2).unwrap().label), ("Terminal", "Counter"));
-    s.key(Key::Down, 4);
-    s.type_text("");
-    assert_eq!(s.sel, 2);
-    s.key(Key::Backspace, 4);
-    assert_eq!((s.query.as_str(), s.count(), s.sel), ("te", 5, 1));
-    s.type_text("lc");
-    assert_eq!((s.count(), s.sel), (1, 0));
-    // Up from the first row of tiles goes to the Ask row, Down from it to the first tile.
-    let mut s = search(&apps, &["Clicker"]);
-    s.type_text("e");
-    let (u, d) = (Key::Up, Key::Down);
-    let steps = [(u, 0), (u, 0), (d, 1), (d, 4), (d, 4), (u, 3), (Key::Left, 2), (u, 0)];
-    for (k, want) in steps {
-        assert!(s.key(k, 4) && s.sel == want, "{k:?} to {}", s.sel);
-    }
-    let mut none = Search::new(Vec::new());
-    let keys = [Key::Up, Key::Down, Key::Left, Key::Right, Key::Backspace];
-    assert!(keys.into_iter().all(|k| none.key(k, 4) && none.sel == 0));
 }
 
 #[test]

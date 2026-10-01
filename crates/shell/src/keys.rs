@@ -1,5 +1,6 @@
-//! Keys: the desktop's bindings (`mod` is Alt or Meta, without Ctrl), the
-//! launcher's keys while it shows, and the rest for the focused app.
+//! Keys: an open menu's, the home screen's (Enter opens the selected icons, Escape puts carried
+//! ones back or ends the selection), the desktop's bindings (`mod` is Alt or Meta, without Ctrl),
+//! and the rest for the focused app.
 
 use ui::{AppEvent, Key, Mods};
 use wm::{Cmd, Snap, State};
@@ -26,8 +27,8 @@ fn is_browser(key: Key, m: Mods) -> bool {
 }
 
 impl Shell {
-    /// A key for an open menu, else for the everything bar while it has the keys, else a
-    /// binding, else for the focused app.
+    /// A key for an open menu, else for the home screen, else a binding, else for the focused
+    /// app.
     pub(crate) fn key(&mut self, key: Key, m: Mods, out: &mut Response) {
         let chord = (m.alt || m.meta) && !m.ctrl;
         if let Some((menu, ..)) = &mut self.menu {
@@ -42,17 +43,7 @@ impl Shell {
             out.consumed = true;
             return;
         }
-        if self.launcher.focus {
-            match key {
-                Key::Space if chord && !m.shift => self.toggle_launcher(),
-                Key::Enter if self.launcher.open => self.launch(self.launcher.search.sel, out),
-                Key::Escape => self.hide_launcher(),
-                _ => _ = self.launcher.search.key(key, self.panel().cols()),
-            }
-            out.consumed = !is_paste(key, m);
-            return;
-        }
-        if chord && self.binding(key, m.shift, out) {
+        if self.home_key(key, m, out) || chord && self.binding(key, m.shift, out) {
             out.consumed = true;
             return;
         }
@@ -71,16 +62,12 @@ impl Shell {
             focused.and_then(|w| self.placement(w)).is_some_and(|p| p.state == State::Maximized);
         let snap = |snap| focused.map(|win| Cmd::SnapTo { win, snap });
         let cmd = match (key, shift) {
-            (Key::Space, false) => {
-                self.toggle_launcher();
+            (Key::Space | Key::Char('a'), false) => {
+                self.host.show("assistant", out);
                 None
             }
             (Key::Enter, false) => {
                 self.host.open("terminal", None, out);
-                None
-            }
-            (Key::Char('a'), false) => {
-                self.host.show("assistant", out);
                 None
             }
             (Key::Char('q'), false) => focused.map(Cmd::Close),

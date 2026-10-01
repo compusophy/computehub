@@ -1,9 +1,9 @@
-//! Vector icons: the `icons` crate's [`Glyph`]s drawn crisp at any size
-//! through [`TextSystem::draw_vector`], alone or on an app tile in a theme's
-//! colors ([`Theme::icon_colors`]).
+//! Vector icons: the `icons` crate's [`Glyph`]s (and `.app` files' [`sigil`]s) drawn crisp at
+//! any size through [`TextSystem::draw_vector`], alone or on an app tile in a theme's colors
+//! ([`Theme::icon_colors`]).
 
 use gfx::{DrawList, RectF, Rgba};
-pub use icons::{Glyph, MARK_HOLE, PHI, Point, outline, rings};
+pub use icons::{Glyph, MARK_HOLE, PHI, Point, outline, rings, sigil};
 use text::TextSystem;
 
 use crate::Theme;
@@ -24,13 +24,40 @@ pub fn tile(
     hue: Rgba,
     theme: &Theme,
 ) {
-    let (d, side) = (text.dpr(), (r.w.min(r.h) * text.dpr()).round());
-    let (at, s) = (|c: f32| (c * d - side / 2.0).round() / d, side / d);
-    let t = RectF::new(at(r.x + r.w / 2.0), at(r.y + r.h / 2.0), s, s);
+    let t = square(text, r);
     // The mark is never on a tile: its dots in the theme's ink, on whatever is under them.
     if g == Glyph::Mark {
-        return draw(list, text, t.inset(s * 0.09), g, theme.text);
+        return draw(list, text, t.inset(t.w * 0.09), g, theme.text);
     }
+    let ink = plate(list, text, t, hue, theme);
+    draw(list, text, t.inset(t.w * (1.0 - 1.0 / PHI) / 2.0), g, ink);
+}
+
+/// A `.app` file's tile: [`tile`]'s, with the [`sigil`] of `seed` (a hash of its name) as the
+/// glyph.
+pub fn sigil_tile(
+    list: &mut DrawList,
+    text: &mut TextSystem,
+    r: RectF,
+    seed: u32,
+    hue: Rgba,
+    theme: &Theme,
+) {
+    let t = square(text, r);
+    let ink = plate(list, text, t, hue, theme);
+    text.draw_seeded(list, t.inset(t.w * (1.0 - 1.0 / PHI) / 2.0), seed, sigil, ink);
+}
+
+/// The square of side `min(r.w, r.h)` centered in `r`, on device pixels.
+fn square(text: &TextSystem, r: RectF) -> RectF {
+    let (d, side) = (text.dpr(), (r.w.min(r.h) * text.dpr()).round());
+    let (at, s) = (|c: f32| (c * d - side / 2.0).round() / d, side / d);
+    RectF::new(at(r.x + r.w / 2.0), at(r.y + r.h / 2.0), s, s)
+}
+
+/// A tile's plate at `t` for `hue`; its glyph's ink.
+fn plate(list: &mut DrawList, text: &TextSystem, t: RectF, hue: Rgba, theme: &Theme) -> Rgba {
+    let s = t.w;
     let ([top, bottom, ink], radius, style) = (theme.icon_colors(hue), s / PHI.powi(3), theme.icon);
     if style.shadow > 0 {
         let a = u16::from(theme.shadow.3) * u16::from(style.shadow.min(100)) / 100;
@@ -41,6 +68,6 @@ pub fn tile(
     } else {
         list.gradient(t, radius, top, bottom, 0.0);
     }
-    list.border(t, radius, 1.0 / d, theme.border);
-    draw(list, text, t.inset(s * (1.0 - 1.0 / PHI) / 2.0), g, ink);
+    list.border(t, radius, 1.0 / text.dpr(), theme.border);
+    ink
 }

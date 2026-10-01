@@ -34,7 +34,8 @@ devices. Author handle: compusophy.
    fonts ≤60 KB (the rest of `dist/fonts/`), system ≤40 KB (`dist/cpu/`),
    programs ≤64 KB (`dist/bin/`), licenses not counted;
    first frame ≤100 ms after the wasm arrives; idle draws zero frames
-   (a frame only on input or while an animation runs).
+   (a frame only on input or while an animation runs; one opt-out
+   exception: the living grain, 8/s by timer).
 7. **Every failure is coded and spanned** in the language crates; never a
    wrong-but-clean result. `#![forbid(unsafe_code)]` in every crate.
 8. **Designed for computehub now:** determinism, fuel + receipts, messages
@@ -64,8 +65,8 @@ crates/
   studio/    Studio (wasip1 GUI program): make apps by describing them, live
   assistant/ the Assistant (wasip1 GUI program): chat; its AI code Studio shares
   uiwire/    remote UI protocol: GUI programs send widget trees, get events
-  host/      wm + one app per window (placement); motion, frame geometry, search
-  home/      dock, everything bar + launcher panel, desktop icons, menus, touch
+  host/      wm + one app per window (placement); motion, frame geometry
+  home/      the home grid (every app), AI button + dock strip, menus, touch
   shell/     the desktop: top bar, window chrome, keys; wires host + home (no web deps)
   platform/  the browser boundary: canvas, WebGL2, input, textarea, fetch,
              frames on demand, localStorage, workers, beacon
@@ -110,15 +111,14 @@ cargo run -p serve --release -- dist 8080   # preview; --plain: no COOP/COEP
 ```
 
 `?debug` in the page URL marks each frame (`performance.mark("frame")`):
-an idle desktop adds none.
+an idle desktop adds none but the living grain's.
 
 Fonts load in three groups, each with its budget: **boot** (Inter Regular,
-`include_bytes!` in `os`; the first frame needs only it), **deferred** (`os`
-fetches `fonts/deferred/*` after the first frame; until then bold draws as
-Regular and mono cells stay empty), **lazy** (the shell fetches
-`fonts/symbols-*.ttf` when a terminal first opens). `build-web.sh` copies
-them from `assets/fonts/{deferred,lazy}/` and the OFL texts to
-`dist/licenses/`. Regenerating the subsets: `assets/fonts/README.md`.
+`include_bytes!` in `os`), **deferred** (`fonts/deferred/*`, fetched after
+the first frame; until then bold draws as Regular, mono cells stay empty),
+**lazy** (`fonts/symbols-*.ttf`, when a terminal first opens).
+`build-web.sh` copies them and the OFL texts (`dist/licenses/`); subsets:
+`assets/fonts/README.md`.
 
 ## Safety (the owner runs unattended; never trigger an approval prompt)
 
@@ -137,7 +137,7 @@ them from `assets/fonts/{deferred,lazy}/` and the OFL texts to
   on device pixels.
 - Measure the boot budget (`build-web.sh`, `budget.sh`) after any change
   that ships. Avoid core's Unicode tables
-  (`char::to_lowercase` and friends; see `host::search::lower`) and float
+  (`char::to_lowercase` and friends; see `host::upper`) and float
   formatting in shipped code.
 - Git: plain `git commit`, no user.name/email overrides. Authors:
   `compusophy`. No email address in any file.

@@ -1,20 +1,22 @@
-//! Settings: the themes, the AI model, and what gets reported.
+//! Settings: the themes and the living grain, the AI model, and what gets reported.
 
 use gfx::RectF;
+use ui::REPORTS;
 use ui::icon::Glyph;
-use ui::{AI_MODEL, App, AppEvent, AppIcon, CARD_PAD, Cx, PAD, RADIUS_LG, RADIUS_SM, REPORTS};
+use ui::{AI_MODEL, App, AppEvent, AppIcon, CARD_PAD, Cx, GRAIN, PAD, RADIUS_LG, RADIUS_SM};
 use ui::{SPACING, Sense, THEMES, Theme, Ui, WidgetId};
 
 use crate::kit::{self, Scroll};
 
 const PAGES: [&str; 3] = ["Appearance", "AI", "Privacy"];
 /// Widget ids: page `i`'s nav item is `NAV + i`, theme card `i` `THEME + i`, model `i` `MODEL + i`;
-/// the reports switch and the feedback line.
+/// the reports switch, the feedback line and the grain's switch.
 const NAV: u32 = 1;
 const THEME: u32 = 10;
 const MODEL: u32 = 20;
 const SWITCH: u32 = 30;
 const FEEDBACK: u32 = 31;
+const LIVING: u32 = 32;
 /// The models on offer as (name, what it is best at, the value stored), the first the default.
 const MODELS: [(&str, &str, &str); 2] =
     [("GLM 5.3", "best answers", "zai/glm-5.3"), ("GLM 5.3 Flash", "fastest", "zai/glm-5.3-flash")];
@@ -26,6 +28,9 @@ compusophyOS itself crashes) a short report goes to compusophy: what failed, the
 browser and screen size, the theme, the apps open and the last 50 events, such as \u{201c}ai \
 503\u{201d}. Never your files, your prompts or anything you typed.";
 const TYPED: &str = "Feedback you write always sends: you choose what it says, and when.";
+const GRAIN_LABEL: &str = "Living grain";
+const GRAIN_NOTE: &str =
+    "The backdrop's grain shifts, slightly. It stays still when your device asks for less motion.";
 /// The nav column's width, and the narrowest window with one (else tabs).
 const NAV_W: f32 = 172.0;
 const WIDE: f32 = 520.0;
@@ -44,9 +49,9 @@ const ROW_MAX: f32 = 440.0;
 const CHECK: &str = "✓";
 
 /// Settings: Appearance (each of [`THEMES`] as a miniature desktop, the default first; a click
-/// applies it), AI (a note on the free AI, and the models as rows; a click picks one, which the
-/// host stores) and Privacy (the automatic reports switch, what a report holds, a way to send
-/// feedback), by nav column or, narrow, tabs; tall pages scroll.
+/// applies it; and the living grain's switch), AI (a note on the free AI, and the models as rows;
+/// a click picks one, which the host stores) and Privacy (the automatic reports switch, what a
+/// report holds, a way to send feedback), by nav column or, narrow, tabs; tall pages scroll.
 #[derive(Debug, Default)]
 pub struct Settings {
     /// The page shown, an index into [`PAGES`].
@@ -58,6 +63,8 @@ pub struct Settings {
     /// host last told (it hears a change of ours only from the page, later).
     pub(crate) reports_off: bool,
     told: Option<bool>,
+    /// Whether the grain is still, as [`Cx::grain`] last said.
+    pub(crate) still: bool,
 }
 
 impl App for Settings {
@@ -72,7 +79,7 @@ impl App for Settings {
         let top = ui.text_system().snap(view.y + PAD - self.scroll.y);
         ui.set_cursor(view.x + left, top);
         let bottom = match self.page {
-            0 => appearance(ui),
+            0 => appearance(ui, !self.still),
             1 => self.ai_page(ui),
             _ => self.privacy(ui),
         };
@@ -83,7 +90,9 @@ impl App for Settings {
 
     fn event(&mut self, ev: AppEvent, cx: &mut Cx<'_>) -> bool {
         let fresh = self.model != cx.ai.model || self.told != Some(cx.ai.reports_off);
+        let fresh = fresh || self.still == cx.grain;
         self.model.clone_from(&cx.ai.model);
+        self.still = !cx.grain;
         if self.told != Some(cx.ai.reports_off) {
             (self.told, self.reports_off) = (Some(cx.ai.reports_off), cx.ai.reports_off);
         }
@@ -121,6 +130,9 @@ impl Settings {
         } else if id == SWITCH {
             self.reports_off = !self.reports_off;
             cx.pref(REPORTS, if self.reports_off { "off" } else { "on" });
+        } else if id == LIVING {
+            cx.pref(GRAIN, if self.still { "on" } else { "off" });
+            self.still = !cx.grain;
         } else if id == FEEDBACK {
             cx.open("feedback");
             return false;
@@ -162,22 +174,7 @@ impl Settings {
     fn privacy(&self, ui: &mut Ui<'_>) -> f32 {
         let t = ui.theme();
         ui.heading("Privacy");
-        let (r, (x, y)) = (ui.rect(), ui.cursor());
-        let w = (r.x + r.w - PAD - x).min(ROW_MAX);
-        let row = ui.snapped(RectF::new(x, y, w, ROW_H));
-        let id = WidgetId(SWITCH);
-        let (hover, down) = kit::pointer(ui, id);
-        let (fill, edge) = kit::card_colors(t, hover, down);
-        kit::raised(ui, row, RADIUS_LG, fill, edge);
-        let label = t.body();
-        let base = kit::cap_base(ui, row.y, row.h, label);
-        let room = row.w - 2.0 * CARD_PAD - 34.0 - 13.0;
-        let shown = ui.text_system().ellipsize(REPORT, label, room);
-        ui.text(row.x + CARD_PAD, base, &shown, label);
-        kit::switch(ui, row.inset(CARD_PAD), !self.reports_off);
-        ui.hit(id, row, Sense::Click);
-        ui.advance_to(row.y + row.h);
-        ui.space(SPACING);
+        let w = switch_row(ui, SWITCH, REPORT, !self.reports_off);
         ui.wrapped(HOLDS, t.small());
         ui.wrapped(TYPED, t.small());
         let (x, y) = ui.cursor();
@@ -217,6 +214,28 @@ impl Settings {
         let y = bar.y + bar.h + 2.0;
         RectF::new(r.x, y, r.w, r.y + r.h - y)
     }
+}
+
+/// A card at the cursor, as wide as the page allows up to [`ROW_MAX`]: `label` and a switch,
+/// `on` or off, that widget `id` flips; its width.
+fn switch_row(ui: &mut Ui<'_>, id: u32, label: &str, on: bool) -> f32 {
+    let (t, r, (x, y)) = (ui.theme(), ui.rect(), ui.cursor());
+    let w = (r.x + r.w - PAD - x).min(ROW_MAX);
+    let row = ui.snapped(RectF::new(x, y, w, ROW_H));
+    let id = WidgetId(id);
+    let (hover, down) = kit::pointer(ui, id);
+    let (fill, edge) = kit::card_colors(t, hover, down);
+    kit::raised(ui, row, RADIUS_LG, fill, edge);
+    let style = t.body();
+    let base = kit::cap_base(ui, row.y, row.h, style);
+    let room = row.w - 2.0 * CARD_PAD - 34.0 - 13.0;
+    let shown = ui.text_system().ellipsize(label, style, room);
+    ui.text(row.x + CARD_PAD, base, &shown, style);
+    kit::switch(ui, row.inset(CARD_PAD), on);
+    ui.hit(id, row, Sense::Click);
+    ui.advance_to(row.y + row.h);
+    ui.space(SPACING);
+    w
 }
 
 /// A segmented control in `bar`: `labels` as items `id`, `id + 1`, ..., item `on` lit.
@@ -283,8 +302,8 @@ fn model_row(ui: &mut Ui<'_>, i: usize, row: RectF, (name, best): (&str, &str), 
     ui.hit(id, row, Sense::Click);
 }
 
-/// The Appearance page from the cursor; returns its bottom.
-fn appearance(ui: &mut Ui<'_>) -> f32 {
+/// The Appearance page from the cursor, the grain's switch `on` or off; returns its bottom.
+fn appearance(ui: &mut Ui<'_>, on: bool) -> f32 {
     ui.heading("Appearance");
     ui.small("Pick a theme. The whole desktop follows at once.");
     let (r, (x, y)) = (ui.rect(), ui.cursor());
@@ -306,9 +325,11 @@ fn appearance(ui: &mut Ui<'_>) -> f32 {
         theme_card(ui, i, card, &THEMES[i], ph);
     }
     let rows = THEMES.len().div_ceil(cols) as f32;
-    let bottom = y + rows * ch + (rows - 1.0) * CARD_GAP;
-    ui.advance_to(bottom);
-    bottom
+    ui.advance_to(y + rows * ch + (rows - 1.0) * CARD_GAP);
+    ui.space(CARD_GAP);
+    switch_row(ui, LIVING, GRAIN_LABEL, on);
+    ui.wrapped(GRAIN_NOTE, ui.theme().small());
+    ui.cursor().1
 }
 
 /// Theme card `i`: `th`'s miniature desktop, `ph` tall, over its name.
@@ -375,19 +396,15 @@ fn miniature(ui: &mut Ui<'_>, p: RectF, th: &Theme, under: gfx::Rgba) {
     let button = ui.snapped(at);
     ui.fill(button, bh / 2.0, th.accent);
     ui.border(win, 4.0, line, th.border);
-    // The dock: a glass pill of app colors.
-    let dots = [kit::TERMINAL, kit::STUDIO, kit::SETTINGS, kit::WELCOME];
-    let (dot, gap) = ((7.0 * u).round().max(4.0), (4.0 * u).round().max(2.0));
-    let (dw, dh) = (4.0 * dot + 3.0 * gap + 2.0 * gap + 2.0, dot + 2.0 * gap);
-    let at = RectF::new(p.x + (p.w - dw) / 2.0, p.y + p.h - dh - (0.06 * p.h).round(), dw, dh);
-    let dock = ui.snapped(at);
-    ui.fill(dock, dh / 2.0, th.glass);
-    ui.border(dock, dh / 2.0, line, th.border);
-    for (k, icon) in dots.iter().enumerate() {
-        let x = dock.x + gap + 1.0 + k as f32 * (dot + gap);
-        let r = ui.snapped(RectF::new(x, dock.y + gap, dot, dot));
-        ui.fill(r, (dot * 0.3).round(), icon.hue);
-    }
+    // The AI button: a round of glass, a dot of ink in it.
+    let side = (11.0 * u).round().max(6.0);
+    let at =
+        RectF::new(p.x + (p.w - side) / 2.0, p.y + p.h - side - (0.06 * p.h).round(), side, side);
+    let button = ui.snapped(at);
+    ui.fill(button, side / 2.0, th.glass);
+    ui.border(button, side / 2.0, line, th.border);
+    let dot = ui.snapped(button.inset((side * 0.36).round()));
+    ui.fill(dot, dot.w / 2.0, th.text);
     ui.pop_clip();
     let k = ui.px((radius * 0.5).ceil());
     ui.border(p.inset(-k), radius + k, k, under);

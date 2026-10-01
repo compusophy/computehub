@@ -1,8 +1,8 @@
 //! The compusophyOS desktop: floating windows around a [`host::Host`], which runs one
-//! [`ui::App`] per window, and the home screen around them (the `home` crate): a top bar, the
-//! dock of favorites, the everything bar under it with the launcher's panel above it, desktop
-//! icons, context menus and touch. No browser: [`Shell`] turns [`Input`] into wm commands and
-//! app events, draws into a [`gfx::DrawList`] and hands back what only the platform can do in a
+//! [`ui::App`] per window, and the home screen around them (the `home` crate): a top bar, every
+//! app as an icon behind the windows, the AI button at the bottom between the dock's wings,
+//! context menus and touch. No browser: [`Shell`] turns [`Input`] into wm commands and app
+//! events, draws into a [`gfx::DrawList`] and hands back what only the platform can do in a
 //! [`Response`].
 //!
 //! Logical pixels, origin top-left; non-finite sizes and positions count as 0. Windows live in the
@@ -12,10 +12,13 @@
 //! [`Input::Resize`] that makes it so, and the shell sets the `seen` preference.
 //!
 //! The pointer: button 0 presses, button 2 (or a finger held still for 500 ms) opens a context
-//! menu; a finger that travels over a window's content (or the launcher) scrolls it as the wheel
-//! does, and flings it on when it lifts moving. Bindings, pointer rules and motion are those of
+//! menu; a finger that travels over a window's content scrolls it as the wheel does, and flings
+//! it on when it lifts moving. Icons move: a mouse drags one past 4 px; a finger held on one for
+//! 500 ms picks it up, then moving it 8 px drags it, and lifting it unmoved opens its menu
+//! instead. A mouse dragged on the bare desktop draws a box that selects the icons it touches;
+//! dragging a selected icon carries them all. Bindings, pointer rules and motion are those of
 //! `DESIGN.md`. While anything moves (or a held finger waits to long-press), [`Shell::draw`] asks
-//! for the next frame; otherwise none.
+//! for the next frame; otherwise none, but for the living grain's ([`Shell::grain_in`]).
 
 #![forbid(unsafe_code)]
 
@@ -23,9 +26,8 @@ mod bar;
 mod chrome;
 mod desktop;
 mod dock;
-mod icons;
+mod grid;
 mod keys;
-mod launcher;
 mod menus;
 mod motion;
 mod touch;
@@ -37,17 +39,17 @@ use std::mem;
 
 use desktop::{Grab, Target};
 use gfx::{DrawList, RectF, Rgba};
-use home::dock::Shelf;
-use host::Host;
-use host::search::Entry;
+use host::{Entry, Host};
 use ui::{AppEvent, TextSystem, WidgetId};
 use vfs::Vfs;
 use wm::{Cmd, Rect, WinId, Wm};
 
-/// The top bar's height, and what the work area leaves free at the bottom for the dock and the
-/// everything bar.
+/// The top bar's height, and what the work area leaves free at the bottom for the AI button and
+/// the dock.
 pub const BAR_H: f32 = 44.0;
 pub const DOCK_CLEAR: f32 = home::CLEAR;
+/// How long one pattern of the living grain shows: 8 a second.
+pub const GRAIN_MS: f64 = 125.0;
 
 type Widget = (WinId, WidgetId);
 /// The screen before a keyboard shortened it; each free window then, its rect then, and where
@@ -55,13 +57,16 @@ type Widget = (WinId, WidgetId);
 type Kept = ((f32, f32), Vec<(WinId, Rect, Rect)>);
 
 /// What the page keeps for the shell between visits: the theme's name (else the default, Mono),
-/// the dock's favorites as stored (the `dock` preference; `None` for the default) and whether
-/// Welcome was shown on a first visit (the `seen` preference).
+/// the dock's favorites and the home screen's order as stored (the `dock` and `home`
+/// preferences; `None` for none), whether Welcome was shown on a first visit (the `seen`
+/// preference) and whether the grain is still (the `grain` preference `"off"`).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Prefs {
     pub theme: String,
     pub dock: Option<String>,
+    pub home: Option<String>,
     pub seen: bool,
+    pub grain_off: bool,
 }
 
 /// Everything whose change means a new frame, but the clock.
@@ -71,10 +76,12 @@ struct Visuals {
     buttons: [Option<Target>; 2],
     widgets: [Option<Widget>; 2],
     wins: usize,
-    launcher: (bool, bool, usize, usize, usize),
     zone: Option<host::frame::Zone>,
     menu: Option<(RectF, Option<usize>)>,
-    home: (usize, usize),
+    home: (usize, usize, usize),
+    /// Carried icons: lifted, their slot, the pointer; the selection box's far corner.
+    carry: Option<(bool, usize, (f32, f32))>,
+    lasso: Option<(f32, f32)>,
 }
 
 /// The desktop: the host (the wm, text, files, apps and theme) and the home screen, chrome,
@@ -99,14 +106,20 @@ pub struct Shell {
     ime: Option<(Option<WinId>, bool)>,
     cursor: Cursor,
     clock: Option<LocalTime>,
-    /// The dock: the favorites, the apps it shows (favorites first), where they sit.
+    /// The dock: the favorites, the apps it shows (favorites first), the strip they sit on.
     favs: Vec<String>,
     dock: Vec<dock::Item>,
-    shelf: Shelf,
-    /// The desktop's icons, and the [`Vfs::generation`] they were listed at.
+    strip: home::dock::Strip,
+    /// The home screen's icons in the person's order (their names), the [`Vfs::generation`]
+    /// they were listed at, the icons selected, carried, and the selection box's corner.
     icons: Vec<Entry>,
+    order: Vec<String>,
     listed: Option<u64>,
-    launcher: launcher::Launcher,
+    selected: Vec<String>,
+    carry: Option<grid::Carry>,
+    lasso: Option<(f32, f32)>,
+    /// Whether the page asks for reduced motion (the grain stays still).
+    reduced: bool,
     /// The open context menu.
     menu: Option<menus::Open>,
     /// A finger down (and what it scrolls), and content flinging on.
@@ -129,12 +142,15 @@ impl Shell {
         let size = (coord(w).max(0.0), coord(h).max(0.0));
         let host = Host::new(Wm::new(work_area(size)), text, vfs, reg, &prefs.theme);
         let favs = home::dock::favorites(prefs.dock.as_deref());
+        let order = home::names(prefs.home.as_deref().unwrap_or(""));
         let mut shell = Shell { host, pending: Vec::new(), size, pointer: None, hover: None,
             armed: None, app_hover: None, app_press: None, down: None, grab: None, last_title: None,
             ime: None, cursor: Cursor::Default, clock: None, favs, dock: Vec::new(),
-            shelf: Shelf::default(), icons: Vec::new(), listed: None, launcher: Default::default(),
-            menu: None, touch: None, fling: None, motion: Default::default(), instant: false,
+            strip: Default::default(), icons: Vec::new(), order, listed: None,
+            selected: Vec::new(), carry: None, lasso: None, reduced: false, menu: None,
+            touch: None, fling: None, motion: Default::default(), instant: false,
             startup: !prefs.seen, kept: None, scratch: DrawList::new() };
+        shell.host.grain = !prefs.grain_off;
         let mut out = Response::default();
         shell.start(&mut out);
         shell.settle(&mut out);
@@ -183,6 +199,33 @@ impl Shell {
     /// The frame's clear color.
     pub fn clear_color(&self) -> Rgba {
         self.host.theme.current().base
+    }
+
+    /// Whether the page asks for reduced motion, which keeps the grain still.
+    pub fn set_reduced_motion(&mut self, reduced: bool) {
+        self.reduced = reduced;
+    }
+
+    /// The grain's pattern now: a new one each [`GRAIN_MS`] while it lives (the `grain`
+    /// preference on, motion not reduced, a theme with grain), else always the first.
+    fn grain_seed(&self) -> u32 {
+        match self.grain_lives() {
+            true => (self.host.now_ms / GRAIN_MS) as u32 % 4096 + 1,
+            false => 0,
+        }
+    }
+
+    fn grain_lives(&self) -> bool {
+        self.host.grain && !self.reduced && self.host.theme.current().grain > 0
+    }
+
+    /// While the grain lives, the ms until its next pattern: when an idle desktop wants its next
+    /// frame (by a timer, never a frame loop; nothing else redraws for it).
+    pub fn grain_in(&self) -> Option<u32> {
+        // Not `rem_euclid`: its float remainder links in 128-bit integer math.
+        let now = self.host.now_ms;
+        let next = GRAIN_MS * (now / GRAIN_MS).floor() + GRAIN_MS - now;
+        self.grain_lives().then_some((next.ceil() as u32).max(1))
     }
 
     /// The AI settings apps see (from the page's storage).
@@ -235,10 +278,6 @@ impl Shell {
         self.hold(&mut out);
         match input {
             Input::Key { key, mods } => self.key(key, mods, &mut out),
-            Input::Text(s) if self.launcher.focus => {
-                self.typed(&s);
-                out.consumed = true;
-            }
             Input::Text(s) => {
                 if let Some(win) = self.host.focused_app().filter(|_| !s.is_empty()) {
                     self.host.deliver(win, AppEvent::Text(s), &mut out);
@@ -248,6 +287,8 @@ impl Shell {
             Input::PointerMove { .. } => {
                 self.finger(&mut out);
                 self.drag_to();
+                self.carry_to();
+                self.lasso_to();
                 self.point_menu();
             }
             Input::PointerDown { button: 0, touch, .. } => self.press(touch, &mut out),
@@ -256,7 +297,10 @@ impl Shell {
             }
             Input::PointerUp { button, .. } => self.release(button == 0, &mut out),
             Input::PointerDown { .. } => {}
-            Input::PointerLeave => self.touch = None,
+            Input::PointerLeave => {
+                (self.touch, self.lasso) = (None, None);
+                self.drop_icons(false);
+            }
             Input::Wheel { x, y, dy } => self.wheel(coord(x), coord(y), dy, &mut out),
             Input::Resize { w, h } => {
                 self.resize((coord(w).max(0.0), coord(h).max(0.0)));
@@ -331,13 +375,13 @@ impl Shell {
         for _ in 0..2 {
             for _ in 0..2 {
                 list.clear();
-                theme.draw_backdrop(list, RectF::new(0.0, 0.0, self.size.0, self.size.1));
-                self.draw_icons(list, &theme);
+                let screen = RectF::new(0.0, 0.0, self.size.0, self.size.1);
+                theme.draw_backdrop(list, screen, self.grain_seed() as f32);
+                self.draw_icons(list, &theme, now);
                 self.draw_windows(list, &theme, now);
                 self.draw_dock(list, &theme);
                 self.draw_bar(list, &theme);
-                self.draw_launcher(list, &theme, now);
-                self.draw_field(list, &theme);
+                self.draw_carried(list, &theme);
                 self.draw_menu(list, &theme);
                 self.draw_tooltip(list, &theme, now);
                 if !self.host.text.take_atlas_reset() {
@@ -359,35 +403,34 @@ impl Shell {
     /// Brings the apps up to date with the wm, then the shell with the apps and the files.
     fn settle(&mut self, out: &mut Response) {
         self.host.settle(out);
-        if mem::take(&mut self.host.launcher) && !self.launcher.open {
-            self.show_launcher();
-        }
         let h = &self.host;
         (self.app_hover, self.app_press) =
             (self.app_hover.filter(|w| h.live(w.0)), self.app_press.filter(|w| h.live(w.0)));
         self.dock = self.host.dock_apps(&self.favs);
         let favs = self.dock.iter().take_while(|d| self.favs.contains(&d.0)).count();
-        let top = home::field::rect(self.size).y - home::dock::GAP - home::dock::H;
-        self.shelf = Shelf::new(favs, self.dock.len() - favs, self.size.0, top);
-        let listed = self.host.vfs.generation();
+        self.strip = home::dock::Strip::new(favs, self.dock.len() - favs, self.size);
+        let (listed, first) = (self.host.vfs.generation(), self.listed.is_none());
         if self.listed.replace(listed) != Some(listed) {
-            self.icons = self.host.desktop();
+            self.list_icons(first);
         }
         self.sync();
     }
 
     fn visuals(&self) -> Visuals {
         let button = |t: Option<Target>| t.filter(|t| t.is_button());
-        let (l, s) = (&self.launcher, &self.launcher.search);
+        let carry =
+            self.carry.as_ref().map(|c| (c.lifted, c.slot, self.pointer.unwrap_or_default()));
+        let lasso = self.lasso.and(self.pointer);
         Visuals {
             wm: self.host.wm().state_hash(),
             buttons: [button(self.hover), self.armed],
             widgets: [self.app_hover, self.app_press],
             wins: self.host.wins.len(),
-            launcher: (l.open, l.focus, s.query.len(), s.sel, s.first),
             zone: if let Some(Grab::Move { zone, .. }) = self.grab { zone } else { None },
             menu: self.menu.as_ref().map(|m| (m.0.rect, m.0.sel)),
-            home: (self.dock.len() + self.favs.len(), self.icons.len()),
+            home: (self.dock.len() + self.favs.len(), self.icons.len(), self.selected.len()),
+            carry,
+            lasso,
         }
     }
 
@@ -413,7 +456,7 @@ impl Shell {
         out.effects = mem::take(&mut self.pending);
         let focus = self.host.focused_app();
         let app = focus.and_then(|w| self.host.win(w));
-        let wants = self.launcher.focus || app.is_some_and(|w| w.app.wants_text_input());
+        let wants = app.is_some_and(|w| w.app.wants_text_input());
         if self.ime != Some((focus, wants)) {
             self.ime = Some((focus, wants));
             out.text_input = Some(wants);

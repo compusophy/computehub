@@ -22,10 +22,6 @@ pub const RADIUS_SM: f32 = 8.0;
 pub const RADIUS_LG: f32 = 12.0;
 /// Padding inside a card.
 pub const CARD_PAD: f32 = 16.0;
-pub const TILE_W: f32 = 80.0;
-/// Height of a tile: icon, label and their margins.
-pub const TILE_H: f32 = 84.0;
-pub const TILE_ICON: f32 = 44.0;
 const BUTTON_PAD_X: f32 = 14.0;
 const FIELD_PAD_X: f32 = 12.0;
 /// Cap height of Inter and JetBrains Mono in ems: one-line controls center it.

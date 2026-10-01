@@ -22,7 +22,7 @@ pub use text::{ATLAS_SIZE, Editor, FontId, MAX_FALLBACKS, TextStyle, TextSystem}
 pub use theme::{Glow, IconStyle, THEMES, Theme, theme};
 pub use widgets::{BUTTON_H, CARD_PAD, FIELD_H, PAD, RADIUS_LG, RADIUS_SM};
 pub use widgets::{Hit, Sense, Ui, UiState, WidgetId, button_width, hit_test};
-pub use widgets::{SPACING, SPACING_LG, SPACING_MD, TILE_H, TILE_ICON, TILE_W};
+pub use widgets::{SPACING, SPACING_LG, SPACING_MD};
 
 /// What every window hosts.
 pub trait App {
@@ -40,7 +40,7 @@ pub trait App {
     fn preferred_size(&self) -> Option<(f32, f32)> {
         None
     }
-    /// Its icon on launchers, docks and tiles.
+    /// Its icon on the home screen, the dock and tiles.
     fn icon(&self) -> AppIcon {
         AppIcon::default()
     }
@@ -105,7 +105,7 @@ pub enum AppEvent {
     /// A process this window owns has console output, exited or changed
     /// mode, or homed has a new note: see [`Cx::kernel`].
     Io,
-    /// A prompt from the desktop's everything bar, as if typed and sent.
+    /// A prompt for the Assistant, as if typed and sent.
     Ask(String),
 }
 
@@ -185,6 +185,8 @@ pub enum Request {
 pub const AI_MODEL: &str = "ai.model";
 /// The preference that is `"off"` when automatic error reports are ([`AiStatus::reports_off`]).
 pub const REPORTS: &str = "reports";
+/// The preference that is `"off"` when the backdrop's grain is still ([`Cx::grain`]).
+pub const GRAIN: &str = "grain";
 
 /// What the page tells apps: the model the AI answers with, and how its reports fare.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -198,30 +200,35 @@ pub struct AiStatus {
 }
 
 /// What an app can reach while handling an event: the filesystem, the kernel (processes it spawns
-/// are owned by its window), the clock (milliseconds on the page clock), the AI settings, and
-/// requests to the shell.
+/// are owned by its window), the clock (milliseconds on the page clock), the AI settings, whether
+/// the backdrop's grain lives (the [`GRAIN`] preference), and requests to the shell.
 #[derive(Debug)]
 pub struct Cx<'a> {
     pub vfs: &'a mut vfs::Vfs,
     pub kernel: &'a mut kernel::Kernel,
     pub now_ms: f64,
     pub ai: AiStatus,
+    pub grain: bool,
     requests: Vec<Request>,
 }
 
 impl<'a> Cx<'a> {
     pub fn new(vfs: &'a mut vfs::Vfs, kernel: &'a mut kernel::Kernel, now_ms: f64) -> Cx<'a> {
-        Cx { vfs, kernel, now_ms, ai: AiStatus::default(), requests: Vec::new() }
+        let (ai, requests) = (AiStatus::default(), Vec::new());
+        Cx { vfs, kernel, now_ms, ai, grain: true, requests }
     }
 
     /// Sets a preference ([`Request::Pref`]); for [`AI_MODEL`] and [`REPORTS`], [`Cx::ai`]
-    /// follows at once.
+    /// follows at once, as [`Cx::grain`] does for [`GRAIN`].
     pub fn pref(&mut self, key: &str, value: &str) {
         if key == AI_MODEL {
             self.ai.model = value.to_string();
         }
         if key == REPORTS {
             self.ai.reports_off = value == "off";
+        }
+        if key == GRAIN {
+            self.grain = value != "off";
         }
         self.requests.push(Request::Pref { key: key.to_string(), value: value.to_string() });
     }

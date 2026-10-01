@@ -10,8 +10,8 @@ use crate::desktop::Target;
 use crate::{Effect, Response, Shell};
 
 /// What a menu item does to the menu's app: open a new window of it, show it (its window, else a
-/// new one), keep it in the dock (or not), close its windows; or focus the everything bar, show
-/// a built-in app, open a terminal, or command the menu's window (minimize, toggle maximize,
+/// new one), add it to the dock (or remove it), close its windows; or show the Assistant, show a
+/// built-in app, open a terminal, or command the menu's window (minimize, toggle maximize,
 /// close).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum Act {
@@ -49,14 +49,18 @@ impl Shell {
         out.redraw |= self.menu.is_some();
     }
 
-    /// The menu for `hit` at `at` (the desktop's, an app's for an icon, a result or a dock
-    /// tile, or a window's), with its app and window.
+    /// The menu for `hit` at `at` (the desktop's, the AI button's, an app's for an icon or a
+    /// dock tile, or a window's), with its app and window.
     fn menu_for(&mut self, hit: Target, at: (f32, f32), touch: bool) -> Option<Open> {
         let menu = |s: &mut Shell, items: &[Item<Act>]| {
             Menu::new(items, at, s.size, touch, &mut s.host.text)
         };
         let (name, running) = match hit {
             Target::Desktop => return Some((menu(self, &DESKTOP), String::new(), None)),
+            Target::Ai => {
+                let ask = [("Ask the Assistant", "Alt+Space", Some(Act::Ask))];
+                return Some((menu(self, &ask), String::new(), None));
+            }
             Target::Title(w) | Target::Ctl(w, _) => {
                 self.host.apply(Cmd::Focus(w));
                 let max = self.placement(w).is_some_and(|p| p.state == State::Maximized);
@@ -70,7 +74,6 @@ impl Shell {
                 return Some((menu(self, items), String::new(), Some(w)));
             }
             Target::Icon(i) => (self.icons.get(i)?.name.clone(), false),
-            Target::Item(k) => (self.launcher.search.get(k)?.name.clone(), false),
             Target::Dock(i) => self.dock.get(i).map(|d| (d.0.clone(), !d.2.is_empty()))?,
             _ => return None,
         };
@@ -82,7 +85,7 @@ impl Shell {
             },
             match kept {
                 true => ("Remove from dock", "", Some(Act::Keep(false))),
-                false => ("Keep in dock", "", Some(Act::Keep(true))),
+                false => ("Add to dock", "", Some(Act::Keep(true))),
             },
             ("Close", "", Some(Act::Close)),
         ];
@@ -93,9 +96,6 @@ impl Shell {
     pub(crate) fn choose(&mut self, i: Option<usize>, out: &mut Response) {
         let Some((menu, name, win)) = self.menu.take() else { return };
         let Some(act) = i.and_then(|i| menu.act(i)) else { return };
-        if matches!(act, Act::Open | Act::Show | Act::Go(_) | Act::Terminal) {
-            self.hide_launcher();
-        }
         match act {
             Act::Open => self.host.open(&name, None, out),
             Act::Show => self.host.show(&name, out),
@@ -105,7 +105,7 @@ impl Shell {
                     self.host.apply(Cmd::Close(w));
                 }
             }
-            Act::Ask => self.focus_field(),
+            Act::Ask => self.host.show("assistant", out),
             Act::Go(app) => self.host.show(app, out),
             Act::Terminal => self.host.open("terminal", None, out),
             Act::Wm(i) => {
@@ -116,17 +116,10 @@ impl Shell {
         }
     }
 
-    /// Keeps `name` in the dock or removes it, saving the favorites (names joined by commas)
-    /// if they changed.
+    /// Adds `name` to the dock or removes it, saving the favorites if they changed.
     pub(crate) fn keep(&mut self, name: &str, keep: bool) {
         if home::dock::pin(&mut self.favs, name, keep) {
-            let mut value = String::new();
-            for f in &self.favs {
-                if !value.is_empty() {
-                    value.push(',');
-                }
-                value.push_str(f);
-            }
+            let value = home::joined(&self.favs);
             self.pending.push(Effect::Pref { key: home::dock::PREF.to_string(), value });
         }
     }
