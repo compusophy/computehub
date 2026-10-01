@@ -1,10 +1,7 @@
-//! Drawing helpers: device pixels, centered capitals, lit edges, fading, icons, small glyphs.
+//! Drawing helpers: device pixels, centered capitals, lit edges, fading, window control glyphs.
 
 use gfx::{DrawList, Icon, RectF, Rgba};
 use ui::TextSystem;
-
-/// The side an app icon is designed at.
-pub const ICON: f32 = 44.0;
 
 /// `v` logical pixels as whole device pixels, at least one.
 pub fn px(text: &TextSystem, v: f32) -> f32 {
@@ -49,41 +46,5 @@ pub fn control_glyph(
         }
         1 => list.border(sq(cx - 3.0, cy - 3.0, 6.0), 1.0, line, ink),
         _ => list.icon(RectF::new(cx - 4.5, cy - 4.5, 9.0, 9.0), Icon::Cross, 1.25, ink),
-    }
-}
-
-fn square((cx, cy): (f32, f32), side: f32) -> RectF {
-    RectF::new(cx - side / 2.0, cy - side / 2.0, side, side)
-}
-
-/// compusophy's mark: a ring with a dot.
-pub fn mark(list: &mut DrawList, at: (f32, f32), side: f32, color: Rgba) {
-    list.border(square(at, side), side / 2.0, 1.5, color);
-    list.fill(square(at, 5.0), 2.5, color);
-}
-
-/// Settings: two sliders.
-pub fn sliders(list: &mut DrawList, (cx, cy): (f32, f32), side: f32, color: Rgba) {
-    for d in [-3.0, 3.0] {
-        list.fill(RectF::new(cx - side / 2.0, cy + d, side, 1.0), 0.5, color);
-        list.fill(square((cx + d, cy + d + 0.5), 5.0), 2.5, color);
-    }
-}
-
-/// Light and dark: a ring with its left half filled.
-pub fn contrast(list: &mut DrawList, at: (f32, f32), side: f32, color: Rgba) {
-    let g = square(at, side);
-    list.border(g, side / 2.0, 1.5, color);
-    list.push_clip(RectF { w: side / 2.0, ..g });
-    list.fill(g, side / 2.0, color);
-    list.pop_clip();
-}
-
-/// A magnifier: an 11 px ring and a handle of dots.
-pub fn magnifier(list: &mut DrawList, (cx, cy): (f32, f32), color: Rgba) {
-    list.border(square((cx, cy), 11.0), 5.5, 1.75, color);
-    for i in 0..=6 {
-        let d = 4.6 + i as f32 * 0.5;
-        list.fill(square((cx + d, cy + d), 1.8), 0.9, color);
     }
 }

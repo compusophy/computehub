@@ -1,5 +1,5 @@
 //! Motion: where each window, dock tile and the snap preview are heading,
-//! when tweens start, and whether anything still moves.
+//! when tweens start, and whether anything still moves (or must be watched).
 
 use host::motion::{Tween, Vis, docked};
 use host::rectf;
@@ -23,6 +23,7 @@ const OPEN_SCALE: f32 = 0.96;
 pub(crate) struct Motion {
     pub wins: Vec<(WinId, Tween<Vis>)>,
     pub lifts: Vec<(String, Tween<f32>)>,
+    pub apps: Tween<f32>,
     pub preview: Tween<Vis>,
 }
 
@@ -76,6 +77,7 @@ impl Shell {
         self.sync_preview(now);
     }
 
+    /// Each dock tile's lift, and the Apps button's, heads up while hovered, else down.
     fn sync_lifts(&mut self, now: f64) {
         let hovered = match self.hover {
             Some(Target::Dock(i)) => self.dock.get(i).map(|d| d.0.as_str()),
@@ -88,6 +90,8 @@ impl Shell {
         for (name, t) in &mut self.motion.lifts {
             t.to(f32::from(u8::from(hovered == Some(name.as_str()))), now, LIFT_MS);
         }
+        let apps = f32::from(u8::from(self.hover == Some(Target::Apps)));
+        self.motion.apps.to(apps, now, LIFT_MS);
     }
 
     fn sync_preview(&mut self, now: f64) {
@@ -110,17 +114,22 @@ impl Shell {
         let m = &mut self.motion;
         m.wins.iter_mut().for_each(|w| w.1.arm(now));
         m.lifts.iter_mut().for_each(|l| l.1.arm(now));
+        m.apps.arm(now);
         m.preview.arm(now);
         self.launcher.t.arm(now);
         self.host.theme.arm(now);
     }
 
+    /// Whether frames must come: something moves, flings, or a finger waits to long-press.
     pub(crate) fn animating(&self) -> bool {
         let (now, m) = (self.host.now_ms, &self.motion);
         m.wins.iter().any(|w| w.1.is_running(now))
             || m.lifts.iter().any(|l| l.1.is_running(now))
+            || m.apps.is_running(now)
             || m.preview.is_running(now)
             || self.launcher.t.is_running(now)
             || self.host.theme.is_running(now)
+            || self.touch.is_some_and(|t| !t.0.done)
+            || self.fling.is_some()
     }
 }

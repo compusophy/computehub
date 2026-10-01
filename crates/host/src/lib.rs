@@ -1,5 +1,10 @@
 //! The compusophyOS app host, no browser: the [`wm::Wm`] and one [`ui::App`] per window, and the
-//! pure parts the shell builds on ([`motion`], [`frame`], [`layout`], [`search`], [`paint`]).
+//! pure parts the shell builds on ([`motion`], [`frame`], [`search`], [`paint`]).
+//!
+//! Where a window opens ([`Host::open`]): on a narrow work area (under [`NARROW`] px) maximized,
+//! as every window there stays; else a [`ui::App::compact`] app at its preferred size, centered,
+//! and any other large (0.85 of the work area, cascaded), maximized if no other window shows. A
+//! window opened maximized restores to that large size.
 //!
 //! [`Host`] changes the wm only through [`Host::apply`], delivers
 //! [`ui::AppEvent`]s and carries out the apps' [`ui::Request`]s; what only the
@@ -11,7 +16,6 @@
 #![forbid(unsafe_code)]
 
 pub mod frame;
-pub mod layout;
 pub mod motion;
 pub mod paint;
 pub mod search;
@@ -23,7 +27,7 @@ use kernel::Kernel;
 use motion::Themes;
 use ui::{AiStatus, AppEvent, AppIcon, Cx, Key, Mods, Request, TextSystem, Theme, Ui, UiState};
 use vfs::Vfs;
-use wm::{Cmd, Outcome, Rect, WinId, Wm};
+use wm::{Cmd, Outcome, Rect, State, WinId, Wm};
 
 /// Makes the app for a window by name (`"terminal"`, a `.app` path, ...).
 pub type Registry = Box<dyn Fn(&str) -> Option<Box<dyn ui::App>>>;
@@ -33,15 +37,18 @@ const FONT_URLS: [&str; 2] = ["fonts/symbols-a.ttf", "fonts/symbols-b.ttf"];
 /// How long a theme crossfade takes, and the height of a window's titlebar.
 pub const THEME_MS: f32 = 200.0;
 pub const TITLEBAR_H: f32 = wm::TITLE_H as f32;
+/// Work areas narrower than this (logical px) are phones'.
+pub const NARROW: i32 = 720;
 
 /// One platform event, in logical pixels: a key down by position (repeats too), text typed,
-/// pasted or composed, the pointer (button 0 primary), the wheel (`dy` > 0 down), size, time.
+/// pasted or composed, the pointer (button 0 primary, 2 secondary; `touch` for a finger), the
+/// wheel (`dy` > 0 down), size, time.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Input {
     Key { key: Key, mods: Mods },
     Text(String),
     PointerMove { x: f32, y: f32 },
-    PointerDown { x: f32, y: f32, button: u8 },
+    PointerDown { x: f32, y: f32, button: u8, touch: bool },
     PointerUp { x: f32, y: f32, button: u8 },
     PointerLeave,
     Wheel { x: f32, y: f32, dy: f32 },
@@ -221,15 +228,37 @@ impl Host {
         self.wm.focused().filter(|&w| self.live(w))
     }
 
-    /// Opens `name`, if the registry knows it, in a new focused window of
-    /// `size`, else of the app's preferred content size, else the wm's default.
+    /// Whether the work area is a phone's: every window maximized, none moved.
+    pub fn narrow(&self) -> bool {
+        self.wm.area().w < NARROW
+    }
+
+    /// Opens `name`, if the registry knows it, in a new focused window placed as the crate docs
+    /// say, `size` (window px) if given.
     pub fn open(&mut self, name: &str, size: Option<(i32, i32)>, out: &mut Response) {
         let Some(app) = (self.registry)(name) else { return };
-        let size = size.or_else(|| app.preferred_size().and_then(window_size));
-        if let Ok(Outcome::Opened(id)) = self.wm.apply(Cmd::Open { size }) {
-            let (name, hits) = (name.to_string(), Vec::new());
-            self.wins.push(Win { id, app, name, hits, sizes: [None; 2] });
-            out.redraw = true;
+        let (a, alone, compact) = (self.wm.area(), self.wm.layout().is_empty(), app.compact());
+        let preferred = app.preferred_size().and_then(window_size).filter(|_| compact);
+        let size = size.or(preferred).unwrap_or((a.w * 85 / 100, a.h * 85 / 100));
+        let Ok(Outcome::Opened(id)) = self.wm.apply(Cmd::Open { size: Some(size) }) else { return };
+        let r = self.wm.normal_rect(id).unwrap_or_default();
+        let (x, y) = (a.x + (a.w - r.w) / 2, a.y + (a.h - r.h) / 2);
+        if self.narrow() || alone && !compact {
+            _ = self.wm.apply(Cmd::Maximize(id));
+        } else if compact {
+            _ = self.wm.apply(Cmd::Move { win: id, x, y });
+        }
+        let (name, hits) = (name.to_string(), Vec::new());
+        self.wins.push(Win { id, app, name, hits, sizes: [None; 2] });
+        out.redraw = true;
+    }
+
+    /// The everything bar asked `text`: shows the Assistant (opening it if need be), which hears
+    /// it as [`AppEvent::Ask`].
+    pub fn ask(&mut self, text: &str, out: &mut Response) {
+        self.show("assistant", out);
+        if let Some(&win) = self.windows_of("assistant").last() {
+            self.deliver(win, AppEvent::Ask(text.to_string()), out);
         }
     }
 
@@ -369,8 +398,14 @@ impl Host {
         }
     }
 
-    /// Tells apps focus changes and new content sizes, then switches to themes they asked for.
+    /// Maximizes what shows on a narrow work area, tells apps focus changes and new content
+    /// sizes, then switches to themes they asked for.
     pub fn settle(&mut self, out: &mut Response) {
+        if self.narrow() {
+            for p in self.wm.layout().into_iter().filter(|p| p.state != State::Maximized) {
+                _ = self.wm.apply(Cmd::Maximize(p.win));
+            }
+        }
         for _ in 0..8 {
             let focused = self.focused_app();
             let calm = focused == self.focus;
@@ -467,9 +502,10 @@ impl Host {
         }
     }
 
-    /// The dock's apps (`pinned`, then the others running) and their windows.
-    pub fn dock_apps(&mut self, pinned: &[&str]) -> Vec<(String, AppIcon, Vec<WinId>)> {
-        let mut names: Vec<String> = pinned.iter().map(|n| n.to_string()).collect();
+    /// The dock's apps (`pinned`, then the others running; those the registry knows) and their
+    /// windows.
+    pub fn dock_apps(&mut self, pinned: &[String]) -> Vec<(String, AppIcon, Vec<WinId>)> {
+        let mut names = pinned.to_vec();
         for w in self.wins.iter().filter(|w| self.live(w.id)) {
             if !names.contains(&w.name) {
                 names.push(w.name.clone());
@@ -479,28 +515,52 @@ impl Host {
         apps.map(|(icon, wins, n)| (n, icon, wins)).collect()
     }
 
-    /// The launcher's entries: `apps` as tiles, then the `.app` files in `/apps` and `~`.
+    /// The launcher's entries: `apps` as tiles (those the registry knows), then the `.app` files
+    /// in `~/apps`, `~` and `/apps`.
     pub fn entries(&mut self, apps: &[&str]) -> Vec<search::Entry> {
         let mut out = Vec::new();
-        for &n in apps {
-            if let Some(icon) = self.icon(n) {
-                let (name, label) = (n.to_string(), app_label(n));
+        self.entries_of(apps, &mut out);
+        let mine = [Vfs::HOME, "/apps"].concat();
+        for (dir, shown) in [(&*mine, "~/apps"), (Vfs::HOME, "~"), ("/apps", "/apps")] {
+            self.app_files(dir, shown, &mut out);
+        }
+        out
+    }
+
+    /// The desktop's icons: Home (Files at `~`), Welcome, About and Feedback (those the registry
+    /// knows), then the person's own apps: the `.app` files in `~/apps`.
+    pub fn desktop(&mut self) -> Vec<search::Entry> {
+        let mut out = Vec::new();
+        self.entries_of(&["files", "welcome", "about", "feedback"], &mut out);
+        if let Some(home) = out.first_mut().filter(|e| e.name == "files") {
+            (home.label, home.icon.glyph) = ("Home".into(), ui::icon::Glyph::Home);
+        }
+        self.app_files(&[Vfs::HOME, "/apps"].concat(), "~/apps", &mut out);
+        out
+    }
+
+    /// The apps of `names` the registry knows.
+    fn entries_of(&mut self, names: &[&str], out: &mut Vec<search::Entry>) {
+        for &name in names {
+            if let Some(icon) = self.icon(name) {
+                let (name, label) = (name.to_string(), app_label(name));
                 out.push(search::Entry { name, label, icon, place: None });
             }
         }
-        for (dir, shown) in [("/apps", "/apps"), (Vfs::HOME, "~")] {
-            for e in self.vfs.list(dir).unwrap_or_default() {
-                if e.is_dir || !e.name.ends_with(".app") {
-                    continue;
-                }
-                let fnv = |h: u32, b: u8| (h ^ u32::from(b)).wrapping_mul(16_777_619);
-                let hue = ui::theme::app_tint(e.name.bytes().fold(2_166_136_261, fnv));
-                let (name, place) = ([dir, "/", &e.name].concat(), [shown, "/", &e.name].concat());
-                let icon = AppIcon { glyph: ui::icon::Glyph::Window, hue };
-                out.push(search::Entry { label: app_label(&name), name, icon, place: Some(place) });
+    }
+
+    /// The `.app` files in `dir` (shown as in `shown`), each a window on a hue of its name.
+    fn app_files(&self, dir: &str, shown: &str, out: &mut Vec<search::Entry>) {
+        for e in self.vfs.list(dir).unwrap_or_default() {
+            if e.is_dir || !e.name.ends_with(".app") {
+                continue;
             }
+            let fnv = |h: u32, b: u8| (h ^ u32::from(b)).wrapping_mul(16_777_619);
+            let hue = ui::theme::app_tint(e.name.bytes().fold(2_166_136_261, fnv));
+            let (name, place) = ([dir, "/", &e.name].concat(), [shown, "/", &e.name].concat());
+            let icon = AppIcon { glyph: ui::icon::Glyph::Window, hue };
+            out.push(search::Entry { label: app_label(&name), name, icon, place: Some(place) });
         }
-        out
     }
 }
 

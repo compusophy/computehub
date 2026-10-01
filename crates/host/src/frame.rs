@@ -5,9 +5,11 @@ use wm::{Rect, Snap};
 
 use crate::{Cursor, TITLEBAR_H};
 
-/// A window control's diameter, the space between them, and their margin.
+/// A window control's diameter, its reach (center to center, and its hit box's side) for a mouse
+/// and for touch, and its margin.
 pub const CTL: f32 = 12.0;
-pub const CTL_GAP: f32 = 8.0;
+pub const CTL_STEP: f32 = 20.0;
+pub const TOUCH_STEP: f32 = 44.0;
 const CTL_MARGIN: f32 = 12.0;
 /// How far either side of its edge a window resizes; a corner's reach.
 const EDGE: f32 = 3.0;
@@ -32,14 +34,21 @@ impl Zone {
     }
 }
 
-/// The minimize, maximize and close circles of a large enough window.
-pub fn controls(r: RectF) -> Option<[RectF; 3]> {
-    if r.w < 4.0 * (CTL + CTL_GAP) + CTL_MARGIN || r.h < TITLEBAR_H {
+/// The minimize, maximize and close circles of a large enough window, `step` apart; each one's
+/// hit box is `step` square around it ([`hit_box`]).
+pub fn controls(r: RectF, step: f32) -> Option<[RectF; 3]> {
+    if r.w < 4.0 * step + CTL_MARGIN || r.h < TITLEBAR_H {
         return None;
     }
-    let y = r.y + ((TITLEBAR_H - CTL) / 2.0).round();
-    let at = |i: f32| RectF::new(r.x + r.w - CTL_MARGIN - CTL - i * (CTL + CTL_GAP), y, CTL, CTL);
+    let (y, margin) =
+        (r.y + ((TITLEBAR_H - CTL) / 2.0).round(), CTL_MARGIN.max((step - CTL) / 2.0));
+    let at = |i: f32| RectF::new(r.x + r.w - margin - CTL - i * step, y, CTL, CTL);
     Some([at(2.0), at(1.0), at(0.0)])
+}
+
+/// The hit box of the control circle `c`, `step` square.
+pub fn hit_box(c: RectF, step: f32) -> RectF {
+    c.inset((CTL - step) / 2.0)
 }
 
 /// The edge or corner of `r` the point is on: -1, 0 or 1 in x and y.

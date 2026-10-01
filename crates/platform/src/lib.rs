@@ -58,9 +58,10 @@ pub enum Event {
     Text(String),
     /// The pointer moved.
     PointerMove { x: f32, y: f32 },
-    /// A button (0 primary, 1 middle, 2 secondary) went down; the canvas captures the pointer. Only
-    /// a primary pointer is heard, and during a press only the pressing one.
-    PointerDown { x: f32, y: f32, button: u8 },
+    /// A button (0 primary, 1 middle, 2 secondary) went down, `touch` if a finger's (`pointerType`
+    /// "touch"); the canvas captures the pointer. Only a primary pointer is heard, and during a
+    /// press only the pressing one.
+    PointerDown { x: f32, y: f32, button: u8, touch: bool },
     /// A button went up or the pointer was cancelled (button 0 when the DOM's
     /// is outside `0..=255`).
     PointerUp { x: f32, y: f32, button: u8 },
@@ -309,7 +310,7 @@ fn on_pointer(s: &Rc<Shared>, e: &DomEvent, kind: Ptr) {
     let ev = match kind {
         Ptr::Down => {
             let _ = s.canvas.set_pointer_capture(p.pointer_id());
-            Event::PointerDown { x, y, button }
+            Event::PointerDown { x, y, button, touch: p.pointer_type() == "touch" }
         }
         Ptr::Move => Event::PointerMove { x, y },
         Ptr::Up => Event::PointerUp { x, y, button },

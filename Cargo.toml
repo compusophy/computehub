@@ -8,6 +8,7 @@ members = [
     "crates/wm",
     "crates/gfx",
     "crates/host",
+    "crates/home",
     "crates/shell",
     "crates/platform",
     "crates/os",
@@ -50,6 +51,7 @@ compusophy-applang = { path = "crates/applang", version = "0.1.0" }
 compusophy-wm = { path = "crates/wm", version = "0.1.0" }
 compusophy-gfx = { path = "crates/gfx", version = "0.1.0" }
 compusophy-host = { path = "crates/host", version = "0.1.0" }
+compusophy-home = { path = "crates/home", version = "0.1.0" }
 compusophy-shell = { path = "crates/shell", version = "0.1.0" }
 compusophy-platform = { path = "crates/platform", version = "0.1.0" }
 compusophy-font = { path = "crates/font", version = "0.1.0" }

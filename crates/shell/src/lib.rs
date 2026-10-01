@@ -1,15 +1,21 @@
-//! The compusophyOS desktop: floating windows, a dock, a top bar and a launcher around a
-//! [`host::Host`], which runs one [`ui::App`] per window. No browser: [`Shell`] turns [`Input`]
-//! into wm commands and app events, draws into a [`gfx::DrawList`] and hands back what only the
-//! platform can do in a [`Response`].
+//! The compusophyOS desktop: floating windows around a [`host::Host`], which runs one
+//! [`ui::App`] per window, and the home screen around them (the `home` crate): a top bar, the
+//! dock of favorites, the everything bar under it with the launcher's panel above it, desktop
+//! icons, context menus and touch. No browser: [`Shell`] turns [`Input`] into wm commands and
+//! app events, draws into a [`gfx::DrawList`] and hands back what only the platform can do in a
+//! [`Response`].
 //!
 //! Logical pixels, origin top-left; non-finite sizes and positions count as 0. Windows live in the
 //! work area, the screen below the [`BAR_H`] top bar less [`DOCK_CLEAR`] at the bottom, which every
-//! resize hands the wm; the windows' rects follow at once. The startup app (`welcome`, 680 x 480,
-//! centered, clamped to the work area) opens as soon as the work area is not empty: at
-//! [`Shell::new`] or at the first [`Input::Resize`] that makes it so. Bindings, pointer rules and
-//! motion are those of `DESIGN.md`. While anything moves, [`Shell::draw`] asks for the next frame;
-//! otherwise none.
+//! resize hands the wm; the windows' rects follow at once. On a first visit ([`Prefs::seen`]
+//! unset) Welcome opens as soon as the work area is not empty, at [`Shell::new`] or at the first
+//! [`Input::Resize`] that makes it so, and the shell sets the `seen` preference.
+//!
+//! The pointer: button 0 presses, button 2 (or a finger held still for 500 ms) opens a context
+//! menu; a finger that travels over a window's content (or the launcher) scrolls it as the wheel
+//! does, and flings it on when it lifts moving. Bindings, pointer rules and motion are those of
+//! `DESIGN.md`. While anything moves (or a held finger waits to long-press), [`Shell::draw`] asks
+//! for the next frame; otherwise none.
 
 #![forbid(unsafe_code)]
 
@@ -17,9 +23,12 @@ mod bar;
 mod chrome;
 mod desktop;
 mod dock;
+mod icons;
 mod keys;
 mod launcher;
+mod menus;
 mod motion;
+mod touch;
 
 pub use host::{Cursor, Effect, Input, KernelIn, LocalTime, Registry, Response};
 pub use ui::{Key, Mods};
@@ -28,18 +37,29 @@ use std::mem;
 
 use desktop::{Grab, Target};
 use gfx::{DrawList, RectF, Rgba};
+use home::dock::Shelf;
 use host::Host;
+use host::search::Entry;
 use ui::{AppEvent, TextSystem, WidgetId};
 use vfs::Vfs;
 use wm::{Cmd, Rect, WinId, Wm};
 
-/// The top bar's height, and what the work area leaves free for the dock.
-pub const BAR_H: f32 = 32.0;
-pub const DOCK_CLEAR: f32 = 84.0;
-/// The app that opens first, and its window size.
-const STARTUP: (&str, (i32, i32)) = ("welcome", (680, 480));
+/// The top bar's height, and what the work area leaves free at the bottom for the dock and the
+/// everything bar.
+pub const BAR_H: f32 = 44.0;
+pub const DOCK_CLEAR: f32 = home::CLEAR;
 
 type Widget = (WinId, WidgetId);
+
+/// What the page keeps for the shell between visits: the theme's name (else the default, Mono),
+/// the dock's favorites as stored (the `dock` preference; `None` for the default) and whether
+/// Welcome was shown on a first visit (the `seen` preference).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Prefs {
+    pub theme: String,
+    pub dock: Option<String>,
+    pub seen: bool,
+}
 
 /// Everything whose change means a new frame, but the clock.
 #[derive(PartialEq)]
@@ -48,12 +68,14 @@ struct Visuals {
     buttons: [Option<Target>; 2],
     widgets: [Option<Widget>; 2],
     wins: usize,
-    launcher: (bool, usize, usize, usize),
+    launcher: (bool, bool, usize, usize, usize),
     zone: Option<host::frame::Zone>,
+    menu: Option<(RectF, Option<usize>)>,
+    home: (usize, usize),
 }
 
-/// The desktop: the host (the wm, text, files, apps and theme) and the dock,
-/// bar, launcher, chrome, motion and bindings around it.
+/// The desktop: the host (the wm, text, files, apps and theme) and the home screen, chrome,
+/// motion and bindings around it.
 pub struct Shell {
     host: Host,
     /// Effects from outside a [`Response`], for [`Shell::take_effects`].
@@ -72,27 +94,41 @@ pub struct Shell {
     ime: Option<(Option<WinId>, bool)>,
     cursor: Cursor,
     clock: Option<LocalTime>,
+    /// The dock: the favorites, the apps it shows (favorites first), where they sit.
+    favs: Vec<String>,
     dock: Vec<dock::Item>,
+    shelf: Shelf,
+    /// The desktop's icons, and the [`Vfs::generation`] they were listed at.
+    icons: Vec<Entry>,
+    listed: Option<u64>,
     launcher: launcher::Launcher,
+    /// The open context menu.
+    menu: Option<menus::Open>,
+    /// A finger down (and what it scrolls), and content flinging on.
+    touch: Option<(home::touch::Touch, touch::Scroll)>,
+    fling: Option<(touch::Scroll, home::touch::Fling)>,
     motion: motion::Motion,
     /// Whether this input's wm changes follow the pointer, not animate.
     instant: bool,
-    /// Whether the startup app still waits for a work area.
+    /// Whether Welcome still waits for a work area (on a first visit).
     startup: bool,
     /// A layer drawn, then replayed scaled and faded.
     scratch: DrawList,
 }
 
 impl Shell {
-    /// A desktop of `w` x `h` in the theme named `theme` (else the default, Mono).
+    /// A desktop of `w` x `h` with the stored `prefs`.
     #[rustfmt::skip]
-    pub fn new(w: f32, h: f32, text: TextSystem, vfs: Vfs, reg: Registry, theme: &str) -> Shell {
+    pub fn new(w: f32, h: f32, text: TextSystem, vfs: Vfs, reg: Registry, prefs: Prefs) -> Shell {
         let size = (coord(w).max(0.0), coord(h).max(0.0));
-        let host = Host::new(Wm::new(work_area(size)), text, vfs, reg, theme);
+        let host = Host::new(Wm::new(work_area(size)), text, vfs, reg, &prefs.theme);
+        let favs = home::dock::favorites(prefs.dock.as_deref());
         let mut shell = Shell { host, pending: Vec::new(), size, pointer: None, hover: None,
             armed: None, app_hover: None, app_press: None, grab: None, last_title: None, ime: None,
-            cursor: Cursor::Default, clock: None, dock: Vec::new(), launcher: Default::default(),
-            motion: Default::default(), instant: false, startup: true, scratch: DrawList::new() };
+            cursor: Cursor::Default, clock: None, favs, dock: Vec::new(), shelf: Shelf::default(),
+            icons: Vec::new(), listed: None, launcher: Default::default(), menu: None, touch: None,
+            fling: None, motion: Default::default(), instant: false, startup: !prefs.seen,
+            scratch: DrawList::new() };
         let mut out = Response::default();
         shell.start(&mut out);
         shell.settle(&mut out);
@@ -125,6 +161,11 @@ impl Shell {
 
     pub fn theme_name(&self) -> &'static str {
         self.host.theme.current().name
+    }
+
+    /// Crossfades to the theme named `name` (any ASCII case); whether it is a new one.
+    pub fn set_theme(&mut self, name: &str) -> bool {
+        self.host.theme.set(name, self.host.now_ms, host::THEME_MS)
     }
 
     /// The frame's clear color.
@@ -179,10 +220,11 @@ impl Shell {
             Input::PointerLeave => None,
             _ => self.pointer,
         };
+        self.hold(&mut out);
         match input {
             Input::Key { key, mods } => self.key(key, mods, &mut out),
-            Input::Text(s) if self.launcher.open => {
-                self.launcher.search.type_text(&s);
+            Input::Text(s) if self.launcher.focus => {
+                self.typed(&s);
                 out.consumed = true;
             }
             Input::Text(s) => {
@@ -191,10 +233,18 @@ impl Shell {
                     out.consumed = true;
                 }
             }
-            Input::PointerMove { .. } => self.drag_to(),
-            Input::PointerDown { button: 0, .. } => self.press(&mut out),
+            Input::PointerMove { .. } => {
+                self.finger(&mut out);
+                self.drag_to();
+                self.point_menu();
+            }
+            Input::PointerDown { button: 0, touch, .. } => self.press(touch, &mut out),
+            Input::PointerDown { button: 2, touch, .. } => {
+                self.secondary(self.pointer.unwrap_or_default(), touch, &mut out)
+            }
             Input::PointerUp { button, .. } => self.release(button == 0, &mut out),
-            Input::PointerDown { .. } | Input::PointerLeave => {}
+            Input::PointerDown { .. } => {}
+            Input::PointerLeave => self.touch = None,
             Input::Wheel { x, y, dy } => self.wheel(coord(x), coord(y), dy, &mut out),
             Input::Resize { w, h } => {
                 self.size = (coord(w).max(0.0), coord(h).max(0.0));
@@ -211,11 +261,13 @@ impl Shell {
         out
     }
 
+    /// Opens Welcome on a first visit once there is a work area, and remembers it was shown.
     fn start(&mut self, out: &mut Response) {
         let a = self.host.wm().area();
         if self.startup && a.w > 0 && a.h > 0 {
             self.startup = false;
-            self.host.open(STARTUP.0, Some(STARTUP.1), out);
+            self.host.open("welcome", None, out);
+            out.effects.push(Effect::Pref { key: "seen".into(), value: "1".into() });
         }
     }
 
@@ -224,6 +276,8 @@ impl Shell {
     pub fn draw(&mut self, list: &mut DrawList) -> bool {
         let mut out = Response::default();
         self.instant = false;
+        self.hold(&mut out);
+        self.flinging(&mut out);
         self.settle(&mut out);
         let now = self.host.now_ms;
         self.arm(now);
@@ -232,10 +286,13 @@ impl Shell {
             for _ in 0..2 {
                 list.clear();
                 theme.draw_backdrop(list, RectF::new(0.0, 0.0, self.size.0, self.size.1));
+                self.draw_icons(list, &theme);
                 self.draw_windows(list, &theme, now);
-                self.draw_dock(list, &theme, now);
+                self.draw_dock(list, &theme);
                 self.draw_bar(list, &theme);
                 self.draw_launcher(list, &theme, now);
+                self.draw_field(list, &theme);
+                self.draw_menu(list, &theme);
                 self.draw_tooltip(list, &theme, now);
                 if !self.host.text.take_atlas_reset() {
                     break;
@@ -253,7 +310,7 @@ impl Shell {
         self.animating()
     }
 
-    /// Brings the apps up to date with the wm, then the shell with the apps.
+    /// Brings the apps up to date with the wm, then the shell with the apps and the files.
     fn settle(&mut self, out: &mut Response) {
         self.host.settle(out);
         if mem::take(&mut self.host.launcher) && !self.launcher.open {
@@ -262,20 +319,29 @@ impl Shell {
         let h = &self.host;
         (self.app_hover, self.app_press) =
             (self.app_hover.filter(|w| h.live(w.0)), self.app_press.filter(|w| h.live(w.0)));
-        self.dock = self.host.dock_apps(&dock::PINNED);
+        self.dock = self.host.dock_apps(&self.favs);
+        let favs = self.dock.iter().take_while(|d| self.favs.contains(&d.0)).count();
+        let top = home::field::rect(self.size).y - home::dock::GAP - home::dock::H;
+        self.shelf = Shelf::new(favs, self.dock.len() - favs, self.size.0, top);
+        let listed = self.host.vfs.generation();
+        if self.listed.replace(listed) != Some(listed) {
+            self.icons = self.host.desktop();
+        }
         self.sync();
     }
 
     fn visuals(&self) -> Visuals {
         let button = |t: Option<Target>| t.filter(|t| t.is_button());
-        let l = &self.launcher.search;
+        let (l, s) = (&self.launcher, &self.launcher.search);
         Visuals {
             wm: self.host.wm().state_hash(),
             buttons: [button(self.hover), self.armed],
             widgets: [self.app_hover, self.app_press],
             wins: self.host.wins.len(),
-            launcher: (self.launcher.open, l.query.len(), l.sel, l.first),
+            launcher: (l.open, l.focus, s.query.len(), s.sel, s.first),
             zone: if let Some(Grab::Move { zone, .. }) = self.grab { zone } else { None },
+            menu: self.menu.as_ref().map(|m| (m.0.rect, m.0.sel)),
+            home: (self.dock.len() + self.favs.len(), self.icons.len()),
         }
     }
 
@@ -301,7 +367,7 @@ impl Shell {
         out.effects = mem::take(&mut self.pending);
         let focus = self.host.focused_app();
         let app = focus.and_then(|w| self.host.win(w));
-        let wants = self.launcher.open || app.is_some_and(|w| w.app.wants_text_input());
+        let wants = self.launcher.focus || app.is_some_and(|w| w.app.wants_text_input());
         if self.ime != Some((focus, wants)) {
             self.ime = Some((focus, wants));
             out.text_input = Some(wants);

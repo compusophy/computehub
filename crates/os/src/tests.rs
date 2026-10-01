@@ -104,13 +104,13 @@ fn events_map_to_inputs_and_keys_by_code_or_by_meaning() {
     }
     assert_eq!(input_of(key("KeyQ/q/a", false)), None);
     assert_eq!(input_of(fetched(1, Ok(vec![1]))), None);
-    let (x, y, button, dy) = (3.0, 4.0, 2, -48.0);
+    let (x, y, button, dy, touch) = (3.0, 4.0, 2, -48.0, true);
     let t = platform::LocalTime { year: 2026, month: 9, day: 30, weekday: 3, hour: 14, minute: 7 };
     let shell_time = LocalTime { year: 2026, month: 9, day: 30, weekday: 3, hour: 14, minute: 7 };
     let pairs = [
         (Event::Text("é".into()), Input::Text("é".into())),
         (Event::PointerMove { x, y }, Input::PointerMove { x, y }),
-        (Event::PointerDown { x, y, button }, Input::PointerDown { x, y, button }),
+        (Event::PointerDown { x, y, button, touch }, Input::PointerDown { x, y, button, touch }),
         (Event::PointerUp { x, y, button }, Input::PointerUp { x, y, button }),
         (Event::PointerLeave, Input::PointerLeave),
         (Event::Wheel { x, y, dy }, Input::Wheel { x, y, dy }),
@@ -174,11 +174,14 @@ fn shell_starts_at_the_first_usable_size() {
     assert!(desk.missed_tick);
     // A frame before the shell clears to the default theme's base.
     assert_eq!(desk.paint(1.0, &Ctl::default()), (ui::theme("").base, false));
-    // Welcome opens, focused, and wants no text input.
-    assert_eq!(send(&mut desk, resize(1280.0, 800.0)), ((true, false), vec![Fx::TextInput(false)]));
+    // On a first visit Welcome opens, focused, wanting no text input, and that is kept.
+    let seen = Fx::Store { key: "compusophy.seen".into(), value: "1".into() };
+    let want = ((true, false), vec![seen, Fx::TextInput(false)]);
+    assert_eq!(send(&mut desk, resize(1280.0, 800.0)), want);
     // The startup window sits as it would at that size from the start.
     let (text, fs) = fresh().parts.expect("unused");
-    let fresh = Shell::new(1280.0, 800.0, text, fs, registry(ai::Ai::default()), "");
+    let reg = registry(ai::Ai::default());
+    let fresh = Shell::new(1280.0, 800.0, text, fs, reg, shell::Prefs::default());
     let got = shell(&desk);
     let wm = |s: &Shell| (s.wm().state_hash(), s.wm().layout());
     assert_eq!(wm(got), wm(&fresh));
@@ -198,19 +201,18 @@ fn the_theme_comes_from_storage_and_goes_back_when_it_changes() {
         let writes = ctl.effects().iter().filter(|f| matches!(f, Fx::Store { .. })).count();
         (desk, writes)
     };
-    // Names match in any case, an unknown one is the default; none is written back.
+    // Names match in any case, an unknown one is the default; none is written back (the
+    // other write is the first visit's mark).
     let (mut desk, writes) = stored("dawn");
-    assert_eq!((shell(&desk).theme_name(), writes), ("Dawn", 1));
+    assert_eq!((shell(&desk).theme_name(), writes), ("Dawn", 2));
     assert_eq!(shell(&stored("Solarized").0).theme_name(), "Mono");
-    // The top bar's theme button (at the right) moves to the next theme, stored once.
-    let (x, y) = (1280.0 - 12.0 - 7.0, shell::BAR_H / 2.0);
+    // A new theme (Settings sets it) is stored once, after the event that set it.
     let store = Fx::Store { key: THEME_KEY.into(), value: "Mono".into() };
-    send(&mut desk, Event::PointerMove { x, y });
-    send(&mut desk, Event::PointerDown { x, y, button: 0 });
-    let (_, fx) = send(&mut desk, Event::PointerUp { x, y, button: 0 });
+    assert!(desk.shell.as_mut().expect("created").set_theme("mono"));
+    let (_, fx) = send(&mut desk, Event::PointerMove { x: 9.0, y: 300.0 });
     assert_eq!(shell(&desk).theme_name(), "Mono");
     assert_eq!(fx.iter().filter(|f| **f == store).count(), 1, "{fx:?}");
-    for fx in [frame(&mut desk), send(&mut desk, Event::PointerMove { x: 9.0, y: 300.0 }).1] {
+    for fx in [frame(&mut desk), send(&mut desk, Event::PointerMove { x: 9.0, y: 200.0 }).1] {
         assert!(fx.iter().all(|f| !matches!(f, Fx::Store { .. })), "{fx:?}");
     }
 }
@@ -293,7 +295,8 @@ fn desktop_routes_events_through_the_shell() {
     assert_eq!(over(&mut desk, (8.0, 300.0)), [Fx::Cursor("default")]);
     // A release on the focused window asks for the keyboard again, only
     // without text input (the welcome window wants none).
-    let down = |d: &mut Desktop, (x, y)| send(d, Event::PointerDown { x, y, button: 0 });
+    let down =
+        |d: &mut Desktop, (x, y)| send(d, Event::PointerDown { x, y, button: 0, touch: false });
     let up = |d: &mut Desktop, (x, y), button| send(d, Event::PointerUp { x, y, button }).1;
     let at = focused_middle(&desk);
     down(&mut desk, at);
@@ -318,7 +321,7 @@ fn desktop_routes_events_through_the_shell() {
     assert_eq!((h.1, fx), (true, vec![]));
     assert_eq!(up(&mut desk, at, 0), [Fx::TextInput(true)]);
     assert_eq!(up(&mut desk, at, 2), []);
-    let bare = (4.0, shell::BAR_H + 4.0);
+    let bare = (4.0, 796.0);
     let r = |p: &wm::Placement| RectF::from_i32(p.rect.x, p.rect.y, p.rect.w, p.rect.h);
     assert!(shell(&desk).wm().layout().iter().all(|p| !r(p).contains(bare.0, bare.1)));
     down(&mut desk, bare);
@@ -366,17 +369,33 @@ fn programs_reach_the_kernel_and_its_effects_the_page() {
         Fx::Reply { pid: 2, errno: 44, data: vec![7] }, Fx::Word { pid: 2, index: 5, value: 1 },
         Fx::Kill(2), Fx::Wake(1000), Fx::Store { key: HOME_KEY.into(), value: "1".into() }];
     assert_eq!(ctl.effects(), want);
-    // The AI model loads with the shell (one not on offer is the default) and changes as apps
-    // set it; other preferences are ignored; streams nobody asked for are dropped.
+    // The AI model loads with the shell (one not on offer is the default), as do the theme,
+    // the dock's favorites and the first visit's mark (after which no Welcome opens).
     ctl.storage_set(ai::MODEL, "openai/gpt-x");
+    ctl.storage_set("compusophy.dock", "terminal");
+    ctl.storage_set("compusophy.seen", "1");
+    let want = shell::Prefs { theme: String::new(), dock: Some("terminal".into()), seen: true };
+    assert_eq!(prefs(&ctl), want);
     desk.event(resize(1280.0, 800.0), &mut ctl);
     assert_eq!(desk.ai.status().model, ai::DEFAULT_MODEL);
+    assert!(shell(&desk).wm().layout().is_empty());
+    // Preferences are kept as compusophy.<key> (the AI model through the AI hub); other keys
+    // are dropped, as are streams nobody asked for.
     let pref = |key: &str, value: &str| Effect::Pref { key: key.into(), value: value.into() };
     let mut ctl = Ctl::default();
     effect(pref("ai.model", "zai/glm-5.3-flash"), &mut ctl, &desk.ai);
     effect(pref("ai.nope", "x"), &mut ctl, &desk.ai);
-    let stored = Fx::Store { key: ai::MODEL.into(), value: "zai/glm-5.3-flash".into() };
-    assert_eq!((ctl.effects(), desk.ai.status().model.as_str()), (&[stored][..], ai::MODELS[1]));
+    for (k, v) in [("dock", "studio,files"), ("seen", "1"), ("reports", "off"), ("theme", "x")] {
+        effect(pref(k, v), &mut ctl, &desk.ai);
+    }
+    let store = |k: &str, v: &str| Fx::Store { key: k.into(), value: v.into() };
+    let stored = [
+        store(ai::MODEL, "zai/glm-5.3-flash"),
+        store("compusophy.dock", "studio,files"),
+        store("compusophy.seen", "1"),
+        store("compusophy.reports", "off"),
+    ];
+    assert_eq!((ctl.effects(), desk.ai.status().model.as_str()), (&stored[..], ai::MODELS[1]));
     let end = Event::StreamEnd { id: 1, status: 0, error: "".into() };
     for ev in [Event::Chunk { id: 1, data: vec![1] }, end] {
         assert_eq!((send(&mut desk, ev.clone()), input_of(ev)), ((NOTHING, vec![]), None));

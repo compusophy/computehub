@@ -2,8 +2,9 @@
 //! [`Vfs`] holding the `/bin` markers and Studio's samples, and a [`Registry`] of [`apps::open`]
 //! then [`remote::open`]. The [`Shell`] is made at the first Resize that leaves a work area; until
 //! then input is dropped (a missed Tick is replayed) and frames clear to the default theme's base.
-//! The theme is kept in `localStorage` ([`THEME_KEY`]), as are the preferences apps set
-//! ([`ui::Request::Pref`]: the AI model, see [`ai`]).
+//! The theme is kept in `localStorage` ([`THEME_KEY`]), as are the preferences of [`PREFS`]
+//! (`compusophy.<key>`), which apps and the shell set ([`shell::Effect::Pref`]) and the shell
+//! reads when it is made ([`shell::Prefs`]).
 //!
 //! Fonts: boot (Inter Regular, in the wasm); deferred (Inter SemiBold and JetBrains Mono, fetched
 //! after the first frame under the top two fetch ids, which the shell never reaches; a failure
@@ -35,6 +36,10 @@ const DEFERRED: [(u32, FontId, &str); 2] = [
 /// The `localStorage` keys of the theme's name and of `"1"` once /home was saved.
 pub const THEME_KEY: &str = "compusophy.theme";
 pub const HOME_KEY: &str = "compusophy.home";
+/// The preferences kept as `compusophy.<key>`: the AI model (which the AI hub keeps, see [`ai`]),
+/// the dock's favorites (registry names, comma-separated), `"1"` once Welcome was shown on a
+/// first visit, and `"off"` to stop automatic error reports. Other keys are dropped.
+pub const PREFS: [&str; 4] = [ui::AI_MODEL, "dock", "seen", "reports"];
 /// The applets of `bin/toolbox.wasm`, each a `/bin` marker file (as are the
 /// GUI programs, such as [`remote::STUDIO`] for `bin/studio.wasm`).
 const APPLETS: [&str; 9] =
@@ -87,8 +92,8 @@ impl Desktop {
         match input {
             Input::Resize { w, h } if w >= 1.0 && h >= shell::BAR_H + shell::DOCK_CLEAR + 1.0 => {
                 let (text, vfs) = self.parts.take()?;
-                let theme = ctl.storage_get(THEME_KEY).unwrap_or_default();
-                let shell = Shell::new(w, h, text, vfs, registry(self.ai.clone()), &theme);
+                let prefs = prefs(ctl);
+                let shell = Shell::new(w, h, text, vfs, registry(self.ai.clone()), prefs);
                 let shell = self.shell.insert(shell);
                 shell.kernel_mut().set_isolated(ctl.isolated());
                 self.ai.load(ctl);
@@ -266,14 +271,21 @@ fn effect(fx: Effect, ctl: &mut Ctl, ai: &ai::Ai) {
     }
 }
 
-/// Stores a preference an app set, each key where it belongs; a key this page does not know
-/// (yet) is ignored. A new key is a new arm (and then the `expect` goes).
-#[expect(clippy::single_match, reason = "the one key so far; more come as arms")]
+/// Stores a preference of [`PREFS`] as `compusophy.<key>` (the AI model through the AI hub,
+/// which checks it); any other key is dropped.
 fn pref(key: &str, value: &str, ctl: &mut Ctl, ai: &ai::Ai) {
     match key {
         ui::AI_MODEL => ai.set_model(ctl, value),
+        key if PREFS.contains(&key) => ctl.storage_set(&["compusophy.", key].concat(), value),
         _ => {}
     }
+}
+
+/// What the shell starts from: the stored theme, favorites and first-visit mark.
+fn prefs(ctl: &Ctl) -> shell::Prefs {
+    let theme = ctl.storage_get(THEME_KEY).unwrap_or_default();
+    let (dock, seen) = (ctl.storage_get("compusophy.dock"), ctl.storage_get("compusophy.seen"));
+    shell::Prefs { theme, dock, seen: seen.is_some() }
 }
 
 /// A Start's program as the platform takes it.
@@ -323,7 +335,7 @@ fn input_of(ev: Event) -> Option<Input> {
         }
         Event::Text(s) => Input::Text(s),
         Event::PointerMove { x, y } => Input::PointerMove { x, y },
-        Event::PointerDown { x, y, button } => Input::PointerDown { x, y, button },
+        Event::PointerDown { x, y, button, touch } => Input::PointerDown { x, y, button, touch },
         Event::PointerUp { x, y, button } => Input::PointerUp { x, y, button },
         Event::PointerLeave => Input::PointerLeave,
         Event::Wheel { x, y, dy } => Input::Wheel { x, y, dy },

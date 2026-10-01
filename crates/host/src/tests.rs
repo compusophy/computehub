@@ -12,8 +12,8 @@ use super::*;
 const SANS: &[u8] = include_bytes!("../../../assets/fonts/Inter-Regular.ttf");
 const SYM_A: &[u8] = include_bytes!("../../../assets/fonts/lazy/symbols-a.ttf");
 const SYM_B: &[u8] = include_bytes!("../../../assets/fonts/lazy/symbols-b.ttf");
-/// The names the registry knows.
-const KNOWN: &str = "welcome terminal /apps/counter.app sized huge nan";
+/// The names the registry knows (`welcome` and `sized` are compact).
+const KNOWN: &str = "welcome terminal /apps/counter.app sized huge nan assistant files about";
 
 type Log = Rc<RefCell<Vec<(u32, E)>>>;
 
@@ -55,6 +55,9 @@ impl App for Probe {
     }
     fn icon(&self) -> AppIcon {
         AppIcon { glyph: ui::icon::Glyph::Window, hue: Rgba(self.1.len() as u8, 1, 2, 255) }
+    }
+    fn compact(&self) -> bool {
+        ["welcome", "sized"].contains(&self.1)
     }
     fn frame(&mut self, pid: u32, frame: &[u8], _: &mut Cx<'_>) -> bool {
         let said = [&pid.to_string(), " ", &String::from_utf8_lossy(frame)].concat();
@@ -113,17 +116,17 @@ impl Host {
 }
 
 #[test]
-fn apps_open_in_floating_windows() {
+fn apps_open_placed_for_the_screen() {
     let (mut h, log, _) = host();
-    assert_eq!(h.rect_of(1), Some(Rect::new(300, 134, 680, 480)));
+    // A compact app (welcome) centered at its size; the next app large, cascaded.
+    let large = |x, y| Some(Rect::new(x, y, 1088, 581));
+    assert_eq!([h.rect_of(1), h.rect_of(2)], [Some(Rect::new(300, 134, 680, 480)), large(28, 60)]);
     h.say(2, "open sized;open nope;open huge;open nan");
     assert_eq!(h.names()[2..], [(3, "sized", false), (4, "huge", false), (5, "nan", false)]);
-    // The wm places them: preferred sizes are content sizes; non-finite ones get the default.
-    let mut wm = Wm::new(Rect::new(0, 32, 1280, 684));
-    let sizes = [Some((680, 480)), None, Some((402, 341)), Some((5002, 5041)), None];
-    sizes.into_iter().for_each(|size| _ = wm.apply(Cmd::Open { size }).unwrap());
-    assert_eq!(h.wm().state_hash(), wm.state_hash());
-    assert_eq!(h.rect_of(4), Some(Rect::new(0, 32, 1280, 684)));
+    // A compact app at its preferred content size, centered, among other windows; the others
+    // large (whatever size they prefer), cascaded from the top window or the area's corner.
+    assert_eq!(h.rect_of(3), Some(Rect::new(439, 203, 402, 341)));
+    assert_eq!([h.rect_of(4), h.rect_of(5)], [large(28, 60), large(56, 88)]);
     assert_eq!(h.focused_app(), Some(WinId(5)));
     h.settle(&mut Response::default());
     let r = rectf(h.rect_of(3).unwrap());
@@ -139,6 +142,61 @@ fn apps_open_in_floating_windows() {
     h.draw_content(&mut list, WinId(1), [RectF::default(), clip], &THEMES[1], st);
     assert!(h.win(WinId(1)).unwrap().hits.is_empty());
     assert_eq!(list.clip(), RectF::new(-1e9, -1e9, 2e9, 2e9));
+    // Alone, a main app opens maximized and restores to its large size; a compact one does not.
+    let mut out = Response::default();
+    for (name, max) in [("terminal", true), ("welcome", false)] {
+        let (mut h, _, _) = host();
+        h.apply(Cmd::Close(WinId(1)));
+        h.apply(Cmd::Close(WinId(2)));
+        h.open(name, None, &mut out);
+        let p = h.wm().layout()[0];
+        assert_eq!(p.state == wm::State::Maximized, max, "{name}");
+        h.apply(Cmd::Restore(p.win));
+        assert_eq!(h.rect_of(p.win.0), large(96, 83), "{name}");
+    }
+    // On a narrow work area every window opens maximized and stays so.
+    let (mut h, _, _) = host();
+    h.apply(Cmd::SetArea(Rect::new(0, 44, 600, 500)));
+    assert!(h.narrow());
+    h.open("sized", None, &mut out);
+    h.apply(Cmd::Restore(WinId(1)));
+    h.apply(Cmd::SnapTo { win: WinId(2), snap: wm::Snap::Left });
+    h.settle(&mut out);
+    let states: Vec<_> = h.wm().layout().iter().map(|p| (p.state, p.rect)).collect();
+    assert_eq!(states, [(wm::State::Maximized, h.wm().area()); 3]);
+}
+
+#[test]
+fn the_desktop_lists_home_and_the_persons_apps_and_asks_reach_the_assistant() {
+    let (mut h, log, _) = host();
+    let mine = [Vfs::HOME, "/apps"].concat();
+    h.vfs.mkdir_all(&mine).unwrap();
+    for f in [&*[&mine, "/notes.app"].concat(), &[Vfs::HOME, "/x.app"].concat(), "/apps/demo.app"] {
+        h.vfs.write(f, b"x").unwrap();
+    }
+    // Home is Files at ~ (with the home glyph); the demos in /apps are never shown.
+    let icons = h.desktop();
+    let got: Vec<_> = icons.iter().map(|e| (&*e.name, &*e.label, e.place.is_some())).collect();
+    let notes = [&mine, "/notes.app"].concat();
+    let want = [("files", "Home", false), ("welcome", "Welcome", false)];
+    assert_eq!(got, [&want[..], &[("about", "About", false), (&notes, "Notes", true)]].concat());
+    assert_eq!(icons[0].icon.glyph, ui::icon::Glyph::Home);
+    // The launcher: apps the registry knows, then ~/apps, ~ and /apps.
+    let places: Vec<_> = h.entries(&["terminal", "nope"]).into_iter().map(|e| e.place).collect();
+    let place = |p: &str| Some(p.to_string());
+    assert_eq!(
+        places,
+        [None, place("~/apps/notes.app"), place("~/x.app"), place("/apps/demo.app")]
+    );
+    // Asking opens the Assistant once, which hears each question.
+    let mut out = Response::default();
+    h.ask("hi", &mut out);
+    h.apply(Cmd::Minimize(WinId(3)));
+    h.ask("again", &mut out);
+    // (Probes are numbered as made: listing icons made some.)
+    let asked: Vec<_> = log.take().into_iter().filter(|e| matches!(e.1, E::Ask(_))).collect();
+    assert_eq!(asked, [(5, E::Ask("hi".into())), (5, E::Ask("again".into()))]);
+    assert_eq!((h.wins.len(), h.wm().focused()), (3, Some(WinId(3))));
 }
 
 #[test]
@@ -323,10 +381,10 @@ fn tweens_ease_out_from_their_first_frame_replays_scale_and_themes_crossfade() {
     assert_eq!(blend(mono, mid, 0.5).glows[1].cy, mid.glows[1].cy);
     assert_eq!(blend(mono, mono, 0.3), *mono);
     let mut t = Themes::new("DAWN");
-    assert_eq!((t.current().name, t.next()), ("Dawn", "Mono"));
+    assert_eq!(t.current().name, "Dawn");
     assert!(!t.set("nope", 0.0, 200.0) && !t.set("dawn", 0.0, 200.0) && !t.is_running(0.0));
     assert!(t.set("mono", 100.0, 200.0));
-    assert_eq!((t.current().name, t.next(), t.at(100.0).base), ("Mono", "Midnight", dawn.base));
+    assert_eq!((t.current().name, t.at(100.0).base), ("Mono", dawn.base));
     assert!(t.is_running(5000.0));
     t.arm(1000.0);
     assert_eq!((t.at(1000.0).grain, t.at(1100.0).grain), (6, 5));
@@ -335,12 +393,20 @@ fn tweens_ease_out_from_their_first_frame_replays_scale_and_themes_crossfade() {
 }
 
 #[test]
-fn frames_have_controls_edges_and_snap_zones_and_the_layout_places_the_dock_and_launcher() {
+fn frames_have_controls_edges_and_snap_zones() {
     use frame::*;
     let r = RectF::new(100.0, 50.0, 400.0, 300.0);
-    let [min, max, close] = controls(r).unwrap();
+    let [min, max, close] = controls(r, CTL_STEP).unwrap();
     assert_eq!((min.x, max.x, close.x, close.y), (436.0, 456.0, 476.0, 64.0));
-    assert_eq!((controls(RectF { w: 91.0, ..r }), controls(RectF { h: 39.0, ..r })), (None, None));
+    assert_eq!(hit_box(close, CTL_STEP), RectF::new(472.0, 60.0, 20.0, 20.0));
+    let none =
+        (controls(RectF { w: 91.0, ..r }, CTL_STEP), controls(RectF { h: 39.0, ..r }, CTL_STEP));
+    assert_eq!(none, (None, None));
+    // For a finger: hit boxes a fingertip wide, kept inside the window.
+    let [min, _, close] = controls(r, TOUCH_STEP).unwrap();
+    let touch = RectF::new(456.0, 48.0, 44.0, 44.0);
+    assert_eq!((min.x, close.x, hit_box(close, TOUCH_STEP)), (384.0, 472.0, touch));
+    assert_eq!(controls(RectF { w: 187.0, ..r }, TOUCH_STEP), None);
     let at = |x, y| edge(r, x, y);
     let sides = [at(98.0, 200.0), at(502.0, 200.0), at(300.0, 52.0), at(300.0, 349.0)];
     assert_eq!(sides, [Some((-1, 0)), Some((1, 0)), Some((0, -1)), Some((0, 1))]);
@@ -361,27 +427,6 @@ fn frames_have_controls_edges_and_snap_zones_and_the_layout_places_the_dock_and_
     let corners = [z(20.0, 20.0), z(1260.0, 790.0)];
     assert_eq!(corners, [snap(wm::Snap::TopLeft), snap(wm::Snap::BottomRight)]);
     assert_eq!(Zone::Max.rect(Rect::new(0, 32, 1280, 684)), Rect::new(0, 32, 1280, 684));
-    // The layout places the dock and the launcher.
-    use layout::*;
-    let screen = (1280.0, 800.0);
-    assert_eq!(dock(4, screen), RectF::new(529.0, 728.0, 222.0, 60.0));
-    assert_eq!(dock_tile(4, screen, 1), RectF::new(591.0, 736.0, 44.0, 44.0));
-    assert_eq!(dock(0, screen).w, 16.0);
-    let at = |x| dock_at(4, screen, x, 750.0);
-    let found = [at(530.0), at(560.0), at(585.0), at(586.0), at(749.0), at(800.0)];
-    assert_eq!(found, [Some(None), Some(Some(0)), Some(Some(0)), Some(Some(1)), Some(None), None]);
-    assert_eq!(dock_at(0, screen, 640.0, 750.0), None);
-    let p = Panel::new(screen, 5);
-    assert_eq!((p.rect, p.cols()), (RectF::new(340.0, 180.0, 600.0, 440.0), 4));
-    assert_eq!(p.field(), RectF::new(356.0, 196.0, 568.0, 48.0));
-    assert_eq!((p.tile(0), p.tile(4).y), (RectF::new(387.0, 260.0, 80.0, 84.0), 352.0));
-    assert_eq!((p.list_top(), p.row(1).y, p.fit()), (452.0, 492.0, 3));
-    let at = |x, y, first| p.at(x, y, first, 9);
-    assert_eq!((at(400.0, 300.0, 0), at(400.0, 500.0, 2)), (Some(Some(0)), Some(Some(8))));
-    assert_eq!((at(345.0, 300.0, 0), at(10.0, 10.0, 0)), (Some(None), None));
-    let tiny = Panel::new((40.0, 30.0), 3);
-    assert_eq!((tiny.rect.w, tiny.rect.h, tiny.cols(), tiny.fit()), (0.0, 0.0, 1, 0));
-    assert_eq!(Panel::new((300.0, 800.0), 0).cols(), 2);
 }
 
 /// A search over apps, then files, by label.
@@ -419,20 +464,31 @@ fn searches_rank_then_move_through_the_grid_then_the_list() {
     s.fit = 2;
     (0..5).for_each(|_| _ = s.key(Key::Down, 4));
     assert_eq!((s.sel, s.first), (8, 2));
-    s.scroll(-1e9, 40.0);
+    s.scroll(-9);
     assert_eq!(s.first, 0);
-    s.scroll(80.0, 40.0);
+    s.scroll(9);
     assert_eq!(s.first, 2);
-    s.scroll(f32::NAN, 40.0);
     assert!(!s.key(Key::Enter, 4) && s.first == 2);
-    // Typing filters and selects the best; Backspace widens again.
+    // A query puts the Ask row first, and selects the first app named by it, else the Ask row.
     s.type_text("ter\u{7}");
     assert_eq!((s.query.as_str(), &s.tiles[..], &s.rows[..]), ("ter", &[0][..], &[6, 7][..]));
+    assert!(s.ask() && s.get(0).is_none() && s.count() == 4 && s.sel == 1);
+    assert_eq!((&*s.get(1).unwrap().label, &*s.get(2).unwrap().label), ("Terminal", "Counter"));
     s.key(Key::Down, 4);
     s.type_text("");
-    assert_eq!(s.sel, 1);
+    assert_eq!(s.sel, 2);
     s.key(Key::Backspace, 4);
-    assert_eq!((s.query.as_str(), s.count(), s.sel), ("te", 4, 0));
+    assert_eq!((s.query.as_str(), s.count(), s.sel), ("te", 5, 1));
+    s.type_text("lc");
+    assert_eq!((s.count(), s.sel), (1, 0));
+    // Up from the first row of tiles goes to the Ask row, Down from it to the first tile.
+    let mut s = search(&apps, &["Clicker"]);
+    s.type_text("e");
+    let (u, d) = (Key::Up, Key::Down);
+    let steps = [(u, 0), (u, 0), (d, 1), (d, 4), (d, 4), (u, 3), (Key::Left, 2), (u, 0)];
+    for (k, want) in steps {
+        assert!(s.key(k, 4) && s.sel == want, "{k:?} to {}", s.sel);
+    }
     let mut none = Search::new(Vec::new());
     let keys = [Key::Up, Key::Down, Key::Left, Key::Right, Key::Backspace];
     assert!(keys.into_iter().all(|k| none.key(k, 4) && none.sel == 0));
@@ -450,12 +506,6 @@ fn glyphs_draw_on_whole_pixels_and_time_reads_as_the_bar_shows_it() {
     let want = [103., 20., 6., 1., 103., 17., 6., 6., 105., 16., 5., 5., 102., 19., 5., 5.];
     assert_eq!(rects[..4].concat(), want);
     assert_eq!((list.len(), list.instances()[3].color, list.instances()[5].kind), (6, fill, 3.0));
-    list.clear();
-    mark(&mut list, (19.0, 16.0), 14.0, ink);
-    sliders(&mut list, (50.0, 16.0), 14.0, ink);
-    contrast(&mut list, (80.0, 16.0), 14.0, ink);
-    magnifier(&mut list, (20.0, 20.0), ink);
-    assert_eq!((list.len(), list.instances()[2].rect), (2 + 4 + 2 + 8, [43.0, 13.0, 14.0, 1.0]));
     let fades = (faded(ink, 0.5), faded(ink, 9.0), faded(ink, f32::NAN));
     assert_eq!(fades, (Rgba(2, 2, 2, 128), ink, Rgba(2, 2, 2, 0)));
     assert_eq!((px(&text, 1.0), px(&text, 0.2)), (1.0, 1.0));

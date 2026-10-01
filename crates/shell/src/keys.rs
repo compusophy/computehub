@@ -26,14 +26,26 @@ fn is_browser(key: Key, m: Mods) -> bool {
 }
 
 impl Shell {
-    /// A key for the launcher while it shows, else a binding, else for the
-    /// focused app.
+    /// A key for an open menu, else for the everything bar while it has the keys, else a
+    /// binding, else for the focused app.
     pub(crate) fn key(&mut self, key: Key, m: Mods, out: &mut Response) {
         let chord = (m.alt || m.meta) && !m.ctrl;
-        if self.launcher.open {
+        if let Some((menu, ..)) = &mut self.menu {
             match key {
-                Key::Space if chord && !m.shift => self.hide_launcher(),
-                Key::Enter => self.launch(self.launcher.search.sel, out),
+                Key::Escape => self.menu = None,
+                Key::Enter => {
+                    let sel = menu.sel;
+                    self.choose(sel, out);
+                }
+                _ => _ = menu.key(key),
+            }
+            out.consumed = true;
+            return;
+        }
+        if self.launcher.focus {
+            match key {
+                Key::Space if chord && !m.shift => self.toggle_launcher(),
+                Key::Enter if self.launcher.open => self.launch(self.launcher.search.sel, out),
                 Key::Escape => self.hide_launcher(),
                 _ => _ = self.launcher.search.key(key, self.panel().cols()),
             }

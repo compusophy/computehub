@@ -1,0 +1,150 @@
+//! Context menus: which one a secondary press opens, what their items do, and the dock's
+//! favorites they change.
+
+use gfx::DrawList;
+use home::menu::{Item, Menu};
+use ui::Theme;
+use wm::{Cmd, State, WinId};
+
+use crate::desktop::Target;
+use crate::{Effect, Response, Shell};
+
+/// What a menu item does to the menu's app: open a new window of it, show it (its window, else a
+/// new one), keep it in the dock (or not), close its windows; or focus the everything bar, show
+/// a built-in app, open a terminal, or command the menu's window (minimize, toggle maximize,
+/// close).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum Act {
+    Open,
+    Show,
+    Keep(bool),
+    Close,
+    Ask,
+    Go(&'static str),
+    Terminal,
+    Wm(usize),
+}
+
+/// The desktop's menu.
+const DESKTOP: [Item<Act>; 6] = [
+    ("Open Terminal", "Alt+\u{23ce}", Some(Act::Terminal)),
+    ("Ask the Assistant", "", Some(Act::Ask)),
+    ("", "", None),
+    ("Settings", "", Some(Act::Go("settings"))),
+    ("Send feedback", "", Some(Act::Go("feedback"))),
+    ("About compusophy", "", Some(Act::Go("about"))),
+];
+
+/// An open menu, the app it is about (`""` if none) and its window, if a window's.
+pub(crate) type Open = (Menu<Act>, String, Option<WinId>);
+
+impl Shell {
+    /// A secondary press at `(x, y)` (a finger's if `touch`): the menu of what is there,
+    /// replacing any other; nothing inside an open menu.
+    pub(crate) fn secondary(&mut self, (x, y): (f32, f32), touch: bool, out: &mut Response) {
+        if self.menu.as_ref().is_some_and(|m| m.0.rect.contains(x, y)) {
+            return;
+        }
+        self.menu = self.hit(x, y).and_then(|hit| self.menu_for(hit, (x, y), touch));
+        out.redraw |= self.menu.is_some();
+    }
+
+    /// The menu for `hit` at `at` (the desktop's, an app's for an icon, a result or a dock
+    /// tile, or a window's), with its app and window.
+    fn menu_for(&mut self, hit: Target, at: (f32, f32), touch: bool) -> Option<Open> {
+        let menu = |s: &mut Shell, items: &[Item<Act>]| {
+            Menu::new(items, at, s.size, touch, &mut s.host.text)
+        };
+        let (name, running) = match hit {
+            Target::Desktop => return Some((menu(self, &DESKTOP), String::new(), None)),
+            Target::Title(w) | Target::Ctl(w, _) => {
+                self.host.apply(Cmd::Focus(w));
+                let max = self.placement(w).is_some_and(|p| p.state == State::Maximized);
+                let [min, close] = [("Minimize", "Alt+\u{2193}", 0), ("Close", "Alt+Q", 2)]
+                    .map(|(label, hint, i)| (label, hint, Some(Act::Wm(i))));
+                let label = if max { "Restore" } else { "Maximize" };
+                let items: &[_] = match self.host.narrow() {
+                    true => &[min, close],
+                    false => &[min, (label, "Alt+\u{2191}", Some(Act::Wm(1))), close],
+                };
+                return Some((menu(self, items), String::new(), Some(w)));
+            }
+            Target::Icon(i) => (self.icons.get(i)?.name.clone(), false),
+            Target::Item(k) => (self.launcher.search.get(k)?.name.clone(), false),
+            Target::Dock(i) => self.dock.get(i).map(|d| (d.0.clone(), !d.2.is_empty()))?,
+            _ => return None,
+        };
+        let kept = self.favs.contains(&name);
+        let items = [
+            match running {
+                true => ("New window", "", Some(Act::Open)),
+                false => ("Open", "", Some(Act::Show)),
+            },
+            match kept {
+                true => ("Remove from dock", "", Some(Act::Keep(false))),
+                false => ("Keep in dock", "", Some(Act::Keep(true))),
+            },
+            ("Close", "", Some(Act::Close)),
+        ];
+        Some((menu(self, &items[..2 + usize::from(running)]), name, None))
+    }
+
+    /// Does what item `i` of the open menu says, closing it.
+    pub(crate) fn choose(&mut self, i: Option<usize>, out: &mut Response) {
+        let Some((menu, name, win)) = self.menu.take() else { return };
+        let Some(act) = i.and_then(|i| menu.act(i)) else { return };
+        if matches!(act, Act::Open | Act::Show | Act::Go(_) | Act::Terminal) {
+            self.hide_launcher();
+        }
+        match act {
+            Act::Open => self.host.open(&name, None, out),
+            Act::Show => self.host.show(&name, out),
+            Act::Keep(keep) => self.keep(&name, keep),
+            Act::Close => {
+                for w in self.host.windows_of(&name) {
+                    self.host.apply(Cmd::Close(w));
+                }
+            }
+            Act::Ask => self.focus_field(),
+            Act::Go(app) => self.host.show(app, out),
+            Act::Terminal => self.host.open("terminal", None, out),
+            Act::Wm(i) => {
+                if let Some(w) = win {
+                    self.host.apply([Cmd::Minimize, Cmd::ToggleMaximize, Cmd::Close][i](w));
+                }
+            }
+        }
+    }
+
+    /// Keeps `name` in the dock or removes it, saving the favorites (names joined by commas)
+    /// if they changed.
+    pub(crate) fn keep(&mut self, name: &str, keep: bool) {
+        if home::dock::pin(&mut self.favs, name, keep) {
+            let mut value = String::new();
+            for f in &self.favs {
+                if !value.is_empty() {
+                    value.push(',');
+                }
+                value.push_str(f);
+            }
+            self.pending.push(Effect::Pref { key: home::dock::PREF.to_string(), value });
+        }
+    }
+
+    /// The hovered action becomes the selection.
+    pub(crate) fn point_menu(&mut self) {
+        let hit = self.pointer.and_then(|(x, y)| self.hit(x, y));
+        if let (Some(menu), Some(Target::Menu(i))) = (&mut self.menu, hit) {
+            menu.0.sel = Some(i);
+        }
+    }
+
+    /// The open menu; its selection washed more while pressed.
+    pub(crate) fn draw_menu(&mut self, list: &mut DrawList, theme: &Theme) {
+        let held =
+            self.armed.is_some_and(|a| matches!(a, Target::Menu(_)) && self.hover == Some(a));
+        if let Some(menu) = &self.menu {
+            menu.0.draw(list, &mut self.host.text, theme, held);
+        }
+    }
+}

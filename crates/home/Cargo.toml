@@ -1,0 +1,17 @@
+[package]
+name = "compusophy-home"
+description = "The compusophyOS home screen: the dock of favorites, the everything bar and the launcher's panel above it, the desktop's icons, context menus, and touch (finger scrolling, flings, long presses)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[lib]
+name = "home"
+
+[dependencies]
+compusophy-gfx.workspace = true
+compusophy-host.workspace = true
+compusophy-ui.workspace = true

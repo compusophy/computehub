@@ -1,11 +1,14 @@
 //! The pointer: what lies under it; pressing, dragging, resizing, snapping,
-//! double clicks, buttons (which act on release) and clicks into apps.
+//! double clicks, buttons (which act on release), clicks into apps and secondary presses.
 
-use host::frame::{CTL_GAP, Zone, controls, edge, edge_cursor, resized, zone};
+use host::frame::{
+    CTL_STEP, TOUCH_STEP, Zone, controls, edge, edge_cursor, hit_box, resized, zone,
+};
 use host::{Cursor, TITLEBAR_H, content_rect, rectf};
 use ui::{AppEvent, Sense};
 use wm::{Cmd, Placement, Rect, State, WinId};
 
+use crate::touch::Scroll;
 use crate::{BAR_H, Response, Shell};
 
 /// Travel before a titlebar press drags; most time between double clicks.
@@ -17,12 +20,15 @@ const DOUBLE_MS: f64 = 350.0;
 pub(crate) enum Target {
     /// The top bar's buttons, and the bare bar.
     Mark,
+    Feedback,
     Settings,
-    Theme,
-    Bar,
-    /// A dock tile, and the bare dock.
+    Top,
+    /// A dock tile, the Apps button, and the bare dock.
     Dock(usize),
-    DockBar,
+    Apps,
+    Shelf,
+    /// The everything bar.
+    Field,
     /// A window's control (minimize, maximize, close), titlebar, content, and
     /// an edge or corner (which way it resizes).
     Ctl(WinId, usize),
@@ -33,16 +39,35 @@ pub(crate) enum Target {
     Veil,
     Panel,
     Item(usize),
+    /// A desktop icon, and the bare desktop.
+    Icon(usize),
+    Desktop,
+    /// A menu's action, the rest of the menu, and anywhere else while it shows.
+    Menu(usize),
+    MenuPanel,
+    Off,
 }
 
 impl Target {
     /// Whether it acts on release (and highlights).
     pub(crate) fn is_button(self) -> bool {
         use Target::*;
-        matches!(self, Mark | Settings | Theme | Dock(_) | Ctl(..) | Veil | Item(_))
+        matches!(
+            self,
+            Mark | Feedback
+                | Settings
+                | Dock(_)
+                | Apps
+                | Field
+                | Ctl(..)
+                | Veil
+                | Item(_)
+                | Icon(_)
+                | Menu(_)
+        )
     }
 
-    fn win(self) -> Option<WinId> {
+    pub(crate) fn win(self) -> Option<WinId> {
         use Target::*;
         match self {
             Ctl(w, _) | Title(w) | Body(w) | Edge(w, ..) => Some(w),
@@ -62,9 +87,17 @@ pub(crate) enum Grab {
 }
 
 impl Shell {
-    /// What is under `(x, y)`: the launcher, else the bar, the dock, the
-    /// windows top to bottom.
+    /// What is under `(x, y)`: a menu (which hides the rest), the everything bar, the
+    /// launcher, the top bar, the dock, the windows top to bottom, then the desktop.
     pub(crate) fn hit(&self, x: f32, y: f32) -> Option<Target> {
+        if let Some((m, ..)) = &self.menu {
+            return Some(
+                m.at(x, y).map_or(Target::Off, |i| i.map_or(Target::MenuPanel, Target::Menu)),
+            );
+        }
+        if home::field::rect(self.size).contains(x, y) {
+            return Some(Target::Field);
+        }
         if self.launcher.open {
             return Some(self.launcher_hit(x, y));
         }
@@ -74,22 +107,29 @@ impl Shell {
         if let Some(t) = self.dock_hit(x, y) {
             return Some(t);
         }
+        let step = self.ctl_step();
         for p in self.host.wm().layout().iter().rev() {
             let r = rectf(p.rect);
+            let mut ctl = controls(r, step).into_iter().flatten();
+            if let Some(i) = ctl.position(|c| hit_box(c, step).contains(x, y)) {
+                return Some(Target::Ctl(p.win, i));
+            }
             if let Some((dx, dy)) = edge(r, x, y).filter(|_| p.state != State::Maximized) {
                 return Some(Target::Edge(p.win, dx, dy));
             }
-            if !r.contains(x, y) {
-                continue;
+            if r.contains(x, y) {
+                let body = y >= r.y + TITLEBAR_H;
+                return Some(if body { Target::Body(p.win) } else { Target::Title(p.win) });
             }
-            if y >= r.y + TITLEBAR_H {
-                return Some(Target::Body(p.win));
-            }
-            let mut ctl = controls(r).into_iter().flatten();
-            let i = ctl.position(|c| c.inset(-CTL_GAP / 2.0).contains(x, y));
-            return Some(i.map_or(Target::Title(p.win), |i| Target::Ctl(p.win, i)));
         }
-        None
+        let (a, narrow) = (rectf(self.host.wm().area()), self.host.narrow());
+        let icon = home::icons::at(self.icons.len(), a, narrow, x, y);
+        Some(icon.map_or(Target::Desktop, Target::Icon))
+    }
+
+    /// The window controls' reach: wide enough for a finger on a narrow screen.
+    pub(crate) fn ctl_step(&self) -> f32 {
+        if self.host.narrow() { TOUCH_STEP } else { CTL_STEP }
     }
 
     /// The topmost hit of `win`'s last frame at `(x, y)`, inside its content.
@@ -107,31 +147,49 @@ impl Shell {
         match (self.grab, self.hover) {
             (Some(Grab::Move { .. }), _) => Cursor::Grabbing,
             (Some(Grab::Size { edge, .. }), _) => edge_cursor(edge),
-            (None, Some(Target::Title(_))) => Cursor::Grab,
+            (None, Some(Target::Title(_))) if !self.host.narrow() => Cursor::Grab,
             (None, Some(Target::Edge(_, dx, dy))) => edge_cursor((dx, dy)),
             _ if text => Cursor::Text,
             _ => Cursor::Default,
         }
     }
 
-    /// Button 0 down: arms a button, focuses a window, grabs it, toggles
-    /// maximize on a double click, or presses into content.
-    pub(crate) fn press(&mut self, out: &mut Response) {
-        let (x, y) = self.pointer.unwrap_or_default();
+    /// Button 0 down (a finger's if `touch`): closes a menu pressed outside (and does nothing
+    /// else), arms a button, follows a finger, takes the keys from the everything bar, focuses a
+    /// window, grabs it (not on a narrow screen), toggles maximize on a double click, or presses
+    /// into content.
+    pub(crate) fn press(&mut self, touch: bool, out: &mut Response) {
+        let ((x, y), now) = (self.pointer.unwrap_or_default(), self.host.now_ms);
         let hit = self.hit(x, y);
+        (self.grab, self.app_press, self.armed, self.fling) = (None, None, None, None);
+        if hit == Some(Target::Off) {
+            self.menu = None;
+            return;
+        }
         self.armed = hit.filter(|h| h.is_button());
-        (self.grab, self.app_press) = (None, None);
+        let scroll = match hit {
+            Some(Target::Body(win)) => Scroll::Win(win, (x, y)),
+            Some(Target::Panel | Target::Item(_)) => Scroll::Launcher,
+            _ => Scroll::None,
+        };
+        let finger = home::touch::Touch::new((x, y), now, scroll != Scroll::None);
+        self.touch = touch.then_some((finger, scroll));
+        let field = self.launcher.focus && !self.launcher.open && self.menu.is_none();
+        if field && hit != Some(Target::Field) {
+            self.hide_launcher();
+        }
         let (Some(hit), Some(win)) = (hit, hit.and_then(Target::win)) else {
             return;
         };
         self.host.apply(Cmd::Focus(win));
         // Focus events reach the apps before the press.
         self.settle(out);
-        let (Some(p), now) = (self.placement(win), self.host.now_ms) else {
+        let Some(p) = self.placement(win) else {
             return;
         };
         let r = rectf(p.rect);
         match hit {
+            Target::Title(_) if self.host.narrow() => {}
             Target::Title(_) => {
                 let last = self.last_title.take();
                 if last.is_some_and(|(w, t)| w == win && now - t <= DOUBLE_MS) {
@@ -185,10 +243,13 @@ impl Shell {
         }
     }
 
-    /// Drops a held window (snapping it); button 0 fires the armed button, or
-    /// clicks the pressed widget, if still over it.
+    /// Lifts a finger (it may fling) and drops a held window (snapping it); button 0 fires the
+    /// armed button, or clicks the pressed widget, if still over it.
     pub(crate) fn release(&mut self, primary: bool, out: &mut Response) {
-        let (x, y) = self.pointer.unwrap_or_default();
+        let ((x, y), now) = (self.pointer.unwrap_or_default(), self.host.now_ms);
+        if let Some((finger, scroll)) = self.touch.take() {
+            self.fling = finger.lift(now).map(|f| (scroll, f));
+        }
         if let Some(Grab::Move { win, zone: Some(zone), .. }) = self.grab.take() {
             self.host.apply(match zone {
                 Zone::Max => Cmd::Maximize(win),
@@ -211,35 +272,35 @@ impl Shell {
     }
 
     fn activate(&mut self, target: Target, out: &mut Response) {
-        let now = self.host.now_ms;
+        let name = |s: &Shell, i: usize| s.dock.get(i).map_or(String::new(), |d| d.0.clone());
         match target {
-            Target::Mark => self.toggle_launcher(),
+            Target::Mark => self.host.show("welcome", out),
+            Target::Feedback => self.host.show("feedback", out),
             Target::Settings => self.host.show("settings", out),
-            Target::Theme => _ = self.host.theme.set(self.host.theme.next(), now, host::THEME_MS),
-            Target::Dock(i) => self.host.toggle(self.dock.get(i).map_or("", |d| d.0.as_str()), out),
+            Target::Dock(i) => self.host.toggle(&name(self, i), out),
+            Target::Apps => self.toggle_launcher(),
+            Target::Field => self.focus_field(),
             Target::Ctl(w, i) => {
                 self.host.apply([Cmd::Minimize, Cmd::ToggleMaximize, Cmd::Close][i](w))
             }
             Target::Item(k) => self.launch(k, out),
             Target::Veil => self.hide_launcher(),
+            Target::Icon(i) => {
+                let name = self.icons.get(i).map(|e| e.name.clone()).unwrap_or_default();
+                self.host.show(&name, out);
+            }
+            Target::Menu(i) => self.choose(Some(i), out),
             _ => {}
         }
     }
 
     /// The wheel scrolls the launcher, else goes to the app under it.
     pub(crate) fn wheel(&mut self, x: f32, y: f32, dy: f32, out: &mut Response) {
-        if self.launcher.open {
-            self.launcher.search.scroll(dy, host::layout::ROW_H);
-            out.consumed = true;
-            return;
-        }
-        let Some(Target::Body(win)) = self.hit(x, y) else {
-            return;
+        let scroll = match self.hit(x, y) {
+            _ if self.launcher.open => Scroll::Launcher,
+            Some(Target::Body(win)) => Scroll::Win(win, (x, y)),
+            _ => return,
         };
-        if let (Some(p), true) = (self.placement(win), dy.is_finite()) {
-            let c = content_rect(rectf(p.rect));
-            self.host.deliver(win, AppEvent::Wheel { x: x - c.x, y: y - c.y, dy }, out);
-            out.consumed = true;
-        }
+        out.consumed |= dy.is_finite() && self.scroll(scroll, dy, out);
     }
 }

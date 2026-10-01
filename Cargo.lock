@@ -82,6 +82,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "compusophy-home"
+version = "0.1.0"
+dependencies = [
+ "compusophy-gfx",
+ "compusophy-host",
+ "compusophy-ui",
+]
+
+[[package]]
 name = "compusophy-host"
 version = "0.1.0"
 dependencies = [
@@ -141,6 +150,7 @@ name = "compusophy-shell"
 version = "0.1.0"
 dependencies = [
  "compusophy-gfx",
+ "compusophy-home",
  "compusophy-host",
  "compusophy-ui",
  "compusophy-vfs",

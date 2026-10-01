@@ -3,7 +3,7 @@
 //! waits for the next frame to arm it, so every animation's first frame moves.
 
 use gfx::{DrawList, Icon, Kind, RectF, Rgba};
-use ui::theme::{Glow, THEMES, Theme, mix};
+use ui::theme::{Glow, Theme, mix};
 
 use crate::paint::faded;
 
@@ -229,11 +229,6 @@ impl Themes {
         t.to(1.0, now, ms);
         (self.fade, self.current) = (Some((self.at(now), t)), next);
         true
-    }
-
-    pub fn next(&self) -> &'static str {
-        let i = THEMES.iter().position(|t| t.name == self.current.name).unwrap_or(0);
-        THEMES[(i + 1) % THEMES.len()].name
     }
 
     /// What shows at `now`.

@@ -1,42 +1,40 @@
-//! The launcher: a glass panel over a veiled desktop with a search field,
-//! the built-in apps as tiles and the `.app` files as a list. Typing filters
-//! both; the arrows move the selection, Enter or a click opens.
+//! The launcher: the everything bar's focus and query, and the panel of results above it over a
+//! veiled desktop. Typing into the bar opens the panel; the arrows move the selection, Enter or
+//! a click opens an app or asks the Assistant.
 
 use gfx::{DrawList, RectF};
-use host::layout::{FIELD_H, PANEL_PAD as PAD, Panel, ROW_H};
+use home::panel::{Panel, ROW_H};
 use host::motion::{Tween, Vis, replay};
-use host::paint::{ICON as TILE, cap_baseline, magnifier, px, sheen};
 use host::search::Search;
-use ui::{FontId, TextStyle, Theme};
+use ui::Theme;
 
 use crate::desktop::Target;
-use crate::{Response, Shell};
+use crate::{BAR_H, Response, Shell};
 
-/// The built-in apps the grid offers, in order (those the registry knows).
-const BUILTIN: [&str; 6] = ["terminal", "assistant", "studio", "settings", "welcome", "about"];
-const RADIUS: f32 = 20.0;
-const FIELD_SIZE: f32 = 18.0;
-/// Where the query starts, after the search glyph.
-const QUERY_X: f32 = 44.0;
-const ROW_ICON: f32 = 24.0;
+/// The apps the grid offers, in order (those the registry knows).
+const BUILTIN: [&str; 8] =
+    ["studio", "assistant", "terminal", "files", "settings", "welcome", "about", "feedback"];
 const OPEN_MS: f32 = 160.0;
 const CLOSE_MS: f32 = 120.0;
 /// The veil's alpha, and the panel's scale as it opens.
 const VEIL: f32 = 90.0;
 const FROM_SCALE: f32 = 0.98;
 
-/// Whether the launcher shows (and takes the keys), how shown it is (0 to
-/// 1, as it fades), and its search.
+/// Whether the panel shows, whether the bar takes the keys, how shown the panel is (0 to 1, as
+/// it fades), the search, and wheel or finger travel short of a whole row.
 #[derive(Default)]
 pub(crate) struct Launcher {
     pub open: bool,
+    pub focus: bool,
     pub t: Tween<f32>,
     pub search: Search,
+    pub travel: f32,
 }
 
 impl Shell {
     pub(crate) fn panel(&self) -> Panel {
-        Panel::new(self.size, self.launcher.search.tiles.len())
+        let (s, field) = (&self.launcher.search, home::field::rect(self.size));
+        Panel::new(self.size.0, field, BAR_H, s.ask(), s.tiles.len(), s.rows.len())
     }
 
     pub(crate) fn launcher_hit(&self, x: f32, y: f32) -> Target {
@@ -48,30 +46,65 @@ impl Shell {
         }
     }
 
-    /// Shows the launcher with an empty query.
+    /// Gives the bar the keys with a fresh search, and asks for text input again: a tap on the
+    /// bar brings back a phone keyboard put away.
+    pub(crate) fn focus_field(&mut self) {
+        if !self.launcher.focus {
+            let items = self.host.entries(&BUILTIN);
+            (self.launcher.search, self.launcher.focus) = (Search::new(items), true);
+        }
+        self.ime = None;
+    }
+
+    /// Shows the panel, the bar focused.
     pub(crate) fn show_launcher(&mut self) {
-        let items = self.host.entries(&BUILTIN);
+        self.focus_field();
         let (now, l) = (self.host.now_ms, &mut self.launcher);
-        (l.search, l.open) = (Search::new(items), true);
+        l.open = true;
         l.t.to(1.0, now, OPEN_MS);
         (self.grab, self.armed) = (None, None);
     }
 
+    /// Hides the panel and takes the keys (and the query) from the bar.
     pub(crate) fn hide_launcher(&mut self) {
-        self.launcher.open = false;
-        self.launcher.t.to(0.0, self.host.now_ms, CLOSE_MS);
+        let l = &mut self.launcher;
+        (l.open, l.focus) = (false, false);
+        l.t.to(0.0, self.host.now_ms, CLOSE_MS);
     }
 
     pub(crate) fn toggle_launcher(&mut self) {
         if self.launcher.open { self.hide_launcher() } else { self.show_launcher() }
     }
 
-    /// Opens result `k` and hides the launcher.
-    pub(crate) fn launch(&mut self, k: usize, out: &mut Response) {
-        if let Some(name) = self.launcher.search.get(k).map(|e| e.name.clone()) {
-            self.hide_launcher();
-            self.host.open(&name, None, out);
+    /// Text typed into the bar; any shows the panel.
+    pub(crate) fn typed(&mut self, s: &str) {
+        self.launcher.search.type_text(s);
+        if !self.launcher.open && !self.launcher.search.query.is_empty() {
+            self.show_launcher();
         }
+    }
+
+    /// Opens result `k` or asks the Assistant (the Ask row), and hides the launcher.
+    pub(crate) fn launch(&mut self, k: usize, out: &mut Response) {
+        let s = &self.launcher.search;
+        let (name, query) = (s.get(k).map(|e| e.name.clone()), s.query.clone());
+        if name.is_none() && !(s.ask() && k == 0) {
+            return;
+        }
+        self.hide_launcher();
+        match name {
+            Some(name) => self.host.open(&name, None, out),
+            None => self.host.ask(&query, out),
+        }
+    }
+
+    /// Scrolls the list by `dy` px, a row at a time.
+    pub(crate) fn scroll_launcher(&mut self, dy: f32) {
+        let l = &mut self.launcher;
+        l.travel += dy;
+        let rows = (l.travel / ROW_H).trunc();
+        l.travel -= rows * ROW_H;
+        l.search.scroll(rows as isize);
     }
 
     /// The veil, then the panel, fading in and growing.
@@ -87,106 +120,27 @@ impl Shell {
             return;
         }
         self.launcher.search.fit = p.fit().max(1);
+        let hot = match self.hover {
+            Some(Target::Item(k)) => Some((k, self.armed == self.hover)),
+            _ => None,
+        };
+        let (s, text) = (&self.launcher.search, &mut self.host.text);
         if t >= 1.0 {
-            return self.draw_panel(list, theme, p);
+            return p.draw(list, text, theme, s, hot);
         }
         let mut layer = std::mem::take(&mut self.scratch);
         layer.clear();
-        self.draw_panel(&mut layer, theme, p);
+        p.draw(&mut layer, text, theme, s, hot);
         let s = FROM_SCALE + (1.0 - FROM_SCALE) * t;
         replay(list, &layer, Vis { s, a: t, ..Vis::at(p.rect) });
         self.scratch = layer;
     }
 
-    /// The (solid) panel, the field, then the results or word of none.
-    fn draw_panel(&mut self, list: &mut DrawList, theme: &Theme, p: Panel) {
-        let (r, line) = (p.rect, px(&self.host.text, 1.0));
-        list.shadow_offset(r, RADIUS, 60.0, 24.0, theme.shadow);
-        list.fill(r, RADIUS, theme.base);
-        list.fill(r, RADIUS, theme.surface);
-        list.border(r, RADIUS, line, theme.border);
-        sheen(list, r, RADIUS, line, theme.highlight);
-        list.push_clip(r);
-        self.draw_field(list, theme, p.field());
-        let l = &self.launcher.search;
-        let (tiles, rows, first) = (l.tiles.clone(), l.rows.clone(), l.first);
-        for (k, &i) in tiles.iter().enumerate() {
-            self.draw_result(list, theme, k, i, p.tile(k));
-        }
-        for (j, (n, &i)) in rows.iter().enumerate().skip(first).take(p.fit()).enumerate() {
-            self.draw_result(list, theme, tiles.len() + n, i, p.row(j));
-        }
-        let body = TextStyle::new(FontId::Sans, 14.0, theme.text_dim);
-        let text = &mut self.host.text;
-        if !tiles.is_empty() && !rows.is_empty() {
-            let y = text.snap(p.list_top() - PAD / 2.0);
-            list.fill(RectF::new(r.x + PAD, y, r.w - 2.0 * PAD, line), 0.0, theme.border);
-        }
-        if tiles.is_empty() && rows.is_empty() {
-            let msg = "No results";
-            let w = text.measure(msg, body);
-            let x = text.snap(r.x + (r.w - w) / 2.0);
-            text.draw_text(list, x, cap_baseline(text, p.list_top(), ROW_H, 14.0), msg, body);
-        }
-        list.pop_clip();
-    }
-
-    /// The search field: a glyph, the query (or a placeholder) and a caret.
-    fn draw_field(&mut self, list: &mut DrawList, theme: &Theme, f: RectF) {
-        let text = &mut self.host.text;
-        let line = px(text, 1.0);
-        list.fill(f, 12.0, theme.wash(false));
-        list.border(f, 12.0, line, theme.border);
-        magnifier(list, (f.x + 21.0, f.y + FIELD_H / 2.0 - 1.0), theme.accent);
-        let style = TextStyle::new(FontId::Sans, FIELD_SIZE, theme.text);
-        let q = &self.launcher.search.query;
-        let room = RectF::new(f.x + QUERY_X, f.y, (f.w - QUERY_X - PAD).max(0.0), f.h);
-        let (base, tw) = (cap_baseline(text, f.y, f.h, FIELD_SIZE), text.measure(q, style));
-        let caret_w = px(text, 1.5);
-        let x = text.snap(room.x + (room.w - caret_w - tw).min(0.0));
-        list.push_clip(room);
-        if q.is_empty() {
-            let hint = style.with_color(theme.text_faint);
-            text.draw_text(list, room.x + 4.0, base, "Search apps and files", hint);
-        } else {
-            text.draw_text(list, x, base, q, style);
-        }
-        let (a, d) = (text.ascent(style), text.descent(style));
-        list.fill(RectF::new(text.snap(x + tw), base - a, caret_w, a + d), 0.0, theme.accent);
-        list.pop_clip();
-    }
-
-    /// Result `k` (item `i`) in `r`: a tile, or a row with the file's place.
-    fn draw_result(&mut self, list: &mut DrawList, theme: &Theme, k: usize, i: usize, r: RectF) {
-        let (target, l) = (Some(Target::Item(k)), &self.launcher.search);
-        let (e, text) = (&l.items[i], &mut self.host.text);
-        let radius = if e.place.is_none() { 12.0 } else { 10.0 };
-        if self.hover == target {
-            list.fill(r, radius, theme.wash(self.armed == target));
-        }
-        if l.sel == k {
-            list.border(r, radius, px(text, 1.5), theme.accent);
-        }
-        let label = TextStyle::new(FontId::Sans, 12.0, theme.text);
-        let Some(place) = &e.place else {
-            let icon = RectF::new(r.x + (r.w - TILE) / 2.0, r.y + 8.0, TILE, TILE);
-            ui::icon::tile(list, text, icon, e.icon.glyph, e.icon.hue, theme);
-            let name = text.ellipsize(&e.label, label, r.w - 8.0);
-            let w = text.measure(&name, label);
-            let x = text.snap(r.x + (r.w - w) / 2.0);
-            let base = cap_baseline(text, icon.y + TILE + 8.0, 16.0, 12.0);
-            text.draw_text(list, x, base, &name, label);
-            return;
-        };
-        let icon = RectF::new(r.x + 10.0, r.y + (r.h - ROW_ICON) / 2.0, ROW_ICON, ROW_ICON);
-        ui::icon::tile(list, text, icon, e.icon.glyph, e.icon.hue, theme);
-        let body = TextStyle::new(FontId::Sans, 14.0, theme.text);
-        let x = r.x + 10.0 + ROW_ICON + 12.0;
-        let lw = text.draw_text(list, x, cap_baseline(text, r.y, r.h, 14.0), &e.label, body);
-        let dim = label.with_color(theme.text_dim);
-        let room = r.x + r.w - 12.0 - (x + lw + 24.0);
-        let place = text.ellipsize(place, dim, room.max(0.0));
-        let (pw, base) = (text.measure(&place, dim), cap_baseline(text, r.y, r.h, 12.0));
-        text.draw_text(list, text.snap(r.x + r.w - 12.0 - pw), base, &place, dim);
+    /// The everything bar, showing the query while it has the keys.
+    pub(crate) fn draw_field(&mut self, list: &mut DrawList, theme: &Theme) {
+        let (l, r) = (&self.launcher, home::field::rect(self.size));
+        let hover = (self.hover == Some(Target::Field)).then_some(self.armed == self.hover);
+        let query = if l.focus { l.search.query.as_str() } else { "" };
+        home::field::draw(list, &mut self.host.text, theme, r, query, l.focus, hover);
     }
 }

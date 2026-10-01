@@ -64,8 +64,9 @@ crates/
   studio/    Studio, a wasip1 GUI program (dist/bin/): applang editor + AppHost
   assistant/ the Assistant, a wasip1 GUI program: chat, builds verified apps
   uiwire/    remote UI protocol: GUI programs send widget trees, get events
-  host/      wm + one app per window; motion, frame geometry, launcher search
-  shell/     the desktop: top bar, dock, launcher, window chrome, keys (no web deps)
+  host/      wm + one app per window (placement); motion, frame geometry, search
+  home/      dock, everything bar + launcher panel, desktop icons, menus, touch
+  shell/     the desktop: top bar, window chrome, keys; wires host + home (no web deps)
   platform/  the browser boundary: canvas, WebGL2, input, textarea, fetch,
              frames on demand, cursor, localStorage, program workers
   os/        wasm entry: fonts, VFS, app registry, prefs, event glue, Remote

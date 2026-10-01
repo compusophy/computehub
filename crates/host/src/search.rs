@@ -1,4 +1,5 @@
-//! The launcher's search: what a query keeps, best first; a selection over apps, then files.
+//! The launcher's search: what a query keeps, best first; a selection over the Ask row (while
+//! there is a query), the apps, then the files.
 
 use ui::{AppIcon, Key};
 
@@ -41,8 +42,9 @@ pub struct Entry {
     pub place: Option<String>,
 }
 
-/// A query and its results (indices into `items`, best first), the selection
-/// over the tiles then the rows, and the first row on screen of `fit`.
+/// A query and its results (indices into `items`, best first), the selection over the results
+/// (the Ask row while there is a query, the tiles, then the rows), and the first row on screen
+/// of `fit`.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Search {
     pub query: String,
@@ -61,17 +63,28 @@ impl Search {
         s
     }
 
-    pub fn count(&self) -> usize {
-        self.tiles.len() + self.rows.len()
+    /// Whether result 0 is the Ask row: there is a query to ask the Assistant.
+    pub fn ask(&self) -> bool {
+        !self.query.is_empty()
     }
 
-    /// Result `k`: the tiles, then the rows.
+    fn skip(&self) -> usize {
+        usize::from(self.ask())
+    }
+
+    pub fn count(&self) -> usize {
+        self.skip() + self.tiles.len() + self.rows.len()
+    }
+
+    /// Result `k` if it is an app or a file (not the Ask row).
     pub fn get(&self, k: usize) -> Option<&Entry> {
+        let k = k.checked_sub(self.skip())?;
         let i = self.tiles.get(k).or_else(|| self.rows.get(k.checked_sub(self.tiles.len())?))?;
         self.items.get(*i)
     }
 
-    /// Matches the query again (ties keep their order), selecting the best.
+    /// Matches the query again (ties keep their order), selecting the first app whose name
+    /// starts with it, else the Ask row (with no query, the first app).
     fn refilter(&mut self) {
         let mut ranked: Vec<(bool, usize, usize)> = Vec::new();
         for (i, e) in self.items.iter().enumerate() {
@@ -82,7 +95,12 @@ impl Search {
             }
         }
         let of = |file: bool| ranked.iter().filter(|e| e.0 == file).map(|e| e.2).collect();
-        (self.tiles, self.rows, self.sel, self.first) = (of(false), of(true), 0, 0);
+        (self.tiles, self.rows, self.first) = (of(false), of(true), 0);
+        let starts = |i: &usize| {
+            let mut label = self.items[*i].label.chars().map(lower);
+            self.query.chars().all(|q| label.next() == Some(lower(q)))
+        };
+        self.sel = self.tiles.iter().position(starts).map_or(0, |t| t + self.skip());
     }
 
     pub fn type_text(&mut self, s: &str) {
@@ -93,37 +111,48 @@ impl Search {
         }
     }
 
-    /// Backspace edits the query; the arrows move through a grid of `cols`
+    /// Backspace edits the query; the arrows move from the Ask row through a grid of `cols`
     /// tiles, then the list. Whether the key is one of these.
     pub fn key(&mut self, key: Key, cols: usize) -> bool {
-        let (n, tiles, s, cols) = (self.count(), self.tiles.len(), self.sel, cols.max(1));
-        self.sel = match key {
-            Key::Backspace => {
+        let (skip, tiles, cols) = (self.skip(), self.tiles.len(), cols.max(1));
+        let (s, last) = (self.sel, self.count().saturating_sub(1));
+        // The selection among the tiles and rows; `None` on the Ask row.
+        let t = s.checked_sub(skip);
+        self.sel = match (key, t) {
+            (Key::Backspace, _) => {
                 if self.query.pop().is_some() {
                     self.refilter();
                 }
                 return true;
             }
-            Key::Left => s.saturating_sub(1),
-            Key::Right => (s + 1).min(n.saturating_sub(1)),
-            Key::Up if s > tiles => s - 1,
-            Key::Up if s == tiles => s.saturating_sub(1),
-            Key::Up => s.checked_sub(cols).unwrap_or(s),
-            Key::Down if s >= tiles => (s + 1).min(n.saturating_sub(1)),
-            Key::Down if s / cols < (tiles - 1) / cols => (s + cols).min(tiles - 1),
-            Key::Down if tiles < n => tiles,
-            Key::Down => s,
+            (Key::Left, _) => s.saturating_sub(1),
+            (Key::Right, _) | (Key::Down, None) => (s + 1).min(last),
+            (Key::Up, None) => s,
+            (Key::Up, Some(t)) if t >= tiles => s.saturating_sub(1),
+            (Key::Up, Some(t)) if t >= cols => s - cols,
+            (Key::Up, Some(_)) => {
+                if skip > 0 {
+                    0
+                } else {
+                    s
+                }
+            }
+            (Key::Down, Some(t)) if t >= tiles => (s + 1).min(last),
+            (Key::Down, Some(t)) if t / cols < (tiles - 1) / cols => {
+                (t + cols).min(tiles - 1) + skip
+            }
+            (Key::Down, Some(_)) if skip + tiles <= last => skip + tiles,
+            (Key::Down, Some(_)) => s,
             _ => return false,
         };
-        if let Some(row) = self.sel.checked_sub(tiles) {
+        if let Some(row) = self.sel.checked_sub(skip + tiles) {
             self.first = self.first.min(row).max((row + 1).saturating_sub(self.fit.max(1)));
         }
         true
     }
 
-    pub fn scroll(&mut self, dy: f32, row_h: f32) {
-        let rows = (dy / row_h).round();
-        let rows = if rows.is_finite() { rows.clamp(-64.0, 64.0) as isize } else { 0 };
+    /// Scrolls the list by `rows` (down if positive), keeping it full.
+    pub fn scroll(&mut self, rows: isize) {
         let last = self.rows.len().saturating_sub(self.fit.max(1));
         self.first = self.first.saturating_add_signed(rows).min(last);
     }

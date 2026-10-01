@@ -73,7 +73,7 @@ impl Shell {
         if r.h < TITLEBAR_H {
             return;
         }
-        let ctl = controls(r);
+        let ctl = controls(r, self.ctl_step());
         // The title, cut with an ellipsis before the controls.
         let end = ctl.map_or(r.x + r.w - TITLE_X, |c| c[0].x - TITLE_GAP);
         let room = RectF::new(r.x + TITLE_X, r.y, end - r.x - TITLE_X, TITLEBAR_H);
