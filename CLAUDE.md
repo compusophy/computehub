@@ -55,7 +55,7 @@ crates/
   gfx/       instanced-quad draw list (fills, borders, shadows, glyphs,
              gradients, glows, grain), glyph atlas, the WebGL2 shaders
   text/      TextSystem: font slots, fallbacks, glyphs on the atlas
-  icons/     the mark and desktop glyphs as vector outlines (ui::icon draws)
+  icons/     the mark and desktop glyphs as vector outlines (`ui::icon`)
   ui/        immediate-mode widgets, themes (Midnight, Dawn, Mono), the App
              trait, Cx, the Code editor (re-exports text)
   vt/        VT/xterm escape parser        term/  terminal screen model
@@ -103,11 +103,9 @@ cargo fmt --all --check
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
 cargo +1.85 test --workspace   # the MSRV: rust-version in Cargo.toml
 bash scripts/caps.sh
-bash scripts/build-web.sh        # dist/; needs wasm-bindgen CLI = Cargo.lock's
-                                 # and `rustup target add wasm32-wasip1`
+bash scripts/build-web.sh   # dist/; wasm-bindgen CLI = Cargo.lock's, wasm32-wasip1
 bash scripts/budget.sh
-cargo run -p serve --release -- dist 8080   # preview (.claude/launch.json "os");
-                                            # --plain drops COOP/COEP/CORP
+cargo run -p serve --release -- dist 8080   # preview; --plain: no COOP/COEP
 ```
 
 `?debug` in the page URL marks each frame (`performance.mark("frame")`):
@@ -136,11 +134,11 @@ them from `assets/fonts/{deferred,lazy}/` and the OFL texts to
 - Every color comes from the `ui::Theme` the frame is drawn in; no widget
   or chrome draws from a color constant. Rects, strokes and baselines land
   on device pixels.
-- The boot budget is nearly spent: measure (`build-web.sh`, `budget.sh`)
-  after any change that ships. Avoid core's Unicode tables
+- Measure the boot budget (`build-web.sh`, `budget.sh`) after any change
+  that ships. Avoid core's Unicode tables
   (`char::to_lowercase` and friends; see `host::search::lower`) and float
   formatting in shipped code.
-- Git: plain `git commit`; never pass user.name/user.email overrides.
-- Authors field: `compusophy`. Never put an email address in any file.
+- Git: plain `git commit`, no user.name/email overrides. Authors:
+  `compusophy`. No email address in any file.
 - No absolute home-directory paths in committed files or `dist/` (caps.sh
   and build-web.sh check; the VFS's own guest home is allowed in the wasm).
