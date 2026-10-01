@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use super::*;
-use json::Json;
+use json::{Json, quote};
 
 /// A disk in memory; a full one fails every write.
 #[derive(Default)]
@@ -127,15 +127,20 @@ const COUNTER: &str = "state count = 0;\nlabel \"Counter\";\nbutton \"+\" { coun
 fn opens_ready_and_shows_the_model() {
     let mut w = Win::default();
     let f = w.last(&[Event::Resize { w: 600, h: 600 }]);
-    assert_eq!(f.requests, [Request::Size { w: 560, h: 640 }]);
+    assert_eq!(f.requests, [Request::Size { w: 560, h: 640 }, Request::Focus { id: INPUT }]);
     assert!(f.title == "Assistant" && has(&f, DEFAULT_MODEL) && has(&f, "Send"));
     assert!(w.send(&[Event::Resize { w: 700, h: 700 }]).is_empty());
     // No key to ask for: the model the desktop names, and nothing else above the prompt.
     let f = w.last(&[config()]);
     assert!(has(&f, "m/x") && !has(&f, DEFAULT_MODEL) && f.requests.is_empty());
     assert_eq!(words(&f.nodes), ["Assistant", "m/x", "Send"]);
-    // A blank prompt sends nothing.
+    // A blank prompt sends nothing; a sent one empties the prompt, which keeps the keyboard.
     assert!(w.last(&[Event::Click { id: SEND }]).requests.is_empty());
+    let f = w.last(&[
+        Event::Change { id: INPUT, version: 1, text: "hi".into() },
+        Event::Submit { id: INPUT },
+    ]);
+    assert_eq!(f.requests[1..], [Request::Focus { id: INPUT + 1 }]);
 }
 
 #[test]
@@ -152,6 +157,10 @@ fn streams_a_reply_split_anywhere() {
     assert_eq!((messages(&body), message(&body, 1)), (2, ("user", "Hi there")));
     let f = w.a.frame();
     assert!(has(&f, "Hi there") && has(&f, "\u{2026}") && has(&f, "Stop") && !has(&f, "Send"));
+    // Reasoning is counted, never taken as the reply.
+    let think = "data: {\"choices\":[{\"delta\":{\"reasoning\":\"Hm\u{e9}.\"}}]}\n\n";
+    let f = w.last(&[data(id, think.as_bytes())]);
+    assert!(has(&f, "\u{2026}") && !has(&f, "Hm") && w.a.run.as_ref().unwrap().stream.thought == 4);
     // Three-byte chunks split lines, CRLFs and chars; usage comes last.
     let reply = "H\u{e9}llo \u{2014} w\u{f6}rld \u{2713} \u{1f600}";
     let usage = "data: {\"usage\":{\"prompt_tokens\":12,\"completion_tokens\":5}}\n\n";
@@ -170,12 +179,12 @@ fn builds_an_app_and_feeds_the_corpus() {
     let f = w.answer(id, &format!("Here it is.\n```app\n{COUNTER}```\nEnjoy."), "", 5);
     let path = [HOME, "/apps/counter.app"].concat();
     assert_eq!(w.disk.0.get(&path).map(String::as_str), Some(COUNTER));
-    assert_eq!(f.requests, [Request::Open { name: path }]);
+    assert_eq!(f.requests, [Request::Open { name: ["studio:", &path].concat() }]);
     assert!(has(&f, "Built counter.app \u{2713}") && has(&f, "Enjoy."));
     let mono = Node::Text { id: 0, style: Style::Mono, text: COUNTER.trim().into() };
     assert!(f.nodes.contains(&mono));
     let row = format!("{{\"prompt\":\"make me a counter app\",\"program\":{},", quote(COUNTER));
-    let corpus = &w.disk.0[&[HOME, "/.ai/corpus.jsonl"].concat()];
+    let corpus = &w.disk.0[CORPUS];
     assert_eq!(*corpus, row + "\"attempts\":1,\"model\":\"m/x\"}\n");
 }
 
@@ -202,7 +211,7 @@ fn a_program_that_does_not_compile_goes_back_twice() {
     let (id, _) = w.ask("a counter app");
     let f = w.answer(id, "```app\nlabel\n```", "", 64);
     assert!(has(&w.answer(ai(&f).0, &format!("```app\n{COUNTER}"), "", 64), "Built counter.app"));
-    let corpus = &w.disk.0[&[HOME, "/.ai/corpus.jsonl"].concat()];
+    let corpus = &w.disk.0[CORPUS];
     assert!(corpus.contains("\"prompt\":\"a counter app\"") && corpus.contains("\"attempts\":2"));
     // A disk that cannot take it says so.
     let mut w = Win { disk: Mem(BTreeMap::new(), true), ..Win::new() };
@@ -246,6 +255,22 @@ fn stop_cancels_and_ignores_the_rest() {
     assert!(w.send(&[data(id, chunk("upon").as_bytes()), end]).is_empty());
     let (_, body) = w.ask("next");
     assert_eq!(message(&body, 2), ("assistant", "Once "));
+}
+
+#[test]
+fn asks_from_the_everything_bar_are_sent_in_turn() {
+    let mut w = Win::new();
+    let ask = |text: &str| Event::Ask { text: text.into() };
+    assert!(w.send(&[ask(" ")]).is_empty());
+    let (id, body) = ai(&w.last(&[ask("first")]));
+    assert_eq!(message(&body, 1), ("user", "first"));
+    // One asked while a reply streams waits for it, then goes as if typed.
+    let f = w.last(&[ask("second")]);
+    assert!(f.requests.is_empty() && has(&f, "Stop"));
+    let f = w.answer(id, "One.", "", 64);
+    let (_, body) = ai(&f);
+    assert_eq!((messages(&body), message(&body, 3)), (4, ("user", "second")));
+    assert!(has(&f, "second") && has(&f, "Stop"));
 }
 
 #[test]

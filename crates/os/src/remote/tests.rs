@@ -8,7 +8,7 @@ use uiwire::{Class, Span, mods};
 
 const MONO: &[u8] = include_bytes!("../../../../assets/fonts/deferred/JetBrainsMono-Regular.ttf");
 
-/// Studio editing the default file, its kernel (isolated) and files.
+/// Studio editing a file, its kernel (isolated) and files.
 struct Sys {
     r: Remote,
     k: Kernel,
@@ -23,7 +23,7 @@ impl Sys {
         fs.mkdir("/bin").and(fs.write(STUDIO, b"#!wasm bin/studio.wasm\n")).unwrap();
         let mut k = Kernel::new();
         k.set_isolated(true);
-        let argv = ["studio", "edit", DEFAULT_FILE].map(String::from).into();
+        let argv = ["studio", "edit", "/apps/counter.app"].map(String::from).into();
         let r = Remote::new(STUDIO, argv, &Ai::default());
         let mut s = Sys { r, k, fs, asked: Vec::new() };
         if start {
@@ -106,8 +106,9 @@ fn change(id: u32, version: u32, text: &str) -> Event {
 fn names_open_studio_and_the_first_size_starts_it() {
     let open = |name: &str| open(name, &Ai::default());
     let argv = |name: &str| open(name).map(|a| (a.title(), a.icon(), a.preferred_size()));
-    let studio = Some(("Studio \u{2014} counter.app".into(), STUDIO_ICON, Some((760.0, 540.0))));
-    assert_eq!((argv("studio"), argv("studio:counter.app")), (studio.clone(), studio));
+    let studio = |title: &str| Some((title.into(), STUDIO_ICON, Some((880.0, 560.0))));
+    assert_eq!(argv("studio"), studio("Studio"));
+    assert_eq!(argv("studio:counter.app"), studio("Studio \u{2014} counter.app"));
     assert_eq!(argv("/tmp/x.app"), Some(("x.app".into(), APP_ICON, None)));
     assert!(["studio:", "terminal", ".apps", ""].iter().all(|n| open(n).is_none()));
     let assistant = Some(("Assistant".into(), ASSISTANT_ICON, Some((560.0, 600.0))));
@@ -272,6 +273,57 @@ fn trees_draw_with_the_toolkit_and_fills_take_the_rest() {
     s.r.follow = true;
     s.show(vec![Node::Spacer { px: 1500 }, input(5, "")], vec![]);
     assert_eq!(s.draw().1[0].rect.y, 400.0 - PAD - FIELD_H);
+}
+
+#[test]
+fn panes_take_their_width_chips_are_small_and_fills_match_a_taller_sibling() {
+    let mut s = Sys::new(true);
+    // Studio wide, on code: a Fill beside a taller Pane still reaches the bottom.
+    let chip = Node::Button { id: 7, variant: Variant::Chip, label: "a dice roller".into() };
+    let pane = Node::Pane { id: 0, w: 200, children: vec![Node::Spacer { px: 300 }, chip] };
+    let fill = Node::Fill { id: 0, children: vec![code(1, "a", vec![])] };
+    let main = Node::Col { id: 0, gap: 8, children: vec![fill] };
+    s.show(vec![Node::Row { id: 0, gap: 16, children: vec![main, pane] }], vec![]);
+    let (_, hits) = s.draw();
+    let at = |id| hits.iter().find(|h| h.id == WidgetId(id)).copied().expect("a hit");
+    let (code, chip) = (at(4), at(7));
+    let content = 600.0 - 2.0 * PAD;
+    assert!((code.rect.y + code.rect.h - (400.0 - PAD)).abs() < 1.0, "{code:?}");
+    assert!((code.rect.w - (content - 216.0)).abs() < 1.0, "{code:?}");
+    assert_eq!(
+        (chip.rect.x, chip.rect.y, chip.rect.h),
+        (PAD + content - 200.0, PAD + 308.0, CHIP_H)
+    );
+    assert!(chip.sense == Sense::Click && chip.rect.w < 120.0);
+    // Room either side centers a Pane; one wider than its Row is cut to it.
+    let pane = |w| Node::Pane { id: 0, w, children: vec![input(5, "")] };
+    let flex = || Node::Col { id: 0, gap: 0, children: vec![] };
+    s.show(vec![Node::Row { id: 0, gap: 0, children: vec![flex(), pane(200), flex()] }], vec![]);
+    let field = s.draw().1[0].rect;
+    assert_eq!((field.x, field.w), (PAD + (content - 200.0) / 2.0, 200.0));
+    s.show(vec![pane(900)], vec![]);
+    assert_eq!(s.draw().1[0].rect.w, content);
+}
+
+#[test]
+fn asks_wait_for_the_start_and_frames_move_the_keyboard() {
+    // A prompt asked before the first size goes after it and the AI settings.
+    let mut s = Sys::new(false);
+    let ask = |t: &str| Event::Ask { text: t.into() };
+    assert!(!s.ev(AppEvent::Ask("a timer".into())));
+    s.ev(AppEvent::Resized { w: 600.0, h: 400.0 });
+    let config = Event::Config { model: ai::DEFAULT_MODEL.into() };
+    assert_eq!(s.events(), [Event::Resize { w: 600, h: 400 }, config, ask("a timer")]);
+    // A frame puts the keyboard in its Input or Code; an id it lacks moves nothing.
+    s.show(vec![input(5, ""), code(1, "a", vec![])], vec![Request::Focus { id: 4 }]);
+    assert_eq!(s.r.texts.focus, 4);
+    s.show(vec![input(5, "")], vec![Request::Focus { id: 5 }, Request::Focus { id: 9 }]);
+    assert!(s.r.wants_text_input() && s.r.texts.focus == 5);
+    // Once it runs, a prompt goes at once, after the Change that waits.
+    s.ev(text("x"));
+    s.ev(text("y"));
+    assert!(!s.ev(AppEvent::Ask("more".into())));
+    assert_eq!(s.events(), [change(5, 1, "x"), change(5, 2, "xy"), ask("more")]);
 }
 
 #[test]

@@ -1,84 +1,111 @@
-//! AppHost: one applang program running in a window.
+//! One applang program running, as wire nodes and events ([`Live`]); and [`AppHost`], one `.app`
+//! file running in a window.
 
-use crate::{Disk, View, clip, file_name, problem};
+use crate::{Disk, View, file_name, text};
 use applang::{App, Limits, Node as A};
+use assistant::ai::{clip, problem};
 use uiwire::{Event, Frame, MAX_DEPTH, Node, Request, Style, Variant};
 
-/// Inputs are this plus their state's place in declaration order; buttons
-/// are applang's ids plus one (0 is no id on the wire).
-pub(crate) const INPUT: u32 = 1 << 31;
+/// The app's buttons are this plus applang's ids, its inputs [`INPUT`] plus their state's place
+/// in declaration order: ids below [`APP`] are the window's own.
+pub const APP: u32 = 1 << 30;
+pub const INPUT: u32 = 1 << 31;
 /// "Edit in Studio", shown when the file cannot run.
-pub(crate) const EDIT: u32 = INPUT - 1;
+pub(crate) const EDIT: u32 = 1;
 /// The most of the app's own widgets a frame shows (a frame holds 4,096).
 const MAX_WIDGETS: usize = 4000;
 /// Shown, as an error, under a render that did not fit in a frame.
 pub(crate) const TOO_BIG: &str =
     "renders more than 4,000 widgets or nests them deeper than 32; the rest is not shown";
 
-#[derive(Debug, Default)]
-enum Run {
-    /// Not read yet.
-    #[default]
-    Pending,
-    Live(App),
-    /// Unreadable or not compiling: the problem, and its line with carets under it (or "").
-    Broken(String, String),
-}
-
-/// Runs one `.app` file, compiled at its first event, with [`applang::App`]
-/// and [`Limits::default`]; faults and files that cannot run show as errors.
-#[derive(Debug, Default)]
-pub struct AppHost {
-    path: String,
+/// A program compiled and running with [`Limits::default`], or why it cannot run; a fault
+/// (a handler or render that failed) shows as an error under it until the next event.
+#[derive(Debug)]
+pub struct Live {
     src: String,
-    run: Run,
+    /// The app, or its problem and the problem's line with carets under it (or "").
+    app: Result<App, (String, String)>,
     nodes: Vec<A>,
     fault: Option<String>,
-    requests: Vec<Request>,
 }
 
-impl AppHost {
-    /// A host for the file at `path`, read at its first event.
-    pub fn new(path: &str) -> AppHost {
-        AppHost { path: path.to_string(), ..AppHost::default() }
+impl Live {
+    /// `src` compiled and started.
+    pub fn new(src: &str) -> Live {
+        let app = applang::compile(src).map(|p| App::new(p, Limits::default())).map_err(|d| {
+            let snip = d.span.and_then(|s| lang::diag::render_snippet(src, s));
+            let snip = snip.as_deref().and_then(|s| s.split_once('\n')).map(|(_, s)| s);
+            (problem(&d, src), clip(snip.unwrap_or_default(), 4096))
+        });
+        let mut live = Live { src: src.into(), app, nodes: Vec::new(), fault: None };
+        live.render();
+        live
     }
 
-    fn load(&mut self, disk: &mut dyn Disk) {
-        self.run = match disk.read(&self.path).map(|src| (applang::compile(&src), src)) {
-            Err(e) => Run::Broken(format!("error cannot read {}: {e}", self.path), String::new()),
-            Ok((Ok(program), src)) => {
-                self.src = src;
-                Run::Live(App::new(program, Limits::default()))
-            }
-            Ok((Err(d), src)) => {
-                let snip = d.span.and_then(|s| lang::diag::render_snippet(&src, s));
-                let snip = snip.as_deref().and_then(|s| s.split_once('\n')).map(|(_, s)| s);
-                Run::Broken(problem(&d, &src), clip(snip.unwrap_or_default().into(), 4096))
-            }
-        };
-        self.render();
+    /// The file at `path` running, or why it cannot be read.
+    pub fn load(path: &str, disk: &mut dyn Disk) -> Live {
+        disk.read(path).map_or_else(
+            |e| Live {
+                src: String::new(),
+                app: Err((format!("error cannot read {path}: {e}"), String::new())),
+                nodes: Vec::new(),
+                fault: None,
+            },
+            |src| Live::new(&src),
+        )
+    }
+
+    /// Whether the program compiled.
+    pub fn runs(&self) -> bool {
+        self.app.is_ok()
     }
 
     fn render(&mut self) {
-        let Run::Live(app) = &self.run else { return };
+        let Ok(app) = &self.app else { return };
         match app.render() {
             Ok(nodes) => self.nodes = nodes,
             Err(d) => (self.nodes, self.fault) = (Vec::new(), Some(problem(&d, &self.src))),
         }
     }
 
-    fn fire(&mut self, ev: &applang::Event) {
-        if let Run::Live(app) = &mut self.run {
-            self.fault = app.handle(ev).err().map(|d| problem(&d, &self.src));
-            self.render();
-        }
+    /// Runs `ev` if it is the app's (a click of its button, a change of its input); whether it was.
+    pub fn event(&mut self, ev: &Event) -> bool {
+        let Ok(app) = &mut self.app else { return false };
+        let ev = match ev {
+            &Event::Click { id } if (APP..INPUT).contains(&id) => {
+                applang::Event::Click { id: id - APP }
+            }
+            Event::Change { id, text, .. } => {
+                let i = id.checked_sub(INPUT).and_then(|i| usize::try_from(i).ok());
+                let state = i.and_then(|i| app.state().nth(i)).map(|(n, _)| n.to_string());
+                let Some(state) = state else { return false };
+                applang::Event::Input { state, text: text.clone() }
+            }
+            _ => return false,
+        };
+        self.fault = app.handle(&ev).err().map(|d| problem(&d, &self.src));
+        self.render();
+        true
     }
 
-    /// The name of the state input `id` is bound to.
-    fn state(&self, id: u32) -> Option<String> {
-        let Run::Live(app) = &self.run else { return None };
-        let i = usize::try_from(id.checked_sub(INPUT)?).ok()?;
-        app.state().nth(i).map(|(name, _)| name.to_string())
+    /// The app as wire nodes, the outermost at `depth`: its widgets while they fit in a frame,
+    /// then its fault; or its problem and the problem's line.
+    pub fn nodes(&self, depth: usize) -> Vec<Node> {
+        let mut out = Vec::new();
+        match &self.app {
+            Err((problem, snippet)) => {
+                out.push(text(Style::Error, problem));
+                out.extend((!snippet.is_empty()).then(|| text(Style::Mono, snippet)));
+            }
+            Ok(app) => {
+                let names: Vec<&str> = app.state().map(|(name, _)| name).collect();
+                if !wire(&self.nodes, depth, &mut { MAX_WIDGETS }, &names, &mut out) {
+                    out.push(text(Style::Error, TOO_BIG));
+                }
+                out.extend(self.fault.as_deref().map(|f| text(Style::Error, f)));
+            }
+        }
+        out
     }
 }
 
@@ -99,7 +126,7 @@ fn wire(nodes: &[A], depth: usize, left: &mut usize, names: &[&str], out: &mut V
         out.push(match n {
             A::Label { text } => Node::Text { id: 0, style: Style::Body, text: text.clone() },
             A::Button { text, id } => {
-                let id = id.checked_add(1).filter(|&id| id < EDIT).unwrap_or(0);
+                let id = APP.checked_add(*id).filter(|&id| id < INPUT).unwrap_or(0);
                 Node::Button { id, variant: Variant::Normal, label: text.clone() }
             }
             A::Input { state, value } => {
@@ -114,30 +141,33 @@ fn wire(nodes: &[A], depth: usize, left: &mut usize, names: &[&str], out: &mut V
     })
 }
 
-pub(crate) fn text(style: Style, text: &str) -> Node {
-    Node::Text { id: 0, style, text: text.into() }
+/// Runs one `.app` file, read at its first event, in a window of its own; a file that cannot
+/// run says why and offers Studio.
+#[derive(Debug, Default)]
+pub struct AppHost {
+    path: String,
+    live: Option<Live>,
+    requests: Vec<Request>,
+}
+
+impl AppHost {
+    /// A host for the file at `path`, read at its first event.
+    pub fn new(path: &str) -> AppHost {
+        AppHost { path: path.to_string(), ..AppHost::default() }
+    }
 }
 
 impl View for AppHost {
     fn event(&mut self, ev: Option<&Event>, disk: &mut dyn Disk) -> bool {
-        let fresh = matches!(self.run, Run::Pending);
-        if fresh {
-            self.load(disk);
-        }
-        let live = matches!(self.run, Run::Live(_));
+        let fresh = self.live.is_none();
+        let live = self.live.get_or_insert_with(|| Live::load(&self.path, disk));
         match ev {
-            Some(&Event::Click { id: EDIT }) if !live => {
+            Some(&Event::Click { id: EDIT }) if !live.runs() => {
                 self.requests.push(Request::Open { name: ["studio:", &self.path].concat() })
             }
-            Some(&Event::Click { id }) if live && (1..EDIT).contains(&id) => {
-                self.fire(&applang::Event::Click { id: id - 1 })
-            }
             // Every Change gets a frame: the desktop sends the next one then.
-            Some(Event::Change { id, text, .. }) => {
-                if let Some(state) = self.state(*id) {
-                    self.fire(&applang::Event::Input { state, text: text.clone() });
-                }
-            }
+            Some(ev @ Event::Change { .. }) => _ = live.event(ev),
+            Some(ev) if live.event(ev) => {}
             _ => return fresh,
         }
         true
@@ -145,25 +175,17 @@ impl View for AppHost {
 
     fn frame(&mut self) -> Frame {
         let mut nodes = Vec::new();
-        match &self.run {
-            Run::Pending => {}
-            Run::Broken(problem, snippet) => {
-                let heading =
-                    text(Style::Heading, &[file_name(&self.path), " cannot run"].concat());
-                nodes = vec![heading, text(Style::Error, problem)];
-                nodes.extend((!snippet.is_empty()).then(|| text(Style::Mono, snippet)));
-                let label = "Edit in Studio".into();
-                nodes.push(Node::Button { id: EDIT, variant: Variant::Primary, label });
-            }
-            Run::Live(app) => {
-                let names: Vec<&str> = app.state().map(|(name, _)| name).collect();
-                if !wire(&self.nodes, 1, &mut { MAX_WIDGETS }, &names, &mut nodes) {
-                    nodes.push(text(Style::Error, TOO_BIG));
-                }
-                if let Some(fault) = &self.fault {
-                    nodes.push(text(Style::Error, fault));
-                }
-            }
+        if let Some(live) = &self.live {
+            let name = file_name(&self.path);
+            let broken = !live.runs();
+            nodes.extend(broken.then(|| text(Style::Heading, &[name, " cannot run"].concat())));
+            nodes.extend(live.nodes(1));
+            let edit = || Node::Button {
+                id: EDIT,
+                variant: Variant::Primary,
+                label: "Edit in Studio".into(),
+            };
+            nodes.extend(broken.then(edit));
         }
         let requests = std::mem::take(&mut self.requests);
         Frame { seq: 0, title: file_name(&self.path).into(), requests, nodes }

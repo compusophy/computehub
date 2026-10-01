@@ -5,35 +5,32 @@
 //! [`Event::AiData`] until [`Event::AiEnd`].
 //!
 //! A reply holding a fenced block whose info string is `app` is compiled with [`applang`]: a
-//! program that compiles is saved to `~/apps/<slug>.app`, opened, and appended to the fine-tuning
-//! corpus (`~/.ai/corpus.jsonl`); one that does not goes back to the model with its diagnostics, at
-//! most [`RETRIES`] times. Files go through a [`Disk`]: [`Fs`] in the program.
+//! program that compiles is saved to `~/apps/<slug>.app`, opened in Studio, and appended to the
+//! fine-tuning corpus ([`ai::CORPUS`]); one that does not goes back to the model with its
+//! diagnostics, at most [`RETRIES`] times. Files go through a [`Disk`]: [`Fs`] in the program.
+//! A prompt from the desktop's everything bar ([`Event::Ask`]) is sent as if typed, after the
+//! request in flight if there is one. [`ai`] and [`json`] are what Studio shares with it.
 
 #![forbid(unsafe_code)]
 
-mod json;
+pub mod ai;
+pub mod json;
 #[cfg(test)]
 mod tests;
 
 use std::io::{self, ErrorKind, Read, Write};
 
-use applang::Class;
-use json::{Stream, quote};
+use ai::{CORPUS, EXAMPLE, HOME, MAX_REPLY, app_block, clip, corpus_line, failure, problem, slug};
+pub use ai::{DEFAULT_MODEL, RETRIES};
+use json::Stream;
 use uiwire::client::Client;
 use uiwire::{Event, Frame, Node, Request, Style, Variant};
 
-/// The guest's home, where built apps and the corpus go.
-const HOME: &str = concat!("/home/", "guest");
-/// The model until the desktop names one.
-pub const DEFAULT_MODEL: &str = "zai/glm-5.3";
-/// How many times a program that does not compile goes back to the model.
-pub const RETRIES: u32 = 2;
 /// The most messages (after the system prompt) a request carries.
 const HISTORY: usize = 12;
-/// Caps in bytes: a prompt, a reply, and both the history a request carries
-/// (quoted) and the transcript a frame shows, which share one 1 MiB frame.
+/// Caps in bytes: a prompt, and both the history a request carries (quoted)
+/// and the transcript a frame shows, which share one 1 MiB frame.
 const MAX_PROMPT: usize = 16 * 1024;
-const MAX_REPLY: usize = 64 * 1024;
 const MAX_TEXT: usize = 256 * 1024;
 /// The most turns kept, and the most Text nodes one reply becomes.
 const MAX_TURNS: usize = 64;
@@ -44,16 +41,14 @@ const STOP: u32 = 2;
 /// The prompt Input is this plus the prompts sent: a fresh id starts it empty.
 const INPUT: u32 = 100;
 
-/// The system prompt, with applang's reference card between the halves.
+/// The system prompt, with applang's reference card between the parts and an example after.
 const SYSTEM: [&str; 2] = [
     "You are the Assistant of compusophyOS, a computer that runs in one browser tab: a \
      desktop of floating windows, written in Rust and compiled to WebAssembly. Answer briefly \
      and plainly.\n\nYou can build small apps in applang, the OS's app language:\n\n",
     "\n\nWhen the user asks for an app, reply with one short sentence and one fenced block \
      whose info string is app, holding a complete program. The OS compiles it, saves it and \
-     opens it in a window; if it does not compile, you get the diagnostics back. For \
-     example:\n```app\nstate count = 0;\nlabel \"Counter\";\nrow {\n  button \"-\" { count = \
-     count - 1; }\n  label count;\n  button \"+\" { count = count + 1; }\n}\n```",
+     opens it in Studio; if it does not compile, you get the diagnostics back. For example:\n",
 ];
 
 /// Where the program's files go.
@@ -91,6 +86,8 @@ pub struct Assistant {
     /// The conversation as the model sees it: (role, content).
     history: Vec<(&'static str, String)>,
     run: Option<Run>,
+    /// Prompts from the everything bar, sent in turn once nothing is in flight.
+    asks: Vec<String>,
     last_id: u32,
     requests: Vec<Request>,
     framed: bool,
@@ -139,7 +136,14 @@ impl Assistant {
             Event::AiEnd { id, status, error } if live == Some(*id) => {
                 self.finish(*status, error, disk);
             }
+            Event::Ask { text } if !text.trim().is_empty() => {
+                self.asks.push(clip(text, MAX_PROMPT))
+            }
             _ => return false,
+        }
+        if self.run.is_none() && !self.asks.is_empty() {
+            self.input = self.asks.remove(0);
+            self.send();
         }
         true
     }
@@ -158,6 +162,7 @@ impl Assistant {
         if !text.is_empty() && self.run.is_none() {
             (self.input, self.sent) = (String::new(), self.sent.wrapping_add(1));
             self.ask(text.clone(), text, 1);
+            self.requests.push(Request::Focus { id: self.input_id() });
         }
     }
 
@@ -177,18 +182,10 @@ impl Assistant {
     /// The chat-completions request: the system prompt and the newest
     /// history that fits in [`MAX_TEXT`] bytes.
     fn body(&self) -> String {
-        let keep = fit(&self.history, MAX_TEXT, |m| quote(&m.1).len());
-        let message = |(role, text): &(&str, String)| {
-            format!(",{{\"role\":\"{role}\",\"content\":{}}}", quote(text))
-        };
-        let history: String =
-            self.history[self.history.len() - keep..].iter().map(message).collect();
-        let (model, system) = (quote(self.model()), quote(&SYSTEM.join(applang::REFERENCE)));
-        format!(
-            "{{\"model\":{model},\"stream\":true,\"stream_options\":{{\"include_usage\":true}},\
-             \"max_tokens\":4096,\"temperature\":0.3,\"messages\":[{{\"role\":\"system\",\
-             \"content\":{system}}}{history}]}}"
-        )
+        let keep = fit(&self.history, MAX_TEXT, |m| json::quote(&m.1).len());
+        let system = [&SYSTEM.join(applang::REFERENCE), EXAMPLE].concat();
+        let options = ",\"max_tokens\":4096,\"temperature\":0.3";
+        ai::chat(self.model(), options, &system, &self.history[self.history.len() - keep..])
     }
 
     /// Ends the request in flight with `status` and the host's `error`: notes
@@ -227,19 +224,18 @@ impl Assistant {
         }
     }
 
-    /// Saves `src`, which compiles, to `~/apps`, opens it and adds it to the corpus, noting so.
+    /// Saves `src`, which compiles, to `~/apps`, opens it in Studio and adds it to the corpus,
+    /// noting so.
     fn build(&mut self, src: &str, run: &Run, disk: &mut dyn Disk) {
         let name = [&slug(src), ".app"].concat();
         let path = [HOME, "/apps/", &name].concat();
         if let Err(e) = disk.put(&path, src, false) {
             return self.note((Style::Error, format!("Couldn't save {path}: {e}")));
         }
-        self.requests.push(Request::Open { name: path });
-        let line = format!("{{\"prompt\":{},\"program\":{},", quote(&run.prompt), quote(src));
-        let line =
-            format!("{line}\"attempts\":{},\"model\":{}}}\n", run.attempt, quote(self.model()));
-        let built = format!("Built {name} \u{2713}");
-        self.note(match disk.put(&[HOME, "/.ai/corpus.jsonl"].concat(), &line, true) {
+        self.requests.push(Request::Open { name: ["studio:", &path].concat() });
+        let line = corpus_line(&run.prompt, src, "", run.attempt, self.model());
+        let built = format!("Built {name} \u{2713} \u{2014} open in Studio to change it");
+        self.note(match disk.put(CORPUS, &line, true) {
             Ok(()) => (Style::Success, built),
             Err(e) => (Style::Success, format!("{built} (not added to the corpus: {e})")),
         });
@@ -271,9 +267,10 @@ impl Assistant {
             None => button(SEND, Variant::Primary, "Send"),
         };
         nodes.push(Node::Row { id: 0, gap: 8, children: vec![input, action] });
-        let size = Request::Size { w: 560, h: 640 };
-        let size = (!std::mem::replace(&mut self.framed, true)).then_some(size);
-        let requests = size.into_iter().chain(std::mem::take(&mut self.requests)).collect();
+        let first = [Request::Size { w: 560, h: 640 }, Request::Focus { id: self.input_id() }];
+        let first = (!std::mem::replace(&mut self.framed, true)).then_some(first);
+        let requests =
+            first.into_iter().flatten().chain(std::mem::take(&mut self.requests)).collect();
         Frame { seq: 0, title: "Assistant".into(), requests, nodes }
     }
 }
@@ -307,41 +304,6 @@ fn fit<T>(items: &[T], mut room: usize, len: impl Fn(&T) -> usize) -> usize {
     items.iter().rev().take_while(fits).count().max(1).min(items.len())
 }
 
-/// What went wrong with a request that ended with HTTP `status` (0: none
-/// made), the host's `error` and the AI service's own message `said`.
-fn failure(status: u16, error: &str, said: &str) -> Option<(Style, String)> {
-    let (code, what) = match status {
-        _ if error == "cancelled" => return Some((Style::Dim, "Stopped.".into())),
-        200..=299 if error.is_empty() && said.is_empty() => return None,
-        200..=299 if error.is_empty() => (5, "the AI stopped with an error"),
-        401 | 403 => (1, "the AI service refused the request"),
-        402 => (2, "the free AI is out of credit for now, try again later"),
-        429 => (3, "the free AI is busy, try again in a minute"),
-        400 | 404 => (4, "the model was not found or refused the request"),
-        503 => (5, "the AI is not available right now"),
-        _ if !error.is_empty() => (5, error),
-        _ => (5, "couldn't reach the AI service"),
-    };
-    let said = if said.is_empty() { String::new() } else { [": ", &clip(said, 300)].concat() };
-    Some((Style::Error, format!("E090{code} {what}{said}")))
-}
-
-/// The program in `reply`'s first fenced block whose info string is `app`
-/// (to the end of the reply if the block is not closed).
-fn app_block(reply: &str) -> Option<&str> {
-    let (mut at, mut start) = (0, None);
-    for line in reply.split_inclusive('\n') {
-        let fence = line.trim().strip_prefix("```");
-        match start {
-            None if fence.map(str::trim) == Some("app") => start = Some(at + line.len()),
-            Some(s) if fence.is_some() => return Some(&reply[s..at]),
-            _ => {}
-        }
-        at += line.len();
-    }
-    start.map(|s| &reply[s..])
-}
-
 /// `reply` as Text nodes: prose as Body, each fenced block (fences dropped)
 /// as Mono; past [`MAX_BLOCKS`], the rest is one node as it is.
 fn blocks(reply: &str) -> Vec<Node> {
@@ -360,37 +322,4 @@ fn blocks(reply: &str) -> Vec<Node> {
         (part, code) = (String::new(), !code);
     }
     out
-}
-
-/// A slug for `src`'s file: its first label's text, lowercase ASCII words
-/// joined by `-`, at most 32 bytes; "app" if that leaves nothing.
-fn slug(src: &str) -> String {
-    let toks = applang::highlight(src);
-    let tok = |i: usize| toks.get(i).map(|(s, c)| (&src[s.start..s.end], *c));
-    let label = (0..toks.len()).find_map(|i| match (tok(i)?, tok(i + 1)?) {
-        (("label", Class::Keyword), (text, Class::Str)) => Some(text),
-        _ => None,
-    });
-    let alnum = |b: u8| if b.is_ascii_alphanumeric() { b.to_ascii_lowercase() } else { b' ' };
-    let words: String = label.unwrap_or("").bytes().map(|b| char::from(alnum(b))).collect();
-    let slug = words.split_whitespace().collect::<Vec<_>>().join("-");
-    let slug = slug[..slug.len().min(32)].trim_end_matches('-');
-    if slug.is_empty() { "app".into() } else { slug.into() }
-}
-
-/// A diagnostic as `E0101 3:5 message`: line and column (in chars) from 1.
-fn problem(d: &applang::Diag, src: &str) -> String {
-    let code = d.code.map_or_else(|| "error".into(), |c| format!("E{c:04}"));
-    let at = |s: applang::Span| {
-        let before = src.get(..s.start).unwrap_or(src);
-        let col = before.rsplit('\n').next().unwrap_or("").chars().count() + 1;
-        format!(" {}:{col}", before.matches('\n').count() + 1)
-    };
-    format!("{code}{} {}", d.span.map(at).unwrap_or_default(), clip(&d.message, 512))
-}
-
-/// `s` cut to at most `max` bytes, on a char boundary.
-fn clip(s: &str, max: usize) -> String {
-    let end = (0..=max.min(s.len())).rev().find(|&i| s.is_char_boundary(i)).unwrap_or(0);
-    s[..end].to_string()
 }

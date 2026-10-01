@@ -162,6 +162,7 @@ name = "compusophy-studio"
 version = "0.1.0"
 dependencies = [
  "compusophy-applang",
+ "compusophy-assistant",
  "compusophy-lang",
  "compusophy-uiwire",
 ]

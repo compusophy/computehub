@@ -169,12 +169,15 @@ pub struct Stream {
     pub error: String,
     /// The tokens in and out, once the usage chunk came.
     pub usage: Option<(String, String)>,
+    /// The chars of reasoning deltas so far: the model thinking, never part of the text.
+    pub thought: usize,
 }
 
 const MAX_OTHER: usize = 16 * 1024;
 
 impl Stream {
-    /// Reads `data`, appending each content delta to `text` while it is under `max` bytes.
+    /// Reads `data`, appending each content delta to `text` while it is under `max` bytes and
+    /// counting reasoning deltas in [`Stream::thought`].
     pub fn feed(&mut self, data: &[u8], text: &mut String, max: usize) {
         self.rest.extend_from_slice(data);
         if let Some(n) = self.rest.iter().rposition(|b| *b == b'\n') {
@@ -204,10 +207,13 @@ impl Stream {
             return;
         };
         let Some(v) = Json::parse(data) else { return };
-        let delta = || v.get("choices")?.at(0)?.get("delta")?.get("content")?.text();
-        if let Some(d) = delta().filter(|_| text.len() < max) {
+        let delta = v.get("choices").and_then(|c| c.at(0)?.get("delta"));
+        let field = |k| delta.and_then(|d| d.get(k)?.text());
+        if let Some(d) = field("content").filter(|_| text.len() < max) {
             text.push_str(d);
         }
+        let thought = field("reasoning").or_else(|| field("reasoning_content"));
+        self.thought += thought.map_or(0, |t| t.chars().count());
         if let Some(m) = message(&v) {
             self.error = m.into();
         }
