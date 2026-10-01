@@ -13,6 +13,8 @@
 //!
 //! Forked from litelite's fuellite 0.2.0 (commit 4f5e056).
 
+#![forbid(unsafe_code)]
+
 /// The budget is spent. Map to your language's "fuel exhausted" diagnostic.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Exhausted;

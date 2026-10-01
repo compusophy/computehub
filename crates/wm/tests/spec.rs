@@ -253,9 +253,7 @@ fn dir_is(r2: &str, r3: &str, d: &str, want: usize) {
     let top = format!("{w}~*:{}", rects[w - 1].replace(' ', ","));
     let s = "new 0 0 1000 1000 0 0 1; float 1; float 2; float 3; rect 1 400 400 100 100";
     for raise in ["focus 2; focus 1", "focus 1"] {
-        play(&format!(
-            "{s}; rect 2 {r2}; rect 3 {r3}; {raise}; fdir {d}{noop} | ... {top}"
-        ));
+        play(&format!("{s}; rect 2 {r2}; rect 3 {r3}; {raise}; fdir {d}{noop} | ... {top}"));
     }
 }
 

@@ -1,0 +1,14 @@
+[package]
+name = "compusophy-vt"
+description = "A dependency-free VT/xterm escape sequence parser: the DEC ANSI state machine with UTF-8 decoding across chunk boundaries."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[lib]
+name = "vt"
+
+[dependencies]

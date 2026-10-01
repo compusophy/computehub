@@ -7,6 +7,8 @@
 //! segment, an empty segment such as `//x`, a backslash or a drive colon) is
 //! a 404. Paths are not percent-decoded, so an escape cannot hide in `%2e`.
 
+#![forbid(unsafe_code)]
+
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};

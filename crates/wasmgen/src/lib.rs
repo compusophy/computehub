@@ -34,6 +34,8 @@
 //! assert_eq!(&wasm[..8], b"\0asm\x01\0\0\0");
 //! ```
 
+#![forbid(unsafe_code)]
+
 /// Wasm value types (the binary-format encodings).
 pub mod val {
     pub const I32: u8 = 0x7F;
@@ -212,10 +214,7 @@ impl std::fmt::Display for BuildError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             BuildError::ImportAfterFunc => {
-                write!(
-                    f,
-                    "import added after a local function (indices would shift)"
-                )
+                write!(f, "import added after a local function (indices would shift)")
             }
             BuildError::BadValType(b) => write!(f, "0x{b:02x} is not a wasm value type"),
             BuildError::BadTypeIndex(i) => write!(f, "type index {i} was never declared"),
@@ -227,10 +226,7 @@ impl std::fmt::Display for BuildError {
                 write!(f, "memory limits min={min} max={max:?} are not spec-valid")
             }
             BuildError::DataOutOfBounds { offset, len } => {
-                write!(
-                    f,
-                    "data segment [{offset}..+{len}] ends past the initial memory"
-                )
+                write!(f, "data segment [{offset}..+{len}] ends past the initial memory")
             }
             BuildError::TooLarge(n) => {
                 write!(f, "{n} bytes does not fit the format's u32 sizes")
@@ -330,8 +326,7 @@ impl Module {
         if type_idx as usize >= self.types.len() {
             self.fault(BuildError::BadTypeIndex(type_idx));
         }
-        self.imports
-            .push((module.to_string(), name.to_string(), type_idx));
+        self.imports.push((module.to_string(), name.to_string(), type_idx));
         (self.imports.len() - 1) as u32
     }
 
@@ -366,10 +361,7 @@ impl Module {
         const MAX_PAGES: u32 = 65_536; // 4 GiB / 64 KiB
         if min_pages > MAX_PAGES || max_pages.is_some_and(|max| max > MAX_PAGES || max < min_pages)
         {
-            self.fault(BuildError::BadMemoryLimits {
-                min: min_pages,
-                max: max_pages,
-            });
+            self.fault(BuildError::BadMemoryLimits { min: min_pages, max: max_pages });
         }
         self.memory = Some((min_pages, max_pages));
     }
@@ -425,10 +417,7 @@ impl Module {
                 return Err(BuildError::MissingMemory("data"));
             };
             if u64::from(*offset) + bytes.len() as u64 > u64::from(min_pages) * 65_536 {
-                return Err(BuildError::DataOutOfBounds {
-                    offset: *offset,
-                    len: bytes.len(),
-                });
+                return Err(BuildError::DataOutOfBounds { offset: *offset, len: bytes.len() });
             }
         }
         let mut out = Vec::new();
@@ -558,11 +547,7 @@ mod tests {
     fn add_function_module_is_byte_exact() {
         let mut m = Module::new();
         let sig = m.functype(&[val::I64, val::I64], &[val::I64]);
-        let f = m.func(
-            sig,
-            &[],
-            vec![op::LOCAL_GET, 0, op::LOCAL_GET, 1, op::I64_ADD, op::END],
-        );
+        let f = m.func(sig, &[], vec![op::LOCAL_GET, 0, op::LOCAL_GET, 1, op::I64_ADD, op::END]);
         m.export_func("add", f);
         #[rustfmt::skip]
         let expected = [
@@ -581,23 +566,15 @@ mod tests {
         let log_sig = m.functype(&[val::I32], &[]);
         let add_sig = m.functype(&[val::I64, val::I64], &[val::I64]);
         let log_idx = m.import_func("env", "log", log_sig);
-        let f = m.func(
-            add_sig,
-            &[],
-            vec![op::LOCAL_GET, 0, op::LOCAL_GET, 1, op::I64_ADD, op::END],
-        );
+        let f =
+            m.func(add_sig, &[], vec![op::LOCAL_GET, 0, op::LOCAL_GET, 1, op::I64_ADD, op::END]);
         assert_eq!((log_idx, f), (0, 1)); // import first, local offset past it
         m.export_func("add", f);
         let wasm = m.finish().unwrap();
         // The import section names env.log with kind func and the export
         // points at function index 1.
         let s = section(&wasm, SEC_IMPORT).unwrap();
-        assert_eq!(
-            s,
-            [
-                0x01, 0x03, b'e', b'n', b'v', 0x03, b'l', b'o', b'g', 0x00, 0x00
-            ]
-        );
+        assert_eq!(s, [0x01, 0x03, b'e', b'n', b'v', 0x03, b'l', b'o', b'g', 0x00, 0x00]);
         let s = section(&wasm, SEC_EXPORT).unwrap();
         assert_eq!(s[s.len() - 1], 0x01); // exported func index 1
     }
@@ -626,20 +603,7 @@ mod tests {
         assert_eq!(section(&wasm, SEC_MEMORY).unwrap(), [1, 0x01, 1, 4]);
         let data = section(&wasm, SEC_DATA).unwrap();
         // 1 segment: active mem0, i32.const 1024, end, len 2, "hi"
-        assert_eq!(
-            data,
-            [
-                0x01,
-                0x00,
-                op::I32_CONST,
-                0x80,
-                0x08,
-                op::END,
-                0x02,
-                b'h',
-                b'i'
-            ]
-        );
+        assert_eq!(data, [0x01, 0x00, op::I32_CONST, 0x80, 0x08, op::END, 0x02, b'h', b'i']);
         // Section ids appear in strictly increasing order.
         let ids = section_ids(&wasm);
         let mut sorted = ids.clone();
@@ -692,27 +656,15 @@ mod tests {
         // Spec-invalid memory limits: min > max, and past the 2^16-page space.
         let mut m = Module::new();
         m.memory(5, Some(2));
-        assert!(matches!(
-            m.finish(),
-            Err(BuildError::BadMemoryLimits {
-                min: 5,
-                max: Some(2)
-            })
-        ));
+        assert!(matches!(m.finish(), Err(BuildError::BadMemoryLimits { min: 5, max: Some(2) })));
         let mut m = Module::new();
         m.memory(70_000, None);
-        assert!(matches!(
-            m.finish(),
-            Err(BuildError::BadMemoryLimits { .. })
-        ));
+        assert!(matches!(m.finish(), Err(BuildError::BadMemoryLimits { .. })));
         // A data segment past the initial memory can never instantiate.
         let mut m = Module::new();
         m.memory(1, None);
         m.data(65_535, b"too far");
-        assert!(matches!(
-            m.finish(),
-            Err(BuildError::DataOutOfBounds { .. })
-        ));
+        assert!(matches!(m.finish(), Err(BuildError::DataOutOfBounds { .. })));
     }
 
     #[test]

@@ -16,8 +16,10 @@ WEB_DEPS="wasm-bindgen js-sys web-sys"
 LOCK_ALLOW="bumpalo cfg-if futures-core futures-task futures-util js-sys once_cell pin-project-lite proc-macro2 quote rustversion slab syn unicode-ident wasm-bindgen wasm-bindgen-macro wasm-bindgen-macro-support wasm-bindgen-shared web-sys"
 # Crates whose state must replay bit-for-bit: no floats, no hash-ordered or
 # randomly seeded collections, no clocks, no randomness.
-DETERMINISTIC_CRATES="wm"
+DETERMINISTIC_CRATES="wm vfs"
 DET_TOKENS="HashMap|HashSet|RandomState|DefaultHasher|Instant|SystemTime|UNIX_EPOCH|thread_rng"
+# The native node: a separate Cargo workspace (see check 1).
+NODE_DIR=node
 fail=0
 
 # Crates live under crates/ (the libraries) and tools/ (build and dev tools).
@@ -37,7 +39,23 @@ for c in "${crate_dirs[@]}"; do
     fail=1
   fi
 done
+# The node (node/) is a separate Cargo workspace: native infrastructure that
+# takes PTY and WebSocket libraries, so it is exempt from the zero-dependency
+# rule (check 3; its dependencies are reviewed in node/Cargo.toml, and it has
+# its own lockfile). It is Rust in this repo all the same: it keeps the
+# per-crate line cap, counts toward the total, and carries the license
+# (check 5). Its build output, node/target/, is not counted.
+node_lines=0
+if [ -d "$NODE_DIR" ]; then
+  node_lines=$(find "$NODE_DIR" -path "$NODE_DIR/target" -prune -o -name '*.rs' -print0 | xargs -0 cat | wc -l)
+  printf '%-26s %6d LOC (cap %d)\n' "$NODE_DIR/ (own workspace)" "$node_lines" "$CRATE_CAP"
+  if [ "$node_lines" -gt "$CRATE_CAP" ]; then
+    echo "FAIL: $NODE_DIR/ exceeds the per-crate cap"
+    fail=1
+  fi
+fi
 total=$(find "${crate_dirs[@]}" -name '*.rs' -print0 | xargs -0 cat | wc -l)
+total=$((total + node_lines))
 printf '%-26s %6d LOC (cap %d)\n' "total" "$total" "$REPO_CAP"
 if [ "$total" -gt "$REPO_CAP" ]; then
   echo "FAIL: repo exceeds the total cap"
@@ -172,9 +190,9 @@ for c in $DETERMINISTIC_CRATES; do
   fi
 done
 
-# 5. Every crate carries the license text: cargo packages only the crate dir,
-#    and Apache-2.0 wants the text with every copy.
-for c in "${crate_dirs[@]}"; do
+# 5. Every crate, and the node, carries the license text: cargo packages only
+#    the crate dir, and Apache-2.0 wants the text with every copy.
+for c in "${crate_dirs[@]}" "$NODE_DIR/"; do
   if ! cmp -s LICENSE "${c}LICENSE"; then
     echo "FAIL: ${c}LICENSE is missing or differs from the root LICENSE"
     fail=1

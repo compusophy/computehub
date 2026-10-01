@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
-# Builds the web bundle into dist/: the os crate as wasm, wasm-bindgen's
-# glue, wasm-opt when it is installed, and web/index.html. scripts/budget.sh
-# measures the result; `cargo run -p serve --release -- dist 8080` serves it.
+# Builds the web bundle into dist/: the os crate as wasm (the boot font is
+# inside it), wasm-bindgen's glue, wasm-opt when it is installed and helps,
+# web/index.html, the deferred fonts in dist/fonts/deferred/, the lazy fonts
+# in dist/fonts/ and the font licenses in dist/licenses/.
+# scripts/budget.sh measures the result;
+# `cargo run -p serve --release -- dist 8080` serves it.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -77,18 +80,42 @@ features=(
 if ! command -v wasm-opt >/dev/null 2>&1; then
   echo "WARNING: wasm-opt not found (install binaryen); dist/os_bg.wasm stays unoptimized"
 elif wasm-opt -Oz "${features[@]}" dist/os_bg.wasm -o dist/os_bg.opt.wasm && [ -s dist/os_bg.opt.wasm ]; then
-  mv dist/os_bg.opt.wasm dist/os_bg.wasm
+  # The budget is compressed bytes, and a smaller module can compress worse
+  # (binaryen 112 on this one does): keep whichever gzips smaller.
+  opt_gz=$(($(gzip -9 -c dist/os_bg.opt.wasm | wc -c)))
+  raw_gz=$(($(gzip -9 -c dist/os_bg.wasm | wc -c)))
+  if [ "$opt_gz" -le "$raw_gz" ]; then
+    mv dist/os_bg.opt.wasm dist/os_bg.wasm
+  else
+    rm -f dist/os_bg.opt.wasm
+    echo "note: wasm-opt output gzips larger ($opt_gz > $raw_gz bytes); kept the unoptimized module"
+  fi
 else
   rm -f dist/os_bg.opt.wasm
   echo "WARNING: wasm-opt failed; dist/os_bg.wasm stays unoptimized"
 fi
 
 cp web/index.html dist/
+# The fonts outside the wasm, none of them part of the boot download: the
+# deferred ones the page fetches right after its first frame (Inter SemiBold
+# and JetBrains Mono, from fonts/deferred/), the lazy symbol fonts a terminal
+# fetches when it first opens (from fonts/, the URLs the shell asks for), and
+# the fonts' licenses (OFL 1.1 wants its text with every copy).
+# scripts/budget.sh measures each group on its own.
+mkdir -p dist/fonts/deferred dist/licenses
+cp assets/fonts/deferred/*.ttf dist/fonts/deferred/
+cp assets/fonts/lazy/*.ttf dist/fonts/
+cp assets/fonts/OFL-*.txt dist/licenses/
 
 # dist/ is what visitors download, so it gets scripts/caps.sh's privacy check
-# too (same patterns; -a because the wasm is binary). A leaky bundle is
-# deleted rather than left where a deploy could pick it up.
-leaks=$(LC_ALL=C grep -a -o -E '[A-Za-z]:[/\\]+Users[/\\]|/home/[A-Za-z]|/Users/[A-Za-z]|[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+\.[A-Za-z0-9.-]*[A-Za-z]{2,}' dist/* || true)
+# too (same patterns; -a because the wasm and fonts are binary). A leaky
+# bundle is deleted rather than left where a deploy could pick it up.
+# One home path belongs in the bundle: the OS's own guest home
+# (vfs::Vfs::HOME), which names no account on the build machine. It is an
+# alternative of its own so that the longest match reports it whole, and is
+# then dropped. ([g] keeps this line from matching caps.sh's own check.)
+leaks=$(LC_ALL=C grep -r -a -o -E '[A-Za-z]:[/\\]+Users[/\\]|/home/[g]uest|/home/[A-Za-z]|/Users/[A-Za-z]|[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+\.[A-Za-z0-9.-]*[A-Za-z]{2,}' dist \
+  | LC_ALL=C grep -a -v -E '^[^:]*:/home/[g]uest$' || true)
 if [ -n "$leaks" ]; then
   echo "ERROR: dist/ holds a local path or email address; deleted it:" >&2
   printf '%s\n' "$leaks" | cut -c1-160 >&2
@@ -96,14 +123,14 @@ if [ -n "$leaks" ]; then
   exit 1
 fi
 
-printf '%-24s %10s %10s\n' "file" "raw" "gzip -9"
+printf '%-46s %10s %10s\n' "file" "raw" "gzip -9"
 raw_total=0
 gz_total=0
-for f in dist/*; do
+while IFS= read -r f; do
   raw=$(($(wc -c <"$f")))
   gz=$(($(gzip -9 -c "$f" | wc -c)))
-  printf '%-24s %10d %10d\n' "$f" "$raw" "$gz"
+  printf '%-46s %10d %10d\n' "$f" "$raw" "$gz"
   raw_total=$((raw_total + raw))
   gz_total=$((gz_total + gz))
-done
-printf '%-24s %10d %10d\n' "total" "$raw_total" "$gz_total"
+done < <(find dist -type f | LC_ALL=C sort)
+printf '%-46s %10d %10d\n' "total (all files)" "$raw_total" "$gz_total"

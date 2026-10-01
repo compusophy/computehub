@@ -1,0 +1,19 @@
+[package]
+name = "compusophy-apps"
+description = "compusophyOS built-in apps: Terminal, Welcome, Launcher and About."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[lib]
+name = "apps"
+
+[dependencies]
+compusophy-ui.workspace = true
+compusophy-gfx.workspace = true
+compusophy-vfs.workspace = true
+compusophy-term.workspace = true
+compusophy-guest.workspace = true

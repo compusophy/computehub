@@ -1,0 +1,15 @@
+[package]
+name = "compusophy-term"
+description = "An xterm-compatible terminal screen model: cells, colors, cursor, scroll regions, alternate screen, scrollback, replies and key encoding."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[lib]
+name = "term"
+
+[dependencies]
+compusophy-vt.workspace = true

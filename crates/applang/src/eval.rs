@@ -45,11 +45,7 @@ impl std::fmt::Display for Value {
 pub(crate) type State = Vec<(String, Value)>;
 
 pub(crate) fn init_state(program: &Program) -> State {
-    program
-        .states()
-        .iter()
-        .map(|s| (s.name.clone(), Value::from_lit(&s.init)))
-        .collect()
+    program.states().iter().map(|s| (s.name.clone(), Value::from_lit(&s.init))).collect()
 }
 
 fn fuel_out(sp: Span) -> Diag {
@@ -57,11 +53,7 @@ fn fuel_out(sp: Span) -> Diag {
 }
 
 fn overflow(op: &str, sp: Span) -> Diag {
-    Diag::at_code(
-        codes::OVERFLOW,
-        format!("`{op}` overflowed the 64-bit integer range"),
-        sp,
-    )
+    Diag::at_code(codes::OVERFLOW, format!("`{op}` overflowed the 64-bit integer range"), sp)
 }
 
 /// Expression evaluation shared by render and handlers. `locals` is empty at
@@ -94,10 +86,9 @@ impl Eval<'_> {
             Expr::Unary(op, inner, sp) => {
                 let v = self.expr(inner)?;
                 match (op, v) {
-                    (UnOp::Neg, Value::Int(n)) => n
-                        .checked_neg()
-                        .map(Value::Int)
-                        .ok_or_else(|| overflow("-", *sp)),
+                    (UnOp::Neg, Value::Int(n)) => {
+                        n.checked_neg().map(Value::Int).ok_or_else(|| overflow("-", *sp))
+                    }
                     (UnOp::Not, Value::Bool(b)) => Ok(Value::Bool(!b)),
                     _ => unreachable!("checked: unary operand types"),
                 }
@@ -148,11 +139,9 @@ impl Eval<'_> {
                 Add => int(a.checked_add(b)),
                 Sub => int(a.checked_sub(b)),
                 Mul => int(a.checked_mul(b)),
-                Div | Rem if b == 0 => Err(Diag::at_code(
-                    codes::DIV_BY_ZERO,
-                    "division or remainder by zero",
-                    sp,
-                )),
+                Div | Rem if b == 0 => {
+                    Err(Diag::at_code(codes::DIV_BY_ZERO, "division or remainder by zero", sp))
+                }
                 Div => int(a.checked_div(b)),
                 Rem => int(a.checked_rem(b)),
                 Lt => Ok(Value::Bool(a < b)),
@@ -172,57 +161,60 @@ impl Eval<'_> {
     }
 }
 
-/// Render `state` through the widget tree: a fresh fuel tank, a pure pass.
+/// Render `state` through the widget tree: a fresh fuel tank, a pure pass,
+/// at most `limits.max_render_bytes` of text in all.
 pub(crate) fn render(program: &Program, state: &State, limits: &Limits) -> Result<Vec<Node>, Diag> {
-    let mut fuel = Fuel::new(limits.fuel);
+    let (mut fuel, mut left) = (Fuel::new(limits.fuel), limits.max_render_bytes);
     let mut nodes = Vec::new();
     for w in program.widgets() {
-        widget(w, state, &mut fuel, limits, &mut nodes)?;
+        widget(w, state, &mut fuel, &mut left, limits, &mut nodes)?;
     }
     Ok(nodes)
+}
+
+/// Takes `n` bytes of the render's text from those `left`; past them, a
+/// fault at `w`.
+fn spend(left: &mut usize, n: usize, w: &Widget) -> Result<(), Diag> {
+    let msg = "render output exceeds the byte limit";
+    *left =
+        left.checked_sub(n).ok_or_else(|| Diag::at_code(codes::RENDER_TOO_BIG, msg, w_span(w)))?;
+    Ok(())
 }
 
 fn widget(
     w: &Widget,
     state: &State,
     fuel: &mut Fuel,
+    left: &mut usize,
     limits: &Limits,
     out: &mut Vec<Node>,
 ) -> Result<(), Diag> {
     fuel.burn(1).map_err(|_| fuel_out(w_span(w)))?;
-    let mut ev = Eval {
-        fuel,
-        state,
-        locals: &[],
-        max_str: limits.max_str_bytes,
-    };
+    let mut ev = Eval { fuel, state, locals: &[], max_str: limits.max_str_bytes };
     match w {
         Widget::Label { value, .. } => {
             let text = ev.expr(value)?.to_string();
+            spend(left, text.len(), w)?;
             out.push(Node::Label { text });
             Ok(())
         }
         Widget::Button { text, id, .. } => {
-            out.push(Node::Button {
-                text: text.clone(),
-                id: *id,
-            });
+            spend(left, text.len(), w)?;
+            out.push(Node::Button { text: text.clone(), id: *id });
             Ok(())
         }
         Widget::Input { state: name, .. } => {
             let Value::Str(value) = ev.get(name) else {
                 unreachable!("checked: input binds a string state")
             };
-            out.push(Node::Input {
-                state: name.clone(),
-                value,
-            });
+            spend(left, name.len() + value.len(), w)?;
+            out.push(Node::Input { state: name.clone(), value });
             Ok(())
         }
         Widget::Row { children, .. } | Widget::Col { children, .. } => {
             let mut inner = Vec::new();
             for c in children {
-                widget(c, state, fuel, limits, &mut inner)?;
+                widget(c, state, fuel, left, limits, &mut inner)?;
             }
             out.push(if matches!(w, Widget::Row { .. }) {
                 Node::Row { children: inner }
@@ -233,21 +225,16 @@ fn widget(
         }
         Widget::If { arms, els, .. } => {
             for (cond, body) in arms {
-                let mut ev = Eval {
-                    fuel,
-                    state,
-                    locals: &[],
-                    max_str: limits.max_str_bytes,
-                };
+                let mut ev = Eval { fuel, state, locals: &[], max_str: limits.max_str_bytes };
                 if ev.expr(cond)? == Value::Bool(true) {
                     for c in body {
-                        widget(c, state, fuel, limits, out)?;
+                        widget(c, state, fuel, left, limits, out)?;
                     }
                     return Ok(());
                 }
             }
             for c in els {
-                widget(c, state, fuel, limits, out)?;
+                widget(c, state, fuel, left, limits, out)?;
             }
             Ok(())
         }
@@ -316,10 +303,7 @@ pub(crate) fn handle(
     if total > limits.max_state_bytes {
         return Err(Diag::new_code(
             codes::STATE_TOO_BIG,
-            format!(
-                "string state totals {total} bytes; the limit is {}",
-                limits.max_state_bytes
-            ),
+            format!("string state totals {total} bytes; the limit is {}", limits.max_state_bytes),
         ));
     }
     Ok(next)

@@ -1,0 +1,343 @@
+use super::*;
+use gfx::{DrawList, Instance, Rgba};
+
+const SANS: &[u8] = include_bytes!("../../../assets/fonts/Inter-Regular.ttf");
+const BOLD: &[u8] = include_bytes!("../../../assets/fonts/deferred/Inter-SemiBold.ttf");
+const MONO: &[u8] = include_bytes!("../../../assets/fonts/deferred/JetBrainsMono-Regular.ttf");
+const SYM_A: &[u8] = include_bytes!("../../../assets/fonts/lazy/symbols-a.ttf");
+const SYM_B: &[u8] = include_bytes!("../../../assets/fonts/lazy/symbols-b.ttf");
+
+const WHITE: Rgba = Rgba::hex(0xffffff);
+const SANS14: TextStyle = TextStyle::new(FontId::Sans, 14.0, WHITE);
+const BOLD20: TextStyle = TextStyle::new(FontId::SansBold, 20.0, WHITE);
+const MONO13: TextStyle = TextStyle::new(FontId::Mono, 13.0, WHITE);
+
+fn ts() -> TextSystem {
+    let mut t = TextSystem::new(SANS.to_vec()).unwrap();
+    t.set_font(FontId::SansBold, BOLD.to_vec()).unwrap();
+    t.set_font(FontId::Mono, MONO.to_vec()).unwrap();
+    t
+}
+
+fn sans(size: f32) -> TextStyle {
+    TextStyle::new(FontId::Sans, size, WHITE)
+}
+
+/// The instances of `kind` (4 for glyphs), in `color` if given.
+fn find(list: &DrawList, kind: f32, color: Option<Rgba>) -> Vec<Instance> {
+    let hit = |i: &&Instance| i.kind == kind && color.is_none_or(|c| i.color == c);
+    list.instances().iter().filter(hit).copied().collect()
+}
+
+fn glyphs(list: &DrawList) -> Vec<Instance> {
+    find(list, 4.0, None)
+}
+
+fn on_grid(v: f32, dpr: f32) -> bool {
+    (v * dpr - (v * dpr).round()).abs() < 1e-3
+}
+
+fn near(a: f32, b: f32) -> bool {
+    (a - b).abs() < 1e-4
+}
+
+#[test]
+fn measure_matches_draw_and_font_advances() {
+    let mut t = ts();
+    // Inter 'A' advances 1413 of 2048 units; JetBrains Mono is 600 of 1000.
+    assert!(near(t.measure("A", SANS14), 1413.0 * 14.0 / 2048.0));
+    assert!(near(t.measure("iiii", MONO13), 4.0 * 7.8));
+    assert_eq!(t.measure("iiii", MONO13), t.measure("WWWW", MONO13));
+    assert!(t.measure("WWW", SANS14) > t.measure("iii", SANS14));
+    assert!(t.measure("Hello", BOLD20) > t.measure("Hello", SANS14));
+    assert_eq!(t.measure("", SANS14), 0.0);
+    assert_eq!(t.measure("a\tb", MONO13), t.measure("a    b", MONO13));
+    assert_eq!(t.measure("a\u{7}b", MONO13), t.measure("ab", MONO13));
+    assert_eq!(t.measure("abc", sans(f32::NAN)), 0.0);
+
+    let mut list = DrawList::new();
+    let adv = t.draw_text(&mut list, 10.0, 30.0, "Hello, world", SANS14);
+    assert_eq!(adv, t.measure("Hello, world", SANS14));
+    assert_eq!(glyphs(&list).len(), 11); // all but the space
+    assert_eq!(t.draw_text(&mut list, 0.0, 0.0, "abc", sans(0.0)), 0.0);
+    assert_eq!(list.len(), 11);
+    // Glyphs run left to right and sit on the baseline.
+    let g = glyphs(&list);
+    assert!(g.windows(2).all(|w| w[0].rect[0] < w[1].rect[0]));
+    let h = g[0].rect; // 'H': cap height above the baseline
+    assert!((h[1] + h[3] - 30.0).abs() <= 1.0 && h[1] < 21.0, "{h:?}");
+    assert!(!t.take_atlas_reset() && t.atlas_mut().take_dirty().is_some());
+}
+
+#[test]
+fn vertical_metrics_snap_to_device_pixels() {
+    let mut t = ts();
+    // Inter: (1984 + 494) / 2048 * 14 = 16.94; Mono: 1.32 * 13 = 17.16.
+    assert_eq!(t.line_height(SANS14), 17.0);
+    assert_eq!(t.line_height(MONO13), 17.0);
+    assert_eq!((t.ascent(MONO13), t.descent(MONO13)), (13.0, 4.0));
+    for dpr in [1.25, 1.5, 2.0, 3.0] {
+        t.set_dpr(dpr);
+        for style in [SANS14, MONO13, BOLD20] {
+            for v in [t.line_height(style), t.ascent(style), t.descent(style)] {
+                assert!(on_grid(v, dpr), "{v} at {dpr}");
+            }
+        }
+        assert!(on_grid(t.cell_width(13.0), dpr) && on_grid(t.snap(0.37), dpr));
+    }
+    t.set_dpr(1.0);
+    assert_eq!(t.cell_width(13.0), 8.0); // 7.8 -> 8
+    assert_eq!(t.cell_width(12.0), 7.0); // 7.2 -> 7
+    assert_eq!(t.cell_width(0.0), 0.0);
+    [f32::NAN, -1.0, 0.0].into_iter().for_each(|bad| t.set_dpr(bad));
+    assert_eq!(t.dpr(), 1.0);
+    t.set_dpr(100.0);
+    assert_eq!(t.dpr(), 8.0);
+    assert_eq!(t.line_height(sans(0.0)), 0.0);
+    assert_eq!(t.line_height(sans(0.01)), 1.0 / 8.0);
+}
+
+#[test]
+fn glyphs_land_on_device_pixels() {
+    for dpr in [1.0, 1.5, 2.0, 2.625] {
+        let mut t = ts();
+        t.set_dpr(dpr);
+        let mut list = DrawList::new();
+        t.draw_text(&mut list, 10.3, 20.7, "Snap gj", SANS14);
+        t.draw_text(&mut list, 3.1, 40.45, "mono{}", MONO13);
+        let g = glyphs(&list);
+        assert_eq!(g.len(), 12);
+        for i in &g {
+            let ([x, y, w, h], [u, v, uw, vh]) = (i.rect, i.uv);
+            assert!(on_grid(x, dpr) && on_grid(y, dpr), "{:?} at {dpr}", i.rect);
+            // Sampled 1:1: the rect is the uv size in device pixels.
+            assert!((w * dpr - uw).abs() < 1e-3 && (h * dpr - vh).abs() < 1e-3);
+            assert!(u >= 1.0 && v >= 1.0 && u + uw < 1024.0 && v + vh < 1024.0);
+        }
+    }
+    // Twice the dpr, twice the device pixels: a separate cache entry; the
+    // same glyph at the same size: one atlas slot.
+    let (mut t, mut list) = (ts(), DrawList::new());
+    t.draw_text(&mut list, 0.0, 20.0, "O", SANS14);
+    t.set_dpr(2.0);
+    t.draw_text(&mut list, 0.0, 20.0, "OO", SANS14);
+    let g = glyphs(&list);
+    assert!((g[1].uv[2] - 2.0 * g[0].uv[2]).abs() <= 2.0 && g[0].uv != g[1].uv);
+    assert!(g[2].uv == g[1].uv);
+    assert_eq!(t.atlas_mut().size(), (ATLAS_SIZE, ATLAS_SIZE));
+}
+
+#[test]
+fn a_full_atlas_resets_once_and_keeps_drawing() {
+    let mut t = ts();
+    let mut list = DrawList::new();
+    let mut resets = 0;
+    // Big glyphs at many sizes: far more than 1024 x 1024 holds.
+    for size in (100..=400).step_by(5) {
+        let style = TextStyle::new(FontId::SansBold, size as f32, WHITE);
+        t.draw_text(&mut list, 0.0, 400.0, "MWQ@", style);
+        if t.take_atlas_reset() {
+            resets += 1;
+            assert!(!t.take_atlas_reset());
+        }
+    }
+    assert!(resets >= 1, "the atlas never filled");
+    assert_eq!(resets, t.atlas_mut().generation());
+    // After a reset, new glyphs get fresh, in-bounds slots.
+    list.clear();
+    t.draw_text(&mut list, 0.0, 40.0, "fresh", SANS14);
+    for g in glyphs(&list) {
+        assert!(g.uv[0] + g.uv[2] < 1024.0 && g.uv[1] + g.uv[3] < 1024.0);
+    }
+    // A glyph wider than the whole atlas (U+23E5 is 1.26 em) is skipped
+    // without a reset, and so is any glyph over 1000 device px per em.
+    t.add_fallback(SYM_B.to_vec()).unwrap();
+    list.clear();
+    t.draw_text(&mut list, 0.0, 900.0, "\u{23e5}", sans(900.0));
+    t.set_dpr(2.0);
+    t.draw_text(&mut list, 0.0, 900.0, "i", sans(501.0));
+    assert!(list.is_empty() && !t.take_atlas_reset());
+    t.draw_text(&mut list, 0.0, 900.0, "\u{23e5}i", sans(400.0));
+    assert_eq!(list.len(), 2);
+}
+
+#[test]
+fn fallbacks_resolve_missing_chars() {
+    let mut t = ts();
+    let mut list = DrawList::new();
+    // No face has U+273B yet: a hollow box in a cell, .notdef in a line.
+    t.draw_cell_char(&mut list, 0.0, 13.0, 8.0, '✻', 13.0, WHITE);
+    assert_eq!(list.instances()[0].kind, 1.0);
+    assert!(t.measure("✻", MONO13) > 0.0);
+    t.add_fallback(SYM_A.to_vec()).unwrap();
+    t.add_fallback(SYM_B.to_vec()).unwrap();
+    // Symbols A has it at 750 units, wider than a Mono cell; U+23BF is only
+    // in Symbols B, the second fallback.
+    assert!(near(t.measure("✻", MONO13), 750.0 * 13.0 / 1000.0));
+    assert!(near(t.measure("✻", SANS14), 750.0 * 14.0 / 1000.0));
+    assert!(near(t.measure("⎿", MONO13), 699.0 * 13.0 / 1000.0));
+    // The built-ins stand in for each other: Inter lacks box drawing, and
+    // JetBrains Mono lacks the check mark Inter has.
+    assert!(near(t.measure("─", SANS14), 600.0 * 14.0 / 1000.0));
+    assert!(near(t.measure("✓", MONO13), 1811.0 * 13.0 / 2048.0));
+    for c in ['✻', '⎿', '⠋', '⣿'] {
+        list.clear();
+        t.draw_cell_char(&mut list, 16.0, 13.0, 8.0, c, 13.0, WHITE);
+        let g = glyphs(&list);
+        assert_eq!(g.len(), 1, "{c}");
+        // Scaled to the cell: its width, within the ink's overhang.
+        let [x, _, w, _] = g[0].rect;
+        assert!(w <= 9.0 && x >= 15.0 && x + w <= 26.0, "{c} {g:?}");
+    }
+    // Braille frames scale together: a full cell and a top-row pattern
+    // share their top edge.
+    list.clear();
+    t.draw_cell_char(&mut list, 0.0, 13.0, 8.0, '⣿', 13.0, WHITE);
+    t.draw_cell_char(&mut list, 8.0, 13.0, 8.0, '⠉', 13.0, WHITE);
+    let g = glyphs(&list);
+    assert!((g[0].rect[1] - g[1].rect[1]).abs() <= 1.0, "{g:?}");
+    // Bad fonts are refused, naming the slot; fallbacks are capped.
+    let e = TextSystem::new(vec![1, 2, 3]).unwrap_err();
+    let e2 = t.set_font(FontId::SansBold, vec![1]).unwrap_err();
+    assert!(e.starts_with("sans:") && e2.starts_with("sans bold:"));
+    assert!(t.has_font(FontId::SansBold) && t.add_fallback(vec![0; 10]).is_err());
+    while t.fallback_count() < MAX_FALLBACKS {
+        t.add_fallback(SYM_B.to_vec()).unwrap();
+    }
+    assert!(t.add_fallback(SYM_B.to_vec()).is_err());
+}
+
+#[test]
+fn empty_slots_until_the_deferred_fonts_arrive() {
+    let mut t = TextSystem::new(SANS.to_vec()).unwrap();
+    assert!(t.has_font(FontId::Sans) && !t.has_font(FontId::SansBold) && !t.has_font(FontId::Mono));
+    // SansBold is Sans: same metrics, same glyphs.
+    let (mut a, mut b) = (DrawList::new(), DrawList::new());
+    let bold = t.draw_text(&mut a, 0.0, 30.0, "Hello", BOLD20);
+    assert_eq!(bold, t.draw_text(&mut b, 0.0, 30.0, "Hello", sans(20.0)));
+    assert_eq!((glyphs(&a).len(), a.instances()), (5, b.instances()));
+    assert_eq!(t.line_height(BOLD20), t.line_height(sans(20.0)));
+    // Mono draws nothing but keeps JetBrains Mono's grid: 0.6 em a char.
+    let w = t.measure("abc\t", MONO13);
+    let cells = [10.0, 13.0, 12.0].map(|s| t.cell_width(s));
+    assert!(near(w, 7.0 * 0.6 * 13.0) && cells == [6.0, 8.0, 7.0]);
+    let v = |t: &TextSystem| [t.line_height(MONO13), t.ascent(MONO13), t.descent(MONO13)];
+    let (vm, list) = (v(&t), &mut DrawList::new());
+    assert_eq!(t.draw_text(list, 0.0, 13.0, "abc\t", MONO13), w);
+    for c in ['A', '─', '✻'] {
+        t.draw_cell_char(list, 0.0, 13.0, 8.0, c, 13.0, WHITE);
+    }
+    assert!(list.is_empty() && t.measure("─", SANS14) == t.measure("\u{ffff}", SANS14));
+    // Filling the slots changes glyphs but not the grid.
+    t.set_font(FontId::Mono, MONO.to_vec()).unwrap();
+    t.set_font(FontId::SansBold, BOLD.to_vec()).unwrap();
+    assert!(t.has_font(FontId::SansBold) && t.has_font(FontId::Mono));
+    assert_eq!((t.measure("abc\t", MONO13), v(&t)), (w, vm));
+    assert_eq!([10.0, 13.0, 12.0].map(|s| t.cell_width(s)), cells);
+    assert!(near(t.measure("─", SANS14), 0.6 * 14.0) && t.measure("Hello", BOLD20) > bold);
+    t.draw_cell_char(list, 0.0, 13.0, 8.0, 'A', 13.0, WHITE);
+    assert_eq!(glyphs(list).len(), 1);
+    // Replacing a slot drops its cached glyphs: SemiBold as Sans has the
+    // same glyph ids as Regular, yet draws fresh, as SansBold does.
+    let old = t.draw_text(&mut a, 0.0, 30.0, "O", sans(20.0));
+    t.set_font(FontId::Sans, BOLD.to_vec()).unwrap();
+    assert!(t.draw_text(&mut a, 0.0, 30.0, "O", sans(20.0)) > old);
+    t.draw_text(&mut a, 0.0, 30.0, "O", BOLD20);
+    let g = glyphs(&a);
+    let [r, s, bo] = [&g[g.len() - 3], &g[g.len() - 2], &g[g.len() - 1]];
+    assert!(r.uv != s.uv && s.rect[2..] == bo.rect[2..]);
+}
+
+#[test]
+fn cells_center_and_box_drawing_fills_the_cell() {
+    let mut t = ts();
+    let mut list = DrawList::new();
+    let (size, cw) = (13.0, t.cell_width(13.0));
+    let (row, lh) = (40.0, t.line_height(MONO13));
+    let base = row + t.ascent(MONO13);
+    for (i, c) in "─│█╭".chars().enumerate() {
+        t.draw_cell_char(&mut list, i as f32 * cw, base, cw, c, size, WHITE);
+    }
+    let g = glyphs(&list);
+    assert_eq!(g.len(), 4);
+    // ─ and █ reach both cell edges; │ and █ reach both row edges.
+    for (x0, [x, _, w, _]) in [(0.0, g[0].rect), (2.0 * cw, g[2].rect)] {
+        assert!(x <= x0 && x + w >= x0 + cw, "{x} {w}");
+    }
+    for [_, y, _, h] in [g[1].rect, g[2].rect] {
+        assert!(y <= row && y + h >= row + lh, "{y} {h}");
+    }
+    // The block's texels are opaque right at the cell's edges.
+    let ([ux, uy, uw, uh], dx) = (g[2].uv, g[2].rect[0]);
+    let px = t.atlas_mut().pixels();
+    let at = |x: f32| px[(uy + (uh / 2.0).floor()) as usize * 1024 + x as usize];
+    let first = ux + (2.0 * cw - dx).round();
+    let last = ux + (3.0 * cw - dx).round() - 1.0;
+    assert!(first >= ux && last < ux + uw);
+    assert_eq!((at(first), at(last)), (255, 255));
+    // Plain Mono glyphs keep their size and sit centered.
+    list.clear();
+    t.draw_cell_char(&mut list, 80.0, base, cw, 'A', size, WHITE);
+    t.draw_text(&mut list, 80.0, base, "A", MONO13);
+    let g = glyphs(&list);
+    assert!(g[0].uv[2..] == g[1].uv[2..] && (g[0].rect[0] - g[1].rect[0]).abs() <= 1.0);
+    // Spaces, control chars and bad sizes draw nothing.
+    list.clear();
+    for c in [' ', '\n', '\u{1b}'] {
+        t.draw_cell_char(&mut list, 0.0, base, cw, c, size, WHITE);
+    }
+    t.draw_cell_char(&mut list, 0.0, base, cw, 'A', f32::NAN, WHITE);
+    t.draw_cell_char(&mut list, 0.0, base, 0.0, 'A', size, WHITE);
+    assert!(list.is_empty());
+}
+
+#[test]
+fn wrapping() {
+    let mut t = ts();
+    let w = t.measure("hello world", SANS14);
+    assert_eq!(t.wrap("hello world", SANS14, w), ["hello world"]);
+    assert_eq!(t.wrap("hello world", SANS14, w - 1.0), ["hello", "world"]);
+    assert_eq!(t.wrap("hello   world", SANS14, w - 1.0), ["hello", "world"]);
+    assert_eq!(t.wrap("a\nb\r\n\nc", SANS14, 500.0), ["a", "b", "", "c"]);
+    assert_eq!(t.wrap("", SANS14, 500.0), [""]);
+    assert_eq!(t.wrap("  indented", MONO13, 500.0), ["  indented"]);
+    // Mono: 7.8 px a char, so 5 chars fit in 40 px.
+    let words = ["abcde", "fghij", "kl"];
+    assert_eq!(t.wrap("abcdefghijkl", MONO13, 40.0), words);
+    assert_eq!(t.wrap("ab abcdefghijkl", MONO13, 40.0)[1..], words);
+    assert_eq!(t.wrap("abc", MONO13, 0.0), ["a", "b", "c"]);
+    assert_eq!(t.wrap("é ü", MONO13, 500.0), ["é ü"]);
+    let long = "The quick brown fox jumps over the lazy dog. ".repeat(8);
+    let lines = t.wrap(&long, SANS14, 180.0);
+    assert!(lines.len() > 5);
+    for l in &lines {
+        assert!(t.measure(l, SANS14) <= 180.0, "{l:?}");
+        assert!(!l.starts_with(' ') && !l.ends_with(' '));
+    }
+    let rejoined: Vec<&str> = lines.iter().flat_map(|l| l.split_whitespace()).collect();
+    assert_eq!(long.split_whitespace().collect::<Vec<_>>(), rejoined);
+}
+
+#[test]
+fn wrap_breaks_after_joiners_and_skips_empty_lines() {
+    let mut t = ts();
+    // Mono: 7.8 px a char. Leading spaces before a long word leave no
+    // empty first line.
+    assert_eq!(t.wrap("  verylongword", MONO13, 47.0), ["verylo", "ngword"]);
+    // `+`, `/` and `-` between letters or digits are break opportunities,
+    // kept at the end of the line; not between two digits, nor after a
+    // leading or doubled one.
+    assert_eq!(t.wrap("Alt+Shift+Enter", MONO13, 94.0), ["Alt+Shift+", "Enter"]);
+    assert_eq!(t.wrap("Alt+Shift+Enter", MONO13, 63.0), ["Alt+", "Shift+", "Enter"]);
+    assert_eq!(t.wrap("Alt+Shift+1-4", MONO13, 94.0), ["Alt+Shift+", "1-4"]);
+    assert_eq!(t.wrap("usr/local-bin", MONO13, 79.0), ["usr/local-", "bin"]);
+    assert_eq!(t.wrap("ab --cdefgh", MONO13, 63.0), ["ab", "--cdefgh"]);
+    // The widest piece wrap never splits: wrapping that narrow keeps words.
+    let shift = t.measure("Shift+", MONO13);
+    assert_eq!(t.min_width("Alt+Shift+1-4", MONO13), shift);
+    let word = t.measure("verylongword", MONO13);
+    assert_eq!(t.min_width("  verylongword x\nab", MONO13), word);
+    assert_eq!((t.min_width("", MONO13), t.min_width("ab", sans(f32::NAN))), (0.0, 0.0));
+    let w = t.min_width("Alt+Shift+Enter", SANS14);
+    assert_eq!(t.wrap("Alt+Shift+Enter", SANS14, w), ["Alt+", "Shift+", "Enter"]);
+}

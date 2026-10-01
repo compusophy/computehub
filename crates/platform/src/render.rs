@@ -1,24 +1,27 @@
 //! The WebGL2 side of the gfx contract: one program, one VAO, one instance
-//! buffer, one instanced draw per frame.
+//! buffer, one R8 atlas texture, one instanced draw per frame.
 
-use gfx::{DrawList, INSTANCE_BYTES, Rgba};
+use gfx::{Atlas, DrawList, INSTANCE_BYTES, Rgba};
 use wasm_bindgen::JsCast;
 use web_sys::WebGl2RenderingContext as Gl;
 use web_sys::{
     HtmlCanvasElement, WebGlBuffer, WebGlContextAttributes, WebGlPowerPreference, WebGlProgram,
-    WebGlShader, WebGlUniformLocation, WebGlVertexArrayObject,
+    WebGlShader, WebGlTexture, WebGlUniformLocation, WebGlVertexArrayObject,
 };
 
 /// The instanced attributes as (location, GL type, normalized, byte offset);
 /// each has 4 components, divisor 1 and stride [`INSTANCE_BYTES`], matching
-/// the `layout(location = N)` declarations in [`gfx::VERTEX_SHADER`].
-pub(crate) const ATTRIBS: [(u32, u32, bool, i32); 3] = [
+/// the `layout(location = N)` declarations in [`gfx::VERTEX_SHADER`]:
+/// `a_rect`, `a_params`, `a_color` (four normalized bytes), `a_clip`, `a_uv`.
+pub(crate) const ATTRIBS: [(u32, u32, bool, i32); 5] = [
     (0, Gl::FLOAT, false, 0),
     (1, Gl::FLOAT, false, 16),
     (2, Gl::UNSIGNED_BYTE, true, 32),
+    (3, Gl::FLOAT, false, 36),
+    (4, Gl::FLOAT, false, 52),
 ];
 
-/// The smallest GL instance buffer, in bytes (a power of two; 455 instances).
+/// The smallest GL instance buffer, in bytes (a power of two; 240 instances).
 pub(crate) const MIN_CAPACITY: usize = 16 * 1024;
 
 /// Draws [`gfx::DrawList`]s into the `<canvas>` with WebGL2.
@@ -32,11 +35,15 @@ pub struct Renderer {
     program: WebGlProgram,
     vao: WebGlVertexArrayObject,
     buffer: WebGlBuffer,
+    texture: WebGlTexture,
     u_viewport: Option<WebGlUniformLocation>,
     u_dpr: Option<WebGlUniformLocation>,
-    bytes: Vec<u8>,      // the reused encode buffer
-    capacity: usize,     // the GL buffer's size in bytes
-    backing: (u32, u32), // the size last written to the canvas
+    u_atlas: Option<WebGlUniformLocation>,
+    u_atlas_size: Option<WebGlUniformLocation>,
+    bytes: Vec<u8>,             // the reused encode buffer
+    capacity: usize,            // the GL buffer's size in bytes
+    backing: (u32, u32),        // the size last written to the canvas
+    texels: Option<(u32, u32)>, // the texture's storage size, once allocated
     css: (f32, f32),
     dpr: f32,
 }
@@ -55,14 +62,15 @@ impl Renderer {
         attrs.set_power_preference(WebGlPowerPreference::LowPower);
         let gl: Gl = canvas
             .get_context_with_context_options("webgl2", &attrs)
-            .map_err(|e| format!("getContext(\"webgl2\") threw: {e:?}"))?
+            .map_err(|e| ["getContext(\"webgl2\") threw: ", &crate::js_text(&e)].concat())?
             .ok_or("WebGL2 is not available")?
             .dyn_into()
             .map_err(|_| "getContext(\"webgl2\") returned a non-WebGL2 context")?;
 
         let program = link(&gl)?;
-        let u_viewport = gl.get_uniform_location(&program, "u_viewport");
-        let u_dpr = gl.get_uniform_location(&program, "u_dpr");
+        let uniform = |name| gl.get_uniform_location(&program, name);
+        let (u_viewport, u_dpr) = (uniform("u_viewport"), uniform("u_dpr"));
+        let (u_atlas, u_atlas_size) = (uniform("u_atlas"), uniform("u_atlas_size"));
 
         let vao = gl.create_vertex_array().ok_or("createVertexArray failed")?;
         let buffer = gl.create_buffer().ok_or("createBuffer failed")?;
@@ -76,17 +84,35 @@ impl Renderer {
         }
         gl.bind_vertex_array(None);
 
+        // The atlas texture. Its storage comes with the first draw, which
+        // knows the atlas size.
+        let texture = gl.create_texture().ok_or("createTexture failed")?;
+        gl.bind_texture(Gl::TEXTURE_2D, Some(&texture));
+        let params = [
+            (Gl::TEXTURE_MIN_FILTER, Gl::NEAREST),
+            (Gl::TEXTURE_MAG_FILTER, Gl::NEAREST),
+            (Gl::TEXTURE_WRAP_S, Gl::CLAMP_TO_EDGE),
+            (Gl::TEXTURE_WRAP_T, Gl::CLAMP_TO_EDGE),
+        ];
+        for (p, v) in params {
+            gl.tex_parameteri(Gl::TEXTURE_2D, p, v as i32);
+        }
+
         Ok(Renderer {
             gl,
             canvas: canvas.clone(),
             program,
             vao,
             buffer,
+            texture,
             u_viewport,
             u_dpr,
+            u_atlas,
+            u_atlas_size,
             bytes: Vec::new(),
             capacity: 0,
             backing: (0, 0),
+            texels: None,
             css: (0.0, 0.0),
             dpr: 1.0,
         })
@@ -110,8 +136,15 @@ impl Renderer {
     /// Draws one frame: resizes the canvas backing store to
     /// `round(css * dpr)` if that changed, clears to `clear` (opaque), then
     /// draws every instance of `list` in one instanced call. An empty list
-    /// only clears.
-    pub fn draw(&mut self, list: &DrawList, clear: Rgba) {
+    /// only clears (and leaves the atlas dirty band for the next draw).
+    ///
+    /// Glyphs sample `atlas`, mirrored in an `R8` texture on unit 0
+    /// (`NEAREST`, `CLAMP_TO_EDGE`, `UNPACK_ALIGNMENT` 1). The first draw,
+    /// the first after a context restore and the first after the atlas size
+    /// changes upload the whole atlas; later draws upload only the full-width
+    /// row band [`Atlas::take_dirty`] reports. Pass the same atlas every
+    /// frame: the texture follows its dirty band, not its identity.
+    pub fn draw(&mut self, list: &DrawList, clear: Rgba, atlas: &mut Atlas) {
         let gl = &self.gl;
         let size = backing_size(self.css, self.dpr);
         if size != self.backing {
@@ -140,17 +173,77 @@ impl Renderer {
         } else {
             gl.buffer_sub_data_with_i32_and_u8_array(Gl::ARRAY_BUFFER, 0, &self.bytes);
         }
+        self.sync_atlas(atlas);
 
+        let gl = &self.gl;
+        let (aw, ah) = atlas.size();
         gl.enable(Gl::BLEND);
         gl.blend_func(Gl::ONE, Gl::ONE_MINUS_SRC_ALPHA);
         gl.use_program(Some(&self.program));
         gl.uniform2f(self.u_viewport.as_ref(), self.css.0, self.css.1);
         gl.uniform1f(self.u_dpr.as_ref(), self.dpr);
+        gl.uniform1i(self.u_atlas.as_ref(), 0);
+        gl.uniform2f(self.u_atlas_size.as_ref(), aw as f32, ah as f32);
         gl.bind_vertex_array(Some(&self.vao));
         let n = i32::try_from(list.len()).unwrap_or(i32::MAX);
         gl.draw_arrays_instanced(Gl::TRIANGLE_STRIP, 0, 4, n);
         gl.bind_vertex_array(None);
     }
+
+    /// Binds the atlas texture to unit 0 and brings it up to date: all of it
+    /// when the texture has no storage of the atlas size yet, else the dirty
+    /// row band.
+    fn sync_atlas(&mut self, atlas: &mut Atlas) {
+        let gl = &self.gl;
+        gl.active_texture(Gl::TEXTURE0);
+        gl.bind_texture(Gl::TEXTURE_2D, Some(&self.texture));
+        gl.pixel_storei(Gl::UNPACK_ALIGNMENT, 1);
+        let (w, h) = atlas.size();
+        let band = atlas.take_dirty();
+        let px = atlas.pixels();
+        let (fmt, ty) = (Gl::RED, Gl::UNSIGNED_BYTE);
+        if self.texels != Some((w, h)) {
+            self.texels = Some((w, h));
+            let (w, h, r8) = (w as i32, h as i32, Gl::R8 as i32);
+            let _ = gl.tex_image_2d_with_i32_and_i32_and_i32_and_format_and_type_and_opt_u8_array(
+                Gl::TEXTURE_2D,
+                0,
+                r8,
+                w,
+                h,
+                0,
+                fmt,
+                ty,
+                Some(px),
+            );
+        } else if let Some((y0, rows, bytes)) = band.and_then(|b| band_bytes(b, w, px.len())) {
+            let (y0, w, rows) = (y0 as i32, w as i32, rows as i32);
+            let _ = gl.tex_sub_image_2d_with_i32_and_i32_and_u32_and_type_and_opt_u8_array(
+                Gl::TEXTURE_2D,
+                0,
+                0,
+                y0,
+                w,
+                rows,
+                fmt,
+                ty,
+                Some(&px[bytes]),
+            );
+        }
+    }
+}
+
+/// For the dirty band `[y0, y1)` of an atlas `w` pixels wide holding `len`
+/// bytes: the first row, the row count and the byte range to upload. `None`
+/// when the band is empty or reaches past the pixels.
+pub(crate) fn band_bytes(
+    (y0, y1): (u32, u32),
+    w: u32,
+    len: usize,
+) -> Option<(u32, u32, core::ops::Range<usize>)> {
+    let start = (y0 as usize).checked_mul(w as usize)?;
+    let end = (y1 as usize).checked_mul(w as usize)?;
+    (y0 < y1 && end <= len).then(|| (y0, y1 - y0, start..end))
 }
 
 /// Compiles both gfx shaders and links them. Compile status is read only when
@@ -162,22 +255,19 @@ fn link(gl: &Gl) -> Result<WebGlProgram, String> {
     gl.attach_shader(&program, &vs);
     gl.attach_shader(&program, &fs);
     gl.link_program(&program);
-    let linked = gl
-        .get_program_parameter(&program, Gl::LINK_STATUS)
-        .is_truthy();
+    let linked = gl.get_program_parameter(&program, Gl::LINK_STATUS).is_truthy();
     let result = if linked {
         Ok(program)
     } else {
         let compiled = |s: &WebGlShader| gl.get_shader_parameter(s, Gl::COMPILE_STATUS).is_truthy();
-        let log = |s: &WebGlShader| gl.get_shader_info_log(s).unwrap_or_default();
-        Err(if !compiled(&vs) {
-            format!("vertex shader failed to compile: {}", log(&vs))
+        let (what, log) = if !compiled(&vs) {
+            ("vertex shader failed to compile: ", gl.get_shader_info_log(&vs))
         } else if !compiled(&fs) {
-            format!("fragment shader failed to compile: {}", log(&fs))
+            ("fragment shader failed to compile: ", gl.get_shader_info_log(&fs))
         } else {
-            let log = gl.get_program_info_log(&program).unwrap_or_default();
-            format!("shader program failed to link: {log}")
-        })
+            ("shader program failed to link: ", gl.get_program_info_log(&program))
+        };
+        Err([what, &log.unwrap_or_default()].concat())
     };
     gl.delete_shader(Some(&vs));
     gl.delete_shader(Some(&fs));
@@ -209,8 +299,5 @@ pub(crate) fn clear_rgb(c: Rgba) -> [f32; 3] {
 /// The GL buffer size for `needed` bytes: the next power of two, at least
 /// [`MIN_CAPACITY`].
 pub(crate) fn grow_capacity(needed: usize) -> usize {
-    needed
-        .checked_next_power_of_two()
-        .unwrap_or(needed)
-        .max(MIN_CAPACITY)
+    needed.checked_next_power_of_two().unwrap_or(needed).max(MIN_CAPACITY)
 }

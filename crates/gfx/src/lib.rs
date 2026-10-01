@@ -1,11 +1,11 @@
-//! Draw lists for compusophyOS: every rounded rect, border, soft shadow and
-//! icon on screen is one [`Instance`] of a single quad, and a whole frame is
-//! one flat byte buffer drawn with one instanced WebGL2 call.
+//! Draw lists for compusophyOS: every rounded rect, border, soft shadow, icon
+//! and text glyph on screen is one [`Instance`] of a single quad, and a whole
+//! frame is one flat byte buffer drawn with one instanced WebGL2 call.
 //!
-//! This crate is pure Rust: it builds the list and encodes the bytes; the
-//! `platform` crate uploads them and runs [`VERTEX_SHADER`] and
-//! [`FRAGMENT_SHADER`], which live here so the byte contract and its reader
-//! change together.
+//! This crate is pure Rust: it builds the list, packs the glyph [`Atlas`] and
+//! encodes the bytes; the `platform` crate uploads them and runs
+//! [`VERTEX_SHADER`] and [`FRAGMENT_SHADER`], which live here so the byte
+//! contract and its reader change together.
 //!
 //! # Contract
 //!
@@ -14,8 +14,16 @@
 //!   shader writes premultiplied color; blend with `ONE, ONE_MINUS_SRC_ALPHA`.
 //! - Draw order is push order: later instances draw on top.
 //! - A push is skipped when the rect has `w <= 0` or `h <= 0`, any value is
-//!   not finite, the alpha is 0, or a border's width is `<= 0`. The radius is
-//!   clamped to `[0, min(w, h) / 2]`; a negative blur or stroke becomes 0.
+//!   not finite, the alpha is 0, a border's width is `<= 0`, or a glyph's uv
+//!   rect has `w <= 0` or `h <= 0`. The radius is clamped to
+//!   `[0, min(w, h) / 2]`; a negative blur or stroke becomes 0.
+//! - Clipping: [`DrawList::push_clip`] intersects a rect with the current
+//!   clip and [`DrawList::pop_clip`] restores the previous one; with no clip
+//!   pushed the clip is [`NO_CLIP`]. Every instance records the clip current
+//!   at its push and is visible only inside it (a hard edge, tested on the
+//!   fragment's logical position). A push whose reach misses the clip is
+//!   skipped: the reach is the rect grown by 1 px of antialiasing, by the blur
+//!   plus 1 px for a shadow, and not at all for a glyph.
 //! - Each instance is [`INSTANCE_BYTES`] little-endian bytes:
 //!
 //! | offset | field | type |
@@ -23,25 +31,44 @@
 //! | 0 | `rect` x, y, w, h | 4 x `f32` |
 //! | 16 | `radius`, `kind`, `p0`, `p1` | 4 x `f32` |
 //! | 32 | `color` r, g, b, a | 4 x `u8` |
+//! | 36 | `clip` x, y, w, h | 4 x `f32` |
+//! | 52 | `uv` x, y, w, h (atlas pixels) | 4 x `f32` |
 //!
-//! [`Kind`] sets what `p0` and `p1` mean: Fill uses neither; Border's `p0` is
-//! the stroke width (the ring sits just inside the edge); Shadow's `p0` is
-//! the blur (the shadow reaches `p0` px outside the rect); Icon's `p0` is the
-//! [`Icon`] id and `p1` the stroke width.
+//! [`Kind`] sets what `p0`, `p1` and `uv` mean: Fill uses none; Border's
+//! `p0` is the stroke width (the ring sits just inside the edge); Shadow's
+//! `p0` is the blur (the shadow reaches `p0` px outside the rect); Icon's
+//! `p0` is the [`Icon`] id and `p1` the stroke width; Glyph's `uv` is the
+//! [`Atlas`] pixel rect stretched over the rect. Unused fields are 0.
+//!
+//! # Text
+//!
+//! Glyphs are coverage bitmaps in one [`Atlas`], rasterized at the exact
+//! device pixel size and placed on device pixels, so the atlas is sampled
+//! `NEAREST` and a glyph's rect is its uv size divided by the device pixel
+//! ratio. Its coverage (the texel's red channel) scales the color's alpha.
 //!
 //! # Shaders
 //!
 //! GLSL ES 3.00. Instanced attributes (divisor 1, stride [`INSTANCE_BYTES`]):
 //! location 0 `a_rect` (offset 0), location 1 `a_params` = (radius, kind,
 //! p0, p1) (offset 16), location 2 `a_color` as normalized `UNSIGNED_BYTE`
-//! x4 (offset 32). Uniforms: `u_viewport` (logical canvas size) and `u_dpr`
-//! (device pixel ratio). Draw with `drawArraysInstanced(TRIANGLE_STRIP, 0, 4,
-//! n)` and no vertex buffer. Edges are antialiased over one physical pixel.
+//! x4 (offset 32), location 3 `a_clip` (offset 36), location 4 `a_uv`
+//! (offset 52); every other attribute is 4 x `FLOAT`. Uniforms: `u_viewport`
+//! (logical canvas size), `u_dpr` (device pixel ratio), `u_atlas` (a
+//! `sampler2D` on texture unit 0: the [`Atlas`] as an `R8` texture with
+//! `NEAREST` filtering, uploaded with `UNPACK_ALIGNMENT` 1) and
+//! `u_atlas_size` (its size in pixels). Draw with
+//! `drawArraysInstanced(TRIANGLE_STRIP, 0, 4, n)` and no vertex buffer.
+//! Edges are antialiased over one physical pixel.
 //!
 //! # Example
 //!
 //! ```
-//! use gfx::{DrawList, INSTANCE_BYTES, Icon, RectF, Rgba};
+//! use gfx::{Atlas, DrawList, INSTANCE_BYTES, Icon, RectF, Rgba};
+//!
+//! let mut atlas = Atlas::new(256, 256);
+//! let (u, v) = atlas.alloc(7, 9).unwrap();
+//! atlas.write(u, v, 7, 9, &[255; 63]);
 //!
 //! let mut list = DrawList::new();
 //! let win = RectF::new(8.0, 8.0, 640.0, 480.0);
@@ -49,21 +76,32 @@
 //! list.fill(win, 12.0, Rgba::hex(0x1b1b1b));
 //! list.border(win, 12.0, 1.0, Rgba::hex(0x3a3a3a));
 //! list.icon(RectF::new(620.0, 12.0, 16.0, 16.0), Icon::Cross, 1.5, Rgba::hex(0xe0e0e0));
+//! list.push_clip(win.inset(1.0));
+//! let uv = RectF::new(u as f32, v as f32, 7.0, 9.0);
+//! list.glyph(RectF::new(20.0, 40.0, 7.0, 9.0), uv, Rgba::hex(0xe0e0e0));
+//! list.fill(RectF::new(0.0, 600.0, 10.0, 10.0), 0.0, Rgba::hex(0xffffff)); // outside: skipped
+//! list.pop_clip();
 //! list.fill(RectF::new(0.0, 0.0, 0.0, 10.0), 0.0, Rgba::hex(0xffffff)); // zero width: skipped
 //!
 //! let mut bytes = Vec::new();
 //! list.encode_into(&mut bytes);
-//! assert_eq!(bytes.len(), 4 * INSTANCE_BYTES);
+//! assert_eq!(bytes.len(), 5 * INSTANCE_BYTES);
 //! ```
 
 #![forbid(unsafe_code)]
 
+mod atlas;
 mod shader;
 
+pub use atlas::Atlas;
 pub use shader::{FRAGMENT_SHADER, VERTEX_SHADER};
 
 /// Bytes per encoded [`Instance`]; also the attribute stride.
-pub const INSTANCE_BYTES: usize = 36;
+pub const INSTANCE_BYTES: usize = 68;
+
+/// The clip of an unclipped instance, as x, y, w, h: a square a billion
+/// logical pixels out from the origin, beyond any canvas.
+pub const NO_CLIP: [f32; 4] = [-1e9, -1e9, 2e9, 2e9];
 
 /// A straight (not premultiplied) sRGB color with alpha.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -108,18 +146,22 @@ impl RectF {
     /// Shrinks every side by `d` (grows for negative `d`); the size never
     /// goes below zero.
     pub fn inset(self, d: f32) -> RectF {
-        RectF::new(
-            self.x + d,
-            self.y + d,
-            (self.w - 2.0 * d).max(0.0),
-            (self.h - 2.0 * d).max(0.0),
-        )
+        RectF::new(self.x + d, self.y + d, (self.w - 2.0 * d).max(0.0), (self.h - 2.0 * d).max(0.0))
     }
 
     /// Whether the point lies inside, half-open: `x <= px < x + w` and
     /// `y <= py < y + h`.
     pub fn contains(self, px: f32, py: f32) -> bool {
         (self.x..self.x + self.w).contains(&px) && (self.y..self.y + self.h).contains(&py)
+    }
+
+    /// The overlap of two rects; when they do not overlap, the size is zero
+    /// (and the corner is where the overlap would start).
+    pub fn intersect(self, o: RectF) -> RectF {
+        let (x, y) = (self.x.max(o.x), self.y.max(o.y));
+        let right = (self.x + self.w).min(o.x + o.w);
+        let bottom = (self.y + self.h).min(o.y + o.h);
+        RectF::new(x, y, (right - x).max(0.0), (bottom - y).max(0.0))
     }
 }
 
@@ -134,6 +176,9 @@ pub enum Kind {
     Shadow = 2,
     /// Icon `p0` drawn with stroke width `p1` in the rect's centered square.
     Icon = 3,
+    /// The [`Atlas`] pixels at `uv` stretched over the rect; each texel's
+    /// coverage scales the color's alpha.
+    Glyph = 4,
 }
 
 /// Built-in vector icons, drawn in the centered square inscribed in the rect
@@ -170,12 +215,19 @@ pub struct Instance {
     pub p1: f32,
     /// Straight color.
     pub color: Rgba,
+    /// x, y, w, h in logical pixels: the instance is visible only inside it.
+    /// [`NO_CLIP`] when no clip was pushed.
+    pub clip: [f32; 4],
+    /// x, y, w, h in [`Atlas`] pixels, for [`Kind::Glyph`]; zero otherwise.
+    pub uv: [f32; 4],
 }
 
-/// An ordered list of instances: one frame, or one layer of one.
+/// An ordered list of instances and a stack of clip rects: one frame, or one
+/// layer of one.
 #[derive(Default, Clone, Debug)]
 pub struct DrawList {
     items: Vec<Instance>,
+    clips: Vec<RectF>,
 }
 
 impl DrawList {
@@ -184,9 +236,11 @@ impl DrawList {
         DrawList::default()
     }
 
-    /// Removes every instance, keeping the allocation.
+    /// Removes every instance and every pushed clip, keeping the
+    /// allocations.
     pub fn clear(&mut self) {
         self.items.clear();
+        self.clips.clear();
     }
 
     /// Number of instances.
@@ -201,26 +255,58 @@ impl DrawList {
 
     /// A filled rounded rect.
     pub fn fill(&mut self, r: RectF, radius: f32, color: Rgba) {
-        self.push(r, radius, Kind::Fill, 0.0, 0.0, color);
+        self.push(r, radius, Kind::Fill, [0.0; 2], color, [0.0; 4]);
     }
 
     /// A ring `width` px wide just inside the rounded rect's edge. Skipped
     /// when `width <= 0`.
     pub fn border(&mut self, r: RectF, radius: f32, width: f32, color: Rgba) {
         if width > 0.0 {
-            self.push(r, radius, Kind::Border, width, 0.0, color);
+            self.push(r, radius, Kind::Border, [width, 0.0], color, [0.0; 4]);
         }
     }
 
     /// A soft shadow of the rounded rect that fades out `blur` px beyond it.
     pub fn shadow(&mut self, r: RectF, radius: f32, blur: f32, color: Rgba) {
-        self.push(r, radius, Kind::Shadow, blur, 0.0, color);
+        self.push(r, radius, Kind::Shadow, [blur, 0.0], color, [0.0; 4]);
     }
 
     /// An icon in the rect's centered square, stroked `stroke` px wide.
     pub fn icon(&mut self, r: RectF, icon: Icon, stroke: f32, color: Rgba) {
         let id = icon as u8 as f32;
-        self.push(r, 0.0, Kind::Icon, id, stroke, color);
+        self.push(r, 0.0, Kind::Icon, [id, stroke], color, [0.0; 4]);
+    }
+
+    /// The [`Atlas`] pixel rect `uv` drawn into `dst`, its coverage tinting
+    /// `color`. For crisp text, `dst` is `uv`'s size divided by the device
+    /// pixel ratio, on a device pixel. Skipped when `uv.w <= 0` or
+    /// `uv.h <= 0`.
+    pub fn glyph(&mut self, dst: RectF, uv: RectF, color: Rgba) {
+        if uv.w > 0.0 && uv.h > 0.0 {
+            let uv = [uv.x, uv.y, uv.w, uv.h];
+            self.push(dst, 0.0, Kind::Glyph, [0.0; 2], color, uv);
+        }
+    }
+
+    /// Pushes the intersection of `r` and the current clip as the new clip.
+    /// A rect with a non-finite value clips everything away.
+    pub fn push_clip(&mut self, r: RectF) {
+        let cur = self.clip();
+        let finite = [r.x, r.y, r.w, r.h].iter().all(|v| v.is_finite());
+        let next = if finite { cur.intersect(r) } else { RectF::new(cur.x, cur.y, 0.0, 0.0) };
+        self.clips.push(next);
+    }
+
+    /// Restores the clip before the last [`DrawList::push_clip`]; a no-op
+    /// when none is pushed.
+    pub fn pop_clip(&mut self) {
+        self.clips.pop();
+    }
+
+    /// The current clip: the last pushed one, or [`NO_CLIP`].
+    pub fn clip(&self) -> RectF {
+        let [x, y, w, h] = NO_CLIP;
+        self.clips.last().copied().unwrap_or(RectF::new(x, y, w, h))
     }
 
     /// The instances in draw order.
@@ -232,28 +318,48 @@ impl DrawList {
     pub fn encode_into(&self, out: &mut Vec<u8>) {
         out.clear();
         out.reserve(self.items.len() * INSTANCE_BYTES);
-        for it in &self.items {
-            let [x, y, w, h] = it.rect;
-            for v in [x, y, w, h, it.radius, it.kind, it.p0, it.p1] {
+        let le = |out: &mut Vec<u8>, vs: [f32; 4]| {
+            for v in vs {
                 out.extend_from_slice(&v.to_le_bytes());
             }
+        };
+        for it in &self.items {
+            le(out, it.rect);
+            le(out, [it.radius, it.kind, it.p0, it.p1]);
             let Rgba(r, g, b, a) = it.color;
             out.extend_from_slice(&[r, g, b, a]);
+            le(out, it.clip);
+            le(out, it.uv);
         }
     }
 
-    fn push(&mut self, r: RectF, radius: f32, kind: Kind, p0: f32, p1: f32, color: Rgba) {
+    fn push(&mut self, r: RectF, radius: f32, kind: Kind, p: [f32; 2], color: Rgba, uv: [f32; 4]) {
+        let [p0, p1] = p;
         let values = [r.x, r.y, r.w, r.h, radius, p0, p1];
-        if values.iter().any(|v| !v.is_finite()) || r.w <= 0.0 || r.h <= 0.0 || color.3 == 0 {
+        let finite = values.iter().chain(&uv).all(|v| v.is_finite());
+        if !finite || r.w <= 0.0 || r.h <= 0.0 || color.3 == 0 {
+            return;
+        }
+        let (p0, p1) = (p0.max(0.0), p1.max(0.0));
+        let reach = match kind {
+            Kind::Glyph => 0.0,
+            Kind::Shadow => p0 + 1.0,
+            _ => 1.0,
+        };
+        let clip = self.clip();
+        let seen = r.inset(-reach).intersect(clip);
+        if seen.w <= 0.0 || seen.h <= 0.0 {
             return;
         }
         self.items.push(Instance {
             rect: [r.x, r.y, r.w, r.h],
-            radius: radius.clamp(0.0, r.w.min(r.h) / 2.0),
+            radius: radius.max(0.0).min(r.w.min(r.h) / 2.0),
             kind: kind as u8 as f32,
-            p0: p0.max(0.0),
-            p1: p1.max(0.0),
+            p0,
+            p1,
             color,
+            clip: [clip.x, clip.y, clip.w, clip.h],
+            uv,
         });
     }
 }
@@ -284,14 +390,22 @@ mod tests {
         assert!(!r.contains(20.0, 60.0));
         assert!(!r.contains(9.9, 30.0));
         assert!(!RectF::default().contains(0.0, 0.0));
+        let a = RectF::new(0.0, 0.0, 10.0, 10.0);
+        let b = RectF::new(5.0, -5.0, 10.0, 10.0);
+        assert_eq!(a.intersect(b), RectF::new(5.0, 0.0, 5.0, 5.0));
+        assert_eq!(b.intersect(a), RectF::new(5.0, 0.0, 5.0, 5.0));
+        let far = RectF::new(20.0, 3.0, 5.0, 5.0);
+        assert_eq!(a.intersect(far), RectF::new(20.0, 3.0, 0.0, 5.0));
     }
 
     #[test]
     fn encode_exact_bytes() {
         let mut list = DrawList::new();
         list.fill(RectF::new(1.0, 2.0, 3.0, 4.0), 0.5, Rgba(10, 20, 30, 40));
-        list.icon(RectF::new(-2.0, 0.0, 16.0, 8.0), Icon::Grid, 1.5, WHITE);
-        let mut out = vec![9; 100];
+        list.push_clip(RectF::new(0.0, 0.0, 8.0, 8.0));
+        let uv = RectF::new(1.0, 2.0, 3.0, 4.0);
+        list.glyph(RectF::new(-2.0, 0.0, 16.0, 8.0), uv, WHITE);
+        let mut out = vec![9; 200];
         list.encode_into(&mut out);
         #[rustfmt::skip]
         let want: [u8; 2 * INSTANCE_BYTES] = [
@@ -300,11 +414,19 @@ mod tests {
             0x00, 0x00, 0x00, 0x3f, 0x00, 0x00, 0x00, 0x00, // radius 0.5, kind Fill
             0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // p0 0, p1 0
             10, 20, 30, 40,
+            0x28, 0x6b, 0x6e, 0xce, 0x28, 0x6b, 0x6e, 0xce, // clip x, y -1e9
+            0x28, 0x6b, 0xee, 0x4e, 0x28, 0x6b, 0xee, 0x4e, // clip w, h 2e9
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // uv x, y 0
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // uv w, h 0
             0x00, 0x00, 0x00, 0xc0, 0x00, 0x00, 0x00, 0x00, // x -2.0, y 0.0
             0x00, 0x00, 0x80, 0x41, 0x00, 0x00, 0x00, 0x41, // w 16.0, h 8.0
-            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x40, 0x40, // radius 0, kind Icon
-            0x00, 0x00, 0xa0, 0x40, 0x00, 0x00, 0xc0, 0x3f, // p0 Grid, p1 1.5
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x80, 0x40, // radius 0, kind Glyph
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // p0 0, p1 0
             255, 255, 255, 255,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // clip x, y 0
+            0x00, 0x00, 0x00, 0x41, 0x00, 0x00, 0x00, 0x41, // clip w, h 8.0
+            0x00, 0x00, 0x80, 0x3f, 0x00, 0x00, 0x00, 0x40, // uv x 1.0, y 2.0
+            0x00, 0x00, 0x40, 0x40, 0x00, 0x00, 0x80, 0x40, // uv w 3.0, h 4.0
         ];
         assert_eq!(out, want);
         list.clear();
@@ -321,20 +443,18 @@ mod tests {
         list.shadow(r, 2.0, 12.0, WHITE);
         list.shadow(r, 2.0, -3.0, WHITE);
         list.icon(r, Icon::Square, -1.0, WHITE);
-        let got: Vec<[f32; 3]> = list
-            .instances()
-            .iter()
-            .map(|i| [i.kind, i.p0, i.p1])
-            .collect();
+        list.glyph(r, r, WHITE);
+        let got: Vec<[f32; 3]> = list.instances().iter().map(|i| [i.kind, i.p0, i.p1]).collect();
         let want = [
             [0.0, 0.0, 0.0],
             [1.0, 1.5, 0.0],
             [2.0, 12.0, 0.0],
             [2.0, 0.0, 0.0],
             [3.0, 4.0, 0.0],
+            [4.0, 0.0, 0.0],
         ];
         assert_eq!(got, want);
-        assert_eq!(list.len(), 5);
+        assert_eq!(list.len(), 6);
     }
 
     #[test]
@@ -359,6 +479,92 @@ mod tests {
     }
 
     #[test]
+    fn glyphs_carry_their_uv() {
+        let mut list = DrawList::new();
+        let dst = RectF::new(3.0, 4.0, 7.0, 9.0);
+        let uv = RectF::new(10.0, 20.0, 14.0, 18.0);
+        list.glyph(dst, uv, WHITE);
+        list.glyph(dst, RectF::new(10.0, 20.0, 0.0, 18.0), WHITE);
+        list.glyph(dst, RectF::new(10.0, 20.0, 14.0, -1.0), WHITE);
+        list.glyph(dst, RectF::new(f32::NAN, 20.0, 14.0, 18.0), WHITE);
+        list.glyph(dst, RectF::new(10.0, f32::INFINITY, 14.0, 18.0), WHITE);
+        list.glyph(RectF::new(3.0, 4.0, 0.0, 9.0), uv, WHITE);
+        list.glyph(dst, uv, WHITE.with_alpha(0));
+        assert_eq!(list.len(), 1);
+        let g = list.instances()[0];
+        assert_eq!(g.kind, 4.0);
+        assert_eq!((g.rect, g.uv), ([3.0, 4.0, 7.0, 9.0], [10.0, 20.0, 14.0, 18.0]));
+        assert_eq!((g.radius, g.p0, g.p1, g.clip), (0.0, 0.0, 0.0, NO_CLIP));
+        list.fill(dst, 0.0, WHITE);
+        assert_eq!(list.instances()[1].uv, [0.0; 4]);
+    }
+
+    #[test]
+    fn clips_nest_and_pop() {
+        let [x, y, w, h] = NO_CLIP;
+        let none = RectF::new(x, y, w, h);
+        let big = RectF::new(0.0, 0.0, 200.0, 200.0);
+        let mut list = DrawList::new();
+        assert_eq!(list.clip(), none);
+        list.pop_clip(); // empty: a no-op
+        assert_eq!(list.clip(), none);
+        list.push_clip(RectF::new(10.0, 10.0, 100.0, 50.0));
+        list.push_clip(RectF::new(50.0, 0.0, 100.0, 30.0));
+        assert_eq!(list.clip(), RectF::new(50.0, 10.0, 60.0, 20.0));
+        list.fill(big, 0.0, WHITE);
+        list.pop_clip();
+        list.fill(big, 0.0, WHITE);
+        list.pop_clip();
+        list.pop_clip();
+        assert_eq!(list.clip(), none);
+        list.fill(big, 0.0, WHITE);
+        let clips: Vec<[f32; 4]> = list.instances().iter().map(|i| i.clip).collect();
+        let want = [[50.0, 10.0, 60.0, 20.0], [10.0, 10.0, 100.0, 50.0], NO_CLIP];
+        assert_eq!(clips, want);
+
+        // Disjoint, inverted and non-finite clips hide everything until popped.
+        list.push_clip(RectF::new(0.0, 0.0, 10.0, 10.0));
+        list.push_clip(RectF::new(20.0, 0.0, 10.0, 10.0));
+        list.fill(big, 0.0, WHITE);
+        list.shadow(big, 0.0, 1000.0, WHITE);
+        list.pop_clip();
+        list.push_clip(RectF::new(0.0, 0.0, -5.0, 10.0));
+        list.fill(big, 0.0, WHITE);
+        list.pop_clip();
+        list.push_clip(RectF::new(f32::NAN, 0.0, 10.0, 10.0));
+        list.fill(big, 0.0, WHITE);
+        list.pop_clip();
+        list.push_clip(RectF::new(0.0, f32::INFINITY, 10.0, 10.0));
+        list.fill(big, 0.0, WHITE);
+        list.pop_clip();
+        assert_eq!(list.clip(), RectF::new(0.0, 0.0, 10.0, 10.0));
+        assert_eq!(list.len(), 3);
+        list.clear();
+        assert_eq!(list.clip(), none);
+    }
+
+    #[test]
+    fn pushes_outside_the_clip_are_skipped() {
+        let uv = RectF::new(0.0, 0.0, 5.0, 5.0);
+        let red = |r| Rgba(r, 0, 0, 255);
+        let mut list = DrawList::new();
+        list.push_clip(RectF::new(100.0, 100.0, 50.0, 50.0));
+        // Antialiased kinds reach 1 px past their rect.
+        list.fill(RectF::new(90.0, 100.0, 9.0, 10.0), 0.0, WHITE);
+        list.fill(RectF::new(90.0, 100.0, 9.5, 10.0), 0.0, red(1));
+        list.border(RectF::new(151.0, 100.0, 10.0, 10.0), 0.0, 1.0, WHITE);
+        list.icon(RectF::new(100.0, 150.5, 10.0, 10.0), Icon::Dot, 1.0, red(2));
+        // A shadow reaches its blur plus 1 px.
+        list.shadow(RectF::new(100.0, 40.0, 10.0, 10.0), 0.0, 49.0, WHITE);
+        list.shadow(RectF::new(100.0, 40.0, 10.0, 10.0), 0.0, 50.0, red(3));
+        // A glyph reaches exactly its rect.
+        list.glyph(RectF::new(150.0, 100.0, 5.0, 5.0), uv, WHITE);
+        list.glyph(RectF::new(149.0, 145.0, 5.0, 5.0), uv, red(4));
+        let reds: Vec<u8> = list.instances().iter().map(|i| i.color.0).collect();
+        assert_eq!(reds, [1, 2, 3, 4]);
+    }
+
+    #[test]
     fn radius_is_clamped() {
         let mut list = DrawList::new();
         list.fill(RectF::new(0.0, 0.0, 20.0, 10.0), 100.0, WHITE);
@@ -373,11 +579,7 @@ mod tests {
     fn draw_order_is_push_order() {
         let mut list = DrawList::new();
         for i in 0..4u8 {
-            list.fill(
-                RectF::new(f32::from(i), 0.0, 1.0, 1.0),
-                0.0,
-                Rgba(i, 0, 0, 255),
-            );
+            list.fill(RectF::new(f32::from(i), 0.0, 1.0, 1.0), 0.0, Rgba(i, 0, 0, 255));
         }
         let reds: Vec<u8> = list.instances().iter().map(|i| i.color.0).collect();
         assert_eq!(reds, [0, 1, 2, 3]);
@@ -397,11 +599,25 @@ mod tests {
             "layout(location = 0) in vec4 a_rect;",
             "layout(location = 1) in vec4 a_params;",
             "layout(location = 2) in vec4 a_color;",
+            "layout(location = 3) in vec4 a_clip;",
+            "layout(location = 4) in vec4 a_uv;",
             "uniform vec2 u_viewport;",
             "gl_VertexID",
         ] {
             assert!(VERTEX_SHADER.contains(name), "vertex shader lacks {name}");
         }
-        assert!(FRAGMENT_SHADER.contains("out vec4 fragColor;"));
+        for name in [
+            "out vec4 fragColor;",
+            "uniform sampler2D u_atlas;",
+            "uniform vec2 u_atlas_size;",
+            "kind == 4",
+        ] {
+            assert!(FRAGMENT_SHADER.contains(name), "fragment shader lacks {name}");
+        }
+        // Every varying the vertex shader writes, the fragment shader reads.
+        for line in VERTEX_SHADER.lines().filter(|l| l.contains("out ")) {
+            let decl = line.replace("out ", "in ");
+            assert!(FRAGMENT_SHADER.contains(&decl), "fragment shader lacks {decl}");
+        }
     }
 }

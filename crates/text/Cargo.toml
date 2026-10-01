@@ -1,0 +1,16 @@
+[package]
+name = "compusophy-text"
+description = "compusophyOS text on a glyph atlas: three UI font slots plus fallbacks, measured in logical pixels and drawn as device-pixel-exact glyphs."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[lib]
+name = "text"
+
+[dependencies]
+compusophy-font.workspace = true
+compusophy-gfx.workspace = true

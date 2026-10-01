@@ -1,0 +1,17 @@
+[package]
+name = "compusophy-guest"
+description = "The compusophyOS guest shell: a line editor and Unix-like commands over the VFS, run by the Terminal when no node is paired."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[lib]
+name = "guest"
+
+[dependencies]
+compusophy-ui.workspace = true
+compusophy-vfs.workspace = true
+compusophy-term.workspace = true

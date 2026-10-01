@@ -1,0 +1,14 @@
+[package]
+name = "compusophy-font"
+description = "A dependency-free TrueType reader and glyph rasterizer: cmap, hmtx, simple and composite glyf outlines, anti-aliased coverage bitmaps at any pixel size."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[lib]
+name = "font"
+
+[dependencies]

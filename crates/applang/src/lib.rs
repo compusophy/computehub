@@ -49,7 +49,8 @@
 //! - **Bounded memory.** Strings are capped per value ([`Limits::max_str_bytes`],
 //!   a too-long concat is a fault, never a silent clip) and per app
 //!   ([`Limits::max_state_bytes`]) — `s = s + s` in a loop is a diag, not an
-//!   OOM. Host input text is clipped at a char boundary, never mid-char.
+//!   OOM — and so is a render's text ([`Limits::max_render_bytes`]). Host
+//!   input text is clipped at a char boundary, never mid-char.
 //! - **Bounded nesting.** The parser depth-guards widget nesting AND binary
 //!   spines (litelite's prooflite lesson): whatever parses, eval and drop
 //!   glue walk within a bounded stack.
@@ -81,13 +82,15 @@
 //! assert_eq!(app.render().unwrap().len(), 1); // and the state is untouched
 //! ```
 
+#![forbid(unsafe_code)]
+
 mod eval;
 
 pub use applang_syntax::{Program, TokKind, Token, Type, codes, compile, lex};
 pub use eval::Value;
 pub use lang::{Diag, Span};
 
-/// Hard resource limits for one [`App`]. All three are guarantees, not
+/// Hard resource limits for one [`App`]. All four are guarantees, not
 /// hints; each render and each event handler gets a FRESH fuel tank.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Limits {
@@ -98,15 +101,21 @@ pub struct Limits {
     pub max_str_bytes: usize,
     /// Byte cap on all string STATE combined, checked at event commit.
     pub max_state_bytes: usize,
+    /// Byte cap on one render's text (labels, button texts, inputs' names
+    /// and values), counted as it is built: past it the render faults, so
+    /// many labels of one big state cannot allocate without bound.
+    pub max_render_bytes: usize,
 }
 
 impl Default for Limits {
-    /// 100_000 fuel, 4 KiB strings, 64 KiB total string state.
+    /// 100_000 fuel, 4 KiB strings, 64 KiB total string state, 256 KiB of
+    /// text per render.
     fn default() -> Self {
         Limits {
             fuel: 100_000,
             max_str_bytes: 4 * 1024,
             max_state_bytes: 64 * 1024,
+            max_render_bytes: 256 * 1024,
         }
     }
 }
@@ -151,11 +160,7 @@ impl App {
     /// ```
     pub fn new(program: Program, limits: Limits) -> App {
         let state = eval::init_state(&program);
-        App {
-            program,
-            state,
-            limits,
-        }
+        App { program, state, limits }
     }
 
     /// Render the current state through the widget tree. Pure and fueled: a
@@ -213,10 +218,7 @@ mod tests {
     }
 
     fn inp(state: &str, text: &str) -> Event {
-        Event::Input {
-            state: state.to_string(),
-            text: text.to_string(),
-        }
+        Event::Input { state: state.to_string(), text: text.to_string() }
     }
 
     fn vals(a: &App) -> Vec<Value> {
@@ -261,13 +263,7 @@ mod tests {
         let mut a = app("state name = \"\"; input name; label \"hi \" + name;");
         a.handle(&inp("name", "Ada")).unwrap();
         let nodes = a.render().unwrap();
-        assert_eq!(
-            nodes[0],
-            Node::Input {
-                state: "name".to_string(),
-                value: "Ada".to_string()
-            }
-        );
+        assert_eq!(nodes[0], Node::Input { state: "name".to_string(), value: "Ada".to_string() });
         assert_eq!(texts(&nodes), ["hi Ada"]);
         // Hostile input: 5000 multi-byte chars clip at the cap, never mid-char.
         a.handle(&inp("name", &"é".repeat(5000))).unwrap();
@@ -315,22 +311,25 @@ mod tests {
     fn render_is_fueled_too() {
         let a = App::new(
             compile("state x = 1; label x + x + x + x;").unwrap(),
-            Limits {
-                fuel: 3,
-                ..Limits::default()
-            },
+            Limits { fuel: 3, ..Limits::default() },
         );
         assert_eq!(a.render().unwrap_err().code, Some(codes::FUEL_EXHAUSTED));
     }
 
     #[test]
+    fn render_text_is_bounded_in_total() {
+        // Each label is under the string cap; 70 of them pass the render cap.
+        let src = ["state s = \"", &"x".repeat(4000), "\";", &"label s;".repeat(70)].concat();
+        let e = app(&src).render().unwrap_err();
+        assert_eq!((e.code, e.span.is_some()), (Some(codes::RENDER_TOO_BIG), true));
+        let fits = app(&src[..src.len() - 6 * 8]).render().unwrap();
+        assert_eq!(texts(&fits).concat().len(), 64 * 4000);
+    }
+
+    #[test]
     fn bad_events_are_coded_and_harmless() {
         let mut a = app("state n = 0; button \"b\" { n = n + 1; }");
-        for ev in [
-            Event::Click { id: 7 },
-            inp("missing", ""),
-            inp("n", "not a string state"),
-        ] {
+        for ev in [Event::Click { id: 7 }, inp("missing", ""), inp("n", "not a string state")] {
             assert_eq!(a.handle(&ev).unwrap_err().code, Some(codes::BAD_EVENT));
         }
         assert_eq!(vals(&a), [Value::Int(0)]);

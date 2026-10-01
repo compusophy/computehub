@@ -8,6 +8,8 @@
 //! Forked from litelite's diaglite, lexlite and parselite 0.2.0
 //! (commit 4f5e056), merged into one crate.
 
+#![forbid(unsafe_code)]
+
 pub mod diag;
 pub mod lex;
 pub mod parse;

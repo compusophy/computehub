@@ -1,0 +1,17 @@
+[package]
+name = "compusophy-ui"
+description = "The compusophyOS UI toolkit: text layout on a glyph atlas, widgets, hit regions, and the App trait that windows host."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[lib]
+name = "ui"
+
+[dependencies]
+compusophy-text.workspace = true
+compusophy-gfx.workspace = true
+compusophy-vfs.workspace = true

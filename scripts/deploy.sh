@@ -13,7 +13,23 @@ bash scripts/budget.sh
 rm -rf .vercel/output
 mkdir -p .vercel/output/static
 cp -R dist/. .vercel/output/static/
-printf '{ "version": 3 }\n' > .vercel/output/config.json
+# Every response: no other site keeps a handle on the page's window (and so
+# cannot change its #fragment, which pairs a node) or frames it.
+cat > .vercel/output/config.json <<'EOF'
+{
+  "version": 3,
+  "routes": [
+    {
+      "src": "/(.*)",
+      "headers": {
+        "Cross-Origin-Opener-Policy": "same-origin",
+        "Content-Security-Policy": "frame-ancestors 'none'"
+      },
+      "continue": true
+    }
+  ]
+}
+EOF
 
 if [ "${1:-}" = "prod" ]; then
   vercel deploy --prebuilt --prod --yes

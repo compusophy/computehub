@@ -22,9 +22,7 @@ pub enum BinOp { Or, And, Eq, Ne, Lt, Le, Gt, Ge, Add, Sub, Mul, Div, Rem }
 impl BinOp {
     /// Indexed by declaration order — the discriminant.
     pub fn sym(self) -> &'static str {
-        [
-            "||", "&&", "==", "!=", "<", "<=", ">", ">=", "+", "-", "*", "/", "%",
-        ][self as usize]
+        ["||", "&&", "==", "!=", "<", "<=", ">", ">=", "+", "-", "*", "/", "%"][self as usize]
     }
 }
 
@@ -180,11 +178,7 @@ fn state_decl(src: &str, t: &mut Toks<'_>) -> PResult<StateDecl> {
     };
     t.advance();
     expect(src, t, TokKind::Semi, "`;`")?;
-    Ok(StateDecl {
-        name,
-        name_span,
-        init,
-    })
+    Ok(StateDecl { name, name_span, init })
 }
 
 fn widget(src: &str, t: &mut Toks<'_>, next_id: &mut u32) -> PResult<Widget> {
@@ -195,10 +189,7 @@ fn widget(src: &str, t: &mut Toks<'_>, next_id: &mut u32) -> PResult<Widget> {
                 t.advance();
                 let value = expr(src, t)?;
                 let end = expect(src, t, TokKind::Semi, "`;`")?;
-                Ok(Widget::Label {
-                    value,
-                    span: Span::new(tok.span.start, end.end),
-                })
+                Ok(Widget::Label { value, span: Span::new(tok.span.start, end.end) })
             }
             TokKind::Button => {
                 t.advance();
@@ -219,11 +210,7 @@ fn widget(src: &str, t: &mut Toks<'_>, next_id: &mut u32) -> PResult<Widget> {
                 t.advance();
                 let (state, state_span) = ident(src, t, "a state name")?;
                 let end = expect(src, t, TokKind::Semi, "`;`")?;
-                Ok(Widget::Input {
-                    state,
-                    state_span,
-                    span: Span::new(tok.span.start, end.end),
-                })
+                Ok(Widget::Input { state, state_span, span: Span::new(tok.span.start, end.end) })
             }
             TokKind::Row | TokKind::Col => {
                 t.advance();
@@ -237,17 +224,9 @@ fn widget(src: &str, t: &mut Toks<'_>, next_id: &mut u32) -> PResult<Widget> {
             }
             TokKind::If => {
                 let (arms, els, end) = if_chain(src, t, &mut |s, t| widget(s, t, next_id))?;
-                Ok(Widget::If {
-                    arms,
-                    els,
-                    span: Span::new(tok.span.start, end),
-                })
+                Ok(Widget::If { arms, els, span: Span::new(tok.span.start, end) })
             }
-            _ => Err(unexpected(
-                src,
-                t,
-                "a widget (label, button, input, row, col, if)",
-            )),
+            _ => Err(unexpected(src, t, "a widget (label, button, input, row, col, if)")),
         }
     })
 }
@@ -311,11 +290,7 @@ fn stmt(src: &str, t: &mut Toks<'_>) -> PResult<Stmt> {
                 expect(src, t, TokKind::Assign, "`=`")?;
                 let value = expr(src, t)?;
                 let end = expect(src, t, TokKind::Semi, "`;`")?;
-                Ok(Stmt::Let {
-                    name,
-                    value,
-                    span: Span::new(tok.span.start, end.end),
-                })
+                Ok(Stmt::Let { name, value, span: Span::new(tok.span.start, end.end) })
             }
             TokKind::Ident => {
                 let name = text(src, tok.span).to_string();
@@ -332,21 +307,13 @@ fn stmt(src: &str, t: &mut Toks<'_>) -> PResult<Stmt> {
             }
             TokKind::If => {
                 let (arms, els, end) = if_chain(src, t, &mut stmt)?;
-                Ok(Stmt::If {
-                    arms,
-                    els,
-                    span: Span::new(tok.span.start, end),
-                })
+                Ok(Stmt::If { arms, els, span: Span::new(tok.span.start, end) })
             }
             TokKind::Repeat => {
                 t.advance();
                 let count = expr(src, t)?;
                 let (body, end) = braced(src, t, &mut stmt)?;
-                Ok(Stmt::Repeat {
-                    count,
-                    body,
-                    span: Span::new(tok.span.start, end.end),
-                })
+                Ok(Stmt::Repeat { count, body, span: Span::new(tok.span.start, end.end) })
             }
             _ => Err(unexpected(src, t, "a statement")),
         }
@@ -364,11 +331,7 @@ const LADDER: &[&[(TokKind, BinOp)]] = &[
         (TokKind::GtEq, BinOp::Ge),
     ],
     &[(TokKind::Plus, BinOp::Add), (TokKind::Minus, BinOp::Sub)],
-    &[
-        (TokKind::Star, BinOp::Mul),
-        (TokKind::Slash, BinOp::Div),
-        (TokKind::Percent, BinOp::Rem),
-    ],
+    &[(TokKind::Star, BinOp::Mul), (TokKind::Slash, BinOp::Div), (TokKind::Percent, BinOp::Rem)],
 ];
 
 fn expr(src: &str, t: &mut Toks<'_>) -> PResult<Expr> {
@@ -531,17 +494,10 @@ mod tests {
             "row label 1; }",   // missing `{`
             "widget",           // not a widget
         ] {
-            assert_eq!(
-                parse(src).unwrap_err().code,
-                Some(codes::UNEXPECTED_TOKEN),
-                "{src}"
-            );
+            assert_eq!(parse(src).unwrap_err().code, Some(codes::UNEXPECTED_TOKEN), "{src}");
         }
         // Negative int literals in state inits DO parse.
-        assert!(matches!(
-            parse("state x = -5;").unwrap().states[0].init,
-            Lit::Int(-5)
-        ));
+        assert!(matches!(parse("state x = -5;").unwrap().states[0].init, Lit::Int(-5)));
     }
 
     #[test]

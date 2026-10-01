@@ -99,11 +99,7 @@ pub(crate) fn check(program: &Program) -> Result<(), Diag> {
 }
 
 fn widget(w: &Widget, states: &[(String, Type)]) -> Result<(), Diag> {
-    let render_scope = Scopes {
-        states,
-        locals: Vec::new(),
-        frames: Vec::new(),
-    };
+    let render_scope = Scopes { states, locals: Vec::new(), frames: Vec::new() };
     match w {
         Widget::Label { value, .. } => {
             // Labels display any type; it only has to BE one.
@@ -111,16 +107,10 @@ fn widget(w: &Widget, states: &[(String, Type)]) -> Result<(), Diag> {
             Ok(())
         }
         Widget::Button { body, .. } => {
-            let mut sc = Scopes {
-                states,
-                locals: Vec::new(),
-                frames: Vec::new(),
-            };
+            let mut sc = Scopes { states, locals: Vec::new(), frames: Vec::new() };
             block(body, &mut sc)
         }
-        Widget::Input {
-            state, state_span, ..
-        } => match states.iter().find(|(n, _)| n == state) {
+        Widget::Input { state, state_span, .. } => match states.iter().find(|(n, _)| n == state) {
             Some((_, Type::Str)) => Ok(()),
             Some((_, t)) => Err(mismatch(
                 format!("`input` binds a string state; `{state}` is {}", t.name()),
@@ -155,23 +145,14 @@ fn stmt(s: &Stmt, sc: &mut Scopes<'_>) -> Result<(), Diag> {
             sc.locals.push((name.clone(), t));
             Ok(())
         }
-        Stmt::Assign {
-            name,
-            name_span,
-            value,
-            ..
-        } => {
+        Stmt::Assign { name, name_span, value, .. } => {
             let Some(target) = sc.get(name) else {
                 return Err(unknown(name, *name_span));
             };
             let got = expr(value, sc)?;
             if got != target {
                 return Err(mismatch(
-                    format!(
-                        "`{name}` is {}; cannot assign {} to it",
-                        target.name(),
-                        got.name()
-                    ),
+                    format!("`{name}` is {}; cannot assign {} to it", target.name(), got.name()),
                     value.span(),
                 ));
             }
@@ -241,15 +222,7 @@ fn binary(op: BinOp, lt: Type, rt: Type, sp: Span) -> Result<Type, Diag> {
         _ => None,
     };
     ok.ok_or_else(|| {
-        mismatch(
-            format!(
-                "`{}` cannot combine {} and {}",
-                op.sym(),
-                lt.name(),
-                rt.name()
-            ),
-            sp,
-        )
+        mismatch(format!("`{}` cannot combine {} and {}", op.sym(), lt.name(), rt.name()), sp)
     })
 }
 

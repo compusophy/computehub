@@ -1,0 +1,18 @@
+[package]
+name = "compusophy-host"
+description = "The compusophyOS app host: the window manager and one app per window. Opens and closes windows, delivers app events, and carries out app requests: sockets, lazy fonts, windows."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[lib]
+name = "host"
+
+[dependencies]
+compusophy-wm.workspace = true
+compusophy-gfx.workspace = true
+compusophy-ui.workspace = true
+compusophy-vfs.workspace = true

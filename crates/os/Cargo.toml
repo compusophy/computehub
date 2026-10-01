@@ -18,3 +18,7 @@ compusophy-gfx.workspace = true
 compusophy-shell.workspace = true
 compusophy-platform.workspace = true
 wasm-bindgen.workspace = true
+compusophy-ui.workspace = true
+compusophy-vfs.workspace = true
+compusophy-apps.workspace = true
+compusophy-studio.workspace = true

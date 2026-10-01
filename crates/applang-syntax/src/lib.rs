@@ -15,6 +15,8 @@
 //! Forked from litelite's applite 0.2.0 (commit 4f5e056), whose lexer,
 //! parser, checker and diagnostic codes this crate holds.
 
+#![forbid(unsafe_code)]
+
 mod check;
 mod lex;
 mod parse;
@@ -64,6 +66,8 @@ pub mod codes {
     pub const STATE_TOO_BIG: u16 = 212;
     /// The host sent an event no widget or state matches.
     pub const BAD_EVENT: u16 = 213;
+    /// One render's text would exceed `applang::Limits::max_render_bytes`.
+    pub const RENDER_TOO_BIG: u16 = 214;
     /// The same state name declared twice.
     pub const DUP_STATE: u16 = 301;
     /// A name that is no declared state or visible local.

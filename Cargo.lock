@@ -31,7 +31,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "compusophy-apps"
+version = "0.1.0"
+dependencies = [
+ "compusophy-gfx",
+ "compusophy-guest",
+ "compusophy-term",
+ "compusophy-ui",
+ "compusophy-vfs",
+]
+
+[[package]]
 name = "compusophy-cap"
+version = "0.1.0"
+
+[[package]]
+name = "compusophy-font"
 version = "0.1.0"
 
 [[package]]
@@ -43,6 +58,25 @@ name = "compusophy-gfx"
 version = "0.1.0"
 
 [[package]]
+name = "compusophy-guest"
+version = "0.1.0"
+dependencies = [
+ "compusophy-term",
+ "compusophy-ui",
+ "compusophy-vfs",
+]
+
+[[package]]
+name = "compusophy-host"
+version = "0.1.0"
+dependencies = [
+ "compusophy-gfx",
+ "compusophy-ui",
+ "compusophy-vfs",
+ "compusophy-wm",
+]
+
+[[package]]
 name = "compusophy-lang"
 version = "0.1.0"
 
@@ -50,9 +84,13 @@ version = "0.1.0"
 name = "compusophy-os"
 version = "0.1.0"
 dependencies = [
+ "compusophy-apps",
  "compusophy-gfx",
  "compusophy-platform",
  "compusophy-shell",
+ "compusophy-studio",
+ "compusophy-ui",
+ "compusophy-vfs",
  "compusophy-wm",
  "wasm-bindgen",
 ]
@@ -72,8 +110,54 @@ name = "compusophy-shell"
 version = "0.1.0"
 dependencies = [
  "compusophy-gfx",
+ "compusophy-host",
+ "compusophy-ui",
+ "compusophy-vfs",
  "compusophy-wm",
 ]
+
+[[package]]
+name = "compusophy-studio"
+version = "0.1.0"
+dependencies = [
+ "compusophy-applang",
+ "compusophy-gfx",
+ "compusophy-lang",
+ "compusophy-ui",
+ "compusophy-vfs",
+]
+
+[[package]]
+name = "compusophy-term"
+version = "0.1.0"
+dependencies = [
+ "compusophy-vt",
+]
+
+[[package]]
+name = "compusophy-text"
+version = "0.1.0"
+dependencies = [
+ "compusophy-font",
+ "compusophy-gfx",
+]
+
+[[package]]
+name = "compusophy-ui"
+version = "0.1.0"
+dependencies = [
+ "compusophy-gfx",
+ "compusophy-text",
+ "compusophy-vfs",
+]
+
+[[package]]
+name = "compusophy-vfs"
+version = "0.1.0"
+
+[[package]]
+name = "compusophy-vt"
+version = "0.1.0"
 
 [[package]]
 name = "compusophy-wasmgen"

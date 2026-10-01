@@ -71,18 +71,12 @@ pub fn lex(src: &str) -> Result<Vec<Token>, Diag> {
     loop {
         skip_trivia(&mut cur)?;
         if cur.at_eof() {
-            toks.push(Token {
-                kind: TokKind::Eof,
-                span: Span::new(src.len(), src.len()),
-            });
+            toks.push(Token { kind: TokKind::Eof, span: Span::new(src.len(), src.len()) });
             return Ok(toks);
         }
         let start = cur.pos();
         let kind = next_kind(&mut cur)?;
-        toks.push(Token {
-            kind,
-            span: cur.span_from(start),
-        });
+        toks.push(Token { kind, span: cur.span_from(start) });
     }
 }
 
@@ -307,14 +301,8 @@ mod tests {
 
     #[test]
     fn bad_strings_are_coded() {
-        assert_eq!(
-            lex("\"open").unwrap_err().code,
-            Some(codes::UNTERMINATED_STRING)
-        );
-        assert_eq!(
-            lex("\"line\nbreak\"").unwrap_err().code,
-            Some(codes::UNTERMINATED_STRING)
-        );
+        assert_eq!(lex("\"open").unwrap_err().code, Some(codes::UNTERMINATED_STRING));
+        assert_eq!(lex("\"line\nbreak\"").unwrap_err().code, Some(codes::UNTERMINATED_STRING));
         let e = lex("\"bad \\q escape\"").unwrap_err();
         assert_eq!(e.code, Some(codes::BAD_ESCAPE));
         assert_eq!(lex("123abc").unwrap_err().code, Some(codes::BAD_INT));

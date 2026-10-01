@@ -1,0 +1,19 @@
+[package]
+name = "compusophy-studio"
+description = "compusophyOS Studio: write applang apps, check them, and run them in their own windows."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[lib]
+name = "studio"
+
+[dependencies]
+compusophy-ui.workspace = true
+compusophy-gfx.workspace = true
+compusophy-vfs.workspace = true
+compusophy-applang.workspace = true
+compusophy-lang.workspace = true

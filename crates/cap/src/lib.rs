@@ -28,6 +28,8 @@
 //!
 //! Forked from litelite's caplite 0.2.0 (commit `4f5e056`).
 
+#![forbid(unsafe_code)]
+
 /// A language's type vocabulary, as stable lowercase symbols. `sym` strings
 /// appear in signatures and the parity manifest — changing one is an ABI
 /// change and moves every manifest hash. The contract [`CapTable::validate`]
@@ -76,18 +78,11 @@ impl<T: Ty> Cap<T> {
 /// `'static` param slice out of a table borrow.
 pub fn check_args<T: Ty>(params: &[T], got: &[T]) -> Result<(), ArgError<T>> {
     if got.len() != params.len() {
-        return Err(ArgError::Arity {
-            expected: params.len(),
-            got: got.len(),
-        });
+        return Err(ArgError::Arity { expected: params.len(), got: got.len() });
     }
     for (index, (want, have)) in params.iter().zip(got).enumerate() {
         if want != have {
-            return Err(ArgError::Type {
-                index,
-                expected: *want,
-                got: *have,
-            });
+            return Err(ArgError::Type { index, expected: *want, got: *have });
         }
     }
     Ok(())
@@ -114,18 +109,8 @@ impl<T: Ty> std::fmt::Display for ArgError<T> {
             ArgError::Arity { expected, got } => {
                 write!(f, "expects {expected} argument(s), got {got}")
             }
-            ArgError::Type {
-                index,
-                expected,
-                got,
-            } => {
-                write!(
-                    f,
-                    "argument {} must be {}, got {}",
-                    index + 1,
-                    expected.sym(),
-                    got.sym()
-                )
+            ArgError::Type { index, expected, got } => {
+                write!(f, "argument {} must be {}, got {}", index + 1, expected.sym(), got.sym())
             }
         }
     }
@@ -178,10 +163,7 @@ impl<T: Ty> CapTable<T> {
             }
             for (j, other) in self.iter() {
                 if j > i && other.module == cap.module && other.name == cap.name {
-                    return Err(format!(
-                        "duplicate capability `{}.{}`",
-                        cap.module, cap.name
-                    ));
+                    return Err(format!("duplicate capability `{}.{}`", cap.module, cap.name));
                 }
             }
         }
@@ -222,8 +204,7 @@ impl<T: Ty> CapTable<T> {
 
     /// Look up by full `(module, name)`.
     pub fn get(&self, module: &str, name: &str) -> Option<(usize, &Cap<T>)> {
-        self.iter()
-            .find(|(_, c)| c.module == module && c.name == name)
+        self.iter().find(|(_, c)| c.module == module && c.name == name)
     }
 
     /// Look up by bare name (first match) — for languages whose call sites
@@ -248,12 +229,7 @@ impl<T: Ty> CapTable<T> {
     pub fn manifest(&self) -> String {
         let mut out = String::from("caplite-manifest/1\n");
         for (i, cap) in self.iter() {
-            out.push_str(&format!(
-                "{i} {}.{} cost={}\n",
-                cap.module,
-                cap.sig(),
-                cap.cost
-            ));
+            out.push_str(&format!("{i} {}.{} cost={}\n", cap.module, cap.sig(), cap.cost));
         }
         out
     }
@@ -367,22 +343,8 @@ mod tests {
     #[test]
     fn duplicates_fail_validation() {
         static DUP: &[Cap<T>] = &[
-            Cap {
-                module: "a",
-                name: "x",
-                params: &[],
-                result: None,
-                cost: 0,
-                doc: "",
-            },
-            Cap {
-                module: "a",
-                name: "x",
-                params: &[T::I64],
-                result: None,
-                cost: 0,
-                doc: "",
-            },
+            Cap { module: "a", name: "x", params: &[], result: None, cost: 0, doc: "" },
+            Cap { module: "a", name: "x", params: &[T::I64], result: None, cost: 0, doc: "" },
         ];
         let err = CapTable::new(DUP).validate().unwrap_err();
         assert!(err.contains("`a.x`"), "{err}");
@@ -418,22 +380,8 @@ mod tests {
     fn validate_flat_rejects_cross_module_bare_name_dups() {
         assert!(TABLE.validate_flat().is_ok());
         static AMBIG: &[Cap<T>] = &[
-            Cap {
-                module: "a",
-                name: "x",
-                params: &[],
-                result: Some(T::I64),
-                cost: 0,
-                doc: "",
-            },
-            Cap {
-                module: "b",
-                name: "x",
-                params: &[],
-                result: Some(T::I64),
-                cost: 0,
-                doc: "",
-            },
+            Cap { module: "a", name: "x", params: &[], result: Some(T::I64), cost: 0, doc: "" },
+            Cap { module: "b", name: "x", params: &[], result: Some(T::I64), cost: 0, doc: "" },
         ];
         let err = CapTable::new(AMBIG).validate_flat().unwrap_err();
         assert!(err.contains("`x`"), "{err}");
@@ -466,10 +414,7 @@ mod tests {
                 cost: 0,
                 doc: "",
             }]));
-            assert!(
-                CapTable::new(caps).validate().is_err(),
-                "`{bad}` should fail"
-            );
+            assert!(CapTable::new(caps).validate().is_err(), "`{bad}` should fail");
         }
     }
 
@@ -478,13 +423,7 @@ mod tests {
         let (_, mix) = TABLE.find("mix").unwrap();
         assert!(mix.check_args(&[T::I64, T::I64]).is_ok());
         let e = mix.check_args(&[T::I64]).unwrap_err();
-        assert_eq!(
-            e,
-            ArgError::Arity {
-                expected: 2,
-                got: 1
-            }
-        );
+        assert_eq!(e, ArgError::Arity { expected: 2, got: 1 });
         assert_eq!(e.to_string(), "expects 2 argument(s), got 1");
         let e = mix.check_args(&[T::I64, T::Bool]).unwrap_err();
         assert_eq!(e.to_string(), "argument 2 must be i64, got bool");
@@ -502,10 +441,7 @@ mod tests {
         assert_eq!(TABLE.manifest_hash(), fnv1a_64(TABLE.manifest().as_bytes()));
         // Any ABI change — name, order, type symbol, cost — moves the hash.
         static REORDERED: &[Cap<T>] = &[CAPS[1], CAPS[0], CAPS[2]];
-        assert_ne!(
-            CapTable::new(REORDERED).manifest_hash(),
-            TABLE.manifest_hash()
-        );
+        assert_ne!(CapTable::new(REORDERED).manifest_hash(), TABLE.manifest_hash());
     }
 
     #[test]

@@ -167,10 +167,7 @@ pub struct Gaps {
 
 impl Gaps {
     fn normalized(self) -> Gaps {
-        let (outer, inner) = (
-            self.outer.clamp(0, MAX_COORD),
-            self.inner.clamp(0, MAX_COORD),
-        );
+        let (outer, inner) = (self.outer.clamp(0, MAX_COORD), self.inner.clamp(0, MAX_COORD));
         Gaps { outer, inner }
     }
 }
@@ -242,11 +239,7 @@ pub enum Outcome {
 }
 
 fn outcome(changed: bool) -> Outcome {
-    if changed {
-        Outcome::Changed
-    } else {
-        Outcome::Noop
-    }
+    if changed { Outcome::Changed } else { Outcome::Noop }
 }
 
 /// Why [`Wm::apply`] refused a command. The state is left untouched.
@@ -317,9 +310,7 @@ impl Space {
 
     /// Parent index of node `i`, `NONE` for the root.
     fn parent(&self, i: usize) -> usize {
-        shape(&self.tree, Rect::default(), 0)
-            .get(i)
-            .map_or(NONE, |x| x.1)
+        shape(&self.tree, Rect::default(), 0).get(i).map_or(NONE, |x| x.1)
     }
 }
 
@@ -368,11 +359,7 @@ fn keep_visible(r: Rect, area: Rect) -> Rect {
 fn rank(f: Rect, c: Rect, dir: Dir) -> Option<(i64, i64, i64)> {
     let (along, perp) = (dir.axis(), dir.axis().flip());
     let ((fa, fl), (ca, cl)) = (f.span(along), c.span(along));
-    let gap = if dir.forward() {
-        ca - (fa + fl)
-    } else {
-        fa - (ca + cl)
-    };
+    let gap = if dir.forward() { ca - (fa + fl) } else { fa - (ca + cl) };
     let ((fp, fq), (cp, cq)) = (f.span(perp), c.span(perp));
     let overlap = (fp + fq).min(cp + cq) - fp.max(cp);
     if gap < 0 || overlap < 1 {
@@ -384,9 +371,7 @@ fn rank(f: Rect, c: Rect, dir: Dir) -> Option<(i64, i64, i64)> {
 /// The best FocusDir candidate from the focused placement, if any.
 fn neighbor(places: &[Placement], dir: Dir, tiled_only: bool) -> Option<WinId> {
     let f = places.iter().find(|p| p.focused)?;
-    let others = places
-        .iter()
-        .filter(|c| c.win != f.win && !(tiled_only && c.floating));
+    let others = places.iter().filter(|c| c.win != f.win && !(tiled_only && c.floating));
     let ranked = others.filter_map(|c| Some((rank(f.rect, c.rect, dir)?, c.win)));
     ranked.min().map(|(_, win)| win)
 }
@@ -509,10 +494,7 @@ impl Wm {
         let Some(s) = self.spaces.get(ws) else {
             return Vec::new();
         };
-        let nodes = s
-            .tree
-            .iter()
-            .zip(shape(&s.tree, self.root(), self.gaps.inner));
+        let nodes = s.tree.iter().zip(shape(&s.tree, self.root(), self.gaps.inner));
         let tiled = nodes.filter_map(|(node, (rect, _))| match *node {
             Node::Leaf(win) => Some((win, rect, false)),
             Node::Split(..) => None,
@@ -643,11 +625,7 @@ impl Wm {
         };
         let r = shape(&s.tree, root, inner)[i].0;
         let axis = [Axis::Vertical, Axis::Horizontal][usize::from(r.w >= r.h)];
-        let split = [
-            Node::Split(axis, RATIO_ONE / 2),
-            Node::Leaf(old),
-            Node::Leaf(win),
-        ];
+        let split = [Node::Split(axis, RATIO_ONE / 2), Node::Leaf(old), Node::Leaf(win)];
         s.tree.splice(i..=i, split);
     }
 
@@ -914,12 +892,7 @@ mod tests {
 
     #[test]
     fn focus_dir_ranks_gap_then_overlap_then_center_then_id() {
-        let p = |id, rect| Placement {
-            win: WinId(id),
-            rect,
-            floating: false,
-            focused: id == 1,
-        };
+        let p = |id, rect| Placement { win: WinId(id), rect, floating: false, focused: id == 1 };
         let f = p(1, Rect::new(0, 0, 100, 100));
         let far = p(2, Rect::new(150, 0, 10, 10));
         let thin = p(3, Rect::new(120, 90, 10, 100));
@@ -1137,11 +1110,7 @@ mod tests {
         }
 
         fn small(&mut self, n: u64) -> i32 {
-            if self.below(5) == 0 {
-                self.val()
-            } else {
-                self.below(n) as i32
-            }
+            if self.below(5) == 0 { self.val() } else { self.below(n) as i32 }
         }
 
         fn cmd(&mut self, next: u32) -> Cmd {
@@ -1249,10 +1218,6 @@ mod tests {
                 assert_eq!(replay.state_hash(), hash);
             }
         }
-        assert_eq!(
-            changers.len(),
-            13,
-            "some command never changed state: {changers:?}"
-        );
+        assert_eq!(changers.len(), 13, "some command never changed state: {changers:?}");
     }
 }

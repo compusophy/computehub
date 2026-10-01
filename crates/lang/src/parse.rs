@@ -48,16 +48,8 @@ impl<'a, T: Tok> TokCursor<'a, T> {
     }
 
     pub fn with_max_depth(toks: &'a [T], max_depth: usize) -> Self {
-        assert!(
-            !toks.is_empty(),
-            "TokCursor requires an EOF-terminated, non-empty token slice"
-        );
-        Self {
-            toks,
-            pos: 0,
-            depth: 0,
-            max_depth,
-        }
+        assert!(!toks.is_empty(), "TokCursor requires an EOF-terminated, non-empty token slice");
+        Self { toks, pos: 0, depth: 0, max_depth }
     }
 
     /// Current token (the EOF sentinel once input is exhausted).
@@ -95,11 +87,7 @@ impl<'a, T: Tok> TokCursor<'a, T> {
 
     /// Advance past the current token if `pred` accepts it.
     pub fn eat(&mut self, pred: impl Fn(&T) -> bool) -> Option<&'a T> {
-        if pred(self.peek()) {
-            Some(self.advance())
-        } else {
-            None
-        }
+        if pred(self.peek()) { Some(self.advance()) } else { None }
     }
 
     /// Enter one recursion level; `Err(current span)` past the cap — map it to
@@ -211,13 +199,7 @@ mod tests {
         let mut c = TokCursor::with_max_depth(&ts, 8);
         // A recursive descent that errors deep inside: depth must return to 0.
         fn descend(c: &mut TokCursor<'_, T>, n: usize) -> Result<(), Span> {
-            c.guarded(|c| {
-                if n == 0 {
-                    Err(c.span())
-                } else {
-                    descend(c, n - 1)
-                }
-            })
+            c.guarded(|c| if n == 0 { Err(c.span()) } else { descend(c, n - 1) })
         }
         assert!(descend(&mut c, 5).is_err());
         assert_eq!(c.depth(), 0);

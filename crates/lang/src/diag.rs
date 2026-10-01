@@ -16,10 +16,7 @@ pub struct Span {
 impl Span {
     /// Construct a span; `end < start` is normalized to empty at `start`.
     pub fn new(start: usize, end: usize) -> Self {
-        Self {
-            start,
-            end: end.max(start),
-        }
+        Self { start, end: end.max(start) }
     }
 }
 
@@ -42,19 +39,11 @@ pub struct Diag {
 impl Diag {
     /// Error with no span and no code.
     pub fn new(message: impl Into<String>) -> Self {
-        Self {
-            message: message.into(),
-            span: None,
-            code: None,
-        }
+        Self { message: message.into(), span: None, code: None }
     }
     /// Error pinned to a span (no code).
     pub fn at(message: impl Into<String>, span: Span) -> Self {
-        Self {
-            message: message.into(),
-            span: Some(span),
-            code: None,
-        }
+        Self { message: message.into(), span: Some(span), code: None }
     }
     /// Coded error pinned to a span — the canonical constructor.
     pub fn at_code(code: u16, message: impl Into<String>, span: Span) -> Self {
@@ -165,14 +154,9 @@ pub fn render_snippet(source: &str, span: Span) -> Option<String> {
     let start = floor_char_boundary(source, span.start);
     let (line, col) = line_col(source, start);
     let line_start = source[..start].rfind('\n').map(|i| i + 1).unwrap_or(0);
-    let line_end = source[line_start..]
-        .find('\n')
-        .map(|i| line_start + i)
-        .unwrap_or(source.len());
-    let line_text: String = source[line_start..line_end]
-        .chars()
-        .map(|c| if c == '\t' { ' ' } else { c })
-        .collect();
+    let line_end = source[line_start..].find('\n').map(|i| line_start + i).unwrap_or(source.len());
+    let line_text: String =
+        source[line_start..line_end].chars().map(|c| if c == '\t' { ' ' } else { c }).collect();
     let span_end = floor_char_boundary(source, span.end.clamp(start, line_end.max(start)));
     let width = source[start..span_end].chars().count().max(1);
     let line_chars = line_text.chars().count();
@@ -235,9 +219,7 @@ mod tests {
         assert_eq!(d.to_string(), "E0204: type mismatch [12..18]");
         assert_eq!(Diag::new("boom").to_string(), "boom");
         assert_eq!(
-            Diag::at("x", Span::new(19, 20))
-                .location("let a = 1;\nlet x = 1;")
-                .unwrap(),
+            Diag::at("x", Span::new(19, 20)).location("let a = 1;\nlet x = 1;").unwrap(),
             "line 2, col 9"
         );
     }

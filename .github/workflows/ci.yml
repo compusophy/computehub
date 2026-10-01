@@ -50,3 +50,23 @@ jobs:
           toolchain: "1.85"
       - name: test on the declared MSRV
         run: cargo test --workspace
+
+  # The native node (node/) is its own workspace, with its own dependencies
+  # and lockfile (outside the zero-dependency graph), so the jobs above never
+  # build it. --locked: the lockfile is part of the reviewed dependency set.
+  node:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: node
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - name: format
+        run: cargo fmt --check
+      - name: test (unit tests and in-process end to end over a real PTY)
+        run: cargo test --locked
+      - name: clippy
+        run: cargo clippy --locked --all-targets -- -D warnings
