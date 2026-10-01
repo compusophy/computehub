@@ -487,9 +487,11 @@ impl Host {
         icon
     }
 
+    /// The open windows of `name`: those opened as `name`, and as `name:<arg>` (Studio on a
+    /// file, Files in a folder), which the dock shows as one app.
     pub fn windows_of(&self, name: &str) -> Vec<WinId> {
-        let mine = self.wins.iter().filter(|w| w.name == name && self.live(w.id));
-        mine.map(|w| w.id).collect()
+        let of = |w: &&Win| w.name == name || app_of(&w.name) == name;
+        self.wins.iter().filter(of).filter(|w| self.live(w.id)).map(|w| w.id).collect()
     }
 
     /// Shows the newest window of `name` (on top, focused), else opens it.
@@ -517,8 +519,9 @@ impl Host {
     pub fn dock_apps(&mut self, pinned: &[String]) -> Vec<(String, AppIcon, Vec<WinId>)> {
         let mut names = pinned.to_vec();
         for w in self.wins.iter().filter(|w| self.live(w.id)) {
-            if !names.contains(&w.name) {
-                names.push(w.name.clone());
+            let app = app_of(&w.name);
+            if !names.iter().any(|n| n == app) {
+                names.push(app.to_string());
             }
         }
         let apps = names.into_iter().filter_map(|n| Some((self.icon(&n)?, self.windows_of(&n), n)));
@@ -572,6 +575,12 @@ impl Host {
             out.push(search::Entry { label: app_label(&name), name, icon, place: Some(place) });
         }
     }
+}
+
+/// The app a window name opens: `"studio"` for `"studio:/apps/x.app"`, else the name (a path
+/// is its own app).
+pub fn app_of(name: &str) -> &str {
+    name.split_once(':').filter(|(app, _)| !app.contains('/')).map_or(name, |(app, _)| app)
 }
 
 pub fn rectf(r: Rect) -> RectF {
