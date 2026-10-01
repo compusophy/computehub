@@ -5,11 +5,13 @@
 //! [`Event::AiData`] until [`Event::AiEnd`].
 //!
 //! A reply holding a fenced block whose info string is `app` is compiled with [`applang`]: a
-//! program that compiles is saved to `~/apps/<slug>.app`, opened in Studio, and appended to the
-//! fine-tuning corpus ([`ai::CORPUS`]); one that does not goes back to the model with its
-//! diagnostics, at most [`RETRIES`] times. Files go through a [`Disk`]: [`Fs`] in the program.
-//! A prompt from the desktop's everything bar ([`Event::Ask`]) is sent as if typed, after the
-//! request in flight if there is one. [`ai`] and [`json`] are what Studio shares with it.
+//! program that compiles is saved to `~/apps/<slug>.app` (or the first free `<slug>-<n>.app`: it
+//! never replaces a file), opened in Studio, and appended to the fine-tuning corpus
+//! ([`ai::CORPUS`]); one that does not goes back to the model with its diagnostics, at most
+//! [`RETRIES`] times. Files go through a [`Disk`]: [`Fs`] in the program.
+//! A prompt from the desktop's everything bar ([`Event::Ask`]) is sent as if typed (the draft
+//! stays), after the request in flight if there is one. A request carries the newest history
+//! that fits in [`ai::MAX_BODY`]. [`ai`] and [`json`] are what Studio shares with it.
 
 #![forbid(unsafe_code)]
 
@@ -20,16 +22,16 @@ mod tests;
 
 use std::io::{self, ErrorKind, Read, Write};
 
-use ai::{CORPUS, EXAMPLE, HOME, MAX_REPLY, app_block, clip, corpus_line, failure, problem, slug};
+use ai::{CORPUS, EXAMPLE, MAX_BODY, MAX_REPLY, app_block, clip, corpus_line, failure, free_path};
 pub use ai::{DEFAULT_MODEL, RETRIES};
+use ai::{problem, slug};
 use json::Stream;
 use uiwire::client::Client;
 use uiwire::{Event, Frame, Node, Request, Style, Variant};
 
 /// The most messages (after the system prompt) a request carries.
 const HISTORY: usize = 12;
-/// Caps in bytes: a prompt, and both the history a request carries (quoted)
-/// and the transcript a frame shows, which share one 1 MiB frame.
+/// Caps in bytes: a prompt, and the transcript a frame shows (in one 1 MiB frame).
 const MAX_PROMPT: usize = 16 * 1024;
 const MAX_TEXT: usize = 256 * 1024;
 /// The most turns kept, and the most Text nodes one reply becomes.
@@ -56,6 +58,8 @@ pub trait Disk {
     /// Writes `text` to the file at `path`, replacing it or (`append`) after
     /// it, making its directory first.
     fn put(&mut self, path: &str, text: &str, append: bool) -> io::Result<()>;
+    /// Whether anything is at `path`.
+    fn exists(&mut self, path: &str) -> bool;
 }
 
 /// The program's files: `std::fs`, which WASI serves from the desktop's VFS.
@@ -71,6 +75,10 @@ impl Disk for Fs {
         let mut file = std::fs::OpenOptions::new();
         file.create(true).write(true).append(append).truncate(!append);
         file.open(path)?.write_all(text.as_bytes())
+    }
+
+    fn exists(&mut self, path: &str) -> bool {
+        std::path::Path::new(path).exists()
     }
 }
 
@@ -141,9 +149,10 @@ impl Assistant {
             }
             _ => return false,
         }
-        if self.run.is_none() && !self.asks.is_empty() {
-            self.input = self.asks.remove(0);
-            self.send();
+        // Sent as they are: the draft and its Input stay.
+        while self.run.is_none() && !self.asks.is_empty() {
+            let text = self.asks.remove(0).trim().to_string();
+            self.ask(text.clone(), text, 1);
         }
         true
     }
@@ -167,25 +176,34 @@ impl Assistant {
     }
 
     /// Asks the model `text` as the user, attempt `attempt` at `prompt`; a
-    /// first attempt shows `prompt` as its turn's.
+    /// first attempt shows `prompt` as its turn's. Text too long to send is noted, not sent.
     fn ask(&mut self, text: String, prompt: String, attempt: u32) {
-        self.last_id = self.last_id.wrapping_add(1).max(1);
         self.history.push(("user", text));
         self.history.drain(..self.history.len().saturating_sub(HISTORY));
         let shown = if attempt == 1 { prompt.clone() } else { String::new() };
         self.turns.push(Turn { prompt: shown, ..Turn::default() });
         self.turns.drain(..self.turns.len().saturating_sub(MAX_TURNS));
-        self.requests.push(Request::Ai { id: self.last_id, body: self.body() });
+        let Some(body) = self.body() else {
+            self.history.pop();
+            let why = format!("Not sent: too long for the AI ({} KiB at most)", MAX_BODY >> 10);
+            return self.note((Style::Error, why));
+        };
+        self.last_id = self.last_id.wrapping_add(1).max(1);
+        self.requests.push(Request::Ai { id: self.last_id, body });
         self.run = Some(Run { id: self.last_id, prompt, attempt, stream: Stream::default() });
     }
 
-    /// The chat-completions request: the system prompt and the newest
-    /// history that fits in [`MAX_TEXT`] bytes.
-    fn body(&self) -> String {
-        let keep = fit(&self.history, MAX_TEXT, |m| json::quote(&m.1).len());
+    /// The chat-completions request: the system prompt and the newest history that fits in
+    /// [`MAX_BODY`] bytes; none if the newest message alone does not.
+    fn body(&self) -> Option<String> {
         let system = [&SYSTEM.join(applang::REFERENCE), EXAMPLE].concat();
         let options = ",\"max_tokens\":4096,\"temperature\":0.3";
-        ai::chat(self.model(), options, &system, &self.history[self.history.len() - keep..])
+        let chat = |messages| ai::chat(self.model(), options, &system, messages);
+        // A message takes its content quoted, its role and 23 bytes of JSON.
+        let room = MAX_BODY.saturating_sub(chat(&[]).len());
+        let keep = fit(&self.history, room, |m| json::quote(&m.1).len() + 32);
+        let body = chat(&self.history[self.history.len() - keep..]);
+        (body.len() <= MAX_BODY).then_some(body)
     }
 
     /// Ends the request in flight with `status` and the host's `error`: notes
@@ -224,11 +242,15 @@ impl Assistant {
         }
     }
 
-    /// Saves `src`, which compiles, to `~/apps`, opens it in Studio and adds it to the corpus,
-    /// noting so.
+    /// Saves `src`, which compiles, to a free name in `~/apps`, opens it in Studio and adds it
+    /// to the corpus, noting so.
     fn build(&mut self, src: &str, run: &Run, disk: &mut dyn Disk) {
-        let name = [&slug(src), ".app"].concat();
-        let path = [HOME, "/apps/", &name].concat();
+        let slug = slug(src);
+        let Some(path) = free_path(&slug, |p| disk.exists(p)) else {
+            let why = format!("Couldn't save {slug}.app: every name for it in ~/apps is taken");
+            return self.note((Style::Error, why));
+        };
+        let name = path.rsplit('/').next().unwrap_or_default();
         if let Err(e) = disk.put(&path, src, false) {
             return self.note((Style::Error, format!("Couldn't save {path}: {e}")));
         }

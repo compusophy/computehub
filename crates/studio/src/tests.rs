@@ -1,7 +1,7 @@
 use super::*;
 use crate::edit::{CHECK, CHIP, CODE, MAKE, NEW, OPEN, PROMPT, STOP, TOGGLE, spans};
 use crate::run::{EDIT, TOO_BIG};
-use assistant::ai::{CORPUS, HOME};
+use assistant::ai::{CORPUS, HOME, MAX_BODY};
 use assistant::json::{Json, quote};
 use std::collections::BTreeMap;
 use uiwire::{Class, Key, Request, Variant, mods};
@@ -169,10 +169,13 @@ fn code(f: &Frame) -> (u32, u32, &str, &[uiwire::Span]) {
     });
     found.expect("a code editor")
 }
-/// The Ai request a frame makes.
+/// The Ai request a frame makes, which the free AI takes.
 fn ai(f: &Frame) -> (u32, Json) {
     let ai = |r: &Request| match r {
-        Request::Ai { id, body } => Some((*id, Json::parse(body).expect("a JSON body"))),
+        Request::Ai { id, body } if body.len() <= MAX_BODY => {
+            Some((*id, Json::parse(body).expect("a JSON body")))
+        }
+        Request::Ai { body, .. } => panic!("a body of {} bytes", body.len()),
         _ => None,
     };
     f.requests.iter().find_map(ai).expect("an Ai request")
@@ -369,6 +372,76 @@ fn a_change_sends_the_program_and_keeps_its_file() {
         w.last(&[click(OPEN)]).requests,
         [Request::Open { name: "/apps/counter.app".into() }]
     );
+}
+
+#[test]
+fn a_program_that_faults_when_it_first_renders_goes_back_and_is_never_saved() {
+    let mut w = Win::new(&["edit", "/apps/counter.app"], with(&[("/apps/counter.app", COUNTER)]));
+    let f = w.last(&[WIDE]);
+    let (_, mut id, _) = w.make(&f, "show the average");
+    let average = "state total = 0;\nstate count = 0;\nlabel \"Average: \" + total / count;\n";
+    for attempt in 1..=3 {
+        let f = w.answer(id, &app(average)).pop().unwrap();
+        if attempt == 3 {
+            let want = "E0906 still faulting after 2 fixes: E0203 3:";
+            assert!(has(&f, want) && has(&f, "Reset") && f.requests.is_empty(), "{:?}", words(&f));
+            break;
+        }
+        let body;
+        (id, body) = ai(&f);
+        let (role, fix) = message(&body, 3);
+        assert!(
+            role == "user" && fix.starts_with("The program faults when it first renders: E0203 3:")
+        );
+    }
+    assert!(w.disk["/apps/counter.app"] == COUNTER && !w.disk.contains_key(CORPUS));
+}
+
+#[test]
+fn edits_and_prompts_made_while_the_ai_writes_are_kept() {
+    let mut w = Win::new(&["edit", "/apps/counter.app"], with(&[("/apps/counter.app", COUNTER)]));
+    let f = w.last(&[WIDE]);
+    let titled = [COUNTER, "label \"Title\";\n"].concat();
+    // A prompt typed meanwhile stays, in the same Input.
+    let (f, id, _) = w.make(&f, "add a title");
+    w.send(&[change(input(&f).0, 2, "bigger buttons")]);
+    let f = w.answer(id, &app(&titled)).pop().unwrap();
+    assert!(has(&f, "Ready \u{2713}") && w.disk["/apps/counter.app"] == titled);
+    assert_eq!(input(&f), (PROMPT, "bigger buttons", "Describe a change\u{2026}"));
+    // Code edited meanwhile, here checked and saved, wins over the reply, on screen and on disk.
+    let (_, id, _) = w.make(&f, "add a footer");
+    let code_id = code(&w.last(&[click(TOGGLE)])).0;
+    let zero = titled.replace("Reset", "Zero");
+    let f = w.last(&[change(code_id, 2, &zero), click(CHECK)]);
+    assert!(has(&f, "Checked \u{2713}") && w.disk["/apps/counter.app"] == zero);
+    let f = w.answer(id, &app(&[&titled, "label \"Footer\";\n"].concat())).pop().unwrap();
+    assert!(has(&f, "Not applied: the code was edited while it was made"), "{:?}", words(&f));
+    assert_eq!((code(&f).2, w.disk["/apps/counter.app"].as_str()), (zero.as_str(), zero.as_str()));
+    assert_eq!(input(&f).1, "add a footer");
+    assert_eq!(w.disk[CORPUS].lines().count(), 1);
+}
+
+#[test]
+fn makes_fit_what_the_free_ai_takes() {
+    // A fix too big to send with the program it changes goes without it (`ai` checks the size).
+    let big = "label 1;\n".repeat(3500);
+    let mut w = Win::new(&["edit", "/apps/big.app"], with(&[("/apps/big.app", &big)]));
+    let f = w.last(&[WIDE]);
+    let (_, id, body) = w.make(&f, "add a title");
+    assert!(message(&body, 1).1.contains(big.trim_end()));
+    let (reply, done) = (app(&[&big, "label;\n"].concat()), b"data: [DONE]\n\n".to_vec());
+    let end = Event::AiEnd { id, status: 200, error: String::new() };
+    let f = w.last(&[content(id, reply.as_bytes()), Event::AiData { id, data: done }, end]);
+    let (_, body) = ai(&f);
+    assert_eq!((messages(&body), message(&body, 1)), (4, ("user", "add a title")));
+    // One too big even so is not made, and nothing is sent.
+    let big = "label 1;\n".repeat(9000);
+    let mut w = Win::new(&["edit", "/apps/big.app"], with(&[("/apps/big.app", &big)]));
+    let f = w.last(&[WIDE]);
+    let id = input(&f).0;
+    let f = w.last(&[change(id, 1, "add a title"), Event::Submit { id }]);
+    assert!(!f.requests.iter().any(|r| matches!(r, Request::Ai { .. })) && has(&f, "Make"));
+    assert!(has(&f, "Not made: too big to send to the AI (80 KiB at most)"));
 }
 
 #[test]
