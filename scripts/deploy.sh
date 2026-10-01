@@ -13,8 +13,8 @@ bash scripts/budget.sh
 rm -rf .vercel/output
 mkdir -p .vercel/output/static
 cp -R dist/. .vercel/output/static/
-# Every response: no other site keeps a handle on the page's window (and so
-# cannot change its #fragment, which pairs a node) or frames it.
+# Every response: no other site keeps a handle on the page's window or
+# frames it.
 cat > .vercel/output/config.json <<'EOF'
 {
   "version": 3,

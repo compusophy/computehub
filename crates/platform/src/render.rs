@@ -12,16 +12,18 @@ use web_sys::{
 /// The instanced attributes as (location, GL type, normalized, byte offset);
 /// each has 4 components, divisor 1 and stride [`INSTANCE_BYTES`], matching
 /// the `layout(location = N)` declarations in [`gfx::VERTEX_SHADER`]:
-/// `a_rect`, `a_params`, `a_color` (four normalized bytes), `a_clip`, `a_uv`.
-pub(crate) const ATTRIBS: [(u32, u32, bool, i32); 5] = [
+/// `a_rect`, `a_params`, `a_color` (four normalized bytes), `a_clip`, `a_uv`,
+/// `a_color2` (four normalized bytes).
+pub(crate) const ATTRIBS: [(u32, u32, bool, i32); 6] = [
     (0, Gl::FLOAT, false, 0),
     (1, Gl::FLOAT, false, 16),
     (2, Gl::UNSIGNED_BYTE, true, 32),
     (3, Gl::FLOAT, false, 36),
     (4, Gl::FLOAT, false, 52),
+    (5, Gl::UNSIGNED_BYTE, true, 68),
 ];
 
-/// The smallest GL instance buffer, in bytes (a power of two; 240 instances).
+/// The smallest GL instance buffer, in bytes (a power of two; 227 instances).
 pub(crate) const MIN_CAPACITY: usize = 16 * 1024;
 
 /// Draws [`gfx::DrawList`]s into the `<canvas>` with WebGL2.

@@ -1,70 +1,93 @@
-//! The desktop palette and metrics: graphite neutrals with a faint cool cast
-//! and one mint accent. Colors are straight sRGB; sizes are logical pixels.
+//! Themes: every color on screen, chosen at runtime.
 //!
-//! The shell's chrome, the widgets in [`crate::Ui`] and the terminal all read
-//! this one palette.
+//! A [`Theme`] is plain data (straight sRGB, alpha 255 unless noted): the
+//! desktop's backdrop (a base color, up to four soft [`Glow`]s and a grain
+//! strength), the surfaces windows and controls sit on, the text ramp, one
+//! accent, and a 16-color terminal palette. [`THEMES`] holds the built-in
+//! three and [`theme`] looks one up by name. Widgets in [`crate::Ui`] read
+//! the theme the shell gives them; nothing draws from a color constant.
 
-use gfx::Rgba;
+use gfx::{DrawList, RectF, Rgba};
+use text::{FontId, TextStyle};
 
-/// The desktop behind every window (the frame's clear color).
-pub const BG: Rgba = Rgba::hex(0x121419);
-/// The panel across the top of the screen.
-pub const PANEL: Rgba = Rgba::hex(0x1a1d24);
-/// A window's body.
-pub const WINDOW: Rgba = Rgba::hex(0x1e2129);
-/// The titlebar of an unfocused window.
-pub const TITLEBAR: Rgba = Rgba::hex(0x252933);
-/// The titlebar of the focused window.
-pub const TITLEBAR_FOCUSED: Rgba = Rgba::hex(0x2d3240);
-/// Window outlines, separators and the panel's bottom edge.
-pub const BORDER: Rgba = Rgba::hex(0x353a47);
-/// The one accent: focus rings, carets, primary buttons and the active
-/// workspace.
-pub const ACCENT: Rgba = Rgba::hex(0x5fcfae);
-/// A primary button under the pointer.
-pub const ACCENT_HOVER: Rgba = Rgba::hex(0x7adcbe);
-/// A primary button held down.
-pub const ACCENT_PRESSED: Rgba = Rgba::hex(0x4bb394);
-/// Text on an [`ACCENT`] fill.
-pub const ON_ACCENT: Rgba = Rgba::hex(0x0d1f19);
-/// The focused window's outline.
-pub const BORDER_FOCUSED: Rgba = ACCENT;
-/// Icons on the panel and on focused titlebars.
-pub const ICON: Rgba = Rgba::hex(0xdce1e9);
-/// Icons on unfocused titlebars and inactive workspace dots.
-pub const ICON_DIM: Rgba = Rgba::hex(0x747b89);
-/// A translucent wash behind the button under the pointer.
-pub const HOVER: Rgba = Rgba(255, 255, 255, 26);
-/// Window shadows; floating windows use a stronger alpha.
-pub const SHADOW: Rgba = Rgba(0, 0, 0, 120);
+/// A soft elliptical light in the backdrop. Its center and radii are
+/// fractions of the screen: `cx` and `rx` of its width, `cy` and `ry` of its
+/// height. `color`'s alpha is its peak, at the center; alpha 0 is an unused
+/// slot.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Glow {
+    /// Center, as a fraction of the screen width.
+    pub cx: f32,
+    /// Center, as a fraction of the screen height.
+    pub cy: f32,
+    /// Horizontal radius, as a fraction of the screen width.
+    pub rx: f32,
+    /// Vertical radius, as a fraction of the screen height.
+    pub ry: f32,
+    /// Color and peak alpha.
+    pub color: Rgba,
+}
 
-/// Body text on [`WINDOW`].
-pub const TEXT: Rgba = Rgba::hex(0xc9ced8);
-/// Secondary text: captions, keys, placeholders.
-pub const TEXT_DIM: Rgba = Rgba::hex(0x8a91a0);
-/// Headings and text on hovered or pressed controls.
-pub const TEXT_BRIGHT: Rgba = Rgba::hex(0xeef1f6);
-/// A text field's well.
-pub const FIELD: Rgba = Rgba::hex(0x171a20);
-/// A focused text field's well.
-pub const FIELD_FOCUSED: Rgba = Rgba::hex(0x13161b);
-/// A button at rest.
-pub const BUTTON: Rgba = Rgba::hex(0x2b303b);
-/// A button under the pointer.
-pub const BUTTON_HOVER: Rgba = Rgba::hex(0x363c49);
-/// A button held down.
-pub const BUTTON_PRESSED: Rgba = Rgba::hex(0x22262f);
-/// Selected text: the accent, translucent, drawn over the glyphs' cells.
-pub const SELECTION: Rgba = Rgba(95, 207, 174, 72);
+/// The colors of the whole desktop. Translucent fields (`surface`, `glass`,
+/// `border`, `highlight`, `shadow`, `selection`) are meant to be drawn over
+/// what is beneath them.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Theme {
+    /// The name [`theme`] finds it by.
+    pub name: &'static str,
+    /// Whether it is a dark theme (light text on dark surfaces).
+    pub dark: bool,
+    /// The backdrop's flat color: the frame's clear color.
+    pub base: Rgba,
+    /// Lights over the base (see [`Theme::draw_backdrop`]).
+    pub glows: [Glow; 4],
+    /// Film-grain strength over the backdrop: the most alpha (out of 255)
+    /// of the noise ([`DrawList::grain`]); 0 is none.
+    pub grain: u8,
+    /// Window bodies.
+    pub surface: Rgba,
+    /// Raised fills on a surface: buttons, cards, titlebars.
+    pub surface_hi: Rgba,
+    /// Sunken fills on a surface: text fields, wells.
+    pub surface_lo: Rgba,
+    /// Translucent chrome over the backdrop: panels, docks, menus.
+    pub glass: Rgba,
+    /// 1 px outlines and separators.
+    pub border: Rgba,
+    /// A light top edge on raised fills and glass.
+    pub highlight: Rgba,
+    /// Body text.
+    pub text: Rgba,
+    /// Secondary text: captions, keys, small print.
+    pub text_dim: Rgba,
+    /// Placeholders and disabled text.
+    pub text_faint: Rgba,
+    /// The one accent: focus rings, carets, primary buttons.
+    pub accent: Rgba,
+    /// Text on an `accent` fill.
+    pub accent_text: Rgba,
+    /// Errors and destructive actions.
+    pub danger: Rgba,
+    /// Drop shadows.
+    pub shadow: Rgba,
+    /// Selected text, drawn over the glyphs' cells.
+    pub selection: Rgba,
+    /// The terminal's 16 colors: black, red, green, yellow, blue, magenta,
+    /// cyan, white, then the bright eight; readable on `surface`.
+    pub ansi: [Rgba; 16],
+}
 
-/// The terminal's 16 colors, readable on [`WINDOW`]: black, red, green,
-/// yellow, blue, magenta, cyan, white, then the bright eight. Black is lifted
-/// off the background so black-on-default text still shows.
-pub const ANSI: [Rgba; 16] = {
-    let rgb: [u32; 16] = [
-        0x3a3f4b, 0xe06c75, 0x7ccf9a, 0xe5c07b, 0x61afef, 0xc678dd, 0x56b6c2, 0xc9ced8, //
-        0x6e7585, 0xf07f88, 0x9fe0b4, 0xf0d58c, 0x80c2f5, 0xd79bea, 0x70d3de, 0xeef1f6,
-    ];
+const fn rgba(rgb: u32, a: u8) -> Rgba {
+    Rgba::hex(rgb).with_alpha(a)
+}
+
+const fn glow(rgb: u32, a: u8, at: (f32, f32), radii: (f32, f32)) -> Glow {
+    Glow { cx: at.0, cy: at.1, rx: radii.0, ry: radii.1, color: rgba(rgb, a) }
+}
+
+const UNUSED: Glow = glow(0, 0, (0.0, 0.0), (0.0, 0.0));
+
+const fn ansi(rgb: [u32; 16]) -> [Rgba; 16] {
     let mut out = [Rgba(0, 0, 0, 255); 16];
     let mut i = 0;
     while i < 16 {
@@ -72,15 +95,212 @@ pub const ANSI: [Rgba; 16] = {
         i += 1;
     }
     out
+}
+
+/// The default: near-black with violet, cyan and magenta light.
+const MIDNIGHT: Theme = Theme {
+    name: "Midnight",
+    dark: true,
+    base: Rgba::hex(0x07080c),
+    glows: [
+        glow(0x6d5cff, 90, (0.18, 0.22), (0.55, 0.50)),
+        glow(0x22d3ee, 60, (0.82, 0.74), (0.50, 0.45)),
+        glow(0xf472b6, 34, (0.62, 0.08), (0.35, 0.28)),
+        UNUSED,
+    ],
+    grain: 9,
+    surface: rgba(0x111219, 240),
+    surface_hi: Rgba::hex(0x1b1d27),
+    surface_lo: Rgba::hex(0x0c0d12),
+    glass: rgba(0x14151d, 190),
+    border: rgba(0xffffff, 20),
+    highlight: rgba(0xffffff, 14),
+    text: Rgba::hex(0xeceef5),
+    text_dim: Rgba::hex(0x8b8fa3),
+    text_faint: Rgba::hex(0x5a5e70),
+    accent: Rgba::hex(0x8b7bff),
+    accent_text: Rgba::hex(0x0b0b12),
+    danger: Rgba::hex(0xff5f6d),
+    shadow: rgba(0x000000, 150),
+    selection: rgba(0x8b7bff, 70),
+    ansi: ansi([
+        0x323646, 0xf07a85, 0x7fd8a4, 0xebcb8b, 0x7aa2f7, 0xb69cff, 0x6fd3e0, 0xc8ccda, //
+        0x686d82, 0xff959e, 0x9debbe, 0xf5dca6, 0x9ab8ff, 0xcdb8ff, 0x93e4ee, 0xeceef5,
+    ]),
 };
 
-/// An xterm 256-color index: 0-15 are [`ANSI`], 16-231 the 6 x 6 x 6 cube
-/// (levels 0, 95, 135, 175, 215, 255), 232-255 the gray ramp from 8 to 238
-/// in steps of 10.
-pub fn xterm_color(i: u8) -> Rgba {
+/// Light: warm paper with peach, lilac and sky light.
+const DAWN: Theme = Theme {
+    name: "Dawn",
+    dark: false,
+    base: Rgba::hex(0xf4f1ec),
+    glows: [
+        glow(0xffb38a, 120, (0.14, 0.18), (0.50, 0.45)),
+        glow(0xc4b5fd, 110, (0.86, 0.30), (0.45, 0.42)),
+        glow(0x93c5fd, 100, (0.50, 0.98), (0.60, 0.40)),
+        UNUSED,
+    ],
+    grain: 6,
+    surface: rgba(0xffffff, 242),
+    surface_hi: Rgba::hex(0xf1eff6),
+    surface_lo: Rgba::hex(0xe9e6ef),
+    glass: rgba(0xffffff, 178),
+    border: rgba(0x000000, 22),
+    highlight: rgba(0xffffff, 160),
+    text: Rgba::hex(0x16161d),
+    text_dim: Rgba::hex(0x62626f),
+    text_faint: Rgba::hex(0x9a9aa6),
+    accent: Rgba::hex(0x5b5bd6),
+    accent_text: Rgba::hex(0xffffff),
+    danger: Rgba::hex(0xd93a49),
+    shadow: rgba(0x1e1a33, 70),
+    selection: rgba(0x5b5bd6, 50),
+    ansi: ansi([
+        0x2b2a33, 0xc0313e, 0x18794e, 0x8f5b00, 0x2d5bd0, 0x7b3fc9, 0x0f7484, 0x6c6b78, //
+        0x5f5e6a, 0xa51f2c, 0x116b3f, 0x6f4500, 0x1f4bb8, 0x6430b0, 0x0b6170, 0x71707d,
+    ]),
+};
+
+/// Ultra minimal: black, white and grays, no light.
+const MONO: Theme = Theme {
+    name: "Mono",
+    dark: true,
+    base: Rgba::hex(0x000000),
+    glows: [UNUSED; 4],
+    grain: 5,
+    surface: rgba(0x0a0a0a, 248),
+    surface_hi: Rgba::hex(0x161616),
+    surface_lo: Rgba::hex(0x050505),
+    glass: rgba(0x0a0a0a, 210),
+    border: rgba(0xffffff, 26),
+    highlight: rgba(0xffffff, 10),
+    text: Rgba::hex(0xf2f2f2),
+    text_dim: Rgba::hex(0x8a8a8a),
+    text_faint: Rgba::hex(0x4a4a4a),
+    accent: Rgba::hex(0xffffff),
+    accent_text: Rgba::hex(0x000000),
+    danger: Rgba::hex(0xff4d4d),
+    shadow: rgba(0x000000, 200),
+    selection: rgba(0xffffff, 50),
+    ansi: ansi([
+        0x2a2a2a, 0xe5787a, 0x8fcb9b, 0xe3c887, 0x8aa9d6, 0xc3a3d9, 0x86c5c9, 0xbdbdbd, //
+        0x6a6a6a, 0xf29c9d, 0xadddb6, 0xefd9a6, 0xa9c1e6, 0xd5bde6, 0xa6d9dc, 0xf2f2f2,
+    ]),
+};
+
+/// The built-in themes: Midnight (the default), Dawn and Mono.
+pub const THEMES: [Theme; 3] = [MIDNIGHT, DAWN, MONO];
+
+static ALL: [Theme; 3] = THEMES;
+
+/// The theme named `name`, ignoring ASCII case; the first of [`THEMES`]
+/// when none is.
+pub fn theme(name: &str) -> &'static Theme {
+    ALL.iter().find(|t| t.name.eq_ignore_ascii_case(name)).unwrap_or(&ALL[0])
+}
+
+impl Default for Theme {
+    /// The first of [`THEMES`].
+    fn default() -> Theme {
+        THEMES[0]
+    }
+}
+
+/// The type scale: (face, size) of title, heading, subheading, body, small
+/// and mono text.
+const TYPE: [(FontId, f32); 6] = [
+    (FontId::SansBold, 24.0),
+    (FontId::SansBold, 18.0),
+    (FontId::SansBold, 14.0),
+    (FontId::Sans, 14.0),
+    (FontId::Sans, 12.0),
+    (FontId::Mono, 13.0),
+];
+
+impl Theme {
+    fn style(&self, i: usize, color: Rgba) -> TextStyle {
+        TextStyle::new(TYPE[i].0, TYPE[i].1, color)
+    }
+
+    /// Window titles inside content: SansBold 24 in `text`.
+    pub fn title(&self) -> TextStyle {
+        self.style(0, self.text)
+    }
+
+    /// Section headings: SansBold 18 in `text`.
+    pub fn heading(&self) -> TextStyle {
+        self.style(1, self.text)
+    }
+
+    /// Group labels: SansBold 14 in `text`.
+    pub fn subheading(&self) -> TextStyle {
+        self.style(2, self.text)
+    }
+
+    /// Body text: Sans 14 in `text`.
+    pub fn body(&self) -> TextStyle {
+        self.style(3, self.text)
+    }
+
+    /// Small print: Sans 12 in `text_dim`.
+    pub fn small(&self) -> TextStyle {
+        self.style(4, self.text_dim)
+    }
+
+    /// Code: Mono 13 in `text`.
+    pub fn mono(&self) -> TextStyle {
+        self.style(5, self.text)
+    }
+
+    /// A neutral fill under the pointer: 8% of the way to `text`.
+    pub fn hover(&self, fill: Rgba) -> Rgba {
+        mix(fill, self.text, 0.08)
+    }
+
+    /// A neutral fill held down: 60% of the way to `surface_lo`.
+    pub fn pressed(&self, fill: Rgba) -> Rgba {
+        mix(fill, self.surface_lo, 0.6)
+    }
+
+    /// A translucent wash over anything under the pointer (`down` while
+    /// held): `text` at a low alpha.
+    pub fn wash(&self, down: bool) -> Rgba {
+        self.text.with_alpha(if down { 26 } else { 16 })
+    }
+
+    /// The xterm 256-color index `i` in this theme; see [`xterm_color`].
+    pub fn xterm(&self, i: u8) -> Rgba {
+        xterm_color(i, self)
+    }
+
+    /// The backdrop over `screen`: the base, each used glow as a
+    /// [`DrawList::glow`] filling its ellipse's bounding box, then the
+    /// grain.
+    pub fn draw_backdrop(&self, list: &mut DrawList, screen: RectF) {
+        list.fill(screen, 0.0, self.base);
+        for g in self.glows.iter().filter(|g| g.color.3 > 0) {
+            let (rx, ry) = (g.rx * screen.w, g.ry * screen.h);
+            let (cx, cy) = (screen.x + g.cx * screen.w, screen.y + g.cy * screen.h);
+            list.glow(RectF::new(cx - rx, cy - ry, 2.0 * rx, 2.0 * ry), g.color);
+        }
+        list.grain(screen, self.grain, 1.0);
+    }
+}
+
+/// `a` moved `t` (0 to 1) of the way to `b`, in every channel, alpha too.
+pub fn mix(a: Rgba, b: Rgba, t: f32) -> Rgba {
+    let t = t.clamp(0.0, 1.0);
+    let ch = |x: u8, y: u8| (f32::from(x) + (f32::from(y) - f32::from(x)) * t).round() as u8;
+    Rgba(ch(a.0, b.0), ch(a.1, b.1), ch(a.2, b.2), ch(a.3, b.3))
+}
+
+/// An xterm 256-color index: 0-15 are `theme`'s [`Theme::ansi`], 16-231
+/// the 6 x 6 x 6 cube (levels 0, 95, 135, 175, 215, 255), 232-255 the gray
+/// ramp from 8 to 238 in steps of 10.
+pub fn xterm_color(i: u8, theme: &Theme) -> Rgba {
     const LEVELS: [u8; 6] = [0, 95, 135, 175, 215, 255];
     match i {
-        0..=15 => ANSI[usize::from(i)],
+        0..=15 => theme.ansi[usize::from(i)],
         16..=231 => {
             let n = usize::from(i - 16);
             Rgba(LEVELS[n / 36], LEVELS[n / 6 % 6], LEVELS[n % 6], 255)
@@ -92,22 +312,10 @@ pub fn xterm_color(i: u8) -> Rgba {
     }
 }
 
-/// Height of the panel.
-pub const PANEL_H: f32 = 36.0;
-/// Height of a window's titlebar.
-pub const TITLEBAR_H: f32 = 30.0;
-/// Corner radius of windows.
-pub const RADIUS: f32 = 10.0;
-/// Blur of a tiled window's shadow.
-pub const SHADOW_BLUR: f32 = 18.0;
-/// Outer and inner tiling gap.
-pub const GAP: i32 = 10;
-/// Number of workspaces.
-pub const WORKSPACES: usize = 4;
-
-/// A stable, soft color for window `id`: the hue steps by the golden angle
-/// (137.508 degrees) per id at fixed saturation and value, so neighbors
-/// differ and the same id always gets the same color.
+/// A stable, soft color for `id` (an app icon's default hue, a window's
+/// tint): the hue steps by the golden angle (137.508 degrees) per id at
+/// fixed saturation and value, so neighbors differ and the same id always
+/// gets the same color.
 pub fn app_tint(id: u32) -> Rgba {
     // Millidegrees in integers, so the hue is exact for every id.
     let h = ((u64::from(id) * 137_508) % 360_000) as f32 / 60_000.0;

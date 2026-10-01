@@ -33,6 +33,13 @@ jobs:
         uses: taiki-e/install-action@v2
         with:
           tool: wasm-bindgen@0.2.121
+      # Without wasm-opt the budget would measure the unoptimized module,
+      # which is over the boot cap. Pinned to binaryen 112, the version the
+      # boot size is measured with locally.
+      - name: install wasm-opt (binaryen 112)
+        run: |
+          curl -sSfL https://github.com/WebAssembly/binaryen/releases/download/version_112/binaryen-version_112-x86_64-linux.tar.gz | tar -xz -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/binaryen-version_112/bin" >> "$GITHUB_PATH"
       - name: web build
         run: bash scripts/build-web.sh
       - name: size budget
@@ -50,23 +57,3 @@ jobs:
           toolchain: "1.85"
       - name: test on the declared MSRV
         run: cargo test --workspace
-
-  # The native node (node/) is its own workspace, with its own dependencies
-  # and lockfile (outside the zero-dependency graph), so the jobs above never
-  # build it. --locked: the lockfile is part of the reviewed dependency set.
-  node:
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: node
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy, rustfmt
-      - name: format
-        run: cargo fmt --check
-      - name: test (unit tests and in-process end to end over a real PTY)
-        run: cargo test --locked
-      - name: clippy
-        run: cargo clippy --locked --all-targets -- -D warnings

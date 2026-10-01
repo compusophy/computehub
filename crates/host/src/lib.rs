@@ -1,72 +1,172 @@
 //! The compusophyOS app host: the window manager and the apps in its
-//! windows, one [`ui::App`] per window. Split from `shell`, which draws the
-//! panel and window chrome around it and binds keys and the pointer. Pure
-//! Rust, no browser.
+//! windows, one [`ui::App`] per window, plus the pure parts the desktop
+//! shell builds on: [`motion`] (tweens, the ease-out curve, replaying a
+//! draw list scaled and faded, theme crossfades), [`frame`] (window
+//! controls, resize edges, snap zones), [`layout`] (where the dock and
+//! the launcher sit), [`search`] (the launcher's query and results) and
+//! [`paint`] (shared drawing helpers). Pure Rust, no browser.
 //!
-//! [`Host`] owns the [`wm::Wm`] (changed only through [`wm::Wm::apply`]),
-//! the [`ui::TextSystem`], the [`vfs::Vfs`] and the apps. It opens and closes
+//! [`Host`] owns the [`wm::Wm`] (changed only through [`Host::apply`]), the
+//! [`ui::TextSystem`], the [`vfs::Vfs`] and the apps. It opens and closes
 //! windows, delivers [`ui::AppEvent`]s, carries out the [`ui::Request`]s the
 //! apps make, and hands back what only the platform can do as [`Effect`]s in
-//! a [`Response`].
+//! a [`Response`]. What only the shell can do (the launcher, the theme)
+//! waits as an [`Ask`] for [`Host::take_asks`].
+//!
+//! A closed window's app stays, [`Win::closing`] and deaf to events, until
+//! the shell has animated it away and calls [`Host::reap`].
 
 #![forbid(unsafe_code)]
+
+pub mod frame;
+pub mod layout;
+pub mod motion;
+pub mod paint;
+pub mod search;
 
 use std::mem;
 
 use gfx::{DrawList, RectF};
-use ui::theme::{RADIUS, TITLEBAR_H, WINDOW};
-use ui::{AppEvent, Cx, Pairing, Request, SocketId, TextSystem, Ui, UiState, WidgetId, WsEvent};
+use ui::{AppEvent, AppIcon, Cx, Key, Mods, Request, TextSystem, Theme, Ui, UiState};
 use vfs::Vfs;
-use wm::{Cmd, FLOAT_MIN, Outcome, Placement, Rect, WinId, Wm};
+use wm::{Cmd, Outcome, Rect, WinId, Wm};
 
 /// Makes the app for a window from its name: a built-in such as
-/// `"terminal"` or `"launcher"`, or a `.app` path. `None` for a name it does
-/// not know, which then opens nothing.
+/// `"terminal"`, or a `.app` path. `None` for a name it does not know, which
+/// then opens nothing.
 pub type Registry = Box<dyn Fn(&str) -> Option<Box<dyn ui::App>>>;
 
 /// The lazy fonts: fetched on the first [`Request::LoadFallbackFonts`] and
 /// added in this order.
 const FONT_URLS: [&str; 2] = ["fonts/symbols-a.ttf", "fonts/symbols-b.ttf"];
-/// The one app that opens at most once.
-const LAUNCHER: &str = "launcher";
 /// Rounds of focus and resize events before [`Host::settle`] gives up; the
 /// rest waits for the next event or frame.
 const SETTLE_PASSES: usize = 8;
-/// Windows shorter than this get no titlebar, title, content or buttons.
-pub const CHROME_MIN_H: f32 = TITLEBAR_H + RADIUS;
+/// Height of a window's titlebar: the wm's [`wm::TITLE_H`].
+pub const TITLEBAR_H: f32 = wm::TITLE_H as f32;
 
-/// Something only the platform can do. Ids are unique across all effects:
-/// socket ids are the [`SocketId`]s apps hold.
+/// One platform event for the desktop shell. Positions and sizes are
+/// logical pixels; pointer button 0 is the primary button.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Input {
+    /// A key went down (repeats too), by its physical position.
+    Key { key: Key, mods: Mods },
+    /// Text typed, pasted or composed by an IME.
+    Text(String),
+    /// The pointer moved.
+    PointerMove { x: f32, y: f32 },
+    /// A pointer button went down.
+    PointerDown { x: f32, y: f32, button: u8 },
+    /// A pointer button went up.
+    PointerUp { x: f32, y: f32, button: u8 },
+    /// The pointer left the canvas.
+    PointerLeave,
+    /// The wheel turned at `(x, y)`; positive `dy` scrolls down.
+    Wheel { x: f32, y: f32, dy: f32 },
+    /// The canvas has a new size.
+    Resize { w: f32, h: f32 },
+    /// The minute changed (or the date): the time for the top bar's clock.
+    Tick { time: LocalTime },
+}
+
+/// A local date and time of day, to the minute, for the clock.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct LocalTime {
+    /// The full year, such as 2026.
+    pub year: u16,
+    /// The month, `1..=12`.
+    pub month: u8,
+    /// The day of the month, `1..=31`.
+    pub day: u8,
+    /// The day of the week, `0..=6`, 0 being Sunday.
+    pub weekday: u8,
+    /// The hour, `0..=23`.
+    pub hour: u8,
+    /// The minute, `0..=59`.
+    pub minute: u8,
+}
+
+const DAYS: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const MONTHS: [&str; 12] =
+    ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+impl LocalTime {
+    /// The date as the top bar shows it: `"Wed 1 Oct"`.
+    pub fn date(&self) -> String {
+        let digit = |n: u8| char::from(b'0' + n % 10);
+        let mut date = String::from(DAYS[usize::from(self.weekday % 7)]);
+        date.push(' ');
+        if self.day >= 10 {
+            date.push(digit(self.day / 10));
+        }
+        date.extend([digit(self.day), ' ']);
+        date.push_str(MONTHS[usize::from(self.month.clamp(1, 12) - 1)]);
+        date
+    }
+
+    /// The time of day, 24-hour: `"14:32"`.
+    pub fn clock(&self) -> String {
+        let digit = |n: u8| char::from(b'0' + n % 10);
+        let (h, m) = (self.hour, self.minute);
+        String::from_iter([digit(h / 10), digit(h), ':', digit(m / 10), digit(m)])
+    }
+}
+
+/// Something only the platform can do.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Effect {
-    /// Open a WebSocket; report what happens as `shell::Input::Ws` with `id`.
-    WsOpen { id: u32, url: String },
-    /// Send one binary message.
-    WsSend { id: u32, bytes: Vec<u8> },
-    /// Close the socket. No more events are routed for it.
-    WsClose { id: u32 },
-    /// Fetch `url` (relative to the page) and hand the bytes to
-    /// `shell::Shell::fetched` ([`Host::fetched`]) with `id`.
+    /// Fetch `url` (relative to the page) and hand the bytes back to
+    /// [`Host::fetched`] (through the shell) with `id`.
     Fetch { id: u32, url: String },
+}
+
+/// The pointer's look over the desktop; the platform maps each to its own.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Cursor {
+    /// The arrow.
+    #[default]
+    Default,
+    /// The I-beam, over text an app edits.
+    Text,
+    /// An open hand, over a titlebar.
+    Grab,
+    /// A closed hand, while a window moves.
+    Grabbing,
+    /// Resizing left and right.
+    EwResize,
+    /// Resizing up and down.
+    NsResize,
+    /// Resizing along the top-left to bottom-right diagonal.
+    NwseResize,
+    /// Resizing along the top-right to bottom-left diagonal.
+    NeswResize,
 }
 
 /// What the platform should do after an input.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Response {
-    /// The screen changed: draw a new frame. Set when the wm, a hovered or
-    /// pressed button or widget, the clock or the fonts changed, when the
-    /// event handler of an app on the active workspace asked, and on resize.
+    /// The screen changed: draw a new frame.
     pub redraw: bool,
-    /// The shell used the event: the platform should `preventDefault` it.
-    /// Set for every binding (even one the wm answers with `Noop`), every
-    /// key or text an app takes, the wheel over a window, and every pointer
-    /// move, press and release.
+    /// The event was used: the platform should `preventDefault` it.
     pub consumed: bool,
-    /// Whether the focused app wants text input, when that or the focus
-    /// changed: focus or blur the platform's text element to match.
+    /// Whether keys and text should reach the desktop, when that or the
+    /// focus changed: focus or blur the platform's text element to match.
     pub text_input: Option<bool>,
     /// What to do, in order.
     pub effects: Vec<Effect>,
+    /// The pointer's new look, when it changed.
+    pub cursor: Option<Cursor>,
+    /// An animation runs: frames are wanted until a frame says otherwise.
+    pub animating: bool,
+}
+
+/// A request an app made that only the shell can carry out.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Ask {
+    /// Open the launcher (an app opened `"launcher"`).
+    Launcher,
+    /// Switch to the theme with this name ([`Request::SetTheme`]).
+    Theme(String),
 }
 
 /// An app in a window.
@@ -82,6 +182,14 @@ pub struct Win {
     /// The content size it was last told, and the one it last drew at
     /// (`None` again when the device pixel ratio changes).
     sizes: [Option<(f32, f32)>; 2],
+    closing: bool,
+}
+
+impl Win {
+    /// Whether its window is closed and it only waits for [`Host::reap`].
+    pub fn closing(&self) -> bool {
+        self.closing
+    }
 }
 
 /// A lazy font on its way, by its fetch id.
@@ -92,48 +200,42 @@ enum Load {
 }
 
 /// The window manager and the apps in its windows, and what they share:
-/// the text system, the filesystem, the node pairing, the page clock, and
-/// the sockets and fonts they asked for.
+/// the text system, the filesystem, the page clock, and the fonts they
+/// asked for.
 pub struct Host {
     wm: Wm,
     text: TextSystem,
     vfs: Vfs,
     registry: Registry,
-    pairing: Option<Pairing>,
     /// The apps, by window id (ids only grow, so pushing keeps them sorted).
     wins: Vec<Win>,
-    /// Open sockets and the windows that own them.
-    sockets: Vec<(SocketId, WinId)>,
-    /// The next socket or fetch id.
+    /// The next fetch id.
     next_id: u32,
     /// The lazy fonts, once asked for.
     fonts: Vec<(u32, Load)>,
     /// The window that last got `Focus(true)`.
     focus: Option<WinId>,
     now_ms: f64,
+    asks: Vec<Ask>,
+    /// Icons of apps by name, as their registry entry made them.
+    icons: Vec<(String, Option<AppIcon>)>,
 }
 
 impl Host {
     /// A host over `wm` with no apps yet; `registry` makes them by name.
-    pub fn new(
-        wm: Wm,
-        text: TextSystem,
-        vfs: Vfs,
-        registry: Registry,
-        pairing: Option<Pairing>,
-    ) -> Host {
+    pub fn new(wm: Wm, text: TextSystem, vfs: Vfs, registry: Registry) -> Host {
         Host {
             wm,
             text,
             vfs,
             registry,
-            pairing,
             wins: Vec::new(),
-            sockets: Vec::new(),
             next_id: 1,
             fonts: Vec::new(),
             focus: None,
             now_ms: 0.0,
+            asks: Vec::new(),
+            icons: Vec::new(),
         }
     }
 
@@ -142,10 +244,10 @@ impl Host {
         &self.wm
     }
 
-    /// Applies `cmd` to the wm. Errors leave the wm untouched, and a stale
-    /// id is not worth reporting.
-    pub fn apply(&mut self, cmd: Cmd) {
-        let _ = self.wm.apply(cmd);
+    /// Applies `cmd` to the wm; whether that changed anything. Errors leave
+    /// the wm untouched, and a stale id is not worth reporting.
+    pub fn apply(&mut self, cmd: Cmd) -> bool {
+        matches!(self.wm.apply(cmd), Ok(Outcome::Changed | Outcome::Opened(_)))
     }
 
     /// The filesystem the apps share.
@@ -154,6 +256,11 @@ impl Host {
     }
 
     /// The text system the apps draw with.
+    pub fn text(&self) -> &TextSystem {
+        &self.text
+    }
+
+    /// The text system, to draw and measure with.
     pub fn text_mut(&mut self) -> &mut TextSystem {
         &mut self.text
     }
@@ -168,95 +275,75 @@ impl Host {
         }
     }
 
-    /// Stores `p` for every app's [`ui::Cx`].
-    pub fn set_pairing(&mut self, p: Pairing) {
-        self.pairing = Some(p);
-    }
-
-    /// The apps, by window id.
+    /// The apps, by window id, closing ones included.
     pub fn wins(&self) -> &[Win] {
         &self.wins
     }
 
-    /// The app in window `id`.
+    /// The app in window `id`, even if closing.
     pub fn win(&self, id: WinId) -> Option<&Win> {
         self.wins.iter().find(|w| w.id == id)
     }
 
+    fn live(&self, id: WinId) -> bool {
+        self.win(id).is_some_and(|w| !w.closing)
+    }
+
     /// The focused window, if an app lives in it.
     pub fn focused_app(&self) -> Option<WinId> {
-        self.wm.focused().filter(|&w| self.win(w).is_some())
+        self.wm.focused().filter(|&w| self.live(w))
     }
 
-    /// Opens `name` in a new window, unless the registry does not know it;
-    /// a second launcher focuses the first instead. A floating window gets
-    /// its app's [`ui::App::preferred_size`] as its content size, centered.
-    pub fn open(&mut self, name: &str, floating: bool, out: &mut Response) {
-        let open = self.wins.iter().find(|w| w.name == name);
-        if let Some(win) = open.filter(|_| name == LAUNCHER).map(|w| w.id) {
-            self.apply(Cmd::Focus(win));
-            return;
-        }
-        let Some(app) = (self.registry)(name) else {
-            return;
-        };
-        let Ok(Outcome::Opened(win)) = self.wm.apply(Cmd::Open { floating }) else {
-            return;
-        };
-        let rect = app.preferred_size().and_then(|s| self.centered(s));
-        if let (true, Some(rect)) = (floating, rect) {
-            self.apply(Cmd::SetFloatRect { win, rect });
-        }
-        self.wins.push(Win {
-            id: win,
-            app,
-            name: name.to_string(),
-            hits: Vec::new(),
-            sizes: [None; 2],
-        });
-        out.redraw = true;
-    }
-
-    /// A window rect whose content is `w` x `h`, centered in the wm area and
-    /// no bigger than it.
-    fn centered(&self, (w, h): (f32, f32)) -> Option<Rect> {
-        if !(w.is_finite() && h.is_finite()) {
+    /// Opens `name` in a new window, focused, unless the registry does not
+    /// know it. The window is `size` (whole window, titlebar included), else
+    /// its app's [`ui::App::preferred_size`] as content, else the wm's
+    /// default; the wm centers and cascades it.
+    pub fn open(
+        &mut self,
+        name: &str,
+        size: Option<(i32, i32)>,
+        out: &mut Response,
+    ) -> Option<WinId> {
+        let app = (self.registry)(name)?;
+        let size = size.or_else(|| app.preferred_size().and_then(window_size));
+        let Ok(Outcome::Opened(id)) = self.wm.apply(Cmd::Open { size }) else {
             return None;
-        }
-        let a = self.wm.area();
-        let fit = |len: f32, max: i32| (len.round() as i32).clamp(FLOAT_MIN, max.max(FLOAT_MIN));
-        let (w, h) = (fit(w + 2.0, a.w), fit(h + TITLEBAR_H + 1.0, a.h));
-        Some(Rect::new(a.x + (a.w - w) / 2, a.y + (a.h - h) / 2, w, h))
+        };
+        let name = name.to_string();
+        let (hits, sizes, closing) = (Vec::new(), [None; 2], false);
+        self.wins.push(Win { id, app, name, hits, sizes, closing });
+        out.redraw = true;
+        Some(id)
     }
 
-    /// Closes `win` and drops its app.
+    /// Closes `win`; its app stays, closing, until [`Host::reap`].
     pub fn close(&mut self, win: WinId, out: &mut Response) {
         self.apply(Cmd::Close(win));
-        self.forget(win, out);
+        self.mark_closed(out);
     }
 
-    /// Drops the app of `win`, once the wm has no such window, and closes
-    /// its sockets.
-    fn forget(&mut self, win: WinId, out: &mut Response) {
-        let i = self.wins.iter().position(|w| w.id == win);
-        let Some(i) = i.filter(|_| self.wm.workspace_of(win).is_none()) else {
-            return;
-        };
-        self.wins.remove(i);
-        let ids = self.sockets.iter().filter(|s| s.1 == win).map(|s| s.0.0);
-        out.effects.extend(ids.map(|id| Effect::WsClose { id }));
-        self.sockets.retain(|s| s.1 != win);
-        out.redraw = true;
+    /// Marks the apps whose windows the wm no longer has as closing.
+    fn mark_closed(&mut self, out: &mut Response) {
+        for w in self.wins.iter_mut().filter(|w| !w.closing) {
+            if self.wm.normal_rect(w.id).is_none() {
+                (w.closing, out.redraw) = (true, true);
+            }
+        }
     }
 
-    /// Hands `ev` to the app of `win`, then carries out what it asked for.
-    /// A hidden app's redraw is moot: switching to it draws it anyway.
+    /// Drops the app of `win` if it is closing.
+    pub fn reap(&mut self, win: WinId) {
+        self.wins.retain(|w| !(w.id == win && w.closing));
+    }
+
+    /// Hands `ev` to the app of `win` (not a closing one), then carries out
+    /// what it asked for. A minimized app's redraw is moot.
     pub fn deliver(&mut self, win: WinId, ev: AppEvent, out: &mut Response) {
-        let shown = self.wm.workspace_of(win) == Some(self.wm.active_workspace());
-        let Some(w) = self.wins.iter_mut().find(|w| w.id == win) else {
+        let shown = self.wm.layout().iter().any(|p| p.win == win);
+        let Some(w) = self.wins.iter_mut().find(|w| w.id == win && !w.closing) else {
             return;
         };
-        let mut cx = Cx::new(&mut self.vfs, self.now_ms, self.pairing, &mut self.next_id);
+        let mut cx = Cx::new(&mut self.vfs, self.now_ms);
         out.redraw |= w.app.event(ev, &mut cx) && shown;
         for request in cx.take_requests() {
             self.request(win, request, out);
@@ -264,31 +351,23 @@ impl Host {
     }
 
     /// Carries out one request of the app in `from`; nothing once that
-    /// window is gone (it closed itself earlier in the same batch).
+    /// window is closed (it closed itself earlier in the same batch).
     fn request(&mut self, from: WinId, request: Request, out: &mut Response) {
-        if self.win(from).is_none() {
+        if !self.live(from) {
             return;
         }
-        let owned = |s: &Host, socket| s.sockets.contains(&(socket, from));
         match request {
-            Request::Open { name, floating } => self.open(&name, floating, out),
+            Request::Open { name, .. } if name == "launcher" => self.asks.push(Ask::Launcher),
+            Request::Open { name, .. } => _ = self.open(&name, None, out),
             Request::CloseSelf => self.close(from, out),
-            Request::Connect { socket, port } => {
-                self.sockets.push((socket, from));
-                let url = ["ws://127.0.0.1:", &port.to_string(), "/"].concat();
-                out.effects.push(Effect::WsOpen { id: socket.0, url });
-            }
-            Request::Send { socket, bytes } if owned(self, socket) => {
-                let id = socket.0;
-                out.effects.push(Effect::WsSend { id, bytes });
-            }
-            Request::CloseSocket(socket) if owned(self, socket) => {
-                self.sockets.retain(|s| s.0 != socket);
-                out.effects.push(Effect::WsClose { id: socket.0 });
-            }
             Request::LoadFallbackFonts => self.load_fonts(out),
-            _ => {}
+            Request::SetTheme(name) => self.asks.push(Ask::Theme(name)),
         }
+    }
+
+    /// The requests only the shell can carry out, oldest first, leaving none.
+    pub fn take_asks(&mut self) -> Vec<Ask> {
+        mem::take(&mut self.asks)
     }
 
     /// Asks for the lazy fonts, once, unless fallbacks are already loaded.
@@ -299,9 +378,8 @@ impl Host {
         for url in FONT_URLS {
             let id = self.next_id;
             self.next_id = self.next_id.wrapping_add(1);
-            let url = url.to_string();
             self.fonts.push((id, Load::Pending));
-            out.effects.push(Effect::Fetch { id, url });
+            out.effects.push(Effect::Fetch { id, url: url.to_string() });
         }
     }
 
@@ -333,10 +411,13 @@ impl Host {
         }
     }
 
-    /// Time passed: `now_ms` on the page clock (ignored unless finite).
-    /// Every app gets the tick.
-    pub fn tick(&mut self, now_ms: f64, out: &mut Response) {
-        self.set_now(now_ms);
+    /// The page clock, in milliseconds.
+    pub fn now_ms(&self) -> f64 {
+        self.now_ms
+    }
+
+    /// Time passed: every app gets a tick at the page clock.
+    pub fn tick(&mut self, out: &mut Response) {
         let wins: Vec<WinId> = self.wins.iter().map(|w| w.id).collect();
         for win in wins {
             let now_ms = self.now_ms;
@@ -344,25 +425,12 @@ impl Host {
         }
     }
 
-    /// A socket event goes to the window that opened the socket; a closed
-    /// socket is forgotten.
-    pub fn ws(&mut self, socket: SocketId, ev: WsEvent, out: &mut Response) {
-        let owner = self.sockets.iter().find(|s| s.0 == socket).map(|s| s.1);
-        if let WsEvent::Closed { .. } = ev {
-            self.sockets.retain(|s| s.0 != socket);
-        }
-        if let Some(win) = owner {
-            self.deliver(win, AppEvent::Ws { socket, ev }, out);
-        }
-    }
-
-    /// Brings the apps up to date with the wm: drops apps whose windows are
-    /// gone, then sends focus changes and new content sizes, until nothing
-    /// changes (or 8 rounds).
+    /// Brings the apps up to date with the wm: marks apps whose windows are
+    /// gone as closing, then sends focus changes and new content sizes,
+    /// until nothing changes (or 8 rounds).
     pub fn settle(&mut self, out: &mut Response) {
         for _ in 0..SETTLE_PASSES {
-            let wins: Vec<WinId> = self.wins.iter().map(|w| w.id).collect();
-            wins.into_iter().for_each(|win| self.forget(win, out));
+            self.mark_closed(out);
             let mut calm = true;
             let focused = self.focused_app();
             if focused != self.focus {
@@ -374,14 +442,12 @@ impl Host {
                     self.deliver(new, AppEvent::Focus(true), out);
                 }
             }
-            let every = (0..self.wm.workspace_count()).flat_map(|ws| self.wm.layout_of(ws));
-            let rects: Vec<_> = every.map(|p| (p.win, p.rect)).collect();
-            for (win, r) in rects {
-                let c = content_rect(rectf(r));
-                let w = self.wins.iter_mut().find(|w| w.id == win);
+            for p in self.wm.layout() {
+                let c = content_rect(rectf(p.rect));
+                let w = self.wins.iter_mut().find(|w| w.id == p.win);
                 if w.is_some_and(|w| w.sizes[0].replace((c.w, c.h)) != Some((c.w, c.h))) {
                     calm = false;
-                    self.deliver(win, AppEvent::Resized { w: c.w, h: c.h }, out);
+                    self.deliver(p.win, AppEvent::Resized { w: c.w, h: c.h }, out);
                 }
             }
             if calm {
@@ -404,30 +470,110 @@ impl Host {
         }
     }
 
-    /// The content well of window `p`, then its app draws into it and
-    /// leaves its hits; `hover` and `pressed` are its widgets under the
-    /// pointer and held down.
+    /// The app of `win` draws its content laid out in `layout`, showing what
+    /// falls inside `clip`, in `theme`; its hits replace the last frame's.
     pub fn draw_content(
         &mut self,
         list: &mut DrawList,
-        p: &Placement,
-        hover: Option<WidgetId>,
-        pressed: Option<WidgetId>,
+        win: WinId,
+        [layout, clip]: [RectF; 2],
+        theme: &Theme,
+        state: UiState,
     ) {
-        let c = content_rect(rectf(p.rect));
-        let Some(w) = self.wins.iter_mut().find(|w| w.id == p.win) else {
+        let Some(w) = self.wins.iter_mut().find(|w| w.id == win) else {
             return;
         };
         w.hits.clear();
-        if c.w <= 0.0 || c.h <= 0.0 {
+        if layout.w <= 0.0 || layout.h <= 0.0 {
             return;
         }
-        // Rounded to meet the window's lower corners; the body under the
-        // upper ones is the same color.
-        list.fill(c, RADIUS - 1.0, WINDOW);
-        let state = UiState { hover, pressed, focused: p.focused, now_ms: self.now_ms };
-        let mut ui = Ui::new(list, &mut self.text, c, &mut w.hits, state);
-        w.app.draw(&mut ui);
+        list.push_clip(clip);
+        w.app.draw(&mut Ui::new(list, &mut self.text, layout, &mut w.hits, state, theme));
+        list.pop_clip();
+    }
+
+    /// The icon of the app `name`: a running one's, else what its registry
+    /// entry says (made once and remembered); `None` if the registry does
+    /// not know it.
+    pub fn icon(&mut self, name: &str) -> Option<AppIcon> {
+        if let Some(w) = self.wins.iter().find(|w| w.name == name) {
+            return Some(w.app.icon());
+        }
+        if let Some(known) = self.icons.iter().find(|i| i.0 == name) {
+            return known.1;
+        }
+        let icon = (self.registry)(name).map(|app| app.icon());
+        self.icons.push((name.to_string(), icon));
+        icon
+    }
+
+    /// The open (not closing) windows of the app `name`, oldest first.
+    pub fn windows_of(&self, name: &str) -> Vec<WinId> {
+        self.wins.iter().filter(|w| w.name == name && !w.closing).map(|w| w.id).collect()
+    }
+
+    /// Shows the newest window of `name` (on top, focused, minimized or
+    /// not), else opens it.
+    pub fn show(&mut self, name: &str, out: &mut Response) {
+        match self.windows_of(name).last() {
+            Some(&win) => _ = self.apply(Cmd::Focus(win)),
+            None => _ = self.open(name, None, out),
+        }
+    }
+
+    /// What a click on the app `name` in a dock does: minimizes its focused
+    /// window, else shows its topmost shown window or its newest, else
+    /// opens it.
+    pub fn toggle(&mut self, name: &str, out: &mut Response) {
+        let mine = self.windows_of(name);
+        let focused = self.wm.focused().filter(|w| mine.contains(w));
+        let shown = self.wm.layout().iter().rev().map(|p| p.win).find(|w| mine.contains(w));
+        match (focused, shown.or(mine.last().copied())) {
+            (Some(win), _) => _ = self.apply(Cmd::Minimize(win)),
+            (None, Some(win)) => _ = self.apply(Cmd::Focus(win)),
+            (None, None) => _ = self.open(name, None, out),
+        }
+    }
+
+    /// The apps a dock shows, with their icons and open windows: each of
+    /// `pinned` the registry knows, then every other app with an open
+    /// window, in the order they opened.
+    pub fn dock_apps(&mut self, pinned: &[&str]) -> Vec<(String, AppIcon, Vec<WinId>)> {
+        let mut names: Vec<String> = pinned.iter().map(|n| n.to_string()).collect();
+        for w in self.wins.iter().filter(|w| !w.closing) {
+            if !names.contains(&w.name) {
+                names.push(w.name.clone());
+            }
+        }
+        let known = names.into_iter().filter_map(|n| Some((self.icon(&n)?, n)));
+        let apps: Vec<(AppIcon, String)> = known.collect();
+        apps.into_iter().map(|(icon, n)| (n.clone(), icon, self.windows_of(&n))).collect()
+    }
+
+    /// What a launcher offers: each of `apps` the registry knows, as a
+    /// tile, then every `.app` file directly in `/apps` and the guest's
+    /// home (shown as `~`), each in a hue of its own.
+    pub fn entries(&mut self, apps: &[&str]) -> Vec<search::Entry> {
+        let tile = |(name, icon): (&str, AppIcon)| {
+            let (label, name) = (app_label(name), name.to_string());
+            search::Entry { name, label, icon, place: None }
+        };
+        let known: Vec<(&str, AppIcon)> =
+            apps.iter().filter_map(|&n| Some((n, self.icon(n)?))).collect();
+        let mut out: Vec<search::Entry> = known.into_iter().map(tile).collect();
+        for (dir, shown) in [("/apps", "/apps"), (Vfs::HOME, "~")] {
+            for e in self.vfs.list(dir).unwrap_or_default() {
+                if e.is_dir || !e.name.ends_with(".app") {
+                    continue;
+                }
+                let fnv = |h: u32, b: u8| (h ^ u32::from(b)).wrapping_mul(16_777_619);
+                let hue = ui::theme::app_tint(e.name.bytes().fold(2_166_136_261, fnv));
+                let (name, place) = ([dir, "/", &e.name].concat(), [shown, "/", &e.name].concat());
+                let icon = AppIcon { glyph: "", hue };
+                out.push(search::Entry { label: app_label(&name), name, icon, place: Some(place) });
+            }
+        }
+        out
     }
 }
 
@@ -437,10 +583,27 @@ pub fn rectf(r: Rect) -> RectF {
 }
 
 /// Where a window of rect `r` shows its app: below the titlebar, inset 1 px
-/// from the border; no height when the window gets no chrome.
+/// from the border at the sides and bottom.
 pub fn content_rect(r: RectF) -> RectF {
-    let h = [0.0, r.h - TITLEBAR_H - 1.0][usize::from(r.h >= CHROME_MIN_H)];
-    RectF::new(r.x + 1.0, r.y + TITLEBAR_H, (r.w - 2.0).max(0.0), h)
+    let (w, h) = ((r.w - 2.0).max(0.0), (r.h - TITLEBAR_H - 1.0).max(0.0));
+    RectF::new(r.x + 1.0, r.y + TITLEBAR_H, w, h)
+}
+
+/// The window size around content of `w` x `h`, unless not finite.
+fn window_size((w, h): (f32, f32)) -> Option<(i32, i32)> {
+    let side =
+        |v: f32| (v.is_finite() && v >= 0.0).then(|| v.round().min(wm::MAX_COORD as f32) as i32);
+    Some((side(w + 2.0)?, side(h + TITLEBAR_H + 1.0)?))
+}
+
+/// What a person calls the app `name`: the last part of a path without its
+/// `.app`, first letter capitalized ([`search::upper`]):
+/// `"/apps/counter.app"` is `"Counter"`.
+pub fn app_label(name: &str) -> String {
+    let base = name.rsplit('/').next().unwrap_or(name);
+    let stem = base.strip_suffix(".app").unwrap_or(base);
+    let mut chars = stem.chars();
+    chars.next().map(search::upper).into_iter().chain(chars).collect()
 }
 
 #[cfg(test)]

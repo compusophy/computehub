@@ -1,6 +1,4 @@
 target/
-# The node is its own workspace; target/ above already matches, this names it.
-node/target/
 dist/
 *.swp
 .DS_Store

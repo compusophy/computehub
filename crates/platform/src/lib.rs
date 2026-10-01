@@ -5,18 +5,29 @@
 //! [`gfx::DrawList`] and the glyph [`gfx::Atlas`] to [`Renderer::draw`],
 //! which uploads the instance bytes (and the atlas rows that changed) and
 //! issues one instanced WebGL2 draw call. Both calls get a [`Ctl`], the
-//! app's handle on the rest of the page: text input, WebSockets, fetch, the
-//! location hash and the clock. The crate compiles for the host so the
-//! workspace can test natively, but only in the browser does [`run`] do
+//! app's handle on the rest of the page: text input, fetch, frames, the
+//! cursor, `localStorage` and the clocks. The crate compiles for the host so
+//! the workspace can test natively, but only in the browser does [`run`] do
 //! anything.
 //!
 //! # Frames are on demand
 //!
 //! Nothing runs while nothing happens: there is no render loop. When
-//! [`App::event`] returns [`Handled::redraw`] (or the canvas is resized) and
-//! no frame is pending, exactly one `requestAnimationFrame` is requested, and
-//! its callback calls [`App::frame`] once. The only timer is the one behind
-//! [`Event::Tick`], which fires once a minute; idle CPU is otherwise zero.
+//! [`App::event`] returns [`Handled::redraw`] or calls
+//! [`Ctl::request_frame`] (or the canvas is resized) and no frame is
+//! pending, exactly one `requestAnimationFrame` is requested, and its
+//! callback calls [`App::frame`] once.
+//!
+//! Animation is the same rule applied from inside a frame: the pending flag
+//! is cleared before [`App::frame`] runs, so a [`Ctl::request_frame`] made
+//! during it requests exactly one more frame (the first frame, drawn
+//! synchronously by [`run`], included). An animation asks on every frame
+//! while it runs, timing itself with [`Ctl::monotonic_ms`]; the frame that
+//! does not ask is the last. Frames follow the display's refresh and pause
+//! while the page is hidden.
+//!
+//! The only timer is the one behind [`Event::Tick`], which fires once a
+//! minute; idle CPU is otherwise zero.
 //!
 //! # Events
 //!
@@ -28,7 +39,7 @@
 //!   cannot be prevented, so Ctrl+W closes the tab even when the app wants
 //!   it (readline's delete-word). Chromium passes them to a page only in an
 //!   installed app's own window, or in fullscreen with the Keyboard Lock
-//!   API. [`Ctl::guard_unload`] makes closing the tab ask first.
+//!   API.
 //! - Text comes only from the hidden `<textarea>` that [`Ctl::set_text_input`]
 //!   focuses, never from keydown: see [`Event::Text`].
 //! - Pointer events on the canvas, in CSS pixels relative to the canvas
@@ -42,9 +53,9 @@
 //! - [`Event::Resize`] carries the canvas CSS size (`getBoundingClientRect`)
 //!   and `devicePixelRatio`; it is sent at start, on window resize, and when
 //!   the pixel ratio changes (zoom, or a move to another screen).
-//! - [`Event::Tick`] is sent at start and at each local minute boundary.
-//! - hashchange on `window` becomes [`Event::HashChange`].
-//! - [`Event::Ws`] and [`Event::Fetched`] report what [`Ctl`] started.
+//! - [`Event::Tick`] is sent at start, at each local minute boundary, and
+//!   when the page is shown again after the local time moved on.
+//! - [`Event::Fetched`] reports what [`Ctl::fetch`] started.
 //!
 //! [`Handled::prevent_default`] calls `preventDefault` on the DOM event that
 //! produced the [`Event`], with one exception: while text input is active,
@@ -80,7 +91,7 @@ mod render;
 #[cfg(test)]
 mod tests;
 
-pub use ctl::{Ctl, Effect};
+pub use ctl::{Ctl, Cursor, Effect, LocalTime};
 pub use render::Renderer;
 
 use std::cell::{Cell, RefCell};
@@ -164,37 +175,14 @@ pub enum Event {
         /// `window.devicePixelRatio` (1 if the browser reports nonsense).
         dpr: f32,
     },
-    /// The local time of day, at start and whenever the minute changes.
+    /// The local date and time, at start and whenever the minute changes.
     Tick {
-        /// Minutes since local midnight, `0..1440`.
-        minutes: u32,
+        /// The local time now, to the minute.
+        time: LocalTime,
     },
-    /// The URL fragment changed (`hashchange`: the user edited it, opened a
-    /// link that differs only after the `#`, or went back or forward): the
-    /// new `location.hash` without its leading `#`, as the URL has it
-    /// (percent-encoded), and `""` when it is gone.
-    /// [`Ctl::clear_location_hash`] causes none. It cannot be cancelled, so
-    /// [`Handled::prevent_default`] does nothing.
-    HashChange(String),
-    /// Something happened on WebSocket `id` ([`Ctl::ws_open`]).
-    Ws { id: u32, ev: WsEvent },
     /// Fetch `id` finished ([`Ctl::fetch`]): the response body, or why
     /// there is none.
     Fetched { id: u32, result: Result<Vec<u8>, String> },
-}
-
-/// What happened on a WebSocket, in [`Event::Ws`].
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum WsEvent {
-    /// The connection is open; queued sends have gone out.
-    Open,
-    /// One message: the bytes of a binary one, the UTF-8 of a text one.
-    Data(Vec<u8>),
-    /// The socket closed; nothing more arrives for it. `code` 1006 means it
-    /// closed abnormally (it never connected, or the connection dropped).
-    Closed { code: u16, reason: String },
-    /// The browser reported an error; `Closed` follows.
-    Error,
 }
 
 /// What an [`App`] did with an [`Event`].
@@ -255,46 +243,27 @@ pub fn run<A: App + 'static>(app: A) -> Result<(), JsValue> {
         }),
         tick_fn: handler(me, |s, _| tick(s, false)),
         tick_timer: Cell::new(None),
-        minutes: Cell::new(None),
-        ws_fn: handler(me, io::on_ws),
-        sockets: RefCell::new(Vec::new()),
+        time: Cell::new(None),
+        cursor: Cell::new(Cursor::Default),
         later: RefCell::new(Vec::new()),
         later_fn: handler(me, io::flush_later),
         dpr_watch: RefCell::new(None),
-        unload_fn: handler(me, |_, e| e.prevent_default()),
-        guarded: Cell::new(false),
         debug,
     });
 
     resize(&s);
     tick(&s, true);
+    // As on every animation frame: a request made while drawing (an opening
+    // animation) schedules the next frame.
+    s.frame_pending.set(false);
     frame(&s);
     mark(&s.window, "first-frame");
-    s.frame_pending.set(false);
     install(&s)?;
     watch_dpr(&s);
     // Every callback holds only a `Weak`: this reference keeps the state
     // alive for the life of the page.
     core::mem::forget(s);
     Ok(())
-}
-
-/// Reads `location.hash` without its `#` and, if it is not empty, removes it
-/// from the address bar at once with `history.replaceState` (as
-/// [`Ctl::clear_location_hash`] does; no `hashchange` fires). Call it first,
-/// before [`run`] or anything else that can fail, so a secret in the
-/// fragment never stays in the address bar, even when the page cannot start
-/// (no WebGL2, say). Outside the browser it returns `""`.
-pub fn take_location_hash() -> String {
-    let wasm = cfg!(target_arch = "wasm32");
-    let Some(window) = wasm.then(web_sys::window).flatten() else {
-        return String::new();
-    };
-    let hash = ctl::hash_of(&window);
-    if !hash.is_empty() {
-        io::clear_hash(&window);
-    }
-    hash
 }
 
 /// Everything the callbacks share. Borrows of `app` and `renderer` never
@@ -309,7 +278,8 @@ struct Shared {
     app: RefCell<Box<dyn App>>,
     /// `None` while the WebGL context is lost.
     renderer: RefCell<Option<Renderer>>,
-    /// Whether a frame is requested (or the first is not drawn yet).
+    /// Whether a frame is requested (or the first is not drawn yet). Cleared
+    /// just before [`App::frame`] runs, so the frame can ask for the next.
     frame_pending: Cell<bool>,
     /// The `pointerId` of the press the app is following, if any.
     pressed: Cell<Option<i32>>,
@@ -319,24 +289,18 @@ struct Shared {
     typing: Cell<bool>,
     /// The `requestAnimationFrame` callback.
     raf: Function,
-    /// The minute timer's callback, its pending handle, and the minute last
+    /// The minute timer's callback, its pending handle, and the time last
     /// sent as [`Event::Tick`].
     tick_fn: Function,
     tick_timer: Cell<Option<i32>>,
-    minutes: Cell<Option<u32>>,
-    /// The one handler of every WebSocket event; it finds the socket by the
-    /// event's target.
-    ws_fn: Function,
-    sockets: RefCell<Vec<io::Sock>>,
+    time: Cell<Option<LocalTime>>,
+    /// The cursor last written to the canvas style.
+    cursor: Cell<Cursor>,
     /// Events waiting for the microtask that runs `later_fn`.
     later: RefCell<Vec<Event>>,
     later_fn: Function,
     /// The live `(resolution: Xdppx)` query, kept so its listener lives.
     dpr_watch: RefCell<Option<MediaQueryList>>,
-    /// The `beforeunload` listener, and whether it is on `window`
-    /// ([`Ctl::guard_unload`]).
-    unload_fn: Function,
-    guarded: Cell<bool>,
     debug: bool,
 }
 
@@ -349,7 +313,7 @@ enum Ptr {
     Leave,
 }
 
-/// A callback of the page: a DOM listener, a timer, a socket handler.
+/// A callback of the page: a DOM listener or a timer.
 type Handler = fn(&Rc<Shared>, &DomEvent);
 
 /// `f` as a JS function that runs while the state lives. Every callback is
@@ -368,13 +332,10 @@ fn install(s: &Rc<Shared>) -> Result<(), JsValue> {
     let me = Rc::downgrade(s);
     let (win, doc): (&EventTarget, &EventTarget) = (&s.window, &s.document);
     let (canvas, sink): (&EventTarget, &EventTarget) = (&s.canvas, &s.sink);
-    let listeners: [(&EventTarget, &str, Handler); 17] = [
+    let listeners: [(&EventTarget, &str, Handler); 16] = [
         (win, "keydown", |s, e| on_key(s, e, true)),
         (win, "keyup", |s, e| on_key(s, e, false)),
         (win, "resize", |s, _| resize(s)),
-        (win, "hashchange", |s, _| {
-            dispatch(s, Event::HashChange(ctl::hash_of(&s.window)));
-        }),
         (canvas, "pointerdown", |s, e| on_pointer(s, e, Ptr::Down)),
         (canvas, "pointermove", |s, e| on_pointer(s, e, Ptr::Move)),
         (canvas, "pointerup", |s, e| on_pointer(s, e, Ptr::Up)),
@@ -505,20 +466,20 @@ fn measure(s: &Shared) -> (f32, f32, f32) {
     (rect.width() as f32, rect.height() as f32, dpr)
 }
 
-/// Sends [`Event::Tick`] if the local minute changed since the last one (or
+/// Sends [`Event::Tick`] if the local time changed since the last one (or
 /// `always`), and sets the one timer for just after the next minute starts.
 fn tick(s: &Rc<Shared>, always: bool) {
     if let Some(t) = s.tick_timer.take() {
         s.window.clear_timeout_with_handle(t);
     }
     let now = js_sys::Date::new_0();
-    let minutes = now.get_hours() * 60 + now.get_minutes();
+    let time = LocalTime::of(&now);
     let delay = ms_to_next_minute(now.get_seconds(), now.get_milliseconds());
     let timer = s.window.set_timeout_with_callback_and_timeout_and_arguments_0(&s.tick_fn, delay);
     s.tick_timer.set(timer.ok());
-    if always || s.minutes.get() != Some(minutes) {
-        s.minutes.set(Some(minutes));
-        dispatch(s, Event::Tick { minutes });
+    if always || s.time.get() != Some(time) {
+        s.time.set(Some(time));
+        dispatch(s, Event::Tick { time });
     }
 }
 
@@ -557,14 +518,17 @@ fn restore(s: &Shared) {
 }
 
 /// Requests one animation frame unless one is pending (or the first frame
-/// has not been drawn yet).
+/// has not been drawn yet). [`Handled::redraw`] and the
+/// [`Effect::RequestFrame`] of [`Ctl::request_frame`] both come here.
 fn request_frame(s: &Shared) {
     if !s.frame_pending.get() && s.window.request_animation_frame(&s.raf).is_ok() {
         s.frame_pending.set(true);
     }
 }
 
-/// Runs [`App::frame`] if there is a renderer, then applies its [`Ctl`].
+/// Runs [`App::frame`] if there is a renderer, then applies its [`Ctl`]: a
+/// [`Ctl::request_frame`] made while drawing requests the next frame, as
+/// `frame_pending` is already clear.
 fn frame(s: &Rc<Shared>) {
     let mut ctl = Ctl::new();
     {

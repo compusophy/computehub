@@ -1,6 +1,6 @@
 [package]
 name = "compusophy-platform"
-description = "The compusophyOS browser boundary: canvas, WebGL2 renderer for gfx draw lists, input and text events, sockets, fetch and on-demand frame scheduling."
+description = "The compusophyOS browser boundary: canvas, WebGL2 renderer for gfx draw lists, input and text events, fetch and on-demand frame scheduling."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -17,16 +17,14 @@ wasm-bindgen.workspace = true
 js-sys.workspace = true
 web-sys = { workspace = true, features = [
     "AddEventListenerOptions",
-    "BinaryType",
-    "CloseEvent",
     "CompositionEvent",
+    "CssStyleDeclaration",
     "console",
     "Document",
     "DomRect",
     "Element",
     "Event",
     "EventTarget",
-    "History",
     "HtmlCanvasElement",
     "HtmlElement",
     "HtmlTextAreaElement",
@@ -34,12 +32,12 @@ web-sys = { workspace = true, features = [
     "KeyboardEvent",
     "Location",
     "MediaQueryList",
-    "MessageEvent",
     "MouseEvent",
     "Node",
     "Performance",
     "PointerEvent",
     "Response",
+    "Storage",
     "WebGl2RenderingContext",
     "WebGlBuffer",
     "WebGlContextAttributes",
@@ -49,7 +47,6 @@ web-sys = { workspace = true, features = [
     "WebGlTexture",
     "WebGlUniformLocation",
     "WebGlVertexArrayObject",
-    "WebSocket",
     "WheelEvent",
     "Window",
 ] }

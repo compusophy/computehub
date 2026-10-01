@@ -3,7 +3,7 @@ use applang::codes;
 use gfx::{DrawList, RectF};
 use ui::WidgetId;
 use ui::{App, AppEvent, Cx, FontId, Hit, Key, Mods, Request, Sense, TextSystem, Ui, UiState};
-use ui::{BUTTON_H, PAD, SPACING, TextStyle};
+use ui::{BUTTON_H, PAD, SPACING, THEMES, Theme};
 
 const SANS: &[u8] = include_bytes!("../../../assets/fonts/Inter-Regular.ttf");
 const BOLD: &[u8] = include_bytes!("../../../assets/fonts/deferred/Inter-SemiBold.ttf");
@@ -22,8 +22,7 @@ fn fs() -> Vfs {
 
 /// Sends `ev` with a fresh context; returns the redraw flag and requests.
 fn send(app: &mut dyn App, fs: &mut Vfs, ev: AppEvent) -> (bool, Vec<Request>) {
-    let mut next_socket = 0;
-    let mut cx = Cx::new(fs, 0.0, None, &mut next_socket);
+    let mut cx = Cx::new(fs, 0.0);
     let redraw = app.event(ev, &mut cx);
     (redraw, cx.take_requests())
 }
@@ -70,16 +69,21 @@ fn text_system() -> TextSystem {
     ts
 }
 
-/// One focused frame of `app`, `w` x 480 at [`ORIGIN`]; returns its hits.
-fn frame_w(app: &mut dyn App, w: f32) -> Vec<Hit> {
+/// One focused frame of `app` in `theme`, `w` x 480 at [`ORIGIN`].
+fn themed(app: &mut dyn App, w: f32, theme: &Theme) -> (DrawList, Vec<Hit>) {
     let mut ts = text_system();
     let (mut list, mut hits) = (DrawList::new(), Vec::new());
     let base = UiState::default();
     let state = UiState { focused: true, ..base };
     let rect = RectF::new(ORIGIN.0, ORIGIN.1, w, 480.0);
-    app.draw(&mut Ui::new(&mut list, &mut ts, rect, &mut hits, state));
+    app.draw(&mut Ui::new(&mut list, &mut ts, rect, &mut hits, state, theme));
     assert!(list.len() > 5);
-    hits
+    (list, hits)
+}
+
+/// One focused frame of `app` in the default theme; returns its hits.
+fn frame_w(app: &mut dyn App, w: f32) -> Vec<Hit> {
+    themed(app, w, &THEMES[0]).1
 }
 
 fn frame(app: &mut dyn App) -> Vec<Hit> {
@@ -317,6 +321,16 @@ fn host_counter_clicks_change_the_label() {
     let hits = frame(&mut h);
     let (minus, plus) = (hit(&hits, 0), hit(&hits, 1));
     assert!(minus.rect.y == plus.rect.y && plus.rect.x > minus.rect.x);
+    // The count between the buttons sits on their middle line, as their
+    // own labels do.
+    let (list, _) = themed(&mut h, 640.0, &THEMES[0]);
+    let (left, right) = (minus.rect.x + minus.rect.w, plus.rect.x);
+    let between =
+        |i: &&gfx::Instance| (left..right).contains(&i.rect[0]) && i.rect[1] > minus.rect.y;
+    let count = list.instances().iter().find(|i| i.kind == 4.0 && between(i));
+    let [_, y, _, gh] = count.expect("the count").rect;
+    let mid = minus.rect.y + minus.rect.h / 2.0;
+    assert!((y + gh / 2.0 - mid).abs() <= 1.0, "{} {mid}", y + gh / 2.0);
     assert!(hit(&hits, 2).rect.y > plus.rect.y);
     assert!(h.fault.as_ref().is_none() && !h.wants_text_input());
 }
@@ -402,17 +416,36 @@ fn open_routes_names_and_shows_load_problems() {
 
 #[test]
 fn paint_colors_chars_by_token() {
-    use ui::theme::{ANSI, TEXT, TEXT_DIM};
+    use crate::studio::Tok;
     let line = r#"if labels == "é\"" { label 12; } // é"#;
-    let mut colors = vec![TEXT; 99];
-    crate::studio::paint(line, &mut colors);
-    assert_eq!(colors.len(), line.len());
-    let names = [(ANSI[5], 'k'), (ANSI[2], 's'), (ANSI[3], 'n'), (TEXT_DIM, 'd')];
+    let mut toks = vec![Tok::Plain; 99];
+    crate::studio::paint(line, &mut toks);
+    assert_eq!(toks.len(), line.len());
+    let names = [(Tok::Keyword, 'k'), (Tok::Str, 's'), (Tok::Number, 'n'), (Tok::Comment, 'd')];
     let name = |c| names.iter().find(|(k, _)| *k == c).map_or('.', |n| n.1);
-    let got: String = line.char_indices().map(|(at, _)| name(colors[at])).collect();
+    let got: String = line.char_indices().map(|(at, _)| name(toks[at])).collect();
     assert_eq!(got, "kk...........sssss...kkkkk.nn....dddd");
     let p = Problem::new(&lang::Diag::new_code(7, "x"), "");
     assert_eq!(p.to_string(), "E0007 x");
+    // In every theme: keywords in the accent, strings in its green, comments
+    // faint, the current line raised, its number dim and the others faint.
+    let mut fs = fs();
+    fs.write("/apps/p.app", b"label \"hi\"; // c\nlabel 2;").unwrap();
+    for theme in &THEMES {
+        let mut s = Studio::new("/apps/p.app");
+        s.load(&fs);
+        let (list, _) = themed(&mut s, 640.0, theme);
+        let ink =
+            |c: Rgba| list.instances().iter().filter(|i| i.kind == 4.0 && i.color == c).count();
+        assert_eq!(ink(theme.accent), "labellabel".len(), "{}", theme.name);
+        assert_eq!((ink(theme.ansi[2]), ink(theme.ansi[3])), (4, 1), "{}", theme.name);
+        // Faint: "// c" and the 2; dim: the 1 and the note, "/apps/p.app".
+        assert_eq!((ink(theme.text_faint), ink(theme.text_dim)), (4, 12), "{}", theme.name);
+        // Raised: the Save and New buttons, and the current line's row.
+        let lit = |i: &&gfx::Instance| i.kind == 0.0 && i.color == theme.surface_hi;
+        let rows: Vec<f32> = list.instances().iter().filter(lit).map(|i| i.rect[3]).collect();
+        assert_eq!(rows, [BUTTON_H, BUTTON_H, 17.0]);
+    }
 }
 
 #[test]
@@ -425,7 +458,7 @@ fn studio_toolbar_note_stays_on_one_line() {
     send(&mut s, &mut fs, RUN);
     let new = hit(&frame(&mut s), 3).rect;
     let room = |w: f32| w - PAD - (new.x + new.w + SPACING - ORIGIN.0);
-    let small = TextStyle::new(FontId::Sans, 12.0, ui::theme::TEXT_DIM);
+    let small = THEMES[0].small();
     let (mut ts, row) = (text_system(), PAD + BUTTON_H + SPACING);
     let under = ts.line_height(small) + SPACING;
     for w in [640.0, 360.0, 300.0, 280.0, 200.0, 120.0] {
@@ -467,5 +500,55 @@ fn host_cuts_renders_too_big_to_draw() {
         fs.write("/apps/many.app", "label 1;".repeat(n).as_bytes()).unwrap();
         let h = host(&fs, "/apps/many.app");
         assert_eq!((h.nodes.len(), h.fault.is_some()), (2048, cut));
+    }
+}
+
+#[test]
+fn every_view_sits_on_device_pixels_in_every_theme() {
+    // Studio (clean, and with a problem under the pointer) and AppHost
+    // (running, faulted, and unable to run), at three pixel ratios: every
+    // fill, border and gradient lands on device pixels, and nothing is
+    // written in a color the theme does not have.
+    let mut fs = fs();
+    fs.write("/apps/bad.app", b"state n = 0;\nlabel nope;").unwrap();
+    let spin = b"state n = 0;\nbutton \"spin\" { repeat 1000000 { n = n + 1; } }";
+    fs.write("/apps/spin.app", spin).unwrap();
+    for dpr in [1.0, 1.5, 2.0] {
+        for theme in &THEMES {
+            let mut views: Vec<(Box<dyn App>, Option<AppEvent>, u32)> = vec![
+                (open_in("studio", &fs).unwrap(), None, 2),
+                (open_in("studio:/apps/bad.app", &fs).unwrap(), Some(RUN), 100),
+                (open_in("/apps/counter.app", &fs).unwrap(), None, 1),
+                (open_in("/apps/spin.app", &fs).unwrap(), Some(AppEvent::Click(WidgetId(0))), 0),
+                (open_in("/apps/bad.app", &fs).unwrap(), None, INPUT - 1),
+            ];
+            for (app, ev, hover) in &mut views {
+                if let Some(ev) = ev.take() {
+                    send(app.as_mut(), &mut fs, ev);
+                }
+                let mut ts = text_system();
+                ts.set_dpr(dpr);
+                let (mut list, mut hits) = (DrawList::new(), Vec::new());
+                let id = Some(WidgetId(*hover));
+                let state = UiState { hover: id, pressed: id, focused: true, now_ms: 0.0 };
+                let rect = RectF::new(0.0, 36.0, 640.0, 420.0);
+                app.draw(&mut Ui::new(&mut list, &mut ts, rect, &mut hits, state, theme));
+                assert!(hits.iter().any(|h| h.id == WidgetId(*hover)), "{}", app.title());
+                let on = |v: f32| ((v * dpr) - (v * dpr).round()).abs() < 1e-3;
+                for i in list.instances().iter().filter(|i| [0.0, 1.0, 5.0].contains(&i.kind)) {
+                    let [x, y, w, h] = i.rect;
+                    let ok = [x, y, x + w, y + h].iter().all(|&v| on(v));
+                    assert!(ok, "{} in {} at {dpr}: {i:?}", app.title(), theme.name);
+                }
+                let white = Rgba(255, 255, 255, 255);
+                let inks = [theme.text, theme.text_dim, theme.text_faint, theme.accent, white];
+                let code = [theme.ansi[2], theme.ansi[3], theme.danger, theme.accent_text];
+                let plain = ui::theme::mix(theme.text, theme.text_dim, 0.2);
+                for i in list.instances().iter().filter(|i| i.kind == 4.0) {
+                    let known = inks.contains(&i.color) || code.contains(&i.color);
+                    assert!(known || i.color == plain, "{}: {:?}", app.title(), i.color);
+                }
+            }
+        }
     }
 }

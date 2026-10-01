@@ -1,72 +1,80 @@
-//! The compusophyOS desktop shell: the panel, window chrome and bindings
-//! around a [`host::Host`], which runs one [`ui::App`] per window. Pure Rust,
-//! no browser.
+//! The compusophyOS desktop: floating windows, a dock, a top bar and a
+//! launcher around a [`host::Host`], which runs one [`ui::App`] per window.
+//! Pure Rust, no browser.
 //!
 //! [`Shell`] owns the host, and through it the [`wm::Wm`] (changed only
 //! through [`wm::Wm::apply`]), the [`ui::TextSystem`], the [`vfs::Vfs`] and
 //! the apps. It turns [`Input`] into wm commands and [`ui::AppEvent`]s,
 //! draws into a [`gfx::DrawList`], and hands back what only the platform can
-//! do as [`Effect`]s.
+//! do in a [`Response`].
 //!
-//! # Screen and windows
+//! # Screen
 //!
 //! Logical pixels, origin top-left; non-finite sizes and positions count as
-//! 0. The panel ([`theme::PANEL_H`] tall, over everything) holds the
-//! launcher and terminal buttons, the workspace indicators and a clock; the
-//! wm gets the rest. A window's content rect lies below its titlebar, inset
-//! 1 px from its border; its app draws there into a [`ui::Ui`] clipped to
-//! it, and the title (ellipsized) sits in the titlebar.
+//! 0. Bottom to top: the wallpaper (the theme's backdrop), the windows, the
+//! dock, the top bar ([`BAR_H`] tall), the launcher, tooltips. Windows live
+//! in the work area: the screen below the bar, less [`DOCK_CLEAR`] at the
+//! bottom, so a maximized window never meets the dock. A window's content
+//! lies below its 40 px titlebar, inset 1 px at the sides and bottom; its
+//! app draws there into a [`ui::Ui`] in the current theme, clipped to it.
 //!
 //! # Apps
 //!
 //! - The [`Registry`] makes apps by name; unknown names open nothing.
-//!   [`Shell::new`] opens `welcome`, `terminal` and `/apps/counter.app`
-//!   tiled, then focuses welcome. There is one `launcher` at a time: opening
-//!   it again focuses it.
-//! - A floating window gets its app's [`ui::App::preferred_size`] as its
-//!   content size, centered.
-//! - Apps get [`AppEvent::Resized`] before drawing at a new size, and once
-//!   more after that frame (or the first at a new pixel ratio), so what the
-//!   frame changed (a terminal's grid) goes out at once (and the frame is
-//!   drawn again if one asks); and [`AppEvent::Focus`] when their window
-//!   gains or loses the focus. Pointer coordinates in app events are
-//!   relative to the content rect. Apps on hidden workspaces ask for no
-//!   frames. The clock apps see is the last [`Input::Tick`]'s or
-//!   [`Shell::set_now`]'s.
-//! - After each app event its [`ui::Request`]s are carried out. A socket
-//!   belongs to the window that opened it (`ws://127.0.0.1:<port>/` only)
-//!   and closes with it; the lazy fonts are fetched once. Apps see the
-//!   latest pairing, and [`Shell::set_pairing`] opens a terminal with it.
+//!   [`Shell::new`] opens `welcome`, 680 x 480, centered.
+//! - Apps hear [`AppEvent::Resized`] before drawing at a new size and once
+//!   more after that frame, [`AppEvent::Focus`] when their window gains or
+//!   loses the focus, and a tick at each [`Input::Tick`]. Pointer
+//!   coordinates in app events are relative to the content rect.
+//! - After each app event its [`ui::Request`]s are carried out: opening
+//!   `launcher` shows the launcher, a theme request switches the theme, the
+//!   lazy fonts are fetched once.
 //!
-//! # Bindings
+//! # Pointer
 //!
-//! Key-down events only. `mod` is Alt or Meta; directions are the arrows or
-//! H/J/K/L.
+//! Button 0 focuses the window it presses. A titlebar drags the window
+//! (from 4 px of travel; a maximized or snapped one comes back to its
+//! normal size under the pointer, at the same fraction of its width); two
+//! presses within 350 ms toggle maximize. Edges (6 px) and corners (14 px)
+//! resize. Dropped with the pointer within 6 px of the left or right screen
+//! edge, a window snaps to that half; of the top edge, it maximizes; within
+//! 24 px of two edges, it snaps to that quarter. Buttons act on release over
+//! the button pressed. In content a press sends [`AppEvent::PointerDown`]
+//! with the topmost hit of the window's last frame, and a release over the
+//! same [`ui::Sense::Click`] hit sends [`AppEvent::Click`]. The wheel goes
+//! to the window under the pointer.
+//!
+//! # Keys
+//!
+//! Key-down events only. `mod` is Alt or Meta, without Ctrl.
 //!
 //! | keys | action |
 //! |---|---|
-//! | mod+Enter, mod+Shift+Enter | open a tiled, a floating terminal |
-//! | mod+Space | open (or focus) the launcher |
+//! | mod+Space | show or hide the launcher |
+//! | mod+Enter | open a terminal |
 //! | mod+Q | close the focused window |
-//! | mod+F, mod+O | toggle floating, flip the split's orientation |
-//! | mod+direction | focus that way |
-//! | mod+Shift+direction | swap the focused tile that way |
-//! | mod+Ctrl+direction | move that edge of the focused tile by 40 px |
-//! | mod+1..4, mod+Shift+1..4 | switch to, move the focused window to, a workspace |
+//! | mod+Up | maximize or restore the focused window |
+//! | mod+Down | restore a maximized window, else minimize it |
+//! | mod+Left, mod+Right | snap the focused window to that half |
+//! | mod+Backquote, mod+Shift+Backquote | focus the next, the previous window |
 //!
-//! Other keys go to the focused app as [`AppEvent::Key`], consumed, except
-//! that the paste keys (Ctrl+V, Ctrl+Shift+V, Meta+V, Shift+Insert, which
-//! the platform leaves to the browser) are neither sent nor consumed (the
-//! text comes as [`Input::Text`]), and F5, F12, Ctrl+R, Ctrl+Shift+R and
-//! Ctrl+Shift+I are consumed only if the app wants text input.
+//! While the launcher shows, other keys are its own. Otherwise they go to
+//! the focused app as [`AppEvent::Key`], consumed, except that the paste
+//! keys (Ctrl+V, Ctrl+Shift+V, Meta+V, Shift+Insert, which the platform
+//! leaves to the browser) are neither sent nor consumed (the text comes as
+//! [`Input::Text`]), and F5, F12, Ctrl+R, Ctrl+Shift+R and Ctrl+Shift+I are
+//! consumed only if the app wants text input.
 //!
-//! Pointer button 0 focuses the window it presses, drags a floating window
-//! by its titlebar (kept below the panel), and clicks buttons on release
-//! over the button pressed. In content it sends [`AppEvent::PointerDown`]
-//! with the topmost hit of the window's last frame, and a release over the
-//! same [`ui::Sense::Click`] hit sends [`AppEvent::Click`]. Any release ends
-//! a drag or press: browsers report only a chord's last release. The wheel
-//! goes to the window under the pointer.
+//! # Motion
+//!
+//! Every change eases out (CSS `cubic-bezier(0.2, 0.8, 0.2, 1)`): windows
+//! open (fade and grow from 96%, 180 ms), close (140 ms), minimize into
+//! their dock tile and come back (220 ms), and move between rects when they
+//! maximize, restore or snap (200 ms); dock tiles lift under the pointer
+//! (120 ms), the launcher fades in (160 ms) and themes crossfade (200 ms).
+//! Drags and resizes follow the pointer. Times come from
+//! [`Shell::set_now`]. While anything moves, [`Shell::draw`] asks for the
+//! next frame; otherwise no frame is asked for.
 //!
 //! ```
 //! use shell::{Input, Key, Mods, Shell};
@@ -82,106 +90,63 @@
 //! let text = ui::TextSystem::new(std::fs::read(font).unwrap()).unwrap();
 //! let registry: shell::Registry =
 //!     Box::new(|name| (name == "terminal").then(|| Box::new(Hello) as Box<dyn App>));
-//! let mut desk = Shell::new(1280.0, 800.0, text, vfs::Vfs::new(), registry, None);
-//! assert_eq!(desk.wm().layout().len(), 1); // only "terminal" is known
+//! let mut desk = Shell::new(1280.0, 800.0, text, vfs::Vfs::new(), registry, "Dawn");
+//! assert!(desk.wm().layout().is_empty()); // only "terminal" is known
 //! let r = desk.input(Input::Key { key: Key::Enter, mods: Mods { alt: true, ..Mods::default() } });
-//! assert!(r.consumed && r.redraw && desk.wm().layout().len() == 2);
-//! desk.draw(&mut gfx::DrawList::new());
+//! assert!(r.consumed && r.redraw && r.animating && desk.wm().layout().len() == 1);
+//! let mut list = gfx::DrawList::new();
+//! assert!(desk.draw(&mut list)); // the window fades in: more frames to come
+//! assert_eq!(desk.theme_name(), "Dawn");
 //! ```
 
 #![forbid(unsafe_code)]
 
-mod bindings;
+mod bar;
 mod chrome;
+mod desktop;
+mod dock;
+mod keys;
+mod launcher;
+mod motion;
 
-pub use host::{Effect, Registry, Response};
-pub use ui::theme;
-pub use ui::{Key, Mods, WsEvent};
+pub use host::{Cursor, Effect, Input, LocalTime, Registry, Response};
+pub use ui::{Key, Mods};
 
-use gfx::{DrawList, RectF, Rgba};
-use host::{CHROME_MIN_H, Host, content_rect, rectf};
-use theme::*;
-use ui::{AppEvent, Pairing, SocketId, TextStyle, TextSystem, WidgetId};
+use desktop::{Grab, Target};
+use gfx::{DrawList, Rgba};
+use host::motion::Themes;
+use host::{Ask, Host};
+use ui::{AppEvent, TextSystem, Theme, WidgetId};
 use vfs::Vfs;
-use wm::{Cmd, Gaps, Rect, WinId, Wm};
+use wm::{Rect, WinId, Wm};
 
-// Panel buttons and workspace slots: their side, and the space before the
-// first and between each. Titlebar buttons: their side, the close button's
-// distance from the right edge, and the space between them.
-const PANEL_BTN: f32 = 28.0;
-const PANEL_SPACING: f32 = 4.0;
-const TITLE_BTN: f32 = 22.0;
-const TITLE_MARGIN: f32 = 6.0;
-const TITLE_SPACING: f32 = 4.0;
-/// Windows narrower than this get no titlebar buttons.
-const CHROME_MIN_W: f32 = 2.0 * (TITLE_BTN + TITLE_MARGIN) + TITLE_SPACING;
-/// Pixels one resize binding moves an edge.
-const RESIZE_PX: i32 = 40;
-/// The apps [`Shell::new`] opens, tiled, in order; the first gets the focus.
-const STARTUP: [&str; 3] = ["welcome", "terminal", "/apps/counter.app"];
-
-/// One platform event. Positions and sizes are logical pixels; pointer
-/// button 0 is the primary button.
-#[derive(Clone, Debug, PartialEq)]
-pub enum Input {
-    /// A key went down (repeats too), by its physical position.
-    Key { key: Key, mods: Mods },
-    /// Text typed, pasted or composed by an IME.
-    Text(String),
-    /// The pointer moved.
-    PointerMove { x: f32, y: f32 },
-    /// A pointer button went down.
-    PointerDown { x: f32, y: f32, button: u8 },
-    /// A pointer button went up.
-    PointerUp { x: f32, y: f32, button: u8 },
-    /// The pointer left the canvas.
-    PointerLeave,
-    /// The wheel turned at `(x, y)`; positive `dy` scrolls down.
-    Wheel { x: f32, y: f32, dy: f32 },
-    /// The canvas has a new size.
-    Resize { w: f32, h: f32 },
-    /// Time passed: `minutes` since local midnight (for the clock) and the
-    /// page clock in milliseconds (for apps).
-    Tick { minutes: u32, now_ms: f64 },
-    /// Something happened on the socket an [`Effect::WsOpen`] named `id`.
-    Ws { id: u32, ev: WsEvent },
-}
-
-/// What lies under a point: the bare panel, a panel button, a titlebar
-/// button, a titlebar, or a window body.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Target {
-    Panel,
-    Launcher,
-    Terminal,
-    Workspace(usize),
-    Close(WinId),
-    Float(WinId),
-    Title(WinId),
-    Body(WinId),
-}
-
-impl Target {
-    fn is_button(self) -> bool {
-        !matches!(self, Target::Panel | Target::Title(_) | Target::Body(_))
-    }
-
-    /// The window this target belongs to.
-    fn win(self) -> Option<WinId> {
-        match self {
-            Target::Close(w) | Target::Float(w) | Target::Title(w) | Target::Body(w) => Some(w),
-            _ => None,
-        }
-    }
-}
+/// Height of the top bar.
+pub const BAR_H: f32 = 32.0;
+/// What the work area leaves free at the bottom of the screen: the dock
+/// and its margins.
+pub const DOCK_CLEAR: f32 = 84.0;
+/// The app [`Shell::new`] opens, and its window size.
+const STARTUP: (&str, (i32, i32)) = ("welcome", (680, 480));
+/// How long a theme crossfade takes.
+const THEME_MS: f32 = 200.0;
 
 /// A widget of an app: its window and id.
 type Widget = (WinId, WidgetId);
-/// Everything whose change means a new frame.
-type Visuals = (u64, [Option<Target>; 2], [Option<Widget>; 2]);
 
-/// The desktop: a window manager, the apps in its windows, and the panel,
-/// chrome and bindings around them.
+/// Everything whose change means a new frame, but the clock.
+#[derive(PartialEq)]
+struct Visuals {
+    wm: u64,
+    buttons: [Option<Target>; 2],
+    widgets: [Option<Widget>; 2],
+    wins: usize,
+    theme: &'static str,
+    launcher: (bool, usize, usize, usize),
+    zone: Option<host::frame::Zone>,
+}
+
+/// The desktop: a window manager, the apps in its windows, and the dock,
+/// bar, launcher, chrome, motion and bindings around them.
 pub struct Shell {
     /// The wm, the text system, the filesystem and the apps.
     host: Host,
@@ -191,23 +156,36 @@ pub struct Shell {
     size: (f32, f32),
     /// Where the pointer is; `None` once it leaves.
     pointer: Option<(f32, f32)>,
-    /// The button under the pointer, and the one pressed but not released.
+    /// What is under the pointer, and the button pressed but not released.
     hover: Option<Target>,
     armed: Option<Target>,
     /// The app widget under the pointer, and the one pressed and held.
     app_hover: Option<Widget>,
     app_press: Option<Widget>,
-    /// The floating window dragged, and the grab's offset from its corner.
-    drag: Option<(WinId, f32, f32)>,
-    /// The focus and its want of text input, as last reported.
+    /// A window being moved or resized.
+    grab: Option<Grab>,
+    /// The last press on a titlebar, for double clicks: window and time.
+    last_title: Option<(WinId, f64)>,
+    /// The focus and the want of text input, as last reported.
     ime: Option<(Option<WinId>, bool)>,
-    /// Minutes since midnight, from the last tick.
-    clock: Option<u32>,
+    /// The cursor, as last reported.
+    cursor: Cursor,
+    /// The time, from the last tick.
+    clock: Option<LocalTime>,
+    theme: Themes,
+    dock: Vec<dock::Item>,
+    launcher: launcher::Launcher,
+    motion: motion::Motion,
+    /// Whether this input's wm changes follow the pointer, not animate.
+    instant: bool,
+    /// A layer drawn, then replayed scaled and faded.
+    scratch: DrawList,
 }
 
 impl Shell {
-    /// A desktop of `w` x `h` logical pixels with the startup apps open; see
-    /// the crate docs. Effects the apps cause here wait for
+    /// A desktop of `w` x `h` logical pixels in the theme named `theme`
+    /// (the first of [`ui::THEMES`] if none is), with the startup app open; see
+    /// the crate docs. Effects the app causes here wait for
     /// [`Shell::take_effects`].
     pub fn new(
         w: f32,
@@ -215,14 +193,11 @@ impl Shell {
         text: TextSystem,
         vfs: Vfs,
         registry: Registry,
-        pairing: Option<Pairing>,
+        theme: &str,
     ) -> Shell {
         let size = (coord(w).max(0.0), coord(h).max(0.0));
-        let mut gaps = Gaps::default();
-        [gaps.outer, gaps.inner] = [GAP; 2];
-        let wm = Wm::new(wm_area(size), gaps, WORKSPACES);
         let mut shell = Shell {
-            host: Host::new(wm, text, vfs, registry, pairing),
+            host: Host::new(Wm::new(work_area(size)), text, vfs, registry),
             pending: Vec::new(),
             size,
             pointer: None,
@@ -230,18 +205,20 @@ impl Shell {
             armed: None,
             app_hover: None,
             app_press: None,
-            drag: None,
+            grab: None,
+            last_title: None,
             ime: None,
+            cursor: Cursor::Default,
             clock: None,
+            theme: Themes::new(theme),
+            dock: Vec::new(),
+            launcher: launcher::Launcher::default(),
+            motion: motion::Motion::default(),
+            instant: false,
+            scratch: DrawList::new(),
         };
         let mut out = Response::default();
-        for name in STARTUP {
-            shell.host.open(name, false, &mut out);
-        }
-        let first = shell.host.wins().iter().find(|w| w.name == STARTUP[0]);
-        if let Some(win) = first.map(|w| w.id) {
-            shell.host.apply(Cmd::Focus(win));
-        }
+        shell.host.open(STARTUP.0, Some(STARTUP.1), &mut out);
         shell.settle(&mut out);
         shell.pending = out.effects;
         shell
@@ -262,16 +239,26 @@ impl Shell {
         self.host.text_mut()
     }
 
-    /// Sets the device pixel ratio text is rasterized for.
+    /// Sets the device pixel ratio text and hairlines are drawn for.
     pub fn set_dpr(&mut self, dpr: f32) {
         self.host.set_dpr(dpr);
     }
 
-    /// Sets the page clock apps see (unless not finite), with no event or
-    /// frame. Call it before each input and frame: ticks come once a minute,
-    /// and timeouts (a terminal's synchronized-output hold) need time.
+    /// Sets the page clock (monotonic milliseconds; ignored unless finite)
+    /// that animations and apps run on, with no event or frame. Call it
+    /// before each input and frame.
     pub fn set_now(&mut self, now_ms: f64) {
         self.host.set_now(now_ms);
+    }
+
+    /// The name of the current theme, for the platform to keep.
+    pub fn theme_name(&self) -> &'static str {
+        self.theme.current().name
+    }
+
+    /// The frame's clear color: the theme's base.
+    pub fn clear_color(&self) -> Rgba {
+        self.theme.current().base
     }
 
     /// The effects that arose outside a [`Response`] (while drawing, or in
@@ -280,16 +267,6 @@ impl Shell {
     /// no effect is handed out twice.
     pub fn take_effects(&mut self) -> Vec<Effect> {
         std::mem::take(&mut self.pending)
-    }
-
-    /// Pairs the desktop with a node: stores `p` for every app's [`ui::Cx`],
-    /// then opens a tiled terminal, focused, which connects with it.
-    pub fn set_pairing(&mut self, p: Pairing) -> Response {
-        let (mut out, before) = (Response::default(), self.visuals());
-        self.host.set_pairing(p);
-        self.host.open("terminal", false, &mut out);
-        self.finish(before, &mut out);
-        out
     }
 
     /// Hands over the bytes (or the error) of an [`Effect::Fetch`]. Fonts
@@ -302,15 +279,11 @@ impl Shell {
         out
     }
 
-    /// The frame's clear color, [`theme::BG`].
-    pub fn clear_color(&self) -> Rgba {
-        BG
-    }
-
     /// Handles one event; see the crate docs for the bindings and rules.
     pub fn input(&mut self, input: Input) -> Response {
         let mut out = Response::default();
         let before = self.visuals();
+        self.instant = false;
         self.pointer = match input {
             Input::PointerMove { x, y }
             | Input::PointerDown { x, y, .. }
@@ -323,6 +296,10 @@ impl Shell {
         };
         match input {
             Input::Key { key, mods } => self.key(key, mods, &mut out),
+            Input::Text(s) if self.launcher.open => {
+                self.launcher.search.type_text(&s);
+                out.consumed = true;
+            }
             Input::Text(s) => {
                 if let Some(win) = self.host.focused_app().filter(|_| !s.is_empty()) {
                     self.host.deliver(win, AppEvent::Text(s), &mut out);
@@ -336,33 +313,36 @@ impl Shell {
             Input::Wheel { x, y, dy } => self.wheel(coord(x), coord(y), dy, &mut out),
             Input::Resize { w, h } => {
                 self.size = (coord(w).max(0.0), coord(h).max(0.0));
-                self.host.apply(Cmd::SetArea(wm_area(self.size)));
-                out.redraw = true;
+                self.host.apply(wm::Cmd::SetArea(work_area(self.size)));
+                (self.instant, out.redraw) = (true, true);
             }
-            Input::Tick { minutes, now_ms } => self.tick(minutes, now_ms, &mut out),
-            Input::Ws { id, ev } => self.host.ws(SocketId(id), ev, &mut out),
+            Input::Tick { time } => {
+                out.redraw |= self.clock.replace(time) != Some(time);
+                self.host.tick(&mut out);
+            }
         }
         self.finish(before, &mut out);
         out
     }
 
-    /// Clears `list`, then draws every window of the active workspace
-    /// bottom to top, each with its app's content, and the panel over them.
-    /// The desktop background is [`Shell::clear_color`], not an instance.
-    /// If the glyph atlas was reset midway, the frame is drawn once more; so
-    /// it is, once, if an app retold its size after drawing asks to redraw
-    /// (a frame cannot ask for the next). Effects the apps cause wait for
+    /// Clears `list`, then draws the desktop: the wallpaper, the windows
+    /// bottom to top with their apps' content, the dock, the top bar, the
+    /// launcher and tooltips. If the glyph atlas was reset midway, the frame
+    /// is drawn once more; so it is, once, if an app retold its size after
+    /// drawing asks to redraw. Returns whether an animation runs, so the
+    /// next frame is wanted. Effects the apps cause wait for
     /// [`Shell::take_effects`].
-    pub fn draw(&mut self, list: &mut DrawList) {
+    pub fn draw(&mut self, list: &mut DrawList) -> bool {
         let mut out = Response::default();
+        self.instant = false;
+        self.settle(&mut out);
+        let now = self.now();
+        self.arm(now);
+        let theme = self.theme.at(now);
         for _ in 0..2 {
-            self.settle(&mut out);
             for _ in 0..2 {
                 list.clear();
-                for p in self.host.wm().layout() {
-                    self.draw_window(list, &p);
-                }
-                self.draw_panel(list);
+                self.paint(list, &theme, now);
                 if !self.host.text_mut().take_atlas_reset() {
                     break;
                 }
@@ -372,100 +352,91 @@ impl Shell {
             if !out.redraw {
                 break;
             }
+            self.settle(&mut out);
         }
-        self.prune();
+        self.sync();
         self.pending.append(&mut out.effects);
+        self.animating()
     }
 
-    /// Brings the apps up to date with the wm ([`Host::settle`]).
+    /// Every layer, bottom to top.
+    fn paint(&mut self, list: &mut DrawList, theme: &Theme, now: f64) {
+        let screen = gfx::RectF::new(0.0, 0.0, self.size.0, self.size.1);
+        theme.draw_backdrop(list, screen);
+        self.draw_windows(list, theme, now);
+        self.draw_dock(list, theme, now);
+        self.draw_bar(list, theme);
+        self.draw_launcher(list, theme, now);
+        self.draw_tooltip(list, theme, now);
+    }
+
+    /// The page clock.
+    fn now(&self) -> f64 {
+        self.host.now_ms()
+    }
+
+    /// Brings the apps up to date with the wm, then the shell with the apps:
+    /// their asks, the dock and the motion.
     fn settle(&mut self, out: &mut Response) {
         self.host.settle(out);
-        self.prune();
-    }
-
-    /// Forgets the hovered and pressed widgets of apps that are gone.
-    fn prune(&mut self) {
-        let live = |w: Option<Widget>| w.filter(|w| self.host.win(w.0).is_some());
-        (self.app_hover, self.app_press) = (live(self.app_hover), live(self.app_press));
+        for ask in self.host.take_asks() {
+            match ask {
+                Ask::Launcher if !self.launcher.open => self.show_launcher(),
+                Ask::Launcher => {}
+                Ask::Theme(name) => _ = self.theme.set(&name, self.host.now_ms(), THEME_MS),
+            }
+        }
+        let live =
+            |w: Option<Widget>, h: &Host| w.filter(|w| h.win(w.0).is_some_and(|a| !a.closing()));
+        self.app_hover = live(self.app_hover, &self.host);
+        self.app_press = live(self.app_press, &self.host);
+        self.refresh_dock();
+        self.sync();
     }
 
     fn visuals(&self) -> Visuals {
-        let (s, hash) = (self, self.host.wm().state_hash());
-        (hash, [s.hover, s.armed], [s.app_hover, s.app_press])
+        let button = |t: Option<Target>| t.filter(|t| t.is_button());
+        let l = &self.launcher.search;
+        Visuals {
+            wm: self.host.wm().state_hash(),
+            buttons: [button(self.hover), self.armed],
+            widgets: [self.app_hover, self.app_press],
+            wins: self.host.wins().len(),
+            theme: self.theme.current().name,
+            launcher: (self.launcher.open, l.query.len(), l.sel, l.first),
+            zone: self.grab.and_then(Grab::zone),
+        }
     }
 
-    /// Ends every event: settles apps, recomputes hover, and fills in
-    /// `redraw`, `text_input` and the pending effects.
+    /// Ends every event: settles apps, recomputes what is under the
+    /// pointer, and fills in `redraw`, `text_input`, `cursor`, `animating`
+    /// and the pending effects.
     fn finish(&mut self, before: Visuals, out: &mut Response) {
         self.settle(out);
-        let under = match (self.drag, self.pointer) {
-            (None, Some((x, y))) => self.hit(x, y).map(|t| (t, x, y)),
-            _ => None,
-        };
-        self.hover = under.map(|u| u.0).filter(|t| t.is_button());
-        self.app_hover = under.and_then(|(t, x, y)| match t {
-            Target::Body(win) => Some((win, self.widget_at(win, x, y)?.id)),
+        let under = self.pointer.and_then(|(x, y)| Some((self.hit(x, y)?, x, y)));
+        self.hover = under.map(|u| u.0).filter(|_| self.grab.is_none());
+        let widget = under.and_then(|(t, x, y)| match t {
+            Target::Body(win) if self.grab.is_none() => Some((win, self.widget_at(win, x, y)?)),
             _ => None,
         });
-        out.redraw |= self.visuals() != before;
+        self.app_hover = widget.map(|(win, hit)| (win, hit.id));
+        let text = widget.is_some_and(|w| w.1.sense == ui::Sense::Text);
+        self.sync();
+        let cursor = self.cursor_for(text);
+        if cursor != std::mem::replace(&mut self.cursor, cursor) {
+            out.cursor = Some(cursor);
+        }
+        out.animating = self.animating();
+        out.redraw |= out.animating || self.visuals() != before;
         let mut effects = std::mem::take(&mut self.pending);
         effects.append(&mut out.effects);
         out.effects = effects;
         let focus = self.host.focused_app();
         let app = focus.and_then(|w| self.host.win(w));
-        let wants = app.is_some_and(|w| w.app.wants_text_input());
+        let wants = self.launcher.open || app.is_some_and(|w| w.app.wants_text_input());
         if self.ime != Some((focus, wants)) {
             self.ime = Some((focus, wants));
             out.text_input = Some(wants);
-        }
-    }
-
-    /// The minute changed: redraw the clock. Every app gets the tick.
-    fn tick(&mut self, minutes: u32, now_ms: f64, out: &mut Response) {
-        let minutes = minutes % (24 * 60);
-        out.redraw |= self.clock.replace(minutes) != Some(minutes);
-        self.host.tick(now_ms, out);
-    }
-
-    /// What is under `(x, y)`: the panel first, then windows top to bottom.
-    fn hit(&self, x: f32, y: f32) -> Option<Target> {
-        if (0.0..PANEL_H).contains(&y) {
-            let targets = self.panel_targets();
-            let on = targets.iter().find(|t| t.0.contains(x, y));
-            return Some(on.map_or(Target::Panel, |t| t.1));
-        }
-        let layout = self.host.wm().layout();
-        let p = layout.iter().rev().find(|p| rectf(p.rect).contains(x, y))?;
-        let r = rectf(p.rect);
-        let mut buttons = title_buttons(r, p.win).into_iter().flatten();
-        Some(match buttons.find(|b| b.0.contains(x, y)) {
-            Some((_, hit)) => hit,
-            None if y < r.y + TITLEBAR_H => Target::Title(p.win),
-            None => Target::Body(p.win),
-        })
-    }
-
-    /// The topmost hit of `win`'s last frame at `(x, y)`, if that is inside
-    /// its content.
-    fn widget_at(&self, win: WinId, x: f32, y: f32) -> Option<ui::Hit> {
-        let inside = self.content_of(win)?.contains(x, y);
-        let w = self.host.win(win).filter(|_| inside)?;
-        ui::hit_test(&w.hits, x, y)
-    }
-
-    /// The content rect of `win` if it is on the active workspace.
-    fn content_of(&self, win: WinId) -> Option<RectF> {
-        let layout = self.host.wm().layout();
-        let p = layout.iter().find(|p| p.win == win)?;
-        Some(content_rect(rectf(p.rect)))
-    }
-
-    /// The hover wash behind a button, doubled while it is pressed.
-    fn highlight(&self, list: &mut DrawList, r: RectF, hit: Target, radius: f32) {
-        if self.hover == Some(hit) {
-            let pressed = u8::from(self.armed == Some(hit));
-            let a = HOVER.3.saturating_mul(1 + pressed);
-            list.fill(r, radius, HOVER.with_alpha(a));
         }
     }
 }
@@ -478,28 +449,10 @@ fn coord(v: f32) -> f32 {
     v.max(-max).min(max)
 }
 
-/// The wm's area for a screen of `(w, h)`: everything below the panel.
-fn wm_area((w, h): (f32, f32)) -> Rect {
-    let h = (h - PANEL_H).max(0.0);
-    Rect::new(0, PANEL_H as i32, w.round() as i32, h.round() as i32)
-}
-
-/// A window's float and close buttons, or `None` if it is too small.
-fn title_buttons(r: RectF, win: WinId) -> Option<[(RectF, Target); 2]> {
-    if r.w < CHROME_MIN_W || r.h < CHROME_MIN_H {
-        return None;
-    }
-    let y = r.y + (TITLEBAR_H - TITLE_BTN) / 2.0;
-    let x = r.x + r.w - TITLE_MARGIN - TITLE_BTN;
-    let close = RectF::new(x, y, TITLE_BTN, TITLE_BTN);
-    let float = RectF::new(x - TITLE_SPACING - TITLE_BTN, y, TITLE_BTN, TITLE_BTN);
-    Some([(float, Target::Float(win)), (close, Target::Close(win))])
-}
-
-/// The baseline that centers a line of `style` in `h` px from `top`.
-fn baseline(text: &TextSystem, top: f32, h: f32, style: TextStyle) -> f32 {
-    let (a, d) = (text.ascent(style), text.descent(style));
-    text.snap(top + (h - a - d) / 2.0 + a)
+/// The wm's area for a screen of `(w, h)`: below the bar, above the dock.
+fn work_area((w, h): (f32, f32)) -> Rect {
+    let h = (h - BAR_H - DOCK_CLEAR).max(0.0);
+    Rect::new(0, BAR_H as i32, w.round() as i32, h.round() as i32)
 }
 
 #[cfg(test)]

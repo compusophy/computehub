@@ -1,6 +1,6 @@
 [package]
 name = "compusophy-wm"
-description = "Deterministic tiling window manager: integer layout, workspaces and focus. Replaying the same commands reproduces the same state and the same canonical state hash."
+description = "Deterministic floating window manager: integer geometry, stacking, snapping and focus. Replaying the same commands reproduces the same state and the same canonical state hash."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

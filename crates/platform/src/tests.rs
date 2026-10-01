@@ -1,4 +1,4 @@
-use super::ctl::{is_relative_url, strip_hash};
+use super::ctl::is_relative_url;
 use super::io::{http_error, inserts_text};
 use super::render::{ATTRIBS, MIN_CAPACITY, backing_size, band_bytes, clear_rgb, grow_capacity};
 use super::*;
@@ -26,17 +26,20 @@ fn buffer_grows_by_powers_of_two() {
 #[test]
 fn attributes_match_the_gfx_layout() {
     let got: Vec<(u32, i32)> = ATTRIBS.iter().map(|a| (a.0, a.3)).collect();
-    assert_eq!(got, [(0, 0), (1, 16), (2, 32), (3, 36), (4, 52)]);
-    // vec4 f32, vec4 f32, four normalized bytes, vec4 f32, vec4 f32: each
-    // attribute ends where the next starts, and the last fills the instance.
-    let sizes = [16, 16, 4, 16, 16];
+    assert_eq!(got, [(0, 0), (1, 16), (2, 32), (3, 36), (4, 52), (5, 68)]);
+    // vec4 f32, vec4 f32, four normalized bytes, vec4 f32, vec4 f32, four
+    // normalized bytes: each attribute ends where the next starts, and the
+    // last fills the instance.
+    let sizes = [16, 16, 4, 16, 16, 4];
     for (a, next) in ATTRIBS.iter().zip(ATTRIBS.iter().skip(1)) {
         assert_eq!(a.3 + sizes[a.0 as usize], next.3);
     }
-    assert_eq!(ATTRIBS[4].3 as usize + 16, INSTANCE_BYTES);
+    assert_eq!(ATTRIBS[5].3 as usize + 4, INSTANCE_BYTES);
     let normalized: Vec<bool> = ATTRIBS.iter().map(|a| a.2).collect();
-    assert_eq!(normalized, [false, false, true, false, false]);
-    let names = ["a_rect", "a_params", "a_color", "a_clip", "a_uv"];
+    assert_eq!(normalized, [false, false, true, false, false, true]);
+    let bytes = ATTRIBS.iter().filter(|a| a.1 == web_sys::WebGl2RenderingContext::UNSIGNED_BYTE);
+    assert_eq!(bytes.map(|a| a.0).collect::<Vec<_>>(), [2, 5]);
+    let names = ["a_rect", "a_params", "a_color", "a_clip", "a_uv", "a_color2"];
     for (loc, name) in names.iter().enumerate() {
         let decl = format!("layout(location = {loc}) in vec4 {name};");
         assert!(gfx::VERTEX_SHADER.contains(&decl), "missing {decl}");
@@ -92,33 +95,89 @@ fn a_second_pointer_cannot_steal_or_end_a_press() {
 fn ctl_queues_requests_in_order() {
     let mut ctl = Ctl::new();
     assert!(ctl.effects().is_empty());
-    let (id, url, bytes) = (7, "ws://127.0.0.1:7777/pty".to_owned(), b"ls\r".to_vec());
-    let font = "fonts/lazy/symbols-a.ttf".to_owned();
+    let (a, b) = ("fonts/symbols-a.ttf".to_owned(), "fonts/symbols-b.ttf".to_owned());
     ctl.set_text_input(true);
-    ctl.ws_open(id, &url);
-    ctl.ws_send(id, &bytes);
-    ctl.fetch(2, &font);
-    ctl.clear_location_hash();
-    ctl.ws_close(id);
+    ctl.fetch(2, &a);
+    ctl.fetch(1, &b);
     ctl.set_text_input(false);
-    ctl.guard_unload(true);
-    ctl.guard_unload(false);
     let want = [
         Effect::TextInput(true),
-        Effect::WsOpen { id, url },
-        Effect::WsSend { id, bytes },
-        Effect::Fetch { id: 2, url: font },
-        Effect::ClearHash,
-        Effect::WsClose { id },
+        Effect::Fetch { id: 2, url: a },
+        Effect::Fetch { id: 1, url: b },
         Effect::TextInput(false),
-        Effect::GuardUnload(true),
-        Effect::GuardUnload(false),
     ];
     assert_eq!((ctl.effects(), ctl.clone().into_effects()), (&want[..], want.to_vec()));
-    // Reads are live in the browser and neutral natively, as is taking the
-    // hash before the page starts.
-    assert_eq!((ctl.location_hash(), ctl.now_ms(), ctl.local_minutes()), (String::new(), 0.0, 0));
-    assert_eq!(take_location_hash(), "");
+    // Reads are live in the browser and neutral natively.
+    assert_eq!((ctl.now_ms(), ctl.monotonic_ms(), ctl.local_minutes()), (0.0, 0.0, 0));
+    assert_eq!(ctl.local_time(), LocalTime::EPOCH);
+}
+
+#[test]
+fn frames_cursors_and_storage_queue_in_order() {
+    let mut ctl = Ctl::new();
+    ctl.request_frame();
+    ctl.set_cursor(Cursor::Pointer);
+    ctl.storage_set("theme", "dusk");
+    ctl.request_frame(); // asked once already: one frame
+    ctl.set_cursor(Cursor::NwseResize); // the last cursor wins
+    ctl.storage_set("theme", "dawn");
+    ctl.storage_set("dock", "left");
+    let store = |k: &str, v: &str| Effect::Store { key: k.to_owned(), value: v.to_owned() };
+    let want = [
+        Effect::RequestFrame,
+        store("theme", "dusk"),
+        Effect::Cursor(Cursor::NwseResize),
+        store("theme", "dawn"),
+        store("dock", "left"),
+    ];
+    assert_eq!(ctl.effects(), want);
+    // A queued write reads back, the newest first; natively nothing else is
+    // stored.
+    assert_eq!(ctl.storage_get("theme").as_deref(), Some("dawn"));
+    assert_eq!(ctl.storage_get("dock").as_deref(), Some("left"));
+    assert_eq!(ctl.storage_get("Theme"), None);
+    assert_eq!(Ctl::new().storage_get("theme"), None);
+}
+
+#[test]
+fn cursors_are_css_keywords() {
+    use Cursor::*;
+    let all =
+        [Default, Pointer, Text, Move, Grab, Grabbing, EwResize, NsResize, NwseResize, NeswResize];
+    let css = all.map(Cursor::css);
+    let want = [
+        "default",
+        "pointer",
+        "text",
+        "move",
+        "grab",
+        "grabbing",
+        "ew-resize",
+        "ns-resize",
+        "nwse-resize",
+        "nesw-resize",
+    ];
+    assert_eq!(css, want);
+    assert_eq!(Cursor::default(), Default);
+}
+
+#[test]
+fn local_time_comes_from_date_getters() {
+    // 2026-09-30 14:07, a Wednesday: Date's month counts from 0.
+    let t = LocalTime::from_js(2026, 8, 30, 3, 14, 7);
+    let want = LocalTime { year: 2026, month: 9, day: 30, weekday: 3, hour: 14, minute: 7 };
+    assert_eq!(t, want);
+    assert_eq!(t.minute_of_day(), 14 * 60 + 7);
+    assert_eq!(LocalTime::from_js(1999, 11, 31, 5, 23, 59).minute_of_day(), 1439);
+    // Out-of-range values (an invalid Date reads NaN, which arrives as 0; a
+    // far-future clock) land inside each field's range.
+    let zero = LocalTime::from_js(0, 0, 0, 0, 0, 0);
+    assert_eq!(zero, LocalTime { year: 0, month: 1, day: 1, weekday: 0, hour: 0, minute: 0 });
+    let huge = LocalTime::from_js(275_760, 99, 99, 99, 99, 99);
+    let max = LocalTime { year: u16::MAX, month: 12, day: 31, weekday: 6, hour: 23, minute: 59 };
+    assert_eq!(huge, max);
+    assert_eq!(LocalTime::default(), LocalTime::EPOCH);
+    assert_eq!(LocalTime::EPOCH.minute_of_day(), 0);
 }
 
 #[test]
@@ -209,18 +268,9 @@ fn small_helpers() {
     assert!(has("?a=debug", "debug") && has("debug", "debug") && has("xy", "y"));
     assert!(!has("debu", "debug") && !has("", "d") && !has("Debug", "debug"));
     assert_eq!([0, 2, -1, 300].map(button_u8), [0, 2, 0, 0]);
-    assert_eq!(strip_hash("#/apps/term"), "/apps/term");
-    assert_eq!(strip_hash(""), "");
     let codes = [0, 7, 10, 200, 404, 503, u16::MAX].map(http_error);
     let want = ["0", "7", "10", "200", "404", "503", "65535"];
     assert_eq!(codes, want.map(|n| ["HTTP ", n].concat()));
-}
-
-#[test]
-fn hash_changes_carry_the_hash_without_its_mark() {
-    let ev = Event::HashChange(strip_hash("#node=7777&token=ab").to_owned());
-    assert_eq!(ev, Event::HashChange("node=7777&token=ab".into()));
-    assert_ne!(ev, Event::HashChange(String::new()));
 }
 
 #[test]

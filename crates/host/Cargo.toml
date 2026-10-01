@@ -1,6 +1,6 @@
 [package]
 name = "compusophy-host"
-description = "The compusophyOS app host: the window manager and one app per window. Opens and closes windows, delivers app events, and carries out app requests: sockets, lazy fonts, windows."
+description = "The compusophyOS app host: the floating window manager and one app per window, plus motion (tweens, easing, draw-list replay, theme crossfades) and the launcher search the desktop shell builds on."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

@@ -8,6 +8,9 @@
 //! - [`open`] turns a window name into one of them; [`install_samples`]
 //!   puts the sample apps in `/apps`.
 //!
+//! Both draw in the frame's [`ui::Theme`]; their icons are
+//! [`STUDIO_ICON`] and [`APP_ICON`].
+//!
 //! Both apps read the filesystem only through the [`ui::Cx`] of an event,
 //! so [`open`] returns them unloaded and they load on their first event.
 //! [`open_in`] loads at once from a filesystem at hand.
@@ -20,6 +23,7 @@
 //! let host = studio::open_in("/apps/counter.app", &fs).unwrap();
 //! assert_eq!(host.title(), "counter.app");
 //! assert_eq!(studio::open("studio").unwrap().title(), "Studio — counter.app");
+//! assert_eq!(host.icon(), studio::APP_ICON);
 //! assert!(studio::open("terminal").is_none());
 //! ```
 
@@ -32,11 +36,17 @@ mod studio;
 use std::fmt;
 
 use lang::Diag;
+use ui::{AppIcon, Rgba};
 use vfs::Vfs;
 
 pub use editor::Editor;
 pub use host::AppHost;
 pub use studio::Studio;
+
+/// Studio's icon: braces on violet.
+pub const STUDIO_ICON: AppIcon = AppIcon { glyph: "{ }", hue: Rgba::hex(0x8b7bff) };
+/// The icon of every `.app` an [`AppHost`] runs: angle brackets on amber.
+pub const APP_ICON: AppIcon = AppIcon { glyph: "<>", hue: Rgba::hex(0xf59e0b) };
 
 /// The file [`open`]`("studio")` edits.
 pub const DEFAULT_FILE: &str = "/apps/counter.app";

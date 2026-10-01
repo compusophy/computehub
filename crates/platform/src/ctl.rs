@@ -3,14 +3,16 @@
 /// The app's handle on the page, lent to [`crate::App::event`] and
 /// [`crate::App::frame`].
 ///
-/// Requests (text input, sockets, fetches, clearing the hash) are queued as
-/// [`Effect`]s and applied, in order, right after the app returns, while the
-/// DOM event that caused them is still being handled: a request made in a
-/// pointer or key handler keeps that event's user activation, which phones
-/// need before they show a keyboard. Results come back later as events.
+/// Requests (text input, fetches, frames, the cursor, storage writes) are
+/// queued as [`Effect`]s and applied, in order, right after the app returns,
+/// while the DOM event that caused them is still being handled: a request
+/// made in a pointer or key handler keeps that event's user activation,
+/// which phones need before they show a keyboard. Results come back later as
+/// events.
 ///
-/// Reads (`location_hash`, `now_ms`, `local_minutes`) are live. Outside the
-/// browser (native tests) they return `""`, `0.0` and `0`.
+/// Reads (the clocks, [`Ctl::storage_get`]) are live. Outside the browser
+/// (native tests) the clocks read `0.0` and [`LocalTime::EPOCH`], and
+/// storage holds nothing but this handle's own queued writes.
 ///
 /// Native tests can drive an app with [`Ctl::new`] and check
 /// [`Ctl::effects`].
@@ -24,18 +26,121 @@ pub struct Ctl {
 pub enum Effect {
     /// [`Ctl::set_text_input`].
     TextInput(bool),
-    /// [`Ctl::ws_open`].
-    WsOpen { id: u32, url: String },
-    /// [`Ctl::ws_send`].
-    WsSend { id: u32, bytes: Vec<u8> },
-    /// [`Ctl::ws_close`].
-    WsClose { id: u32 },
     /// [`Ctl::fetch`].
     Fetch { id: u32, url: String },
-    /// [`Ctl::clear_location_hash`].
-    ClearHash,
-    /// [`Ctl::guard_unload`].
-    GuardUnload(bool),
+    /// [`Ctl::request_frame`]; queued at most once per handle.
+    RequestFrame,
+    /// [`Ctl::set_cursor`]; queued at most once per handle (the last wins).
+    Cursor(Cursor),
+    /// [`Ctl::storage_set`].
+    Store { key: String, value: String },
+}
+
+/// The pointer's look over the canvas: one CSS `cursor` keyword each.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Cursor {
+    /// The arrow (`default`).
+    #[default]
+    Default,
+    /// The hand over something clickable (`pointer`).
+    Pointer,
+    /// The I-beam over editable or selectable text (`text`).
+    Text,
+    /// Four arrows: something moves (`move`).
+    Move,
+    /// An open hand: something can be dragged (`grab`).
+    Grab,
+    /// A closed hand: something is being dragged (`grabbing`).
+    Grabbing,
+    /// Resize left and right (`ew-resize`).
+    EwResize,
+    /// Resize up and down (`ns-resize`).
+    NsResize,
+    /// Resize along the top-left to bottom-right diagonal (`nwse-resize`).
+    NwseResize,
+    /// Resize along the top-right to bottom-left diagonal (`nesw-resize`).
+    NeswResize,
+}
+
+impl Cursor {
+    /// The CSS `cursor` keyword.
+    pub const fn css(self) -> &'static str {
+        match self {
+            Cursor::Default => "default",
+            Cursor::Pointer => "pointer",
+            Cursor::Text => "text",
+            Cursor::Move => "move",
+            Cursor::Grab => "grab",
+            Cursor::Grabbing => "grabbing",
+            Cursor::EwResize => "ew-resize",
+            Cursor::NsResize => "ns-resize",
+            Cursor::NwseResize => "nwse-resize",
+            Cursor::NeswResize => "nesw-resize",
+        }
+    }
+}
+
+/// A local date and time of day, to the minute, as the browser's `Date`
+/// reports it in the user's time zone.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LocalTime {
+    /// The full year, such as 2026.
+    pub year: u16,
+    /// The month, `1..=12`.
+    pub month: u8,
+    /// The day of the month, `1..=31`.
+    pub day: u8,
+    /// The day of the week, `0..=6`, 0 being Sunday.
+    pub weekday: u8,
+    /// The hour, `0..=23`.
+    pub hour: u8,
+    /// The minute, `0..=59`.
+    pub minute: u8,
+}
+
+impl LocalTime {
+    /// 1970-01-01 00:00, a Thursday: what [`Ctl::local_time`] reads outside
+    /// the browser, and the [`Default`].
+    pub const EPOCH: LocalTime =
+        LocalTime { year: 1970, month: 1, day: 1, weekday: 4, hour: 0, minute: 0 };
+
+    /// Minutes since local midnight, `0..1440`.
+    pub const fn minute_of_day(self) -> u32 {
+        self.hour as u32 * 60 + self.minute as u32
+    }
+
+    /// From the values of `Date`'s getters (`getMonth` counts from 0), each
+    /// clamped into its field's range.
+    pub(crate) fn from_js(
+        year: u32,
+        month0: u32,
+        day: u32,
+        weekday: u32,
+        hour: u32,
+        minute: u32,
+    ) -> LocalTime {
+        let byte = |v: u32, lo: u32, hi: u32| v.clamp(lo, hi) as u8;
+        LocalTime {
+            year: year.min(u32::from(u16::MAX)) as u16,
+            month: byte(month0, 0, 11) + 1,
+            day: byte(day, 1, 31),
+            weekday: byte(weekday, 0, 6),
+            hour: byte(hour, 0, 23),
+            minute: byte(minute, 0, 59),
+        }
+    }
+
+    /// The local time `d` holds.
+    pub(crate) fn of(d: &js_sys::Date) -> LocalTime {
+        let (y, mo, day) = (d.get_full_year(), d.get_month(), d.get_date());
+        LocalTime::from_js(y, mo, day, d.get_day(), d.get_hours(), d.get_minutes())
+    }
+}
+
+impl Default for LocalTime {
+    fn default() -> LocalTime {
+        LocalTime::EPOCH
+    }
 }
 
 impl Ctl {
@@ -63,30 +168,6 @@ impl Ctl {
         self.effects.push(Effect::TextInput(active));
     }
 
-    /// Opens WebSocket `id` (the app picks ids) to `url`, with binary
-    /// messages as bytes. An open socket with the same id is closed first
-    /// and reports nothing more. Events arrive as [`crate::Event::Ws`]: `Open`,
-    /// `Data` per message, then `Error` (maybe) and `Closed` once. A `url`
-    /// the browser refuses reports `Error` and `Closed { code: 1006, .. }`.
-    pub fn ws_open(&mut self, id: u32, url: &str) {
-        let url = url.to_owned();
-        self.effects.push(Effect::WsOpen { id, url });
-    }
-
-    /// Sends `bytes` as one binary message on socket `id`. Sends before
-    /// `Open` are queued and flushed on open, in order; sends to an unknown,
-    /// closing or closed socket are dropped.
-    pub fn ws_send(&mut self, id: u32, bytes: &[u8]) {
-        let bytes = bytes.to_vec();
-        self.effects.push(Effect::WsSend { id, bytes });
-    }
-
-    /// Closes socket `id` (code 1000). It reports nothing more, not even
-    /// `Closed`, and `id` is free for [`Ctl::ws_open`] at once.
-    pub fn ws_close(&mut self, id: u32) {
-        self.effects.push(Effect::WsClose { id });
-    }
-
     /// Fetches `url`, which must be relative to the page (same origin): a
     /// URL with a scheme, a leading `//`, a backslash or a control character
     /// fails without a request. The body arrives as
@@ -97,61 +178,79 @@ impl Ctl {
         self.effects.push(Effect::Fetch { id, url });
     }
 
-    /// `location.hash` without the `#`, as the URL has it (percent-encoded).
-    /// [`crate::Event::HashChange`] reports when it changes.
-    pub fn location_hash(&self) -> String {
-        if !cfg!(target_arch = "wasm32") {
-            return String::new();
+    /// Asks for one more frame: [`crate::App::frame`] runs on the next
+    /// animation frame. Called from [`crate::App::frame`], it schedules
+    /// exactly one frame after this one, so an animation asks on every frame
+    /// while it runs and frames stop the moment it stops asking. From
+    /// [`crate::App::event`] it does what [`crate::Handled::redraw`] does.
+    /// Asking twice in one call asks once.
+    pub fn request_frame(&mut self) {
+        if !self.effects.contains(&Effect::RequestFrame) {
+            self.effects.push(Effect::RequestFrame);
         }
-        web_sys::window().map_or_else(String::new, |w| hash_of(&w))
     }
 
-    /// Removes the hash from the address bar with `history.replaceState`,
-    /// keeping the path, query and history state; no `hashchange` fires.
-    pub fn clear_location_hash(&mut self) {
-        self.effects.push(Effect::ClearHash);
+    /// Shows `c` as the pointer over the canvas. The page writes the
+    /// canvas's `style.cursor` only when the cursor changes, so setting the
+    /// same one on every pointer move costs nothing; within one call, the
+    /// last cursor set wins.
+    pub fn set_cursor(&mut self, c: Cursor) {
+        self.effects.retain(|e| !matches!(e, Effect::Cursor(_)));
+        self.effects.push(Effect::Cursor(c));
     }
 
-    /// While `on`, leaving the page (closing or reloading the tab, or
-    /// following a link) asks the user first: a `beforeunload` listener
-    /// calls `preventDefault`, and the browser shows its own "Leave site?"
-    /// prompt (only once the user has interacted with the page). Ask for it
-    /// while leaving would lose something, such as a live shell, and drop it
-    /// after: the listener exists only while asked for, so the page can
-    /// still enter the back/forward cache otherwise.
-    pub fn guard_unload(&mut self, on: bool) {
-        self.effects.push(Effect::GuardUnload(on));
+    /// The value `localStorage` holds for `key`, or `None` when there is
+    /// none or storage is unavailable (blocked, or private browsing that
+    /// throws). A write this handle has queued ([`Ctl::storage_set`]) is
+    /// read back before it reaches the page.
+    pub fn storage_get(&self, key: &str) -> Option<String> {
+        let queued = self.effects.iter().rev().find_map(|e| match e {
+            Effect::Store { key: k, value } if k == key => Some(value.clone()),
+            _ => None,
+        });
+        if queued.is_some() || !cfg!(target_arch = "wasm32") {
+            return queued;
+        }
+        crate::io::storage()?.get_item(key).ok().flatten()
     }
 
-    /// Milliseconds since the page started (`performance.now()`): monotonic,
-    /// for measuring intervals, not the time of day.
-    pub fn now_ms(&self) -> f64 {
+    /// Stores `value` under `key` in `localStorage`. A failure (storage
+    /// blocked or full, private browsing that throws) is ignored: storage
+    /// is a convenience, never a place the only copy of anything lives.
+    pub fn storage_set(&mut self, key: &str, value: &str) {
+        let (key, value) = (key.to_owned(), value.to_owned());
+        self.effects.push(Effect::Store { key, value });
+    }
+
+    /// Milliseconds since the page started (`performance.now()`): monotonic
+    /// and sub-millisecond, for animation timing and intervals, never the
+    /// time of day.
+    pub fn monotonic_ms(&self) -> f64 {
         if !cfg!(target_arch = "wasm32") {
             return 0.0;
         }
         web_sys::window().and_then(|w| w.performance()).map_or(0.0, |p| p.now())
     }
 
-    /// Minutes since local midnight, `0..1440`: the time of day that
-    /// [`crate::Event::Tick`] also reports.
-    pub fn local_minutes(&self) -> u32 {
-        if !cfg!(target_arch = "wasm32") {
-            return 0;
-        }
-        let d = js_sys::Date::new_0();
-        d.get_hours() * 60 + d.get_minutes()
+    /// The same clock as [`Ctl::monotonic_ms`].
+    pub fn now_ms(&self) -> f64 {
+        self.monotonic_ms()
     }
-}
 
-/// `window.location.hash` without its `#`; `""` if the browser throws.
-pub(crate) fn hash_of(w: &web_sys::Window) -> String {
-    let hash = w.location().hash().unwrap_or_default();
-    strip_hash(&hash).to_owned()
-}
+    /// The local date and time of day, to the minute: what
+    /// [`crate::Event::Tick`] also reports.
+    pub fn local_time(&self) -> LocalTime {
+        if !cfg!(target_arch = "wasm32") {
+            return LocalTime::EPOCH;
+        }
+        LocalTime::of(&js_sys::Date::new_0())
+    }
 
-/// `hash` without its leading `#`.
-pub(crate) fn strip_hash(hash: &str) -> &str {
-    hash.strip_prefix('#').unwrap_or(hash)
+    /// Minutes since local midnight, `0..1440`: [`Ctl::local_time`]'s
+    /// [`LocalTime::minute_of_day`].
+    pub fn local_minutes(&self) -> u32 {
+        self.local_time().minute_of_day()
+    }
 }
 
 /// Whether `url` is a relative reference that can only resolve against the

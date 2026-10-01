@@ -2,12 +2,30 @@
 //!
 //! [`start`] hands [`platform::run`] a desktop made of the boot font, a
 //! [`Vfs`] holding Studio's sample apps, and a [`Registry`]: [`apps::open`]
-//! makes `welcome`, `terminal`, `launcher` and `about`; [`studio::open`]
-//! makes `studio`, `studio:<path>` and any `*.app` path. The wm picks each
-//! split's axis when a window opens, so the [`Shell`] and its startup
-//! windows are created at the first Resize with room for the panel and some
-//! desktop. Until then input is dropped (a Tick is replayed once the shell
-//! exists) and frames only clear.
+//! makes `welcome`, `terminal` and `settings`; [`studio::open`] makes
+//! `studio`, `studio:<path>` and any `*.app` path. The [`Shell`] opens its
+//! startup window centered in the work area, so it is created at the first
+//! Resize that leaves a work area (taller than the bar and the dock's
+//! clearance). Until then input is dropped (a Tick is replayed once the
+//! shell exists) and frames clear to the default theme's base.
+//!
+//! # Theme
+//!
+//! The shell starts in the theme `localStorage` names under [`THEME_KEY`]
+//! (the default one when it names none). After every event and frame, a
+//! theme other than the one last stored is stored, so a reload comes back
+//! to it. Storage is a convenience: when it is blocked, the theme simply
+//! starts at the default.
+//!
+//! # Time and frames
+//!
+//! Before every event and frame the shell gets the monotonic page clock
+//! ([`Ctl::monotonic_ms`], through [`Shell::set_now`]): animations and app
+//! timeouts run on it. [`Event::Tick`] carries the local date and time for
+//! the top bar's clock. A frame whose [`Shell::draw`] reports a running
+//! animation asks for the next one ([`Ctl::request_frame`]); the first frame
+//! that does not is the last until the next input, so an idle desktop draws
+//! nothing.
 //!
 //! # Fonts
 //!
@@ -24,37 +42,16 @@
 //! - lazy: the symbol fallbacks, which the shell fetches from `fonts/` when
 //!   a terminal first opens.
 //!
-//! The shell numbers its fetches and sockets up from 1, so the two deferred
-//! fetches take the top two ids, `u32::MAX - 1` and `u32::MAX`. While a
-//! deferred font is on its way, a result with its id is taken here; every
-//! other fetch result goes to [`Shell::fetched`].
-//!
-//! # Pairing
-//!
-//! The location hash is taken first thing in [`start`], before anything
-//! that can fail ([`platform::take_location_hash`]), and again at each
-//! [`Event::HashChange`]. A hash that is not empty is removed from the
-//! address bar at once, so a token does not linger there, not even when the
-//! desktop cannot start (no WebGL2, say), and read as a computehub-node
-//! pairing ([`ui::parse_pairing`]: `#node=<port>&token=<64 hex digits>`).
-//! A pairing read before the shell exists goes to [`Shell::new`], so the
-//! startup terminal connects with it; one read later goes to
-//! [`Shell::set_pairing`], which opens a new terminal, focused, that
-//! connects with it. A hash that pairs with nothing changes nothing else.
-//!
-//! # Leaving the page
-//!
-//! A node's shell dies with its connection, so while any socket is open
-//! (reported open and not since closed) the page asks before it goes
-//! ([`Ctl::guard_unload`]). That matters most for Ctrl+W: readline, Claude
-//! Code and vim use it, but in a browser tab it closes the tab and never
-//! reaches the terminal. In Chromium, installed as an app in its own
-//! window or in fullscreen with Keyboard Lock, the terminal gets Ctrl+W.
+//! The shell numbers its fetches up from 1, so the two deferred fetches take
+//! the top two ids, `u32::MAX - 1` and `u32::MAX`. While a deferred font is
+//! on its way, a result with its id is taken here; every other fetch result
+//! goes to [`Shell::fetched`].
 //!
 //! # Events
 //!
 //! - Key-downs, repeats too, become [`Input::Key`] by `KeyboardEvent.code`
-//!   ([`Key::from_code`]), or by `KeyboardEvent.key` when a key reports no
+//!   ([`Key::from_code`], and `Backquote` as a backquote [`Key::Char`] for
+//!   the window switcher), or by `KeyboardEvent.key` when a key reports no
 //!   code (phone keyboards' Enter and Backspace, for one). A shortcut letter
 //!   (Ctrl, Alt or Meta held, and `key` an ASCII letter) goes by its `key`,
 //!   so Ctrl+Z is Ctrl+Z on AZERTY and Dvorak too; other layouts' letters
@@ -65,23 +62,21 @@
 //!   the shell, but releasing Alt or Meta is `preventDefault`ed so Firefox
 //!   does not focus its menu bar.
 //! - Text, pointer and wheel events pass through. [`Event::Resize`] drops
-//!   `dpr`: each frame gives the shell the renderer's. Every event and
-//!   frame first gives the shell the page clock ([`Ctl::now_ms`], through
-//!   [`Shell::set_now`]), so timeouts run between the minute ticks;
-//!   [`Event::Tick`] carries it too. Socket events are handed on as they are.
+//!   `dpr`: each frame gives the shell the renderer's.
 //!
 //! # Responses
 //!
-//! - [`Response::redraw`] requests a frame.
+//! - [`Response::redraw`] (or [`Response::animating`]) requests a frame.
 //! - [`Response::consumed`] becomes [`Handled::prevent_default`], except for
 //!   a key-down that types text while text input is active: the text
 //!   reaches apps only through the platform's textarea (as
 //!   [`Event::Text`]), and a prevented key-down would never put it there.
-//! - [`Response::text_input`] goes to [`Ctl::set_text_input`], and each
-//!   [`Effect`] to the [`Ctl`] call of the same name.
+//! - [`Response::text_input`] goes to [`Ctl::set_text_input`],
+//!   [`Response::cursor`] to [`Ctl::set_cursor`], and each [`Effect`] to the
+//!   [`Ctl`] call of the same name.
 //! - After every event and every frame, what the shell queued outside a
-//!   response ([`Shell::take_effects`]) goes out too: a terminal's RESIZE
-//!   after a frame changed its grid, for one.
+//!   response ([`Shell::take_effects`]) goes out too: what an app asked for
+//!   while a frame was drawn, for one.
 //! - A primary-button release over the focused window while text input is
 //!   active asks for text input again. That call runs inside the tap's user
 //!   activation, which brings back a phone keyboard the user dismissed.
@@ -90,8 +85,8 @@
 
 use gfx::{DrawList, RectF, Rgba};
 use platform::{App, Ctl, Event, Handled, Renderer};
-use shell::{Effect, Input, Key, Mods, Registry, Response, Shell, WsEvent, theme};
-use ui::{FontId, Pairing, TextSystem};
+use shell::{Cursor, Effect, Input, Key, LocalTime, Mods, Registry, Response, Shell};
+use ui::{FontId, TextSystem};
 use vfs::Vfs;
 use wasm_bindgen::prelude::*;
 
@@ -105,6 +100,9 @@ const DEFERRED: [(u32, FontId, &str); 2] = [
     (u32::MAX, FontId::Mono, "fonts/deferred/JetBrainsMono-Regular.ttf"),
 ];
 
+/// The `localStorage` key that keeps the theme's name.
+pub const THEME_KEY: &str = "compusophy.theme";
+
 /// The wasm entry point, run when the module is instantiated: starts the
 /// desktop on `<canvas id="os">`.
 ///
@@ -114,10 +112,7 @@ const DEFERRED: [(u32, FontId, &str); 2] = [
 /// no canvas, no WebGL2, bad shaders.
 #[wasm_bindgen(start)]
 pub fn start() -> Result<(), JsValue> {
-    // First: the hash may hold a token, which must leave the address bar
-    // even if what follows fails.
-    let hash = platform::take_location_hash();
-    platform::run(Desktop::boot(&hash)?)
+    platform::run(Desktop::new()?)
 }
 
 /// The shell once the canvas has a usable size, what it is made of until
@@ -126,12 +121,6 @@ struct Desktop {
     /// The shell's text system and filesystem, until the shell takes them.
     parts: Option<(TextSystem, Vfs)>,
     shell: Option<Shell>,
-    /// The node pairing for [`Shell::new`].
-    pairing: Option<Pairing>,
-    /// The sockets reported open and not since closed.
-    open: Vec<u32>,
-    /// Whether leaving the page asks first, as last asked of the platform.
-    guarded: bool,
     /// Whether a Tick came before the shell did.
     missed_tick: bool,
     /// Whether text input is on, as last asked of the platform.
@@ -139,6 +128,8 @@ struct Desktop {
     /// Which [`DEFERRED`] fonts are on their way; `None` until the first
     /// frame asks for them.
     deferred: Option<[bool; 2]>,
+    /// The theme's name as storage last had it (or would have, at start).
+    saved: &'static str,
     list: DrawList,
 }
 
@@ -151,40 +142,12 @@ impl Desktop {
         Ok(Desktop {
             parts: Some((text, vfs)),
             shell: None,
-            pairing: None,
-            open: Vec::new(),
-            guarded: false,
             missed_tick: false,
             typing: false,
             deferred: None,
+            saved: ui::THEMES[0].name,
             list: DrawList::new(),
         })
-    }
-
-    /// A desktop paired by the location `hash` that [`start`] took (and
-    /// cleared) before anything else.
-    fn boot(hash: &str) -> Result<Desktop, String> {
-        let mut desk = Desktop::new()?;
-        desk.pairing = ui::parse_pairing(hash);
-        Ok(desk)
-    }
-
-    /// A hash change's `hash`: cleared from the address bar if not empty,
-    /// and read as a pairing, which waits for [`Shell::new`] or goes to
-    /// [`Shell::set_pairing`] (whose response this is).
-    fn pair(&mut self, hash: &str, ctl: &mut Ctl) -> Option<Response> {
-        if hash.is_empty() {
-            return None;
-        }
-        ctl.clear_location_hash();
-        let p = ui::parse_pairing(hash)?;
-        match &mut self.shell {
-            Some(shell) => Some(shell.set_pairing(p)),
-            None => {
-                self.pairing = Some(p);
-                None
-            }
-        }
     }
 
     /// Hands `input` to the shell, first making it at the first usable
@@ -194,14 +157,16 @@ impl Desktop {
             return Some(shell.input(input));
         }
         match input {
-            Input::Resize { w, h } if w >= 1.0 && h >= theme::PANEL_H + 1.0 => {
+            Input::Resize { w, h } if w >= 1.0 && h >= shell::BAR_H + shell::DOCK_CLEAR + 1.0 => {
                 let (text, vfs) = self.parts.take()?;
-                let shell = Shell::new(w, h, text, vfs, registry(), self.pairing);
+                let theme = ctl.storage_get(THEME_KEY).unwrap_or_default();
+                let shell = Shell::new(w, h, text, vfs, registry(), &theme);
                 let shell = self.shell.insert(shell);
+                self.saved = shell.theme_name();
+                shell.set_now(ctl.monotonic_ms());
                 let mut r = shell.input(input);
                 if self.missed_tick {
-                    let (minutes, now_ms) = (ctl.local_minutes(), ctl.now_ms());
-                    r = merge(r, shell.input(Input::Tick { minutes, now_ms }));
+                    r = merge(r, shell.input(Input::Tick { time: local(ctl.local_time()) }));
                 }
                 Some(r)
             }
@@ -216,14 +181,7 @@ impl Desktop {
     /// One event, but for what the shell queued outside its response.
     fn handle(&mut self, ev: Event, ctl: &mut Ctl) -> Handled {
         if let Some(shell) = &mut self.shell {
-            shell.set_now(ctl.now_ms());
-        }
-        if let Event::Ws { id, ev } = &ev {
-            match ev {
-                platform::WsEvent::Open => self.open.push(*id),
-                platform::WsEvent::Closed { .. } => self.open.retain(|o| o != id),
-                _ => {}
-            }
+            shell.set_now(ctl.monotonic_ms());
         }
         let types = types_text(&ev);
         let release = match ev {
@@ -232,12 +190,11 @@ impl Desktop {
         };
         let r = match ev {
             Event::Key { down: false, ref code, .. } => return key_up(code),
-            Event::HashChange(hash) => self.pair(&hash, ctl),
             Event::Fetched { id, result } => match self.take_deferred(id) {
                 Some(slot) => return self.set_font(slot, result),
                 None => self.shell.as_mut().map(|s| s.fetched(id, result)),
             },
-            ev => input_of(ev, ctl).and_then(|input| self.input(input, ctl)),
+            ev => input_of(ev).and_then(|input| self.input(input, ctl)),
         };
         let Some(r) = r else {
             return Handled::default();
@@ -253,61 +210,54 @@ impl Desktop {
 
     /// Passes the shell's requests to the platform; the answer to the event.
     fn apply(&mut self, r: Response, ctl: &mut Ctl) -> Handled {
-        r.effects.into_iter().for_each(|fx| self.effect(fx, ctl));
+        r.effects.into_iter().for_each(|fx| effect(fx, ctl));
         if let Some(on) = r.text_input {
             self.typing = on;
             ctl.set_text_input(on);
         }
-        Handled { redraw: r.redraw, prevent_default: r.consumed }
+        if let Some(c) = r.cursor {
+            ctl.set_cursor(cursor(c));
+        }
+        Handled { redraw: r.redraw || r.animating, prevent_default: r.consumed }
     }
 
-    /// Passes on what the shell queued outside a response, then guards
-    /// leaving the page while a socket is open (or stops).
+    /// Passes on what the shell queued outside a response, and stores a
+    /// theme that changed.
     fn flush(&mut self, ctl: &mut Ctl) {
-        let queued = self.shell.as_mut().map(Shell::take_effects);
-        for fx in queued.into_iter().flatten() {
-            self.effect(fx, ctl);
+        let Some(shell) = &mut self.shell else {
+            return;
+        };
+        for fx in shell.take_effects() {
+            effect(fx, ctl);
         }
-        let live = !self.open.is_empty();
-        if self.guarded != live {
-            self.guarded = live;
-            ctl.guard_unload(live);
-        }
-    }
-
-    /// Hands one shell effect to the page. A socket opened (again) or closed
-    /// here reports nothing more, so it is no longer open.
-    fn effect(&mut self, fx: Effect, ctl: &mut Ctl) {
-        match fx {
-            Effect::WsOpen { id, url } => {
-                self.open.retain(|&o| o != id);
-                ctl.ws_open(id, &url);
-            }
-            Effect::WsSend { id, bytes } => ctl.ws_send(id, &bytes),
-            Effect::WsClose { id } => {
-                self.open.retain(|&o| o != id);
-                ctl.ws_close(id);
-            }
-            Effect::Fetch { id, url } => ctl.fetch(id, &url),
+        let theme = shell.theme_name();
+        if theme != self.saved {
+            self.saved = theme;
+            ctl.storage_set(THEME_KEY, theme);
         }
     }
 
     /// Draws a frame into the draw list (the shell at `dpr` and the page
-    /// clock, or nothing before it exists); its clear color.
-    fn paint(&mut self, dpr: f32, ctl: &Ctl) -> Rgba {
+    /// clock, or nothing before it exists); its clear color, and whether an
+    /// animation wants the next frame.
+    fn paint(&mut self, dpr: f32, ctl: &Ctl) -> (Rgba, bool) {
         let Some(shell) = &mut self.shell else {
             self.list.clear();
-            return theme::BG;
+            return (ui::THEMES[0].base, false);
         };
-        shell.set_now(ctl.now_ms());
+        shell.set_now(ctl.monotonic_ms());
         shell.set_dpr(dpr);
-        shell.draw(&mut self.list);
-        shell.clear_color()
+        let animating = shell.draw(&mut self.list);
+        (shell.clear_color(), animating)
     }
 
-    /// After a frame: asks for the deferred fonts after the first, and
-    /// passes on what the shell queued while drawing.
-    fn drawn(&mut self, ctl: &mut Ctl) {
+    /// After a frame: asks for the next while an animation runs, for the
+    /// deferred fonts after the first, and passes on what the shell queued
+    /// while drawing.
+    fn drawn(&mut self, animating: bool, ctl: &mut Ctl) {
+        if animating {
+            ctl.request_frame();
+        }
         if self.deferred.is_none() {
             self.deferred = Some([true; 2]);
             for (id, _, url) in DEFERRED {
@@ -356,11 +306,11 @@ impl App for Desktop {
     }
 
     fn frame(&mut self, r: &mut Renderer, ctl: &mut Ctl) {
-        let bg = self.paint(r.dpr(), ctl);
+        let (bg, animating) = self.paint(r.dpr(), ctl);
         if let Some(text) = text_of(&mut self.shell, &mut self.parts) {
             r.draw(&self.list, bg, text.atlas_mut());
         }
-        self.drawn(ctl);
+        self.drawn(animating, ctl);
     }
 }
 
@@ -375,6 +325,33 @@ fn text_of<'a>(
     }
 }
 
+/// Hands one shell effect to the page.
+fn effect(fx: Effect, ctl: &mut Ctl) {
+    let Effect::Fetch { id, url } = fx;
+    ctl.fetch(id, &url);
+}
+
+/// The page's cursor for the shell's.
+fn cursor(c: Cursor) -> platform::Cursor {
+    use platform::Cursor as P;
+    match c {
+        Cursor::Default => P::Default,
+        Cursor::Text => P::Text,
+        Cursor::Grab => P::Grab,
+        Cursor::Grabbing => P::Grabbing,
+        Cursor::EwResize => P::EwResize,
+        Cursor::NsResize => P::NsResize,
+        Cursor::NwseResize => P::NwseResize,
+        Cursor::NeswResize => P::NeswResize,
+    }
+}
+
+/// The shell's local time for the page's.
+fn local(t: platform::LocalTime) -> LocalTime {
+    let platform::LocalTime { year, month, day, weekday, hour, minute } = t;
+    LocalTime { year, month, day, weekday, hour, minute }
+}
+
 /// Makes apps by name: the built-ins, then Studio and `.app` files.
 fn registry() -> Registry {
     Box::new(|name| apps::open(name).or_else(|| studio::open(name)))
@@ -384,18 +361,18 @@ fn registry() -> Registry {
 fn merge(mut a: Response, b: Response) -> Response {
     a.redraw |= b.redraw;
     a.consumed |= b.consumed;
+    a.animating |= b.animating;
     a.text_input = b.text_input.or(a.text_input);
+    a.cursor = b.cursor.or(a.cursor);
     a.effects.extend(b.effects);
     a
 }
 
-/// The shell input for a platform event; `None` for a key-up, a hash change
-/// or a fetch result, which do not go through [`Shell::input`].
-fn input_of(ev: Event, ctl: &Ctl) -> Option<Input> {
+/// The shell input for a platform event; `None` for a key-up or a fetch
+/// result, which do not go through [`Shell::input`].
+fn input_of(ev: Event) -> Option<Input> {
     Some(match ev {
-        Event::Key { down: false, .. } | Event::HashChange(_) | Event::Fetched { .. } => {
-            return None;
-        }
+        Event::Key { down: false, .. } | Event::Fetched { .. } => return None,
         Event::Key { code, key, shift, ctrl, alt, meta, altgr, .. } => {
             let (ctrl, alt) = without_altgr(ctrl, alt, altgr);
             let mods = Mods { shift, ctrl, alt, meta };
@@ -408,16 +385,7 @@ fn input_of(ev: Event, ctl: &Ctl) -> Option<Input> {
         Event::PointerLeave => Input::PointerLeave,
         Event::Wheel { x, y, dy } => Input::Wheel { x, y, dy },
         Event::Resize { w, h, .. } => Input::Resize { w, h },
-        Event::Tick { minutes } => Input::Tick { minutes, now_ms: ctl.now_ms() },
-        Event::Ws { id, ev } => Input::Ws {
-            id,
-            ev: match ev {
-                platform::WsEvent::Open => WsEvent::Open,
-                platform::WsEvent::Data(bytes) => WsEvent::Data(bytes),
-                platform::WsEvent::Closed { code, reason } => WsEvent::Closed { code, reason },
-                platform::WsEvent::Error => WsEvent::Error,
-            },
-        },
+        Event::Tick { time } => Input::Tick { time: local(time) },
     })
 }
 
@@ -425,12 +393,14 @@ fn input_of(ev: Event, ctl: &Ctl) -> Option<Input> {
 /// `key` is an ASCII letter is that letter, as the layout says: AZERTY's Z
 /// sits at `KeyW`, and Ctrl+Z must not send Ctrl+W. A keypad digit or
 /// decimal key whose `key` names a key (NumLock off: `ArrowUp`, `Home`,
-/// `Delete` and the rest) is that key. Otherwise by its `code`
-/// ([`Key::from_code`]; Cyrillic letters and macOS Option symbols too), or,
-/// when it reports none (phone keyboards send Enter and Backspace so, as do
-/// some remote desktops and synthetic events), by its `key`: a letter or
-/// digit as [`Key::Char`], `" "` as [`Key::Space`], and named keys by name
-/// (`Enter`, `ArrowLeft`, `F5` and the rest are spelled as their codes).
+/// `Delete` and the rest) is that key. `Backquote`, the key above Tab, is a
+/// backquote on every layout, for the window switcher. Otherwise by its
+/// `code` ([`Key::from_code`]; Cyrillic letters and macOS Option symbols
+/// too), or, when it reports none (phone keyboards send Enter and Backspace
+/// so, as do some remote desktops and synthetic events), by its `key`: a
+/// letter, digit or backquote as [`Key::Char`], `" "` as [`Key::Space`], and
+/// named keys by name (`Enter`, `ArrowLeft`, `F5` and the rest are spelled
+/// as their codes).
 fn key_of(code: &str, key: &str, chord: bool) -> Key {
     let mut chars = key.chars();
     let one = match (chars.next(), chars.next()) {
@@ -444,13 +414,14 @@ fn key_of(code: &str, key: &str, chord: bool) -> Key {
     if pad && Key::from_code(key) != Key::Other {
         return Key::from_code(key);
     }
-    if !matches!(code, "" | "Unidentified") {
-        return Key::from_code(code);
-    }
-    match one {
-        Some(' ') => Key::Space,
-        Some(c) if c.is_ascii_alphanumeric() => Key::Char(c.to_ascii_lowercase()),
-        _ => Key::from_code(key),
+    match code {
+        "Backquote" => Key::Char('`'),
+        "" | "Unidentified" => match one {
+            Some(' ') => Key::Space,
+            Some(c) if c.is_ascii_alphanumeric() || c == '`' => Key::Char(c.to_ascii_lowercase()),
+            _ => Key::from_code(key),
+        },
+        code => Key::from_code(code),
     }
 }
 

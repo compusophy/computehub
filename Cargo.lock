@@ -42,10 +42,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "compusophy-cap"
-version = "0.1.0"
-
-[[package]]
 name = "compusophy-font"
 version = "0.1.0"
 
@@ -157,10 +153,6 @@ version = "0.1.0"
 
 [[package]]
 name = "compusophy-vt"
-version = "0.1.0"
-
-[[package]]
-name = "compusophy-wasmgen"
 version = "0.1.0"
 
 [[package]]

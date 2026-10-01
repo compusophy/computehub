@@ -77,9 +77,15 @@ features=(
   --enable-reference-types
   --enable-multivalue
 )
+# --low-memory-unused lets wasm-opt fold constant offsets into loads and
+# stores, which differs only when an address wraps past 4 GiB into the low
+# 1 KiB. Rust never does that (pointer overflow is undefined), and the low
+# 1 KiB is the far end of rustc's 1 MiB stack, below every static. About
+# 1.5 KB gzipped.
+opts=(-Oz --low-memory-unused)
 if ! command -v wasm-opt >/dev/null 2>&1; then
   echo "WARNING: wasm-opt not found (install binaryen); dist/os_bg.wasm stays unoptimized"
-elif wasm-opt -Oz "${features[@]}" dist/os_bg.wasm -o dist/os_bg.opt.wasm && [ -s dist/os_bg.opt.wasm ]; then
+elif wasm-opt "${opts[@]}" "${features[@]}" dist/os_bg.wasm -o dist/os_bg.opt.wasm && [ -s dist/os_bg.opt.wasm ]; then
   # The budget is compressed bytes, and a smaller module can compress worse
   # (binaryen 112 on this one does): keep whichever gzips smaller.
   opt_gz=$(($(gzip -9 -c dist/os_bg.opt.wasm | wc -c)))

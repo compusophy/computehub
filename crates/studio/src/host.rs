@@ -2,9 +2,11 @@
 
 use applang::{Event, Limits, Node};
 use gfx::RectF;
-use ui::{App, AppEvent, Cx, FontId, Key, PAD, SPACING, TextStyle, Ui, WidgetId, theme};
+use ui::{App, AppEvent, AppIcon, BUTTON_H, Cx, FIELD_H, Key, PAD, RADIUS_SM, SPACING, Ui};
+use ui::{WidgetId, theme::mix};
 use vfs::Vfs;
 
+use crate::studio::{px, snapped};
 use crate::{Problem, file_name, join};
 
 /// Inputs are numbered from here in render order; buttons keep applang's
@@ -12,8 +14,10 @@ use crate::{Problem, file_name, join};
 const INPUT: u32 = 1 << 31;
 /// "Edit in Studio", shown when the file cannot run.
 const EDIT: WidgetId = WidgetId(INPUT - 1);
-const STATUS_H: f32 = 28.0;
-const STATUS: TextStyle = TextStyle::new(FontId::Sans, 13.0, theme::ANSI[9]);
+/// The fault line: a bar this tall, this far in from the content's
+/// bottom and sides.
+const STATUS_H: f32 = 32.0;
+const STATUS_INSET: f32 = 12.0;
 /// The most one render may show: widgets, and bytes of text (labels,
 /// buttons, inputs' values and names). applang bounds each string, not
 /// their sum, and every frame lays out all of it; past these the host
@@ -41,7 +45,7 @@ enum Run {
 /// An input takes focus on a press, typed text is appended and Backspace
 /// deletes a char, each change sent as an `Event::Input`; Escape or a press
 /// elsewhere drops focus. A fault in a handler or a render shows in a
-/// status line at the bottom, and the state stays as applang left it
+/// danger-tinted bar at the bottom, and the state stays as applang left it
 /// (rolled back). So does a render that shows more than 2,048 widgets or
 /// 32 KiB of text: only the widgets that fit are drawn, so a frame's cost
 /// stays bounded. A file that cannot be read or compiled shows its problem
@@ -115,10 +119,37 @@ fn union(a: Option<RectF>, b: RectF) -> RectF {
 /// The focused input's state, and how many inputs are drawn so far.
 type Focus<'f> = (Option<&'f str>, u32);
 
-/// Draws one node; returns the rect around everything it drew.
-fn node(ui: &mut Ui<'_>, n: &Node, f: &mut Focus<'_>, in_row: bool) -> RectF {
+/// The height of the tallest control directly in `children`, which the
+/// labels beside them center on; 0 for none.
+fn band(children: &[Node]) -> f32 {
+    let h = |c: &Node| match c {
+        Node::Button { .. } => BUTTON_H,
+        Node::Input { .. } => FIELD_H,
+        _ => 0.0,
+    };
+    children.iter().map(h).fold(0.0, f32::max)
+}
+
+/// A label in a row beside controls `band` tall, centered on them.
+fn label_beside(ui: &mut Ui<'_>, text: &str, band: f32) -> RectF {
+    let ((x, y), body, r) = (ui.cursor(), ui.theme().body(), ui.rect());
+    let ts = ui.text_system();
+    let lines = ts.wrap(text, body, r.x + r.w - PAD - x).len() as f32;
+    let dy = ts.snap(((band - lines * ts.line_height(body)) / 2.0).max(0.0));
+    ui.set_cursor(x, y + dy);
+    let got = ui.label(text);
+    ui.set_cursor(ui.cursor().0, y);
+    got
+}
+
+/// Draws one node, in a row beside controls `Some(band)` tall or not in a
+/// row; returns the rect around everything it drew.
+fn node(ui: &mut Ui<'_>, n: &Node, f: &mut Focus<'_>, in_row: Option<f32>) -> RectF {
     match n {
-        Node::Label { text } => ui.label(text),
+        Node::Label { text } => match in_row {
+            Some(band) if band > 0.0 => label_beside(ui, text, band),
+            _ => ui.label(text),
+        },
         Node::Button { text, id } => ui.button(WidgetId(*id), text),
         Node::Input { state, value } => {
             let id = WidgetId(INPUT + f.1);
@@ -126,17 +157,17 @@ fn node(ui: &mut Ui<'_>, n: &Node, f: &mut Focus<'_>, in_row: bool) -> RectF {
             ui.text_field(id, value, f.0 == Some(state.as_str()), state)
         }
         Node::Row { children } => {
-            let mut b = None;
+            let (mut b, band) = (None, band(children));
             let r = ui.row(|ui| {
                 for c in children {
-                    b = Some(union(b, node(ui, c, f, true)));
+                    b = Some(union(b, node(ui, c, f, Some(band))));
                 }
             });
             union(b, r)
         }
         Node::Col { children } => {
             let (x, y) = ui.cursor();
-            col(ui, children, f, in_row).unwrap_or(RectF::new(x, y, 0.0, 0.0))
+            col(ui, children, f, in_row.is_some()).unwrap_or(RectF::new(x, y, 0.0, 0.0))
         }
     }
 }
@@ -148,7 +179,7 @@ fn col(ui: &mut Ui<'_>, children: &[Node], f: &mut Focus<'_>, in_row: bool) -> O
     let mut b: Option<RectF> = None;
     for c in children {
         ui.set_cursor(x0, b.map_or(y0, |b| b.y + b.h + SPACING));
-        b = Some(union(b, node(ui, c, f, false)));
+        b = Some(union(b, node(ui, c, f, None)));
     }
     match (b, in_row) {
         (Some(b), true) => ui.set_cursor(b.x + b.w + SPACING, y0),
@@ -258,6 +289,10 @@ impl App for AppHost {
         self.focus.is_some()
     }
 
+    fn icon(&self) -> AppIcon {
+        crate::APP_ICON
+    }
+
     fn event(&mut self, ev: AppEvent, cx: &mut Cx<'_>) -> bool {
         let fresh = matches!(self.run, Run::Pending);
         if fresh {
@@ -293,20 +328,21 @@ impl App for AppHost {
     }
 
     fn draw(&mut self, ui: &mut Ui<'_>) {
-        let r = ui.rect();
-        let status = self.fault.as_ref().map(Problem::line);
-        self.view_h = r.h - if status.is_some() { STATUS_H } else { 0.0 };
+        let (r, t) = (ui.rect(), ui.theme());
+        let bar = STATUS_H + 2.0 * STATUS_INSET - PAD;
+        self.view_h = r.h - if self.fault.is_some() { bar } else { 0.0 };
         match &self.run {
             Run::Pending => _ = ui.small(&join(&["Loading ", &self.path, "…"])),
             Run::Broken => {
-                ui.subheading(&join(&[file_name(&self.path), " cannot run"]));
+                ui.heading(&join(&[file_name(&self.path), " cannot run"]));
                 for p in &self.problems {
-                    ui.mono(&p.line());
+                    ui.wrapped(&p.line(), t.mono().with_color(t.danger));
                 }
                 if !self.snippet.is_empty() {
-                    ui.mono(&self.snippet);
+                    ui.wrapped(&self.snippet, t.mono().with_color(t.text_dim));
                 }
-                ui.button(EDIT, "Edit in Studio");
+                ui.space(SPACING);
+                ui.button_primary(EDIT, "Edit in Studio");
             }
             Run::Live(_) => {
                 self.scroll = self.scroll.min((self.content_h - self.view_h).max(0.0));
@@ -317,14 +353,31 @@ impl App for AppHost {
                 self.content_h = bottom + self.scroll - r.y + PAD;
             }
         }
-        if let Some(text) = status {
-            let strip = RectF::new(r.x, r.y + r.h - STATUS_H, r.w, STATUS_H);
-            ui.fill(strip, 0.0, theme::PANEL);
-            ui.fill(RectF::new(r.x, strip.y, r.w, 1.0), 0.0, theme::BORDER);
-            let ts = ui.text_system();
-            let (a, d) = (ts.ascent(STATUS), ts.descent(STATUS));
-            let base = ts.snap(strip.y + (STATUS_H - a - d) / 2.0 + a);
-            ui.text(r.x + PAD, base, &text, STATUS);
+        if let Some(fault) = &self.fault {
+            status(ui, r, fault);
         }
     }
+}
+
+/// The fault bar along the bottom of `r`: the code in the danger color,
+/// then the position and the message, cut to fit.
+fn status(ui: &mut Ui<'_>, r: RectF, fault: &Problem) {
+    let (t, line, inset) = (ui.theme(), px(ui, 1.0), STATUS_INSET);
+    let at = RectF::new(r.x + inset, r.y + r.h - inset - STATUS_H, r.w - 2.0 * inset, STATUS_H);
+    let bar = snapped(ui, at);
+    ui.fill(bar, RADIUS_SM, mix(t.surface_hi, t.danger, 0.12));
+    ui.border(bar, RADIUS_SM, line, t.danger.with_alpha(110));
+    let (code, pos) = fault.head();
+    let style = t.small().with_color(t.text);
+    let ts = ui.text_system();
+    let (a, d) = (ts.ascent(style), ts.descent(style));
+    let base = ts.snap(bar.y + (bar.h - a - d) / 2.0 + a);
+    let rest = join(&[&pos, if pos.is_empty() { "" } else { "  " }, &fault.message]);
+    let x = bar.x + 12.0;
+    ui.push_clip(bar);
+    let w = ui.text(x, base, &code, style.with_color(t.danger)) + 10.0;
+    let room = bar.x + bar.w - 12.0 - (x + w);
+    let shown = ui.text_system().ellipsize(&rest, style, room);
+    ui.text(x + w, base, &shown, style);
+    ui.pop_clip();
 }

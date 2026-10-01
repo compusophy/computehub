@@ -1,8 +1,8 @@
 //! The Studio window: toolbar, editor and problem list.
 
 use gfx::{RectF, Rgba};
-use ui::{App, AppEvent, BUTTON_H, Cx, FontId, Key, Mods, PAD, SPACING, Sense, TextStyle, Ui};
-use ui::{WidgetId, theme};
+use ui::{App, AppEvent, AppIcon, BUTTON_H, Cx, Key, Mods, PAD, RADIUS_SM, SPACING, Sense};
+use ui::{Theme, Ui, WidgetId, theme::mix};
 use vfs::Vfs;
 
 use crate::{Editor, NEW_APP, Problem, SAMPLES, file_name, join, push_num};
@@ -16,20 +16,11 @@ const PROBLEM: u32 = 100;
 const MAX_PROBLEMS: usize = 5;
 const PROBLEM_H: f32 = 24.0;
 
-const SIZE: f32 = 13.0;
-const MONO: TextStyle = TextStyle::new(FontId::Mono, SIZE, theme::TEXT);
-const SMALL: TextStyle = TextStyle::new(FontId::Sans, 12.0, DIM);
 /// The least room for the toolbar's note beside the buttons; with less it
 /// goes on its own line under them.
 const NOTE_MIN: f32 = 80.0;
 /// Space between the editor's well and its text.
 const INSET: f32 = 6.0;
-const LINE_WASH: Rgba = Rgba(255, 255, 255, 10);
-const DIM: Rgba = theme::TEXT_DIM;
-const ERROR: Rgba = theme::ANSI[9];
-const KEYWORD: Rgba = theme::ANSI[5];
-const STRING: Rgba = theme::ANSI[2];
-const NUMBER: Rgba = theme::ANSI[3];
 const KEYWORDS: [&str; 12] = [
     "state", "label", "button", "input", "row", "col", "let", "if", "else", "repeat", "true",
     "false",
@@ -52,6 +43,10 @@ pub(crate) struct Geo {
 /// The applang editor. Run compiles the text: on success it saves and asks
 /// the shell to open the file (an [`crate::AppHost`] runs it); on failure
 /// it lists the problems, and clicking one moves the caret there.
+///
+/// It draws in the frame's theme: a sunken well, the current line raised,
+/// faint line numbers, keywords in the accent, strings and numbers in the
+/// theme's terminal green and yellow, comments faint.
 ///
 /// Keys: Enter keeps indentation, Tab inserts two spaces, Backspace,
 /// Delete, arrows, Home, End, PageUp and PageDown edit and move; Ctrl+S (or
@@ -241,8 +236,10 @@ impl Studio {
 
     /// The editor: gutter, highlighted text and caret, clipped to `well`.
     fn draw_text(&mut self, ui: &mut Ui<'_>, well: RectF, (row, asc): (f32, f32)) {
+        let (t, line_px) = (ui.theme(), px(ui, 1.0));
+        let mono = t.mono();
         let count = self.ed.line_count();
-        let cell = ui.text_system().cell_width(SIZE);
+        let cell = ui.text_system().cell_width(mono.size);
         let mut num = String::new();
         push_num(&mut num, count, 2);
         let gutter = (num.len() + 2) as f32 * cell;
@@ -262,78 +259,114 @@ impl Studio {
         let (cl, cc) = self.ed.caret();
         ui.push_clip(well);
         let sep = ui.text_system().snap(well.x + gutter - 0.625 * cell);
-        ui.fill(RectF::new(sep, well.y, 1.0, well.h), 0.0, theme::BORDER);
-        let (mut buf, mut colors) = ([0u8; 4], Vec::new());
+        ui.fill(RectF::new(sep, well.y, line_px, well.h), 0.0, t.border);
+        let (mut buf, mut toks) = ([0u8; 4], Vec::new());
         for i in self.top..count.min(self.top + rows + 1) {
             let y = text.y + (i - self.top) as f32 * row;
             let base = ui.text_system().snap(y + asc);
             if i == cl {
-                let wash = RectF::new(well.x + 1.0, y, well.w - 2.0, row);
-                ui.fill(wash, 0.0, LINE_WASH);
+                let lit = RectF::new(well.x + line_px, y, well.w - 2.0 * line_px, row);
+                ui.fill(lit, 0.0, t.surface_hi);
             }
             num.clear();
             push_num(&mut num, i + 1, 1);
-            let nx = well.x + gutter - 1.25 * cell - ui.text_system().measure(&num, MONO);
-            let color = if i == cl { theme::TEXT } else { DIM };
-            ui.text(nx, base, &num, MONO.with_color(color));
+            let nx = well.x + gutter - 1.25 * cell - ui.text_system().measure(&num, mono);
+            let color = if i == cl { t.text_dim } else { t.text_faint };
+            ui.text(nx, base, &num, mono.with_color(color));
             let line = self.ed.line(i);
-            paint(line, &mut colors);
+            paint(line, &mut toks);
             let cells = line.char_indices().skip(self.left).take(cols + 1);
             for (k, (at, c)) in cells.enumerate().filter(|(_, (_, c))| *c != ' ') {
-                let (x, style) = (text.x + k as f32 * cell, MONO.with_color(colors[at]));
+                let (x, style) = (text.x + k as f32 * cell, mono.with_color(ink(toks[at], t)));
                 ui.text(x, base, c.encode_utf8(&mut buf), style);
             }
         }
         let (top, left) = (self.top, self.left);
         if (top..top + rows).contains(&cl) && (left..=left + cols).contains(&cc) {
-            let x = ui.text_system().snap(text.x + (cc - left) as f32 * cell);
+            let w = px(ui, 2.0);
+            let x = ui.text_system().snap(text.x + (cc - left) as f32 * cell - w / 2.0);
             let y = text.y + (cl - top) as f32 * row;
-            let focused = ui.state().focused;
-            let color = if focused { theme::ACCENT } else { DIM };
-            ui.fill(RectF::new(x - 1.0, y, 2.0, row), 0.0, color);
+            let color = if ui.state().focused { t.accent } else { t.text_faint };
+            ui.fill(RectF::new(x, y, w, row), 0.0, color);
         }
         ui.pop_clip();
         ui.hit(EDITOR, well, Sense::Text);
     }
 }
 
-/// Fills `out` with a color for each byte of one line of applang (a char
+/// What a char of applang is, for its color.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Tok {
+    Plain,
+    Keyword,
+    Str,
+    Number,
+    Comment,
+}
+
+/// The color of a [`Tok`] in `t`. Plain code is a shade softer than body
+/// text, so keywords in the accent stand out even where the accent is
+/// white.
+fn ink(tok: Tok, t: &Theme) -> Rgba {
+    match tok {
+        Tok::Plain => mix(t.text, t.text_dim, 0.2),
+        Tok::Keyword => t.accent,
+        Tok::Str => t.ansi[2],
+        Tok::Number => t.ansi[3],
+        Tok::Comment => t.text_faint,
+    }
+}
+
+/// `v` logical pixels as whole device pixels, at least one: a stroke.
+pub(crate) fn px(ui: &mut Ui<'_>, v: f32) -> f32 {
+    let d = ui.text_system().dpr();
+    (v * d).round().max(1.0) / d
+}
+
+/// `r` with every edge on the nearest device pixel.
+pub(crate) fn snapped(ui: &mut Ui<'_>, r: RectF) -> RectF {
+    let ts = ui.text_system();
+    let (x, y) = (ts.snap(r.x), ts.snap(r.y));
+    RectF::new(x, y, ts.snap(r.x + r.w) - x, ts.snap(r.y + r.h) - y)
+}
+
+/// Fills `out` with a [`Tok`] for each byte of one line of applang (a char
 /// takes its first byte's): keywords, strings, numbers and `//` comments.
 /// Everything that starts or ends a token is ASCII, so bytes will do.
-pub(crate) fn paint(line: &str, out: &mut Vec<Rgba>) {
+pub(crate) fn paint(line: &str, out: &mut Vec<Tok>) {
     let (b, n) = (line.as_bytes(), line.len());
     out.clear();
-    out.resize(n, theme::TEXT);
+    out.resize(n, Tok::Plain);
     let word = |i: usize| b.get(i).is_some_and(|c| c.is_ascii_alphanumeric() || *c == b'_');
     let mut i = 0;
     while i < n {
         let start = i;
         i += 1;
-        let color = match b[start] {
+        let tok = match b[start] {
             b'/' if b.get(i) == Some(&b'/') => {
                 i = n;
-                DIM
+                Tok::Comment
             }
             b'"' => {
                 while i < n && b[i] != b'"' {
                     i += 1 + usize::from(b[i] == b'\\');
                 }
                 i = (i + 1).min(n);
-                STRING
+                Tok::Str
             }
             c if word(start) => {
                 while word(i) {
                     i += 1;
                 }
                 match c.is_ascii_digit() {
-                    true => NUMBER,
-                    false if KEYWORDS.iter().any(|k| k.as_bytes() == &b[start..i]) => KEYWORD,
-                    false => theme::TEXT,
+                    true => Tok::Number,
+                    false if KEYWORDS.iter().any(|k| k.as_bytes() == &b[start..i]) => Tok::Keyword,
+                    false => Tok::Plain,
                 }
             }
-            _ => theme::TEXT,
+            _ => Tok::Plain,
         };
-        out[start..i].fill(color);
+        out[start..i].fill(tok);
     }
 }
 
@@ -344,6 +377,14 @@ impl App for Studio {
 
     fn wants_text_input(&self) -> bool {
         true
+    }
+
+    fn preferred_size(&self) -> Option<(f32, f32)> {
+        Some((760.0, 540.0))
+    }
+
+    fn icon(&self) -> AppIcon {
+        crate::STUDIO_ICON
     }
 
     fn event(&mut self, ev: AppEvent, cx: &mut Cx<'_>) -> bool {
@@ -372,7 +413,8 @@ impl App for Studio {
         let dirty = if self.dirty { " (modified)" } else { "" };
         let sep = if self.status.is_empty() { "" } else { " · " };
         let note = join(&[&self.path, dirty, sep, &self.status]);
-        let r = ui.rect();
+        let (r, t, line_px) = (ui.rect(), ui.theme(), px(ui, 1.0));
+        let (mono, small) = (t.mono(), t.small());
         // One line right of the buttons, or under them if too little fits.
         let mut room = 0.0;
         ui.row(|ui| {
@@ -383,43 +425,44 @@ impl App for Studio {
             room = r.x + r.w - PAD - x;
             if room >= NOTE_MIN {
                 let ts = ui.text_system();
-                let (a, d) = (ts.ascent(SMALL), ts.descent(SMALL));
+                let (a, d) = (ts.ascent(small), ts.descent(small));
                 let base = ts.snap(b.y + (BUTTON_H - a - d) / 2.0 + a);
-                let shown = ts.ellipsize(&note, SMALL, room);
-                ui.text(x, base, &shown, SMALL);
+                let shown = ts.ellipsize(&note, small, room);
+                ui.text(x, base, &shown, small);
             }
         });
         if room < NOTE_MIN {
             let room = ui.width();
-            let shown = ui.text_system().ellipsize(&note, SMALL, room);
+            let shown = ui.text_system().ellipsize(&note, small, room);
             ui.small(&shown);
         }
         let y0 = ui.cursor().1;
         let ts = ui.text_system();
-        let (row, asc) = (ts.line_height(MONO), ts.ascent(MONO));
+        let (row, asc) = (ts.line_height(mono), ts.ascent(mono));
         let shown = self.problems.len().min(MAX_PROBLEMS);
         // The problem rows, and a gap above them when there are any.
         let panel = shown.min(1) as f32 * SPACING + shown as f32 * PROBLEM_H;
         let well_h = (r.y + r.h - PAD - panel - y0).max(row + 2.0 * INSET);
-        let well = RectF::new(r.x + PAD, y0, ui.width(), well_h);
-        ui.fill(well, 8.0, theme::FIELD);
-        ui.border(well, 8.0, 1.0, theme::BORDER);
+        let well = snapped(ui, RectF::new(r.x + PAD, y0, ui.width(), well_h));
+        ui.fill(well, RADIUS_SM, t.surface_lo);
         self.draw_text(ui, well, (row, asc));
+        ui.border(well, RADIUS_SM, line_px, t.border);
 
         let mut y = well.y + well.h + SPACING;
         for (i, p) in self.problems.iter().take(shown).enumerate() {
             let id = WidgetId(PROBLEM + i as u32);
             let rect = RectF::new(well.x, y, well.w, PROBLEM_H);
-            if ui.state().hover == Some(id) {
-                ui.fill(rect, 6.0, theme::HOVER);
+            let (hover, down) = (ui.state().hover == Some(id), ui.state().pressed == Some(id));
+            if hover {
+                ui.fill(rect, 6.0, t.wash(down));
             }
             let base = ui.text_system().snap(y + (PROBLEM_H - row) / 2.0 + asc);
             let (code, pos) = p.head();
             ui.push_clip(rect);
             let mut x = rect.x + 8.0;
-            for (part, color) in [(&code, ERROR), (&pos, DIM), (&p.message, theme::TEXT)] {
+            for (part, color) in [(&code, t.danger), (&pos, t.text_dim), (&p.message, t.text)] {
                 if !part.is_empty() {
-                    x += ui.text(x, base, part, MONO.with_color(color)) + 8.0;
+                    x += ui.text(x, base, part, mono.with_color(color)) + 8.0;
                 }
             }
             ui.pop_clip();

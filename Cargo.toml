@@ -2,9 +2,7 @@
 resolver = "3"
 members = [
     "crates/fuel",
-    "crates/cap",
     "crates/lang",
-    "crates/wasmgen",
     "crates/applang-syntax",
     "crates/applang",
     "crates/wm",
@@ -24,9 +22,6 @@ members = [
     "crates/term",
     "tools/serve",
 ]
-# The native node takes PTY and WebSocket libraries, so it is its own
-# workspace with its own lockfile, outside the zero-dependency graph.
-exclude = ["node"]
 
 # Every crate inherits these. The version lives here, once.
 [workspace.package]
@@ -42,9 +37,7 @@ repository = "https://github.com/compusophy/computehub"
 # (`fuel::Fuel`, `lang::Diag`, `wm::Wm`).
 [workspace.dependencies]
 compusophy-fuel = { path = "crates/fuel", version = "0.1.0" }
-compusophy-cap = { path = "crates/cap", version = "0.1.0" }
 compusophy-lang = { path = "crates/lang", version = "0.1.0" }
-compusophy-wasmgen = { path = "crates/wasmgen", version = "0.1.0" }
 compusophy-applang-syntax = { path = "crates/applang-syntax", version = "0.1.0" }
 compusophy-applang = { path = "crates/applang", version = "0.1.0" }
 compusophy-wm = { path = "crates/wm", version = "0.1.0" }

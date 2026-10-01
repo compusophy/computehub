@@ -1,21 +1,18 @@
 use super::*;
-use ui::{Pairing, Request};
-
-const PAIR: Pairing = Pairing { port: 7878, token: [7; 32] };
+use ui::Request;
 
 /// Runs each `$ ` line of `script` in a guest shell over `fs` and checks
 /// that the transcript (output without escapes, requests in brackets, the
 /// home as `~`) is `script`.
-fn transcript(fs: &mut Vfs, now: f64, pairing: Option<Pairing>, script: &str) {
-    let (mut g, mut got, mut next) = (Guest::new(), String::new(), 1);
+fn transcript(fs: &mut Vfs, now: f64, script: &str) {
+    let (mut g, mut got) = (Guest::new(), String::new());
     for cmd in script.lines().filter_map(|l| l.strip_prefix("$ ")) {
-        let mut cx = Cx::new(fs, now, pairing, &mut next);
+        let mut cx = Cx::new(fs, now);
         g.run(cmd, &mut cx);
         got += &format!("$ {cmd}\n{}", plain(&std::mem::take(&mut g.out)));
         for r in cx.take_requests() {
             got += &format!("[{}]\n", show(&r));
         }
-        got += if std::mem::take(&mut g.connect) { "[connect]\n" } else { "" };
     }
     assert_eq!(got.replace(Vfs::HOME, "~"), script);
 }
@@ -27,6 +24,7 @@ fn show(r: &Request) -> String {
             format!("{} {name}", ["open", "float"][*floating as usize])
         }
         Request::CloseSelf => "close".into(),
+        Request::SetTheme(name) => format!("theme {name}"),
         other => format!("{other:?}"),
     }
 }
@@ -52,7 +50,6 @@ fn guest_shell_commands_and_errors() {
     transcript(
         &mut fs,
         now,
-        None,
         r#"$ pwd
 ~
 $ mkdir -p a/b c
@@ -98,8 +95,10 @@ $ echo a >
 sh: expected a file name after >
 $ open terminal
 [open terminal]
+$ open settings
+[open settings]
 $ open launcher
-[float launcher]
+open: launcher: no such app (see 'apps')
 $ run counter.app
 [open ~/counter.app]
 $ run notes.txt
@@ -109,20 +108,27 @@ $ edit notes.txt
 $ open nope
 open: nope: no such app (see 'apps')
 $ apps
-terminal  studio  welcome  launcher  about
+terminal  studio  welcome  settings
 /apps/demo.app
 ~/counter.app
 $ uname -a
-compusophyOS 0.1 wasm32
-$ connect
-No node is paired with this page. Start computehub-node and open the pairing
-link it prints; type 'node' for how.
+compusophyOS 0.2 wasm32
+$ theme
+Midnight
+Dawn
+Mono
+$ theme MONO
+[theme Mono]
+$ theme sepia
+theme: sepia: no such theme (see 'theme')
+$ theme a b
+usage: theme [name]
+$ whoami
+guest
 $ exit
 [close]
 "#,
     );
-    let script = "$ whoami\nguest\n$ connect\n[connect]\n";
-    transcript(&mut fs, now, Some(PAIR), script);
 }
 
 #[test]
@@ -130,8 +136,8 @@ fn help_lists_one_command_a_line_at_any_width() {
     for cols in [100, 80, 40, 30] {
         let mut g = Guest::new();
         g.cols = cols;
-        let (mut fs, mut next) = (Vfs::new(), 1);
-        g.run("help", &mut Cx::new(&mut fs, 0.0, None, &mut next));
+        let mut fs = Vfs::new();
+        g.run("help", &mut Cx::new(&mut fs, 0.0));
         let out = plain(&g.out);
         for line in out.lines() {
             assert!(width(line) <= usize::from(cols), "{cols} cols: {line:?}\n{out}");

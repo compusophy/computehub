@@ -1,194 +1,95 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use gfx::{Instance, Kind};
+use gfx::{DrawList, Kind, RectF};
+use host::frame::controls;
+use host::{content_rect, rectf};
 use ui::Key::*;
-use ui::{App, AppEvent as E, Cx, FontId, Sense, Ui, UiState, WidgetId as W};
-use wm::Dir;
+use ui::{App, AppEvent as E, Cx, Sense, THEMES, Ui, WidgetId as W};
+use wm::{Rect, Snap, State};
 
 use super::*;
 
 const SANS: &[u8] = include_bytes!("../../../assets/fonts/Inter-Regular.ttf");
-const BOLD: &[u8] = include_bytes!("../../../assets/fonts/deferred/Inter-SemiBold.ttf");
-const MONO: &[u8] = include_bytes!("../../../assets/fonts/deferred/JetBrainsMono-Regular.ttf");
-const SYM_A: &[u8] = include_bytes!("../../../assets/fonts/lazy/symbols-a.ttf");
-/// The probe's own fill, so its content is easy to count.
-const INK: Rgba = Rgba(1, 2, 3, 255);
-/// Big enough that a few glyphs overflow the atlas at dpr 4.
-const BIG: TextStyle = TextStyle::new(FontId::Mono, 240.0, INK);
-const PORT: u16 = 8123;
-/// The names the default registry knows.
-const KNOWN: &str = "welcome terminal /apps/counter.app launcher long huge nan big";
+const KNOWN: &str = "welcome terminal studio settings about";
+type Log = Rc<RefCell<Vec<(&'static str, E)>>>;
 
-/// What a probe saw: an event, or (`Err`) a frame it drew, its rect and state.
-type Seen = Result<E, (RectF, UiState)>;
-type Log = Rc<RefCell<Vec<(u32, Seen)>>>;
-
-/// A scripted app: instance number (1, 2, ... as created, so window `n`
-/// while every open succeeds), name, log, and whether it wants text input.
-/// It logs all it sees; draws an INK button (hit 1, Click) at (10, 10),
-/// 60 x 20, in its content, hit 3 (Click) over the button's right 20 px and
-/// hit 2 (Text) 30 px lower; and runs `;`-separated text commands. An
-/// "eager" probe connects at its first event, as a paired terminal does; a
-/// "grid" probe, whose grid changes when it draws, then sends on socket 1;
-/// a "busy" probe asks to redraw at every event.
-struct Probe(u32, &'static str, Log, bool);
+/// A scripted app: its name and log. It logs every event, runs the
+/// `;`-separated commands of its text, and draws a Click hit (1) over its
+/// content's top-left 60 x 20 and a Text hit (2) below that. A terminal
+/// wants text input.
+struct Probe(&'static str, Log);
 
 impl App for Probe {
     fn title(&self) -> String {
-        match self.1 {
-            "long" => "A window title far too long for any titlebar at all".into(),
-            name => name.to_uppercase(),
-        }
+        self.0.to_uppercase()
     }
 
     fn draw(&mut self, ui: &mut Ui<'_>) {
         let r = ui.rect();
-        let at = |dx, dy, w| RectF::new(r.x + dx, r.y + dy, w, 20.0);
-        ui.fill(at(10.0, 10.0, 60.0), 0.0, INK);
-        ui.hit(W(1), at(10.0, 10.0, 60.0), Sense::Click);
-        ui.hit(W(3), at(50.0, 10.0, 20.0), Sense::Click);
-        ui.hit(W(2), at(10.0, 40.0, 60.0), Sense::Text);
-        if self.1 == "big" {
-            ui.text(r.x, r.y + 300.0, "ABCD", BIG);
-        }
-        self.2.borrow_mut().push((self.0, Err((r, ui.state()))));
+        ui.hit(W(1), RectF::new(r.x, r.y, 60.0, 20.0), Sense::Click);
+        ui.hit(W(2), RectF::new(r.x, r.y + 20.0, r.w, 40.0), Sense::Text);
     }
 
     fn event(&mut self, ev: E, cx: &mut Cx<'_>) -> bool {
-        // Whether it drew since its last event; `None` before its first.
-        let log = self.2.borrow();
-        let drew = log.iter().rfind(|e| e.0 == self.0).map(|e| e.1.is_err());
-        drop(log);
-        self.2.borrow_mut().push((self.0, Ok(ev.clone())));
-        let port = cx.pairing.map_or(1, |p| p.port);
-        let cmds = match (&ev, self.1, drew) {
-            (E::Text(t), ..) => t.as_str(),
-            (_, "eager", None) => "connect",
-            (_, "grid", Some(true)) => "send 1",
-            _ => "",
+        self.1.borrow_mut().push((self.0, ev.clone()));
+        let E::Text(cmds) = ev else {
+            return matches!(ev, E::Click(_));
         };
         for cmd in cmds.split(';') {
-            let (verb, arg) = cmd.split_once(' ').unwrap_or((cmd, ""));
-            let id = SocketId(arg.parse().unwrap_or(0));
-            match verb {
-                "open" => cx.open(arg),
-                "float" => cx.open_floating(arg),
-                "close" => cx.close_self(),
-                "connect" => drop(cx.connect(port)),
-                "send" => cx.send(id, b"hi".to_vec()),
-                "drop" => cx.close_socket(id),
-                "fonts" => cx.load_fallback_fonts(),
-                "text" => self.3 = !self.3,
-                "write" => cx.vfs.write("/tmp/probe", arg.as_bytes()).unwrap(),
-                "now" => cx.vfs.write("/tmp/now", &cx.now_ms.to_le_bytes()).unwrap(),
+            match cmd.split_once(' ').unwrap_or((cmd, "")) {
+                ("theme", name) => cx.set_theme(name),
+                ("open", name) => cx.open(name),
+                ("close", _) => cx.close_self(),
                 _ => {}
             }
         }
-        self.1 == "busy" || matches!(ev, E::Click(_) | E::Wheel { .. } | E::Text(_))
+        true
     }
 
     fn wants_text_input(&self) -> bool {
-        self.3
-    }
-
-    fn preferred_size(&self) -> Option<(f32, f32)> {
-        let names = ["launcher", "huge", "nan"];
-        let i = names.iter().position(|n| *n == self.1)?;
-        Some([(400.0, 300.0), (5e3, 5e3), (f32::NAN, 100.0)][i])
+        self.0 == "terminal"
     }
 }
 
-/// Probes for the space-separated names in `known`; `name:alias` opens
-/// `name` as a probe called `alias`.
-fn registry(log: &Log, known: &'static str) -> Registry {
-    let (log, n) = (log.clone(), Rc::new(RefCell::new(0)));
-    Box::new(move |name| {
-        let named = |k: &&str| k.split(':').next() == Some(name);
-        let k = known.split(' ').find(named)?;
-        *n.borrow_mut() += 1;
-        let probe = Probe(*n.borrow(), k.rsplit(':').next()?, log.clone(), false);
-        Some(Box::new(probe) as Box<dyn App>)
-    })
-}
-
-fn fonts() -> TextSystem {
-    let mut text = TextSystem::new(SANS.to_vec()).unwrap();
-    text.set_font(FontId::SansBold, BOLD.to_vec()).unwrap();
-    text.set_font(FontId::Mono, MONO.to_vec()).unwrap();
-    text
-}
-/// A pairing on `port`; none for port 0.
-fn pairing(port: u16) -> Option<Pairing> {
-    ui::parse_pairing(&format!("node={port}&token={}", "0f".repeat(32)))
-}
-/// A desktop of the probes in `known`, paired on `port` unless it is 0.
-fn desk_of(w: f32, h: f32, known: &'static str, port: u16) -> (Shell, Log) {
+fn desk_of(w: f32, h: f32) -> (Shell, Log) {
     let log = Log::default();
-    let reg = registry(&log, known);
-    (Shell::new(w, h, fonts(), Vfs::new(), reg, pairing(port)), log)
+    let l = log.clone();
+    let reg: Registry = Box::new(move |name| {
+        let k = KNOWN.split(' ').find(|k| *k == name)?;
+        Some(Box::new(Probe(k, l.clone())) as Box<dyn App>)
+    });
+    let text = TextSystem::new(SANS.to_vec()).unwrap();
+    (Shell::new(w, h, text, Vfs::new(), reg, "midnight"), log)
 }
-/// The default desktop, its startup report taken and its log cleared.
+
+/// A 1280 x 800 desktop with welcome open and at rest at t = 1000, its
+/// log cleared.
 fn desk() -> (Shell, Log) {
-    let (mut s, log) = desk_of(1280.0, 800.0, KNOWN, PORT);
-    assert_eq!(s.input(Input::PointerLeave).text_input, Some(false));
-    log.borrow_mut().clear();
+    let (mut s, log) = desk_of(1280.0, 800.0);
+    s.at(0.0);
+    s.at(1000.0);
+    log.take();
     (s, log)
 }
-fn take(log: &Log) -> Vec<(u32, Seen)> {
-    std::mem::take(&mut *log.borrow_mut())
-}
-/// The events logged since the last take.
-fn evs(log: &Log) -> Vec<(u32, E)> {
-    take(log).into_iter().filter_map(|(n, s)| Some((n, s.ok()?))).collect()
-}
-/// The frames drawn since the last take: rects and UI states.
-fn frames(log: &Log) -> Vec<(u32, RectF, UiState)> {
-    let drew = |(n, s): (u32, Seen)| s.err().map(|(r, st)| (n, r, st));
-    take(log).into_iter().filter_map(drew).collect()
-}
-/// Modifiers named by letter: `a`lt, `m`eta, `s`hift, `c`trl.
-fn mods(m: &str) -> Mods {
-    let mut mods = Mods::default();
-    [mods.shift, mods.ctrl, mods.alt, mods.meta] = ['s', 'c', 'a', 'm'].map(|c| m.contains(c));
-    mods
-}
-fn resized(c: RectF) -> E {
-    E::Resized { w: c.w, h: c.h }
-}
-fn ws_open(id: u32, port: u16) -> Effect {
-    let url = format!("ws://127.0.0.1:{port}/");
-    Effect::WsOpen { id, url }
-}
-/// "hi" sent on socket 1.
-fn hi() -> Effect {
-    let bytes = b"hi".to_vec();
-    Effect::WsSend { id: 1, bytes }
-}
-fn rc(r: &Response) -> (bool, bool) {
-    (r.redraw, r.consumed)
-}
-fn mid(r: RectF) -> (f32, f32) {
-    (r.x + r.w / 2.0, r.y + r.h / 2.0)
-}
-fn count(all: &[Instance], kind: Kind, color: Rgba) -> usize {
-    let kind = kind as u8 as f32;
-    let hit = |i: &&Instance| i.kind == kind && i.color == color;
-    all.iter().filter(hit).count()
-}
-fn is_glyph(i: &Instance) -> bool {
-    i.kind == Kind::Glyph as u8 as f32
-}
 
-/// Test drivers, as methods so a point can be computed from the shell in
-/// the same call: `s.click(s.at(2, 20.0, 15.0))`.
+/// Test drivers.
 impl Shell {
-    fn k(&mut self, key: Key, m: &str) -> Response {
-        let mods = mods(m);
-        self.input(Input::Key { key, mods })
+    /// Draws a frame at `t` ms; whether more are wanted.
+    fn at(&mut self, t: f64) -> bool {
+        self.set_now(t);
+        self.draw(&mut DrawList::new())
     }
-    fn say(&mut self, t: &str) -> Response {
-        self.input(Input::Text(t.to_string()))
+    /// Lets every animation finish, `t` ms on.
+    fn rest(&mut self, t: f64) {
+        let now = self.now();
+        self.at(now);
+        self.at(now + t);
+    }
+    fn k(&mut self, key: Key, m: &str) -> Response {
+        let mut mods = Mods::default();
+        [mods.shift, mods.ctrl, mods.alt, mods.meta] = ['s', 'c', 'a', 'm'].map(|c| m.contains(c));
+        self.input(Input::Key { key, mods })
     }
     fn down(&mut self, (x, y): (f32, f32)) -> Response {
         self.input(Input::PointerDown { x, y, button: 0 })
@@ -196,606 +97,363 @@ impl Shell {
     fn up(&mut self, (x, y): (f32, f32)) -> Response {
         self.input(Input::PointerUp { x, y, button: 0 })
     }
-    fn move_to(&mut self, (x, y): (f32, f32)) -> Response {
+    fn to(&mut self, (x, y): (f32, f32)) -> Response {
         self.input(Input::PointerMove { x, y })
     }
     fn click(&mut self, at: (f32, f32)) -> Response {
+        self.to(at);
         self.down(at);
         self.up(at)
     }
-    fn rect_of(&self, n: u32) -> Option<Rect> {
-        let layout = self.wm().layout();
-        layout.iter().find(|p| p.win == WinId(n)).map(|p| p.rect)
+    fn drag(&mut self, from: (f32, f32), to: (f32, f32)) -> Response {
+        self.to(from);
+        self.down(from);
+        self.to(to);
+        self.up(to)
     }
-    fn content(&self, n: u32) -> RectF {
-        content_rect(rectf(self.rect_of(n).unwrap()))
+    fn rect(&self, n: u32) -> Option<Rect> {
+        self.placement(WinId(n)).map(|p| p.rect)
     }
-    /// A point `(dx, dy)` into window `n`'s content.
-    fn at(&self, n: u32, dx: f32, dy: f32) -> (f32, f32) {
-        let c = self.content(n);
-        (c.x + dx, c.y + dy)
+    fn names(&self) -> Vec<&str> {
+        self.host.wins().iter().filter(|w| !w.closing()).map(|w| &*w.name).collect()
     }
-    /// Centers of window `n`'s float and close buttons.
-    fn buttons(&self, n: u32) -> [(f32, f32); 2] {
-        let r = rectf(self.rect_of(n).unwrap());
-        title_buttons(r, WinId(n)).unwrap().map(|b| mid(b.0))
+    fn dock_names(&self) -> Vec<&str> {
+        self.dock.iter().map(|d| &*d.0).collect()
     }
-    /// Center of a panel button.
-    fn spot(&self, t: Target) -> (f32, f32) {
-        let targets = self.panel_targets();
-        mid(targets.iter().find(|p| p.1 == t).unwrap().0)
-    }
-    fn drawn(&mut self) -> Vec<Instance> {
-        let mut list = DrawList::new();
-        self.draw(&mut list);
-        list.instances().to_vec()
-    }
-    fn names(&self) -> Vec<(u32, &str)> {
-        let wins = self.host.wins().iter();
-        wins.map(|w| (w.id.0, &*w.name)).collect()
+    fn tile_at(&self, i: usize) -> (f32, f32) {
+        let r = self.dock_tile(i);
+        (r.x + 22.0, r.y + 22.0)
     }
 }
 
 #[test]
-fn startup_opens_the_apps_and_focuses_welcome() {
-    let (mut s, log) = desk_of(1280.0, 800.0, KNOWN, PORT);
-    let (g, n) = (s.wm().gaps(), s.wm().workspace_count());
-    assert_eq!((g.outer, g.inner, n), (10, 10, 4));
-    assert_eq!(s.wm().area(), Rect::new(0, 36, 1280, 764));
-    assert!(s.wm().layout().iter().all(|p| !p.floating));
-    let names = [(1, "welcome"), (2, "terminal"), (3, "/apps/counter.app")];
-    assert_eq!(s.names(), names);
-    assert_eq!((s.wm().focused(), s.clear_color()), (Some(WinId(1)), BG));
-    assert_eq!(s.rect_of(1), Some(Rect::new(10, 46, 625, 744)));
-    assert_eq!(s.content(1), RectF::new(11.0, 76.0, 623.0, 713.0));
-    // Each app learns its focus and size before it first draws.
-    let size = |n| (n, resized(s.content(n)));
-    let want = [(1, E::Focus(true)), size(1), size(2), size(3)];
-    assert_eq!(evs(&log), want);
-    let first = s.input(Input::PointerLeave);
-    assert_eq!(rc(&first), (false, false));
-    assert_eq!((first.text_input, first.effects), (Some(false), vec![]));
+fn startup_opens_welcome_centered() {
+    let (mut s, _) = desk_of(1280.0, 800.0);
+    assert_eq!(s.wm().area(), Rect::new(0, 32, 1280, 684));
+    assert_eq!(s.rect(1), Some(Rect::new(300, 134, 680, 480)));
+    assert_eq!((s.names(), s.theme_name()), (vec!["welcome"], "Midnight"));
+    assert_eq!(s.dock_names(), ["terminal", "studio", "settings", "welcome"]);
+    // The window fades in from its first frame; then frames stop.
+    assert!(s.animating());
+    assert!(s.at(5000.0) && s.at(5100.0) && !s.at(5180.0));
+    let r = s.input(Input::PointerLeave);
+    assert_eq!(
+        (r.redraw, r.consumed, r.text_input, r.animating),
+        (false, false, Some(false), false)
+    );
     assert_eq!(s.input(Input::PointerLeave), Response::default());
-    // Unknown names open nothing; startup's effects wait for take_effects.
-    let (mut s, _) = desk_of(1280.0, 800.0, "welcome:eager /apps/counter.app:eager", 0);
-    assert_eq!(s.names(), [(1, "welcome"), (2, "/apps/counter.app")]);
-    assert_eq!(s.take_effects(), [ws_open(1, 1), ws_open(2, 1)]);
-    assert!(s.take_effects().is_empty() && s.input(Input::PointerLeave).effects.is_empty());
-    let (s, _) = desk_of(99.6, 36.4, "", 0);
-    assert_eq!(s.wm().area(), Rect::new(0, 36, 100, 0));
 }
 
 #[test]
-fn every_binding_reaches_the_wm() {
-    let f = WinId(0); // stands for the window focused at the time
-    let mut table = vec![
-        (Enter, "a", Cmd::Open { floating: false }),
-        (Enter, "as", Cmd::Open { floating: true }),
-        (Char('f'), "m", Cmd::ToggleFloat),
-        (Char('o'), "a", Cmd::ToggleOrientation),
+fn titlebars_drag_and_double_click() {
+    let (mut s, log) = desk();
+    let title = (400.0, 150.0);
+    assert_eq!(s.to(title).cursor, Some(Cursor::Grab));
+    assert_eq!(s.down(title).cursor, Some(Cursor::Grabbing));
+    // Under 4 px of travel nothing moves; then the window follows.
+    assert!(!s.to((402.0, 151.0)).redraw);
+    let r = s.to((500.0, 250.0));
+    assert_eq!(
+        (r.redraw, r.animating, s.rect(1)),
+        (true, false, Some(Rect::new(400, 234, 680, 480)))
+    );
+    assert_eq!(s.up((500.0, 250.0)).cursor, Some(Cursor::Grab));
+    // Two presses within 350 ms maximize, two more restore.
+    for (t, state) in [(2000.0, State::Maximized), (3000.0, State::Normal)] {
+        let r = s.rect(1).unwrap();
+        let at = (r.x as f32 + 100.0, r.y as f32 + 10.0);
+        s.set_now(t);
+        s.click(at);
+        s.set_now(t + 300.0);
+        assert!(s.click(at).animating);
+        assert_eq!(s.placement(WinId(1)).unwrap().state, state);
+    }
+    // Presses further apart are two clicks.
+    s.set_now(4000.0);
+    s.click((500.0, 244.0));
+    s.set_now(4400.0);
+    s.click((500.0, 244.0));
+    assert_eq!(s.rect(1), Some(Rect::new(400, 234, 680, 480)));
+    assert!(log.take().iter().all(|e| matches!(e.1, E::Focus(_) | E::Resized { .. })));
+}
+
+#[test]
+fn drops_snap_and_snapped_windows_come_back_under_the_pointer() {
+    let (mut s, _) = desk();
+    let area = s.wm().area();
+    let cases = [
+        ((3.0, 400.0), Some(Snap::Left)),
+        ((1278.0, 400.0), Some(Snap::Right)),
+        ((10.0, 10.0), Some(Snap::TopLeft)),
+        ((1270.0, 790.0), Some(Snap::BottomRight)),
+        ((640.0, 4.0), None),
     ];
-    let dirs = [Dir::Left, Dir::Down, Dir::Up, Dir::Right];
-    let keys = "hjkl".chars().map(Char).chain([Left, Down, Up, Right]);
-    for (k, d) in keys.zip(dirs.into_iter().cycle()) {
-        table.push((k, "a", Cmd::FocusDir(d)));
-        table.push((k, "as", Cmd::MoveDir(d)));
-        table.push((k, "ac", Cmd::Resize { dir: d, px: 40 }));
+    for (to, snap) in cases {
+        let r = rectf(s.rect(1).unwrap());
+        let grab = (r.x + r.w / 2.0, r.y + 10.0);
+        s.to(grab);
+        s.down(grab);
+        s.to((grab.0 + 20.0, grab.1 + 20.0));
+        s.to(to);
+        let zone = s.grab.and_then(Grab::zone);
+        // The preview shows where it will go, then the window goes there.
+        assert!(zone.is_some() && s.animating());
+        s.rest(1000.0);
+        assert_eq!(rectf(zone.unwrap().rect(area)), s.motion.preview.value(s.now()).rect);
+        s.up(to);
+        s.rest(1000.0);
+        let p = s.placement(WinId(1)).unwrap();
+        assert_eq!((p.snap, p.state == State::Maximized), (snap, snap.is_none()));
+        assert_eq!(p.rect, zone.unwrap().rect(area));
+        assert_eq!(s.motion.preview.value(s.now()).a, 0.0);
     }
-    table.extend([
-        (Char('3'), "as", Cmd::MoveToWorkspace { win: f, ws: 2 }),
-        (Char('3'), "m", Cmd::SwitchWorkspace(2)),
-        (Char('q'), "a", Cmd::Close(f)),
-        (Char('1'), "ma", Cmd::SwitchWorkspace(0)),
-        (Char('4'), "a", Cmd::SwitchWorkspace(3)),
-    ]);
-    let ((mut s, log), mut kinds) = (desk(), Vec::new());
-    s.click(s.at(3, 300.0, 200.0));
-    for (k, m, cmd) in table {
-        let mut want = s.wm().clone();
-        let focused = want.focused().unwrap_or(f);
-        let cmd = match cmd {
-            Cmd::Close(_) => Cmd::Close(focused),
-            Cmd::MoveToWorkspace { ws, .. } => Cmd::MoveToWorkspace { win: focused, ws },
-            c => c,
-        };
-        let (before, kind) = (want.state_hash(), std::mem::discriminant(&cmd));
-        let _ = want.apply(cmd);
-        let r = s.k(k, m);
-        assert_eq!(s.wm().state_hash(), want.state_hash(), "{k:?} {m}");
-        assert_eq!(rc(&r), (want.state_hash() != before, true), "{k:?} {m}");
-        if r.redraw && !kinds.contains(&kind) {
-            kinds.push(kind);
+    // Dragged at a quarter of its width, a maximized window comes back to
+    // its normal size with the pointer a quarter across.
+    s.drag((320.0, 40.0), (600.0, 300.0));
+    assert_eq!(s.rect(1), Some(Rect::new(430, 292, 680, 480)));
+}
+
+#[test]
+fn edges_resize_with_their_cursors() {
+    let (mut s, _) = desk();
+    let cursors = [
+        ((300.0, 300.0), Cursor::EwResize),
+        ((980.0, 300.0), Cursor::EwResize),
+        ((600.0, 135.0), Cursor::NsResize),
+        ((298.0, 135.0), Cursor::NwseResize),
+        ((979.0, 612.0), Cursor::NwseResize),
+        ((975.0, 135.0), Cursor::NeswResize),
+        ((600.0, 400.0), Cursor::Default),
+    ];
+    for (at, c) in cursors {
+        s.to(at);
+        assert_eq!(s.cursor, c, "{at:?}");
+    }
+    // The left edge moves; the right one stays; the size stays legal.
+    s.drag((300.0, 300.0), (250.0, 300.0));
+    assert_eq!(s.rect(1), Some(Rect::new(250, 134, 730, 480)));
+    s.drag((250.0, 300.0), (900.0, 300.0));
+    assert_eq!(s.rect(1), Some(Rect::new(660, 134, 320, 480)));
+    // The top edge stops under the bar.
+    s.drag((800.0, 134.0), (800.0, 0.0));
+    assert_eq!(s.rect(1), Some(Rect::new(660, 32, 320, 582)));
+    s.drag((980.0, 613.0), (1100.0, 700.0));
+    assert_eq!(s.rect(1), Some(Rect::new(660, 32, 440, 669)));
+}
+
+#[test]
+fn controls_minimize_maximize_and_close() {
+    let (mut s, log) = desk();
+    let [min, max, close] =
+        controls(rectf(s.rect(1).unwrap())).unwrap().map(|c| (c.x + 6.0, c.y + 6.0));
+    // Hovering them shows their glyphs and the close button's danger.
+    let danger = |s: &mut Shell| {
+        let mut list = DrawList::new();
+        s.draw(&mut list);
+        list.instances()
+            .iter()
+            .any(|i| i.color == THEMES[0].danger && i.kind == Kind::Fill as u8 as f32)
+    };
+    assert!(!danger(&mut s));
+    assert!(s.to(min).redraw && danger(&mut s));
+    s.click(max);
+    assert_eq!(s.placement(WinId(1)).unwrap().state, State::Maximized);
+    s.rest(1000.0);
+    s.k(Down, "a");
+    s.rest(1000.0);
+    s.click(min);
+    assert_eq!((s.wm().windows()[0].1, s.wm().focused()), (State::Minimized, None));
+    // It flies into its dock tile: drawn until it gets there.
+    assert!(s.animating());
+    s.rest(1000.0);
+    s.click(s.tile_at(3));
+    assert_eq!(s.wm().focused(), Some(WinId(1)));
+    s.rest(1000.0);
+    // Closing fades it out, then drops the app.
+    assert!(s.click(close).animating);
+    assert_eq!((s.names().len(), s.host.wins().len()), (0, 1));
+    s.rest(1000.0);
+    assert_eq!(s.host.wins().len(), 0);
+    assert_eq!(log.take().last(), Some(&("welcome", E::Focus(true))));
+}
+
+#[test]
+fn dock_tiles_open_minimize_and_focus() {
+    let (mut s, log) = desk();
+    assert!(s.to(s.tile_at(0)).redraw);
+    assert!(s.animating());
+    s.click(s.tile_at(0));
+    assert_eq!(s.names(), ["welcome", "terminal"]);
+    assert_eq!(s.wm().focused(), Some(WinId(2)));
+    s.click(s.tile_at(0));
+    assert_eq!((s.wm().windows()[1].1, s.wm().focused()), (State::Minimized, Some(WinId(1))));
+    s.click(s.tile_at(0));
+    assert_eq!((s.wm().focused(), s.wm().windows()[1].1), (Some(WinId(2)), State::Normal));
+    s.click(s.tile_at(3));
+    assert_eq!(s.wm().focused(), Some(WinId(1)));
+    s.click(s.tile_at(3));
+    assert_eq!(s.wm().windows()[0].1, State::Minimized);
+    // The gap between tiles splits; the shelf's ends are bare.
+    let d = s.dock_rect();
+    assert_eq!(s.hit(d.x + 56.0, d.y + 30.0), Some(Target::Dock(0)));
+    assert_eq!(s.hit(d.x + 57.0, d.y + 30.0), Some(Target::Dock(1)));
+    assert_eq!(s.hit(d.x + 2.0, d.y + 2.0), Some(Target::DockBar));
+    assert!(log.take().iter().all(|e| !matches!(e.1, E::Click(_))));
+}
+
+#[test]
+fn the_launcher_searches_and_opens() {
+    let (mut s, log) = desk();
+    let r = s.k(Space, "a");
+    assert_eq!((r.consumed, r.text_input, s.launcher.open), (true, Some(true), true));
+    let found = |s: &Shell| {
+        (0..s.launcher.search.count())
+            .map(|k| s.launcher.search.get(k).unwrap().name.clone())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(found(&s), ["terminal", "studio", "settings", "welcome", "about"]);
+    s.input(Input::Text("st".into()));
+    assert_eq!(found(&s), ["studio", "settings"]);
+    assert!(s.k(Char('s'), "").consumed && s.k(Right, "").redraw);
+    let r = s.k(Enter, "");
+    assert_eq!((s.launcher.open, r.text_input), (false, Some(false)));
+    assert_eq!(s.names(), ["welcome", "settings"]);
+    // The mark shows it; Escape, the veil and Alt+Space hide it.
+    for hide in 0..3 {
+        s.click((19.0, 16.0));
+        assert!(s.launcher.open && s.hit(640.0, 400.0) == Some(Target::Panel));
+        match hide {
+            0 => _ = s.k(Escape, ""),
+            1 => _ = s.click((5.0, 400.0)),
+            _ => _ = s.k(Space, "m"),
         }
+        assert!(!s.launcher.open && s.animating());
     }
-    assert_eq!(kinds.len(), 9, "a binding never changed the wm");
-    // Bindings never reach an app, and closed windows drop their apps.
-    assert!(!evs(&log).iter().any(|e| matches!(e.1, E::Key { .. })));
-    let live: usize = (0..4).map(|ws| s.wm().layout_of(ws).len()).sum();
-    let wins = s.host.wins();
-    assert!(wins.len() == live && wins.iter().all(|w| s.wm().workspace_of(w.id).is_some()));
+    // An app can ask for it; tiles open what they show.
+    s.rest(1000.0);
+    s.input(Input::Text("".into()));
+    s.host.deliver(WinId(1), E::Text("open launcher".into()), &mut Response::default());
+    s.input(Input::PointerLeave);
+    assert!(s.launcher.open);
+    s.rest(1000.0);
+    let t = s.panel().tile(0);
+    s.click((t.x + 40.0, t.y + 40.0));
+    assert_eq!(s.names(), ["welcome", "settings", "terminal"]);
+    assert!(log.take().iter().all(|e| !matches!(e.1, E::Key { .. })));
+    // Paste reaches the query through the browser.
+    s.k(Space, "a");
+    assert!(!s.k(Char('v'), "c").consumed);
+}
+
+#[test]
+fn bindings_drive_the_wm() {
+    let (mut s, log) = desk();
+    assert!(s.k(Enter, "a").animating);
+    assert_eq!(s.names(), ["welcome", "terminal"]);
+    let f = |s: &Shell| s.placement(WinId(2)).map(|p| (p.state, p.snap));
+    s.k(Up, "m");
+    assert_eq!(f(&s), Some((State::Maximized, None)));
+    s.k(Down, "a");
+    assert_eq!(f(&s), Some((State::Normal, None)));
+    s.k(Left, "a");
+    assert_eq!(f(&s), Some((State::Normal, Some(Snap::Left))));
+    s.k(Right, "a");
+    assert_eq!(f(&s), Some((State::Normal, Some(Snap::Right))));
+    s.k(Char('`'), "a");
+    assert_eq!(s.wm().focused(), Some(WinId(1)));
+    s.k(Char('`'), "as");
+    assert_eq!(s.wm().focused(), Some(WinId(2)));
+    s.k(Down, "a");
+    assert_eq!((f(&s), s.wm().focused()), (None, Some(WinId(1))));
+    assert!(s.k(Char('q'), "a").consumed);
+    assert_eq!(s.names(), ["terminal"]);
+    assert!(log.take().iter().all(|e| !matches!(e.1, E::Key { .. })));
 }
 
 #[test]
 fn other_keys_go_to_the_focused_app() {
     let (mut s, log) = desk();
-    let hash = s.wm().state_hash();
-    // Unbound keys, with or without Alt and Meta, are the app's.
-    let unbound = [(Escape, "a"), (Char('5'), "a"), (Char('0'), "m")];
-    let more = [(Enter, "ac"), (Char('q'), "as"), (Char('v'), "ms")];
-    let ctrl = [(Tab, ""), (Char('i'), "c"), (Char('a'), "c")];
-    let insert = [(Insert, ""), (Insert, "c"), (Insert, "cs")];
-    for (key, m) in unbound.into_iter().chain(more).chain(ctrl).chain(insert) {
-        let mods = mods(m);
-        assert_eq!(rc(&s.k(key, m)), (false, true), "{key:?} {m}");
-        assert_eq!(evs(&log), [(1, E::Key { key, mods })], "{key:?} {m}");
+    for (key, m) in [(Escape, "a"), (Char('x'), ""), (Enter, "ac"), (Char('q'), "as"), (F(5), "")] {
+        let r = s.k(key, m);
+        assert_eq!(r.consumed, key != F(5), "{key:?} {m}");
+        assert!(matches!(log.take()[..], [("welcome", E::Key { .. })]));
     }
-    // Paste keys go to the browser, as the platform leaves them; the text
-    // comes after. A terminal sent Shift+Insert too would paste twice.
-    let paste = [(Char('v'), "c"), (Char('v'), "cs"), (Char('v'), "m")];
-    for (key, m) in paste.into_iter().chain([(Insert, "s")]) {
-        assert_eq!(s.k(key, m), Response::default(), "{key:?} {m}");
-    }
-    assert_eq!(rc(&s.say("pasted")), (true, true));
-    assert_eq!(evs(&log), [(1, E::Text("pasted".into()))]);
-    // Reload and the developer tools are the browser's unless the app
-    // wants text input.
-    let browser = [(F(5), ""), (F(12), ""), (Char('r'), "c")];
-    let more = [(Char('r'), "cs"), (Char('i'), "cs")];
-    for (key, m) in browser.into_iter().chain(more) {
-        let mods = mods(m);
-        assert!(!s.k(key, m).consumed, "{key:?} {m}");
-        assert_eq!(evs(&log), [(1, E::Key { key, mods })]);
-        s.say("text");
-        assert!(s.k(key, m).consumed, "{key:?} {m}");
-        s.say("text");
-        take(&log);
-    }
-    assert_eq!(s.wm().state_hash(), hash);
-    // With no window focused, keys and text pass through.
-    s.k(Char('2'), "a");
-    take(&log);
-    assert_eq!(s.k(Char('a'), ""), Response::default());
-    assert_eq!(s.say("x"), Response::default());
-    assert_eq!(s.say(""), Response::default());
-    assert_eq!(evs(&log), []);
+    // Paste keys are the browser's; the text comes after.
+    assert_eq!(s.k(Char('v'), "c"), Response::default());
+    assert!(s.input(Input::Text("hi".into())).consumed);
+    assert_eq!(log.take(), [("welcome", E::Text("hi".into()))]);
+    // A terminal wants text: reload is its own.
+    let r = s.k(Enter, "a");
+    assert_eq!(r.text_input, Some(true));
+    assert!(s.k(F(5), "").consumed);
 }
 
 #[test]
-fn focus_and_text_input_are_reported() {
+fn content_gets_the_pointer() {
     let (mut s, log) = desk();
-    assert_eq!(s.say("text").text_input, Some(true));
-    assert_eq!(s.say("nothing").text_input, None);
-    assert_eq!(s.k(Right, "a").text_input, Some(false));
-    assert_eq!(s.k(Left, "a").text_input, Some(true));
-    assert_eq!(s.k(Char('2'), "a").text_input, Some(false));
-    assert_eq!(s.k(Char('1'), "a").text_input, Some(true));
-    assert_eq!(s.say("text").text_input, Some(false));
-    take(&log);
-    // Focus moves reach both apps; a workspace with none loses it.
-    s.click(s.at(3, 300.0, 200.0));
-    let moved = [(1, E::Focus(false)), (3, E::Focus(true))];
-    assert_eq!(evs(&log)[..2], moved);
-    s.k(Char('2'), "a");
-    assert_eq!(evs(&log), [(3, E::Focus(false))]);
-    s.k(Enter, "a");
-    assert_eq!(evs(&log)[0], (4, E::Focus(true)));
-    // A new screen size resizes every app, on every workspace.
-    s.input(Input::Resize { w: 999.0, h: 700.0 });
-    let sized = evs(&log);
-    assert!(sized.len() == 4 && (1..=4).all(|n| sized.iter().any(|e| e.0 == n)));
+    let c = content_rect(rectf(s.rect(1).unwrap()));
+    assert_eq!(s.to((c.x + 30.0, c.y + 40.0)).cursor, Some(Cursor::Text));
+    s.click((c.x + 10.0, c.y + 10.0));
+    let want = [
+        ("welcome", E::PointerDown { x: 10.0, y: 10.0, id: Some(W(1)) }),
+        ("welcome", E::Click(W(1))),
+    ];
+    assert_eq!(log.take(), want);
+    // A release elsewhere is no click; the wheel goes to the window under it.
+    s.down((c.x + 10.0, c.y + 10.0));
+    s.up((c.x + 100.0, c.y + 10.0));
+    assert!(s.input(Input::Wheel { x: c.x + 5.0, y: c.y + 5.0, dy: 3.0 }).consumed);
+    assert_eq!(log.take().len(), 2);
 }
 
 #[test]
-fn the_pointer_presses_clicks_and_hovers_widgets() {
-    let (mut s, log) = desk();
-    s.drawn();
-    take(&log);
-    let press = |x, y, id: Option<u32>| {
-        let id = id.map(W);
-        E::PointerDown { x, y, id }
-    };
-    // Pressing content focuses the window first; coordinates are relative.
-    assert_eq!(rc(&s.down(s.at(2, 20.0, 15.0))), (true, true));
-    let focus = [(1, E::Focus(false)), (2, E::Focus(true))];
-    assert_eq!(evs(&log)[..2], focus);
-    s.drawn();
-    let st = frames(&log);
-    let two = st.iter().find(|x| x.0 == 2).unwrap().2;
-    let two = (two.hover, two.pressed, two.focused);
-    assert_eq!(two, (Some(W(1)), Some(W(1)), true));
-    assert!(st.iter().all(|x| x.0 == 2 || x.2 == UiState::default()));
-    assert_eq!(rc(&s.up(s.at(2, 21.0, 16.0))), (true, true));
-    assert_eq!(evs(&log), [(2, E::Click(W(1)))]);
-    // The topmost hit wins; releasing elsewhere, or over a text hit, is no click.
-    s.click(s.at(2, 55.0, 15.0));
-    let want = [(2, press(55.0, 15.0, Some(3))), (2, E::Click(W(3)))];
-    assert_eq!(evs(&log), want);
-    s.down(s.at(2, 20.0, 15.0));
-    s.up(s.at(2, 20.0, 35.0));
-    s.click(s.at(2, 20.0, 45.0));
-    s.click(s.at(2, 200.0, 200.0));
-    let downs = [(20.0, 15.0), (20.0, 45.0), (200.0, 200.0)];
-    let want = downs.into_iter().zip([Some(1), Some(2), None]);
-    let want = want.map(|((x, y), id)| (2, press(x, y, id)));
-    assert!(evs(&log).into_iter().eq(want));
-    // A release over another window, or with another button, is no click.
-    s.down(s.at(2, 20.0, 15.0));
-    s.up(s.at(3, 20.0, 15.0));
-    let (x, y) = s.at(2, 20.0, 15.0);
-    s.down((x, y));
-    s.input(Input::PointerUp { x, y, button: 2 });
-    assert!(!evs(&log).iter().any(|e| matches!(e.1, E::Click(_))));
-    // Titlebars are not content; hovering a widget redraws when it changes.
-    let r = rectf(s.rect_of(3).unwrap());
-    s.click((r.x + 100.0, r.y + 10.0));
-    assert_eq!(evs(&log), [(2, E::Focus(false)), (3, E::Focus(true))]);
-    assert!(s.move_to(s.at(3, 20.0, 15.0)).redraw);
-    assert_eq!(s.app_hover, Some((WinId(3), W(1))));
-    assert!(!s.move_to(s.at(3, 21.0, 15.0)).redraw);
-    assert!(s.move_to(s.at(3, 55.0, 15.0)).redraw);
-    assert!(s.move_to(s.at(3, 200.0, 200.0)).redraw);
-    assert_eq!(s.app_hover, None);
-    // The wheel goes to the window under the pointer, if any, with the
-    // pointer relative to its content.
-    let (x, y) = s.at(2, 50.0, 60.0);
-    assert_eq!(rc(&s.input(Input::Wheel { x, y, dy: 40.0 })), (true, true));
-    assert_eq!(evs(&log), [(2, E::Wheel { x: 50.0, y: 60.0, dy: 40.0 })]);
-    for (x, y, dy) in [(x, 10.0, 1.0), (x, y, f32::NAN)] {
-        assert_eq!(s.input(Input::Wheel { x, y, dy }), Response::default());
+fn themes_switch_and_crossfade() {
+    let (mut s, _) = desk();
+    let theme = (1280.0 - 19.0, 16.0);
+    for name in ["Dawn", "Mono", "Midnight"] {
+        s.click(theme);
+        assert_eq!((s.theme_name(), s.clear_color()), (name, ui::theme(name).base));
+        assert!(s.animating());
+        s.rest(1000.0);
+        assert!(!s.animating());
     }
-    assert_eq!((evs(&log), s.wm().focused()), (vec![], Some(WinId(3))));
+    s.host.deliver(WinId(1), E::Text("theme MONO;theme nope".into()), &mut Response::default());
+    assert!(s.input(Input::PointerLeave).redraw);
+    assert_eq!(s.theme_name(), "Mono");
+    let (s2, _) = desk_of(800.0, 600.0);
+    assert_eq!(s2.theme_name(), "Midnight");
+    // The settings button opens settings, then focuses it.
+    s.click((1280.0 - 47.0, 16.0));
+    s.click((1280.0 - 47.0, 16.0));
+    assert_eq!(s.names(), ["welcome", "settings"]);
 }
 
 #[test]
-fn a_frame_that_changes_a_grid_queues_what_the_app_sends() {
-    let (mut s, log) = desk_of(1280.0, 800.0, "terminal:grid", 0);
-    assert_eq!(s.say("connect").effects, [ws_open(1, 1)]);
-    // After its first frame at a size the app hears the size again; what it
-    // sends then (a terminal's RESIZE) waits for take_effects, once.
-    s.drawn();
-    assert_eq!(s.take_effects(), [hi()]);
-    assert!(s.take_effects().is_empty() && s.input(Input::PointerLeave).effects.is_empty());
-    s.input(Input::Resize { w: 900.0, h: 700.0 });
-    s.drawn();
-    s.drawn();
-    // A response sooner than take_effects hands them out first instead.
-    assert_eq!(s.say("").effects, [hi()]);
-    // A new pixel ratio retells every app after its next frame.
-    s.set_dpr(2.0);
-    take(&log);
-    s.drawn();
-    s.set_dpr(2.0);
-    s.drawn();
-    assert_eq!(evs(&log), [(1, resized(s.content(1)))]);
+fn the_clock_ticks() {
+    let (mut s, _) = desk();
+    let time = LocalTime { year: 2026, month: 10, day: 1, weekday: 3, hour: 9, minute: 5 };
+    assert!(s.input(Input::Tick { time }).redraw);
+    assert!(!s.input(Input::Tick { time }).redraw);
 }
 
 #[test]
-fn an_app_that_redraws_on_its_size_after_a_frame_is_drawn_again() {
-    // As Welcome does to clamp its scroll: else the grown window's frame
-    // stays stale until some unrelated event.
-    let seen = |log: &Log| {
-        let mine = take(log).into_iter().filter(|e| e.0 == 1);
-        mine.map(|e| e.1.is_ok()).collect::<Vec<_>>()
-    };
-    let (mut s, log) = desk_of(1280.0, 800.0, "welcome:busy", 0);
-    s.drawn();
-    take(&log);
-    s.input(Input::Resize { w: 900.0, h: 700.0 });
-    s.drawn();
-    assert_eq!(seen(&log), [true, false, true, false]); // Resized, frame, Resized, frame
-    s.drawn();
-    assert_eq!(seen(&log), [false]);
-    // With no app asking, a frame is drawn once.
-    let (mut s, log) = desk_of(1280.0, 800.0, "welcome", 0);
-    take(&log);
-    s.drawn();
-    assert_eq!(seen(&log), [false, true]);
-}
-
-#[test]
-fn apps_on_hidden_workspaces_ask_for_no_frames() {
-    let (mut s, log) = desk_of(1280.0, 800.0, "welcome:busy", PORT);
-    s.say("connect");
-    s.k(Char('2'), "as");
-    take(&log);
-    // The app gets its data, but nothing on screen changed; shown, it draws.
-    let (id, ev) = (1, WsEvent::Data(b"build output".to_vec()));
-    let r = s.input(Input::Ws { id, ev: ev.clone() });
-    assert_eq!((rc(&r), evs(&log).len()), ((false, false), 1));
-    assert!(s.k(Char('2'), "a").redraw && s.input(Input::Ws { id, ev }).redraw);
-}
-
-#[test]
-fn a_pairing_opens_a_terminal_that_connects_with_it() {
-    let (mut s, _log) = desk_of(1280.0, 800.0, "welcome terminal:eager", 0);
-    assert_eq!(s.take_effects(), [ws_open(1, 1)]);
-    let r = s.set_pairing(pairing(PORT).unwrap());
-    assert_eq!((r.redraw, r.effects), (true, vec![ws_open(2, PORT)]));
-    let focus = s.wm().layout().into_iter().find(|p| p.focused);
-    assert_eq!(focus.map(|p| (p.win, p.floating)), Some((WinId(3), false)));
-    assert_eq!(s.names()[2], (3, "terminal"));
-    // Terminals opened later connect with the latest pairing.
-    assert_eq!(s.k(Enter, "a").effects, [ws_open(3, PORT)]);
-    assert_eq!(s.set_pairing(pairing(7).unwrap()).effects, [ws_open(4, 7)]);
-    assert_eq!(s.k(Enter, "as").effects, [ws_open(5, 7)]);
-}
-
-#[test]
-fn ticks_set_the_clock_and_reach_every_app() {
-    let (mut s, log) = desk();
-    let clock = |s: &mut Shell| {
-        let right = |i: &&Instance| is_glyph(i) && i.rect[0] > 1200.0;
-        s.drawn().iter().filter(right).count()
-    };
-    assert_eq!(clock(&mut s), 0);
-    let tick = |s: &mut Shell, minutes, now_ms| s.input(Input::Tick { minutes, now_ms });
-    assert_eq!(rc(&tick(&mut s, 9 * 60 + 5, 1000.0)), (true, false));
-    assert_eq!(clock(&mut s), 5); // "09:05"
-    let at = |now_ms| E::Tick { now_ms };
-    let ticks = evs(&log).into_iter().filter(|e| e.1 == at(1000.0));
-    assert!(ticks.map(|e| e.0).eq([1, 2, 3]));
-    assert!(!tick(&mut s, 9 * 60 + 5, f64::NAN).redraw);
-    assert_eq!(evs(&log)[0], (1, at(1000.0)));
-    assert!(tick(&mut s, 24 * 60 + 1, 2000.0).redraw);
-    assert_eq!(s.clock, Some(1));
-    // Between ticks the page clock moves by set_now, which sends no event:
-    // a terminal's synchronized-output hold times out by it.
-    take(&log);
-    s.set_now(2500.0);
-    s.set_now(f64::NAN);
-    assert!(take(&log).is_empty());
-    s.say("now");
-    assert_eq!(s.vfs().read("/tmp/now"), Ok(&2500f64.to_le_bytes()[..]));
-    s.drawn();
-    assert!(frames(&log).iter().all(|f| f.2.now_ms == 2500.0));
-    // Apps reach the filesystem through their context.
-    s.say("write hello");
-    assert_eq!(s.vfs().read("/tmp/probe"), Ok(&b"hello"[..]));
-}
-
-#[test]
-fn titlebar_buttons_fire_only_on_release_over_the_same_button() {
-    let (mut s, _log) = desk();
-    let [float, close] = s.buttons(1);
-    assert_eq!(rc(&s.down(close)), (true, true));
-    assert_eq!(s.wm().focused(), Some(WinId(1)));
-    s.up(float);
-    s.down(close);
-    s.up((300.0, 400.0));
-    assert!(s.rect_of(1).is_some());
-    s.say("connect");
-    assert_eq!(s.click(close).effects, [Effect::WsClose { id: 1 }]);
-    assert!(s.rect_of(1).is_none() && s.host.win(WinId(1)).is_none());
-    // Window 2 now spans the top; its float button floats it in place.
-    let ([float, close], r) = (s.buttons(2), s.rect_of(2));
-    s.click(float);
-    assert_eq!(s.wm().is_floating(WinId(2)), Some(true));
-    assert_eq!((s.wm().focused(), s.rect_of(2)), (Some(WinId(2)), r));
-    // Other buttons do nothing, but a chord's last release (button 2) disarms.
-    let (x, y) = close;
-    s.down(close);
-    assert!(s.input(Input::PointerUp { x, y, button: 2 }).consumed);
-    assert!(s.input(Input::PointerDown { x, y, button: 2 }).consumed);
-    assert!(s.rect_of(2).is_some() && s.armed.is_none());
-}
-
-#[test]
-fn panel_opens_apps_and_switches_workspaces() {
-    let (mut s, _log) = desk();
-    let launcher = s.spot(Target::Launcher);
-    let terminal = s.spot(Target::Terminal);
-    let ws: Vec<_> = (0..4).map(|i| s.spot(Target::Workspace(i))).collect();
-    assert_eq!((launcher, terminal), ((18.0, 18.0), (50.0, 18.0)));
-    // Centered: 578 + 4 * 28 + 3 * 4 = 702 = 1280 - 578.
-    assert_eq!((ws[0], ws[3]), ((592.0, 18.0), (688.0, 18.0)));
-    s.click(terminal);
-    assert_eq!(s.wm().is_floating(WinId(4)), Some(false));
-    s.click(launcher);
-    assert_eq!(s.wm().is_floating(WinId(5)), Some(true));
-    s.down(terminal);
-    s.up(launcher);
-    assert_eq!(s.names()[3..], [(4, "terminal"), (5, "launcher")]);
-    s.click(ws[2]);
-    assert_eq!(s.wm().active_workspace(), 2);
-    s.down(ws[3]);
-    s.up(ws[1]);
-    assert_eq!(s.wm().active_workspace(), 2);
-    // The bare panel swallows clicks.
-    let hash = s.wm().state_hash();
-    assert_eq!(s.hit(300.0, 10.0), Some(Target::Panel));
-    s.click((300.0, 10.0));
-    assert_eq!(s.wm().state_hash(), hash);
-    // mod+Space focuses the launcher already open, on its workspace.
-    assert!(s.k(Space, "a").redraw && s.wm().focused() == Some(WinId(5)));
-    assert_eq!((s.wm().active_workspace(), s.host.wins().len()), (0, 5));
-}
-
-#[test]
-fn dragging_a_floating_titlebar_moves_the_window() {
-    let (mut s, _log) = desk();
-    s.k(Enter, "as");
-    let at = |x, y| Some(Rect::new(x, y, 853, 509));
-    assert_eq!(s.rect_of(4), at(213, 163));
-    s.down((253.0, 175.0));
-    assert_eq!(rc(&s.move_to((303.0, 205.0))), (true, true));
-    assert_eq!(s.rect_of(4), at(263, 193));
-    // A chord's last release (button 2) ends the drag; the top stays below the panel.
-    let (x, y) = (0.0, -500.0);
-    s.move_to((x, y));
-    s.input(Input::PointerUp { x, y, button: 2 });
-    s.move_to((500.0, 500.0));
-    assert_eq!(s.rect_of(4), at(-40, 36));
-    s.down((0.0, 48.0));
-    s.input(Input::PointerLeave);
-    s.move_to((245.6, 172.0));
-    assert_eq!(s.rect_of(4), at(206, 160));
-    s.up((0.0, 0.0));
-    s.move_to((900.0, 700.0));
-    // Bodies and tiled titlebars focus without dragging.
-    s.down((500.0, 500.0));
-    s.move_to((600.0, 600.0));
-    assert_eq!(s.rect_of(4), at(206, 160));
-    let tiled = s.rect_of(1);
-    s.down((20.0, 50.0));
-    s.move_to((120.0, 150.0));
-    assert_eq!((s.wm().focused(), s.rect_of(1)), (Some(WinId(1)), tiled));
-    // A drag ends when its window stops floating.
-    s.down((300.0, 170.0));
-    assert!(s.drag.is_some());
-    s.k(Char('f'), "a");
-    s.move_to((400.0, 400.0));
-    assert!(s.drag.is_none());
-}
-
-#[test]
-fn hover_redraws_only_when_the_target_changes() {
-    let (mut s, _log) = desk();
-    assert_eq!(rc(&s.move_to((18.0, 18.0))), (true, true));
-    assert_eq!(s.hover, Some(Target::Launcher));
-    assert!(!s.move_to((20.0, 21.0)).redraw);
-    assert!(s.move_to((300.0, 18.0)).redraw);
-    assert!(!s.move_to((310.0, 18.0)).redraw);
-    assert!(!s.move_to((300.0, 400.0)).redraw);
-    assert!(s.move_to(s.buttons(2)[1]).redraw);
-    assert_eq!(s.hover, Some(Target::Close(WinId(2))));
-    assert_eq!(count(&s.drawn(), Kind::Fill, HOVER), 1);
-    assert_eq!(rc(&s.input(Input::PointerLeave)), (true, false));
-    assert_eq!(s.input(Input::PointerLeave), Response::default());
-    assert_eq!(count(&s.drawn(), Kind::Fill, HOVER), 0);
-    // Closing the hovered window by key moves the hover off it.
-    s.move_to(s.buttons(1)[1]);
-    s.k(Left, "a");
-    assert_eq!(rc(&s.k(Char('q'), "a")), (true, true));
-    assert_eq!(s.hover, None);
-}
-
-#[test]
-fn draw_stays_on_screen_with_the_panel_on_top() {
-    let (mut s, log) = desk();
-    s.k(Enter, "as");
-    take(&log);
-    let mut list = DrawList::new();
-    list.fill(RectF::new(0.0, 0.0, 5.0, 5.0), 0.0, ICON);
-    s.draw(&mut list);
-    let (all, shadow) = (list.instances(), Kind::Shadow as u8 as f32);
-    assert_eq!(all[0].kind, shadow);
-    for [x, y, w, h] in all.iter().filter(|i| i.kind != shadow).map(|i| i.rect) {
-        assert!(x >= 0.0 && y >= 0.0 && x + w <= 1280.0 && y + h <= 800.0);
-    }
-    let bar = all.iter().position(|i| i.color == PANEL).unwrap();
-    assert_eq!(all[bar].rect, [0.0, 0.0, 1280.0, 36.0]);
-    assert!(all[bar..].iter().all(|i| i.rect[1] + i.rect[3] <= PANEL_H));
-    let borders = [BORDER, BORDER_FOCUSED].map(|c| count(all, Kind::Border, c));
-    assert_eq!(borders, [3, 1]);
-    assert_eq!(count(all, Kind::Fill, ACCENT), 1);
-    // A body and a content well each, and the app's own drawing.
-    assert_eq!([WINDOW, INK].map(|c| count(all, Kind::Fill, c)), [8, 4]);
-    let icons = [ICON, ICON_DIM].map(|c| count(all, Kind::Icon, c));
-    assert_eq!(icons, [2 + 1, 3 * 2]);
-    // Every app drew once into its content, clipped to it; titles are glyphs.
-    let drew = frames(&log).into_iter().map(|f| (f.0, f.1));
-    assert!(drew.eq([1, 2, 3, 4].map(|n| (n, s.content(n)))));
-    let c = s.content(4);
-    let ink = |i: &&Instance| i.color == INK && i.rect[0] == c.x + 10.0;
-    let ink = all.iter().find(ink);
-    assert_eq!(ink.unwrap().clip, [c.x, c.y, c.w, c.h]);
-    let titles = all.iter().filter(|i| is_glyph(i) && i.rect[1] > PANEL_H);
-    assert!(titles.count() > 20);
-    // Occupied workspaces show brighter dots than empty ones.
-    s.k(Char('2'), "as");
-    let all = s.drawn();
-    let dots = [ICON_DIM, ICON_DIM.with_alpha(150)].map(|c| count(&all, Kind::Fill, c));
-    assert_eq!(dots, [1, 2]);
-    // Tiles 30 px tall get no titlebar or content, 40 px wide no buttons.
-    for (w, h, bars, wells, hits) in [(1000.0, 86.0, 0, 3, 0), (60.0, 400.0, 6, 6, 2)] {
-        let (mut s, _log) = desk_of(w, h, KNOWN, PORT);
-        let all = s.drawn();
-        let fills = [WINDOW, TITLEBAR, TITLEBAR_FOCUSED].map(|c| count(&all, Kind::Fill, c));
-        assert_eq!([fills[0], fills[1] + fills[2]], [wells, bars]);
-        assert_eq!(count(&all, Kind::Icon, ICON), 1);
-        assert!(s.host.wins().iter().all(|w| w.hits.len() == hits));
-    }
-}
-
-#[test]
-fn titles_are_cut_with_an_ellipsis() {
-    let mut t = fonts();
-    let style = TextStyle::new(FontId::SansBold, 13.0, TEXT);
-    let mut cut = |s, room| t.ellipsize(s, style, room);
-    assert_eq!(cut("Terminal", 200.0), "Terminal");
-    assert_eq!(cut("wide", 1.0), "", "not even the ellipsis fits");
-    let short = cut("A window title far too long", 80.0);
-    assert!(short.ends_with('\u{2026}') && short.len() < 27, "{short}");
-    assert!(t.measure(&short, style) <= 80.0);
-    // In a window, the title stops before the buttons.
-    let (mut s, _log) = desk();
-    s.say("open long");
-    let all = s.drawn();
-    let r = rectf(s.rect_of(4).unwrap());
-    let float_x = s.buttons(4)[0].0 - TITLE_BTN / 2.0;
-    let bar = RectF::new(r.x, r.y, r.w, TITLEBAR_H);
-    let on_bar = |i: &&Instance| is_glyph(i) && bar.contains(i.rect[0], i.rect[1]);
-    let title = all.iter().filter(on_bar);
-    assert!(title.map(|i| i.rect[0] + i.rect[2]).all(|e| e <= float_x));
-}
-
-#[test]
-fn an_atlas_reset_draws_the_frame_again() {
-    let (mut s, log) = desk();
-    s.drawn();
-    assert_eq!(frames(&log).len(), 3);
-    s.say("open big");
-    s.set_dpr(4.0);
-    s.drawn();
-    assert_eq!(frames(&log).len(), 2 * 4);
-    assert!(!s.text_mut().take_atlas_reset());
-}
-
-#[test]
-fn degenerate_input_never_panics() {
-    let inf = f32::INFINITY;
-    let bad = [0.0, -5.0, 20.0, 1e30, f32::NAN, inf, f32::MIN, f32::MAX];
-    let finite = |i: &Instance| i.rect.iter().all(|v| v.is_finite());
-    for (w, h) in bad.iter().flat_map(|&w| bad.map(|h| (w, h))) {
-        let (mut s, _log) = desk_of(w, h, KNOWN, PORT);
-        let a = s.wm().area();
-        assert!(a.w >= 0 && a.h >= 0 && a.y == 36, "{w} {h}");
-        assert!(s.drawn().iter().all(finite));
-    }
-    // A seeded run of mixed events, some at bad sizes and positions,
-    // drawing after each.
-    let ((mut s, _log), mut seed) = (desk(), 0x2545_f491_4f6c_dd1d_u64);
-    let mut next = |n: u64| {
-        seed ^= seed << 13;
-        seed ^= seed >> 7;
-        seed ^= seed << 17;
-        (seed % n) as usize
-    };
-    let keys = [Enter, Char('q'), Char('f'), Space, Char('h'), Down, Other];
-    let mods = ["", "a", "as", "ac", "m", "ms", "mc", "asc"];
-    let cmds = "open terminal|float launcher|close|connect;send 1|fonts|text|float huge";
-    let cmds: Vec<&str> = cmds.split('|').collect();
-    let mut list = DrawList::new();
-    for _ in 0..3000 {
-        let (x, y) = (next(1400) as f32 - 60.0, next(900) as f32 - 60.0);
-        let (x, y) = [(x, y), (bad[next(8)], bad[next(8)])][usize::from(next(8) == 0)];
-        let (button, id) = (u8::from(next(4) == 0), next(6) as u32);
-        let (minutes, now_ms) = (id, f64::from(x));
-        let data = WsEvent::Data(vec![1]);
-        match next(12) {
-            0 | 1 => s.input(Input::PointerMove { x, y }),
-            2 => s.input(Input::PointerDown { x, y, button }),
-            3 => s.input(Input::PointerUp { x, y, button }),
-            4 => s.input(Input::PointerLeave),
-            5 if next(10) == 0 => s.input(Input::Resize { w: x, h: y }),
-            6 => s.say(cmds[next(7)]),
-            7 => s.input(Input::Wheel { x, y, dy: y }),
-            8 => s.input(Input::Ws { id, ev: data }),
-            9 if next(4) == 0 => s.fetched(id, Ok(SYM_A.to_vec())),
-            10 => s.input(Input::Tick { minutes, now_ms }),
-            _ => s.k(keys[next(7)], mods[next(8)]),
-        };
-        s.draw(&mut list);
-        assert!(list.instances().iter().all(finite));
+fn degenerate_sizes_never_panic() {
+    for (w, h) in [(0.0, 0.0), (1.0, 1.0), (f32::NAN, f32::INFINITY), (90.0, 40.0), (2e7, 2e7)] {
+        let (mut s, _) = desk_of(w, h);
+        s.at(0.0);
+        for input in [
+            Input::Key { key: Enter, mods: Mods { alt: true, ..Mods::default() } },
+            Input::PointerDown { x: 10.0, y: 40.0, button: 0 },
+            Input::PointerMove { x: -50.0, y: f32::NAN },
+            Input::PointerUp { x: 0.0, y: 0.0, button: 0 },
+            Input::Key { key: Space, mods: Mods { alt: true, ..Mods::default() } },
+            Input::Text("x".into()),
+            Input::Key { key: Down, mods: Mods::default() },
+            Input::Resize { w: 3.0, h: f32::NAN },
+        ] {
+            s.input(input);
+            s.at(50.0);
+        }
+        s.rest(1000.0);
     }
 }

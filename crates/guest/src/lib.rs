@@ -1,24 +1,21 @@
-//! The guest shell: what the Terminal runs without a node. A line editor and
-//! a few Unix-like commands over the VFS, answering with ANSI text into the
-//! same screen a real shell draws on. Lines end in `\n`; the Terminal makes
-//! that CR LF. Commands are rows of a table; what they do to paths is an
-//! `Op`. Output is built with `push_str`, not `format!`: smaller wasm. Split
-//! from `apps`, whose Terminal runs it.
+//! The guest shell: what the Terminal runs. A line editor and a few
+//! Unix-like commands over the VFS, answering with ANSI text into an
+//! xterm-compatible screen. Lines end in `\n`; the Terminal makes that CR LF.
+//! Commands are rows of a table; what they do to paths is an `Op`. Output is
+//! built with `push_str`, not `format!`: smaller wasm. Split from `apps`,
+//! whose Terminal runs it.
 
 #![forbid(unsafe_code)]
 
 use term::char_width;
-use ui::{Cx, Key, Mods};
+use ui::{Cx, Key, Mods, THEMES};
 use vfs::Vfs;
 use vfs::VfsError::{self, IsADir, NotADir, NotFound};
 
-/// Printed when connecting needs a pairing and the page has none.
-pub const NO_PAIRING: &str = "No node is paired with this page. Start computehub-node and \
-open the pairing link it prints; type 'node' for how.";
 /// The apps `open` knows by name.
-const BUILTIN: [&str; 5] = ["terminal", "studio", "welcome", "launcher", "about"];
+const BUILTIN: [&str; 4] = ["terminal", "studio", "welcome", "settings"];
 /// `help`: sections of (synopsis, what it does), one command a line.
-const HELP: [(&str, &[(&str, &str)]); 4] = [
+const HELP: [(&str, &[(&str, &str)]); 3] = [
     (
         "Files",
         &[
@@ -46,33 +43,18 @@ const HELP: [(&str, &[(&str, &str)]); 4] = [
         "Shell",
         &[
             ("history", "list past commands"),
+            ("theme [name]", "list the themes, or switch to one"),
             ("clear", "clear the screen"),
             ("whoami", "print your user name"),
             ("uname [-a]", "print the system's name"),
             ("exit", "close this terminal"),
         ],
     ),
-    (
-        "Your machine",
-        &[
-            ("node", "about computehub-node: a real shell, with full access"),
-            ("connect", "connect to the node this page is paired with"),
-        ],
-    ),
 ];
 const KEYS: &str = "Up and Down recall history, Ctrl+C cancels the line, Ctrl+L clears the \
 screen. Quotes group words: \"a b\" or 'a b'.";
-const NODE: &str = "\
-computehub-node gives this terminal a real shell on your machine. It runs as you: it can read \
-and change your files, keys and logins, and run any program you can. Start it only on a \
-machine you own, while you use it, and stop it with Ctrl+C when you are done.
-  1. In the computehub repo, run: cd node && cargo run --release
-  2. Open the pairing link it prints. Terminals then connect by themselves.
-It listens on 127.0.0.1 only, accepts only the page it printed, and needs the token in that \
-link. Shared compute will never work this way: it runs sandboxed programs, not a shell.
-";
 /// `uname`, then `uname -a`.
-const UNAME: [&str; 2] = ["compusophyOS\n", "compusophyOS 0.1 wasm32\n"];
+const UNAME: [&str; 2] = ["compusophyOS\n", "compusophyOS 0.2 wasm32\n"];
 
 /// A command: gets the shell, its operands (flags taken off), its flags (bit
 /// `i` for the `i`th letter its row allows), its output and the world.
@@ -84,7 +66,7 @@ const ANY: usize = usize::MAX;
 /// operands (flags included), the synopsis a usage error prints for another
 /// count, and what it runs.
 #[rustfmt::skip]
-const COMMANDS: [(&str, &str, usize, usize, &str, Cmd); 21] = [
+const COMMANDS: [(&str, &str, usize, usize, &str, Cmd); 20] = [
     ("help", "", 0, ANY, "", |g, _, _, io, _| help(io, g.cols)),
     ("ls", "a", 0, ANY, "", ls),
     ("cd", "", 0, 1, "cd [dir]", |g, a, _, io, cx| {
@@ -112,15 +94,11 @@ const COMMANDS: [(&str, &str, usize, usize, &str, Cmd); 21] = [
             io.line(&[&n, h], "  ");
         }
     }),
+    ("theme", "", 0, 1, "theme [name]", theme),
     ("clear", "", 0, ANY, "", |_, _, _, io, _| io.out("\x1b[3J\x1b[H\x1b[2J")),
     ("exit", "", 0, ANY, "", |_, _, _, _, cx| cx.close_self()),
     ("whoami", "", 0, ANY, "", |_, _, _, io, _| io.out("guest\n")),
     ("uname", "", 0, ANY, "", |_, a, _, io, _| io.out(UNAME[usize::from(matches!(a, ["-a"]))])),
-    ("node", "", 0, ANY, "", |g, _, _, io, _| io.prose(NODE, g.cols)),
-    ("connect", "", 0, ANY, "", |g, _, _, io, cx| match cx.pairing {
-        Some(_) => g.connect = true,
-        None => io.prose(&[NO_PAIRING, "\n"].concat(), g.cols),
-    }),
 ];
 
 /// Writes the command list for a terminal `cols` wide: synopses in a column
@@ -235,10 +213,8 @@ type Res = Result<(), VfsError>;
 /// A shell: the working directory, the line being edited, the history.
 #[derive(Debug, Default)]
 pub struct Guest {
-    /// What to show next, and whether to connect to the node: the Terminal
-    /// takes both after each call.
+    /// What to show next: the Terminal takes it after each call.
     pub out: String,
-    pub connect: bool,
     /// The terminal's width, for wrapping the line.
     pub cols: u16,
     cwd: String,
@@ -275,13 +251,6 @@ impl Io<'_> {
             self.out(part);
         }
         self.out("\n");
-    }
-
-    /// Writes `text` to stdout, word-wrapped to `cols` columns.
-    fn prose(&mut self, text: &str, cols: u16) {
-        let mut s = String::new();
-        wrap(text, usize::from(cols), &mut s);
-        self.out(&s);
     }
 
     /// Writes `parts` and a line break to the screen.
@@ -343,9 +312,6 @@ impl Guest {
         for c in s.chars() {
             if c == '\n' {
                 self.enter(cx);
-                if self.connect {
-                    return;
-                }
             } else if !c.is_control() {
                 self.line.insert(self.pos, c);
                 self.pos += 1;
@@ -354,7 +320,7 @@ impl Guest {
         self.redraw();
     }
 
-    /// Runs the line; the next prompt follows unless it connects.
+    /// Runs the line; the next prompt follows.
     fn enter(&mut self, cx: &mut Cx<'_>) {
         self.pos = self.line.len();
         self.redraw();
@@ -374,9 +340,7 @@ impl Guest {
         if !printed.is_empty() && !printed.ends_with('\n') && !printed.ends_with("\x1b[2J") {
             self.out.push('\n');
         }
-        if !self.connect {
-            self.render();
-        }
+        self.render();
     }
 
     /// Up (`back`) or Down through the history; past the newest entry comes
@@ -561,10 +525,21 @@ fn ls(g: &mut Guest, paths: &[&str], all: u32, io: &mut Io<'_>, cx: &mut Cx<'_>)
 
 fn open(g: &mut Guest, args: &[&str], _: u32, io: &mut Io<'_>, cx: &mut Cx<'_>) {
     match args[0] {
-        "launcher" => cx.open_floating("launcher"),
         app if BUILTIN.contains(&app) => cx.open(app),
         app if app.ends_with(".app") => g.each(args, io, cx, Op::Open),
         app => io.err(&["open: ", app, ": no such app (see 'apps')"]),
+    }
+}
+
+/// `theme`: the themes' names, one a line; `theme <name>` switches the
+/// desktop to one (any case).
+fn theme(_: &mut Guest, args: &[&str], _: u32, io: &mut Io<'_>, cx: &mut Cx<'_>) {
+    let Some(&want) = args.first() else {
+        return THEMES.iter().for_each(|t| io.line(&[t.name], ""));
+    };
+    match THEMES.iter().find(|t| t.name.eq_ignore_ascii_case(want)) {
+        Some(t) => cx.set_theme(t.name),
+        None => io.err(&["theme: ", want, ": no such theme (see 'theme')"]),
     }
 }
 
