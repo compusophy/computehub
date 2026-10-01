@@ -1,0 +1,15 @@
+[package]
+name = "compusophy-icons"
+description = "The compusophyOS icon set: the compusophy mark and the desktop's glyphs as vector outlines on golden-ratio geometry."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[lib]
+name = "icons"
+
+[dependencies]
+compusophy-font.workspace = true

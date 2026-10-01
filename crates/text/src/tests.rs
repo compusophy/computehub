@@ -1,5 +1,6 @@
 use super::*;
 use gfx::{DrawList, Instance, Rgba};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 const SANS: &[u8] = include_bytes!("../../../assets/fonts/Inter-Regular.ttf");
 const BOLD: &[u8] = include_bytes!("../../../assets/fonts/deferred/Inter-SemiBold.ttf");
@@ -183,6 +184,52 @@ fn atlas_cells_and_fallbacks() {
     t.draw_cell_char(&mut list, 0.0, base, cw, 'A', f32::NAN, WHITE);
     t.draw_cell_char(&mut list, 0.0, base, 0.0, 'A', size, WHITE);
     assert!(list.is_empty());
+}
+
+static SQUARES: AtomicUsize = AtomicUsize::new(0);
+
+/// The middle 80% of the box, counting its rasterizations.
+fn square(o: &mut Vec<Vec<Point>>) {
+    SQUARES.fetch_add(1, Ordering::Relaxed);
+    let p = |x, y| Point { x, y, on: true };
+    o.push(vec![p(100.0, 100.0), p(900.0, 100.0), p(900.0, 900.0), p(100.0, 900.0)]);
+}
+
+#[test]
+fn vectors_are_cached_and_drawn_on_device_pixels() {
+    let (mut t, mut list) = (ts(), DrawList::new());
+    t.set_dpr(2.0);
+    // A 25 x 25 square centered in r: 50 device px from (36, 40), so the shape is 40 px from (41, 45).
+    let r = RectF::new(10.3, 20.1, 40.0, 25.0);
+    t.draw_vector(&mut list, r, 7, square, WHITE);
+    t.atlas_mut().take_dirty();
+    t.draw_vector(&mut list, r, 7, square, WHITE);
+    let g = glyphs(&list);
+    assert!(
+        g[0] == g[1]
+            && SQUARES.load(Ordering::Relaxed) == 1
+            && t.atlas_mut().take_dirty().is_none()
+    );
+    let ([x, y, w, h], [u, v, ..]) = (g[0].rect, g[0].uv);
+    assert!(
+        on_grid(x, 2.0)
+            && on_grid(y, 2.0)
+            && (x * 2.0 - 41.0).abs() <= 1.0
+            && (y * 2.0 - 45.0).abs() <= 1.0
+    );
+    assert!((w * 2.0 - 40.0).abs() <= 1.0 && (h * 2.0 - 40.0).abs() <= 1.0, "{:?}", g[0].rect);
+    let px = t.atlas_mut().pixels();
+    assert_eq!(px[(v + 20.0) as usize * 1024 + (u + 20.0) as usize], 255);
+    // Too small or too big draws nothing; two shapes too big to share the atlas clear it.
+    t.draw_vector(&mut list, RectF::new(0.0, 0.0, 0.2, 9.0), 7, square, WHITE);
+    t.draw_vector(&mut list, RectF::new(0.0, 0.0, 600.0, 600.0), 7, square, WHITE);
+    assert!(list.len() == 2 && !t.take_atlas_reset());
+    t.draw_vector(&mut list, RectF::new(0.0, 0.0, 450.0, 450.0), 8, square, WHITE);
+    t.draw_vector(&mut list, RectF::new(0.0, 0.0, 450.0, 450.0), 9, square, WHITE);
+    assert!(t.take_atlas_reset() && SQUARES.load(Ordering::Relaxed) == 3);
+    // The cleared atlas lost the small one: it comes back in a fresh slot.
+    t.draw_vector(&mut list, r, 7, square, WHITE);
+    assert_eq!((list.len(), SQUARES.load(Ordering::Relaxed)), (5, 4));
 }
 
 #[test]

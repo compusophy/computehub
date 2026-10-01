@@ -11,6 +11,21 @@ use text::{FontId, TextStyle};
 #[rustfmt::skip]
 pub struct Glow { pub cx: f32, pub cy: f32, pub rx: f32, pub ry: f32, pub color: Rgba }
 
+/// How app tiles take an app's hue ([`Theme::icon_colors`], `icon::tile`), in
+/// percent: the tile's top and bottom of the way from the hue to `ground`, the
+/// glyph of the way from the hue to the theme's `text`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct IconStyle {
+    /// What tiles fade toward.
+    pub ground: Rgba,
+    /// Top and bottom; equal for a flat tile.
+    pub tile: [u8; 2],
+    /// 100 is monochrome: every glyph in `text`.
+    pub ink: u8,
+    /// The tile's drop shadow, in percent of the theme's `shadow` alpha; 0 is none.
+    pub shadow: u8,
+}
+
 /// The colors of the whole desktop; `surface`, `glass`, `border`,
 /// `highlight`, `shadow` and `selection` are translucent.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -56,6 +71,8 @@ pub struct Theme {
     /// The terminal's 16 colors (black, red, green, yellow, blue, magenta,
     /// cyan, white, then bright), readable on `surface`.
     pub ansi: [Rgba; 16],
+    /// App tiles and their glyphs.
+    pub icon: IconStyle,
 }
 
 const fn rgba(rgb: u32, a: u8) -> Rgba {
@@ -97,6 +114,8 @@ const MIDNIGHT: Theme = Theme {
         0x323646, 0xf07a85, 0x7fd8a4, 0xebcb8b, 0x7aa2f7, 0xb69cff, 0x6fd3e0, 0xc8ccda, //
         0x686d82, 0xff959e, 0x9debbe, 0xf5dca6, 0x9ab8ff, 0xcdb8ff, 0x93e4ee, 0xeceef5,
     ]),
+    // Deep tiles: the hue most of the way to the base; glyphs the hue lightened.
+    icon: IconStyle { ground: Rgba::hex(0x07080c), tile: [70, 80], ink: 45, shadow: 50 },
 };
 
 /// Light: warm paper with peach, lilac and sky light.
@@ -118,6 +137,8 @@ const DAWN: Theme = Theme {
         0x2b2a33, 0xc0313e, 0x18794e, 0x8f5b00, 0x2d5bd0, 0x7b3fc9, 0x0f7484, 0x6c6b78, //
         0x5f5e6a, 0xa51f2c, 0x116b3f, 0x6f4500, 0x1f4bb8, 0x6430b0, 0x0b6170, 0x71707d,
     ]),
+    // Pale tiles: a tint of the hue on white; glyphs the hue darkened.
+    icon: IconStyle { ground: Rgba::hex(0xffffff), tile: [86, 76], ink: 55, shadow: 50 },
 };
 
 /// Ultra minimal: black, white and grays, no light.
@@ -134,6 +155,8 @@ const MONO: Theme = Theme {
         0x2a2a2a, 0xe5787a, 0x8fcb9b, 0xe3c887, 0x8aa9d6, 0xc3a3d9, 0x86c5c9, 0xbdbdbd, //
         0x6a6a6a, 0xf29c9d, 0xadddb6, 0xefd9a6, 0xa9c1e6, 0xd5bde6, 0xa6d9dc, 0xf2f2f2,
     ]),
+    // Monochrome: flat raised tiles, every glyph in text, no shadow.
+    icon: IconStyle { ground: Rgba::hex(0x161616), tile: [100, 100], ink: 100, shadow: 0 },
 };
 
 /// The built-in themes: Midnight (the default), Dawn and Mono.
@@ -184,6 +207,16 @@ impl Theme {
     /// A neutral fill held down: 60% of the way to `surface_lo`.
     pub fn pressed(&self, fill: Rgba) -> Rgba {
         mix(fill, self.surface_lo, 0.6)
+    }
+
+    /// An app tile's top and bottom and its glyph's ink for `hue` (see [`IconStyle`]).
+    pub fn icon_colors(&self, hue: Rgba) -> [Rgba; 3] {
+        let (s, pct) = (self.icon, |p: u8| f32::from(p) / 100.0);
+        [
+            mix(hue, s.ground, pct(s.tile[0])),
+            mix(hue, s.ground, pct(s.tile[1])),
+            mix(hue, self.text, pct(s.ink)),
+        ]
     }
 
     /// A translucent wash over anything under the pointer (or held, `down`).

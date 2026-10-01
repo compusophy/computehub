@@ -14,6 +14,7 @@ members = [
     "crates/font",
     "crates/vfs",
     "crates/text",
+    "crates/icons",
     "crates/ui",
     "crates/guest",
     "crates/apps",
@@ -54,6 +55,7 @@ compusophy-platform = { path = "crates/platform", version = "0.1.0" }
 compusophy-font = { path = "crates/font", version = "0.1.0" }
 compusophy-vfs = { path = "crates/vfs", version = "0.1.0" }
 compusophy-text = { path = "crates/text", version = "0.1.0" }
+compusophy-icons = { path = "crates/icons", version = "0.1.0" }
 compusophy-ui = { path = "crates/ui", version = "0.1.0" }
 compusophy-guest = { path = "crates/guest", version = "0.1.0" }
 compusophy-apps = { path = "crates/apps", version = "0.1.0" }

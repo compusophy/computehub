@@ -55,6 +55,7 @@ crates/
   gfx/       instanced-quad draw list (fills, borders, shadows, glyphs,
              gradients, glows, grain), glyph atlas, the WebGL2 shaders
   text/      TextSystem: font slots, fallbacks, glyphs on the atlas
+  icons/     the mark and desktop glyphs as vector outlines (ui::icon draws)
   ui/        immediate-mode widgets, themes (Midnight, Dawn, Mono), the App
              trait, Cx, the Code editor (re-exports text)
   vt/        VT/xterm escape parser        term/  terminal screen model
