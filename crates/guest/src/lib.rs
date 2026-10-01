@@ -17,26 +17,60 @@ pub const NO_PAIRING: &str = "No node is paired with this page. Start computehub
 open the pairing link it prints; type 'node' for how.";
 /// The apps `open` knows by name.
 const BUILTIN: [&str; 5] = ["terminal", "studio", "welcome", "launcher", "about"];
-const HELP: &str = "\
-Commands:
-  ls [-a] [path]   cd [dir]   pwd   cat <file>...   echo <text> [> or >> file]
-  mkdir [-p] <dir>...   touch <file>...   rm [-r] <path>...   mv <from> <to>
-  open <app|file.app>   edit <file> (in Studio)   run <file.app>   apps
-  help   history   clear   exit   whoami   uname [-a]   date
-  node      how to get a real shell on your machine, in this terminal
-  connect   connect to the paired computehub-node
-\"double\" and 'single' quotes group; Up/Down: history; Ctrl+C: cancel; Ctrl+L: clear
-";
+/// `help`: sections of (synopsis, what it does), one command a line.
+const HELP: [(&str, &[(&str, &str)]); 4] = [
+    (
+        "Files",
+        &[
+            ("ls [-a] [path]", "list a directory; -a shows dot files"),
+            ("cd [dir]", "change directory; ~ is home"),
+            ("pwd", "print the working directory"),
+            ("cat <file>...", "print files"),
+            ("echo <text>", "print text; > file writes it, >> file appends"),
+            ("mkdir [-p] <dir>...", "make directories; -p makes parents too"),
+            ("touch <file>...", "make empty files"),
+            ("rm [-r] <path>...", "remove files; -r removes directories"),
+            ("mv <from> <to>", "move or rename"),
+        ],
+    ),
+    (
+        "Apps",
+        &[
+            ("apps", "list the apps you can open"),
+            ("open <app|file.app>", "open one in a new window"),
+            ("run <file.app>", "run an applang app"),
+            ("edit <file>", "edit a file in Studio"),
+        ],
+    ),
+    (
+        "Shell",
+        &[
+            ("history", "list past commands"),
+            ("clear", "clear the screen"),
+            ("whoami", "print your user name"),
+            ("uname [-a]", "print the system's name"),
+            ("exit", "close this terminal"),
+        ],
+    ),
+    (
+        "Your machine",
+        &[
+            ("node", "about computehub-node: a real shell, with full access"),
+            ("connect", "connect to the node this page is paired with"),
+        ],
+    ),
+];
+const KEYS: &str = "Up and Down recall history, Ctrl+C cancels the line, Ctrl+L clears the \
+screen. Quotes group words: \"a b\" or 'a b'.";
 const NODE: &str = "\
-computehub-node serves a real shell on your machine (PowerShell, bash, zsh)
-to this terminal: anything that runs in a terminal runs here, even claude.
-  1. In the computehub repo, run:  cd node && cargo run --release
-  2. Open the pairing link it prints; terminals then connect by themselves.
-It listens on 127.0.0.1 only and checks each page's origin. The token rides
-in the URL fragment, which browsers never send to any server.
+computehub-node gives this terminal a real shell on your machine. It runs as you: it can read \
+and change your files, keys and logins, and run any program you can. Start it only on a \
+machine you own, while you use it, and stop it with Ctrl+C when you are done.
+  1. In the computehub repo, run: cd node && cargo run --release
+  2. Open the pairing link it prints. Terminals then connect by themselves.
+It listens on 127.0.0.1 only, accepts only the page it printed, and needs the token in that \
+link. Shared compute will never work this way: it runs sandboxed programs, not a shell.
 ";
-/// What `date` says until the page passes apps the wall clock.
-const NO_CLOCK: &str = "date: no wall clock here yet (the page clock counts from page load)";
 /// `uname`, then `uname -a`.
 const UNAME: [&str; 2] = ["compusophyOS\n", "compusophyOS 0.1 wasm32\n"];
 
@@ -50,8 +84,8 @@ const ANY: usize = usize::MAX;
 /// operands (flags included), the synopsis a usage error prints for another
 /// count, and what it runs.
 #[rustfmt::skip]
-const COMMANDS: [(&str, &str, usize, usize, &str, Cmd); 22] = [
-    ("help", "", 0, ANY, "", |_, _, _, io, _| io.out(HELP)),
+const COMMANDS: [(&str, &str, usize, usize, &str, Cmd); 21] = [
+    ("help", "", 0, ANY, "", |g, _, _, io, _| help(io, g.cols)),
     ("ls", "a", 0, ANY, "", ls),
     ("cd", "", 0, 1, "cd [dir]", |g, a, _, io, cx| {
         g.each(if a.is_empty() { &["~"][..] } else { a }, io, cx, Op::Cd);
@@ -82,14 +116,103 @@ const COMMANDS: [(&str, &str, usize, usize, &str, Cmd); 22] = [
     ("exit", "", 0, ANY, "", |_, _, _, _, cx| cx.close_self()),
     ("whoami", "", 0, ANY, "", |_, _, _, io, _| io.out("guest\n")),
     ("uname", "", 0, ANY, "", |_, a, _, io, _| io.out(UNAME[usize::from(matches!(a, ["-a"]))])),
-    // `Cx::now_ms` is the page clock (from page load), not the date.
-    ("date", "", 0, ANY, "", |_, _, _, io, _| io.err(&[NO_CLOCK])),
-    ("node", "", 0, ANY, "", |_, _, _, io, _| io.out(NODE)),
+    ("node", "", 0, ANY, "", |g, _, _, io, _| io.prose(NODE, g.cols)),
     ("connect", "", 0, ANY, "", |g, _, _, io, cx| match cx.pairing {
         Some(_) => g.connect = true,
-        None => io.err(&[NO_PAIRING]),
+        None => io.prose(&[NO_PAIRING, "\n"].concat(), g.cols),
     }),
 ];
+
+/// Writes the command list for a terminal `cols` wide: synopses in a column
+/// with descriptions beside them when there is room for both, otherwise
+/// each description on the line below, indented.
+fn help(io: &mut Io<'_>, cols: u16) {
+    let color = io.file.is_none();
+    let cols = usize::from(cols);
+    let syn = HELP.iter().flat_map(|s| s.1).map(|r| r.0.len()).max().unwrap_or(0);
+    // Two columns need room for a description of a few words.
+    let lead = if cols >= syn + 4 + 24 { syn + 4 } else { 6 };
+    let mut s = String::new();
+    for (title, rows) in HELP {
+        s.push_str(if color { "\x1b[1m" } else { "" });
+        s.push_str(title);
+        s.push_str(if color { "\x1b[m\n" } else { "\n" });
+        for (synopsis, what) in rows {
+            let mut line = String::from(if color { "  \x1b[36m" } else { "  " });
+            line.push_str(synopsis);
+            line.push_str(if color { "\x1b[m" } else { "" });
+            if lead > 6 {
+                line.extend(std::iter::repeat_n(' ', lead - 2 - synopsis.len()));
+            } else {
+                s.push_str(&line);
+                s.push('\n');
+                line = " ".repeat(lead);
+            }
+            line.push_str(what);
+            wrap_line(&line, cols, lead, &mut s);
+            s.push('\n');
+        }
+    }
+    s.push('\n');
+    wrap_line(KEYS, cols, 0, &mut s);
+    s.push('\n');
+    io.out(&s);
+}
+
+/// Word-wraps `text` to `cols` columns into `out`, line by line. A line's
+/// continuations keep its indentation, plus the width of a "1. " or "- "
+/// marker after it, so list items hang. Escape sequences take no width.
+pub fn wrap(text: &str, cols: usize, out: &mut String) {
+    for (i, line) in text.split('\n').enumerate() {
+        out.push_str(if i > 0 { "\n" } else { "" });
+        let indent = line.len() - line.trim_start_matches(' ').len();
+        let body = &line[indent..];
+        let digits = body.len() - body.trim_start_matches(|c: char| c.is_ascii_digit()).len();
+        let marker = if digits > 0 && body[digits..].starts_with(". ") {
+            digits + 2
+        } else {
+            usize::from(body.starts_with("- ")) * 2
+        };
+        wrap_line(line, cols, indent + marker, out);
+    }
+}
+
+/// Word-wraps one line, continuing at column `hang`. Words wider than the
+/// room are left whole for the terminal to break.
+fn wrap_line(line: &str, cols: usize, hang: usize, out: &mut String) {
+    if cols < hang + 12 {
+        return out.push_str(line);
+    }
+    let mut col = 0;
+    for (i, word) in line.split(' ').enumerate() {
+        let w = width(word);
+        if i > 0 && col + 1 + w > cols && col > hang {
+            out.push('\n');
+            out.extend(std::iter::repeat_n(' ', hang));
+            col = hang;
+        } else if i > 0 {
+            out.push(' ');
+            col += 1;
+        }
+        out.push_str(word);
+        col += w;
+    }
+}
+
+/// The columns `s` takes on screen, skipping CSI escape sequences.
+fn width(s: &str) -> usize {
+    let (mut w, mut it) = (0, s.chars());
+    while let Some(c) = it.next() {
+        if c == '\x1b' {
+            if it.next() == Some('[') {
+                it.by_ref().find(|d| ('\x40'..='\x7e').contains(d));
+            }
+        } else {
+            w += usize::from(char_width(c));
+        }
+    }
+    w
+}
 
 /// What a command does to each path it names, made absolute. `Mkdir` and
 /// `Rm` hold their flags; `Run` its operand, for an error.
@@ -152,6 +275,13 @@ impl Io<'_> {
             self.out(part);
         }
         self.out("\n");
+    }
+
+    /// Writes `text` to stdout, word-wrapped to `cols` columns.
+    fn prose(&mut self, text: &str, cols: u16) {
+        let mut s = String::new();
+        wrap(text, usize::from(cols), &mut s);
+        self.out(&s);
     }
 
     /// Writes `parts` and a line break to the screen.
@@ -533,34 +663,6 @@ pub fn push_int(out: &mut String, n: u64, width: usize, fill: char) {
         push_int(out, n / 10, 0, fill);
     }
     out.push(char::from(b'0' + (n % 10) as u8));
-}
-
-/// Milliseconds since the Unix epoch as UTC ISO 8601, to the second: for
-/// `date`, once [`Cx`] carries wall-clock time.
-#[allow(dead_code)]
-fn iso_date(ms: f64) -> String {
-    // NaN casts to 0 and infinities saturate.
-    let secs = (ms / 1000.0).floor() as i64;
-    let (days, t) = (secs.div_euclid(86_400), secs.rem_euclid(86_400));
-    // Howard Hinnant's civil_from_days.
-    let z = days + 719_468;
-    let (era, doe) = (z.div_euclid(146_097), z.rem_euclid(146_097));
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    let y = yoe + era * 400 + i64::from(m <= 2);
-    // As `{y:04}-{m:02}-{d:02}T{h:02}:{min:02}:{s:02}Z` would.
-    let mut out = String::from(if y < 0 { "-" } else { "" });
-    push_int(&mut out, y.unsigned_abs(), 4 - usize::from(y < 0), '0');
-    let (h, min, s) = (t / 3600, t / 60 % 60, t % 60);
-    for &(sep, n) in &[('-', m), ('-', d), ('T', h), (':', min), (':', s)] {
-        out.push(sep);
-        push_int(&mut out, n as u64, 2, '0');
-    }
-    out.push('Z');
-    out
 }
 
 #[cfg(test)]

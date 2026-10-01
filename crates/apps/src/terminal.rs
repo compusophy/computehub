@@ -222,10 +222,18 @@ impl Terminal {
         }
     }
 
+    /// Prints prose: like [`Terminal::print`], but broken between words to
+    /// the screen's width, never inside one.
+    fn say(&mut self, fresh: bool, parts: &[&str]) {
+        let mut text = String::new();
+        guest::wrap(&parts.concat(), usize::from(self.term.cols()), &mut text);
+        self.print(fresh, &[&text]);
+    }
+
     /// Connects to this terminal's node, or the page's the first time.
     fn connect(&mut self, cx: &mut Cx<'_>) {
         let Some(p) = self.link.or(cx.pairing) else {
-            self.print(true, &[NO_PAIRING, "\n"]);
+            self.say(true, &[NO_PAIRING, "\n"]);
             return self.guest_shell();
         };
         self.link = Some(p);
@@ -241,12 +249,12 @@ impl Terminal {
     fn begin(&mut self) {
         match (std::mem::take(&mut self.greet), self.mode, self.link) {
             (true, Mode::Guest, _) => {
-                self.print(false, &[BANNER]);
+                self.say(false, &[BANNER]);
                 self.guest_shell();
             }
             (true, _, Some(p)) => {
                 let at = "\x1b[2mconnecting to computehub-node on 127.0.0.1:";
-                self.print(true, &[at, &num(p.port.into()), "…\x1b[m\n"]);
+                self.say(true, &[at, &num(p.port.into()), "…\x1b[m\n"]);
             }
             _ => {}
         }
@@ -275,8 +283,8 @@ impl Terminal {
         self.mode = Mode::Ended;
         self.print(false, &[TIDY]);
         self.print(true, &["\x1b[2m"]);
-        self.print(false, what);
-        self.print(false, &["\x1b[m\n", AGAIN, "\n"]);
+        self.say(false, what);
+        self.say(false, &["\x1b[m\n", AGAIN, "\n"]);
     }
 
     /// Sends `bytes` to the shell as DATA, in chunks.
@@ -469,7 +477,7 @@ impl Terminal {
             (READY, Mode::Hello(_)) if p.len() >= 5 => {
                 self.mode = Mode::Live(s);
                 let info = clean(&p[5..]);
-                self.print(true, &["\x1b[2m[connected: ", &info, "]\x1b[m\n"]);
+                self.say(true, &["\x1b[2m[connected: ", &info, "]\x1b[m\n"]);
                 // A new shell (ConPTY above all) expects its cursor at the top
                 // left: move what is on screen into the scrollback.
                 let (rows, used) = (self.term.rows(), self.term.cursor().0);
@@ -496,7 +504,7 @@ impl Terminal {
             }
             (ERROR, _) => {
                 let m = clean(p);
-                self.print(true, &["\x1b[31mcomputehub-node: ", &m, "\x1b[m\n"]);
+                self.say(true, &["\x1b[31mcomputehub-node: ", &m, "\x1b[m\n"]);
             }
             _ => {}
         }
