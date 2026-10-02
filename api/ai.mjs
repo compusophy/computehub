@@ -1,9 +1,9 @@
 // POST /api/ai: the free AI. Takes an OpenAI-style chat-completions body and sends the Vercel AI
 // Gateway a new one built from it (an allowed model, its messages, the tools the overlay's agent
-// may call, bounded output, bounded reasoning (see below), a temperature; each checked and
-// rebuilt field by field, nothing else it sent goes on), with this project's own
-// credentials (its OIDC token, or AI_GATEWAY_API_KEY when set), and streams the answer back, so
-// no visitor needs a key and the browser never holds one.
+// may call, bounded output, bounded reasoning and the providers that keep to it (see below), a
+// temperature; each checked and rebuilt field by field, nothing else it sent goes on), with
+// this project's own credentials (its OIDC token, or AI_GATEWAY_API_KEY when set), and streams
+// the answer back, so no visitor needs a key and the browser never holds one.
 //
 // Guards, all best effort: same origin (Origin, and Sec-Fetch-Site when a browser sends it);
 // request windows per client (an IPv4 address or an IPv6 /64) and per instance; and a day's
@@ -17,6 +17,9 @@ const GATEWAY = 'https://ai-gateway.vercel.sh/v1/chat/completions';
 // The models allowed, the first the default, with their list prices in dollars per million
 // tokens in and out.
 const MODELS = { 'zai/glm-5.3': [1.4, 4.4], 'zai/glm-5.3-flash': [0.15, 0.5] };
+// The providers that serve them, as the gateway names them: those that keep to a thinking
+// budget (see below). Another joins once measured doing so.
+const PROVIDERS = ['fireworks'];
 const ROLES = ['system', 'user', 'assistant', 'tool'];
 // Tools (the agent that uses the desktop): how many, their JSON, the calls a reply may make, a
 // call's arguments, the output a request with tools may ask for; names and call ids.
@@ -171,17 +174,19 @@ export default async function handler(req, res) {
   }
   const model = Object.hasOwn(MODELS, body.model) ? body.model : Object.keys(MODELS)[0];
   const asked = Math.floor(Number(body.max_tokens));
-  // Thinking costs time and tokens. GLM 5.3 thinks at length even when told off (unseen, up to
-  // the whole output: measured, 8,192 tokens and no program), so by default it gets a budget of
-  // 1,024 tokens, which bounds it (measured: 1,037). A program may ask for a low effort, a
-  // budget of its own (at most 4,096), or none at all ({ enabled: false }).
+  // Thinking costs time and tokens, and GLM 5.3 thinks at length however it is asked not to
+  // (unseen, up to the whole output: measured, told off 3,166 tokens, at a low effort 8,192 of
+  // 8,192 and no program). Only a token budget bounds it, and only where the provider keeps to
+  // one: Fireworks does, for GLM 5.3 and Flash (a budget of 1,024 held it to 1,037, in 37
+  // replies; one of 256 to 1,036, so none holds under about 1,024); Baseten, DigitalOcean and
+  // Alibaba do not (2,000 of 2,000; 7,333 of 8,192 and no program). The gateway picks a
+  // provider itself (by weight, by affinity, after a failure), so every request goes to
+  // PROVIDERS only: when they are down or full, it fails (429 or 503) rather than thinks
+  // unbounded elsewhere. The budget is 1,024 tokens, or a program's own (at most 4,096); an
+  // effort or thinking off, which bound nothing, are not sent.
   const r = (body && body.reasoning) || {};
   const budget = Math.floor(Number(r.max_tokens));
-  const reasoning =
-    r.effort === 'low' ? { effort: 'low' }
-    : budget >= 1 ? { max_tokens: Math.min(budget, 4096) }
-    : r.enabled === false ? { enabled: false }
-    : { max_tokens: 1024 };
+  const reasoning = { max_tokens: budget >= 1 ? Math.min(budget, 4096) : 1024 };
   const out = {
     model,
     messages,
@@ -189,6 +194,7 @@ export default async function handler(req, res) {
     stream_options: { include_usage: true },
     max_tokens: asked >= 1 ? Math.min(asked, MAX_TOKENS) : 4096,
     reasoning,
+    providerOptions: { gateway: { only: PROVIDERS } },
   };
   if (tools.length) {
     Object.assign(out, { tools, tool_choice: choice, max_tokens: Math.min(out.max_tokens, TOOL_OUT) });
