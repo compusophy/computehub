@@ -17,9 +17,13 @@ const GATEWAY = 'https://ai-gateway.vercel.sh/v1/chat/completions';
 // The models allowed, the first the default, with their list prices in dollars per million
 // tokens in and out.
 const MODELS = { 'zai/glm-5.3': [1.4, 4.4], 'zai/glm-5.3-flash': [0.15, 0.5] };
-// The providers tried first, as the gateway names them: those measured keeping to a thinking
-// budget (see below). Another joins once measured doing so.
+// The providers asked first, as the gateway names them: those measured keeping to a thinking
+// budget (see below). Another joins once measured doing so. A model's fallback there, and the
+// statuses (busy, at capacity, down) that send a request on to the next of TRIES.
 const PROVIDERS = ['fireworks'];
+const FALLBACK = { 'zai/glm-5.3': ['zai/glm-5.3-flash'] };
+const TRIES = [{ only: PROVIDERS }, { only: PROVIDERS, wait: 1200 }, { order: PROVIDERS }];
+const BUSY = [429, 500, 502, 503, 504];
 const ROLES = ['system', 'user', 'assistant', 'tool'];
 // Tools (the agent that uses the desktop): how many, their JSON, the calls a reply may make, a
 // call's arguments, the output a request with tools may ask for; names and call ids.
@@ -207,12 +211,14 @@ export default async function handler(req, res) {
   // 8,192 and no program). Only a token budget bounds it, and only where the provider keeps to
   // one: Fireworks does, for GLM 5.3 and Flash (a budget of 1,024 held it to 1,037, in 37
   // replies; one of 256 to 1,036, so none holds under about 1,024); Baseten, DigitalOcean and
-  // Alibaba do not (2,000 of 2,000; 7,333 of 8,192 and no program). The gateway picks a
-  // provider itself (by weight, by affinity, after a failure), so every request tries
-  // PROVIDERS first, in order; when they are down or full (Fireworks answered 429, at
-  // capacity, on 2026-10-02), the gateway falls back to the others: an answer that may think
-  // past its budget beats none (Studio re-asks when thinking eats a reply's room). The budget is 1,024 tokens, or a program's own (at most 4,096); an
-  // effort or thinking off, which bound nothing, are not sent.
+  // Alibaba do not (2,000 of 2,000; 7,333 of 8,192 and no program), and a reply there that
+  // thinks its whole room makes nothing (17 of 20 eval requests fell back on 2026-10-02, and
+  // tetris, 2048 and minesweeper got no program). The gateway picks a provider itself (by
+  // weight, by affinity, after a failure), so it is asked in TRIES: PROVIDERS only, the model
+  // then its FALLBACK there; again after a breath; only then any provider, since an answer
+  // that may think past its budget beats none (Studio re-asks when thinking eats a reply's
+  // room). The budget is 1,024 tokens, or a program's own (at most 4,096); an effort or
+  // thinking off, which bound nothing, are not sent.
   const r = (body && body.reasoning) || {};
   const budget = Math.floor(Number(r.max_tokens));
   const reasoning = { max_tokens: budget >= 1 ? Math.min(budget, 4096) : 1024 };
@@ -223,7 +229,6 @@ export default async function handler(req, res) {
     stream_options: { include_usage: true },
     max_tokens: asked >= 1 ? Math.min(asked, MAX_TOKENS) : 4096,
     reasoning,
-    providerOptions: { gateway: { order: PROVIDERS } },
   };
   if (tools.length) {
     Object.assign(out, { tools, tool_choice: choice, max_tokens: Math.min(out.max_tokens, TOOL_OUT) });
@@ -250,12 +255,19 @@ export default async function handler(req, res) {
   let [up, tail] = [null, ''];
   const [seen, utf8] = [{ events: 0, chars: 0, line: '' }, new TextDecoder()];
   try {
-    up = await fetch(GATEWAY, {
-      method: 'POST',
-      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-      body: JSON.stringify(out),
-      signal: abort.signal,
-    });
+    for (const { wait, ...gateway } of TRIES) {
+      if (wait) await new Promise((done) => setTimeout(done, wait));
+      if (gateway.only) gateway.models = FALLBACK[model];
+      out.providerOptions = { gateway };
+      up = await fetch(GATEWAY, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: JSON.stringify(out),
+        signal: abort.signal,
+      });
+      if (up.ok || !BUSY.includes(up.status)) break;
+      await up.text().catch(() => '');
+    }
     // A refusal costs nothing.
     if (!up.ok) entry.usd = 0;
     res.statusCode = up.status;
@@ -269,8 +281,8 @@ export default async function handler(req, res) {
     }
     res.end();
   } catch {
-    // Never reached, it cost nothing.
-    if (!up) entry.usd = 0;
+    // Never reached (or only refused), it cost nothing.
+    if (!up || !up.ok) entry.usd = 0;
     if (!res.headersSent) return fail(res, 502, "couldn't reach the AI");
     // Cut off mid-answer: say so, on a line of its own, so it never reads as a whole answer.
     res.end('\n\ndata: {"error":{"message":"the answer was cut off"}}\n\n');
