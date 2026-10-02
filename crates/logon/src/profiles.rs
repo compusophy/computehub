@@ -6,7 +6,7 @@
 //! ([`LAST`]) and whether a welcome said hello ([`crate::SEEN`]).
 //!
 //! The list, `CSPR 1 <next id>`, then a line a profile: its id, its seed (8 hex: its face),
-//! `-` (or, from v1.2, its PIN's record) and its name, the rest of the line. Absent, it is the
+//! `-` (or its PIN's record, [`Pin`]) and its name, the rest of the line. Absent, it is the
 //! implied `0 <fnv("guest")> - guest`, written only at the first change. Ids are never reused;
 //! a new profile also skips any id whose keys are still there, so no profile inherits another's
 //! files. Failures are coded: a damaged list is set aside (only profile 0 is offered), a newer
@@ -81,7 +81,7 @@ pub fn fnv(s: &str) -> u32 {
     s.bytes().fold(2_166_136_261, |h, b| (h ^ u32::from(b)).wrapping_mul(16_777_619))
 }
 
-/// One profile: its id, its face's seed, its PIN's record (none until v1.2), its name.
+/// One profile: its id, its face's seed, its PIN's record ([`Pin`]) if it has one, its name.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Profile {
     pub id: u32,
@@ -91,7 +91,7 @@ pub struct Profile {
 }
 
 /// The list: the next id to give, and the profiles (one at least, [`MAX`] at most).
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Profiles {
     pub next: u32,
     pub list: Vec<Profile>,
@@ -208,9 +208,62 @@ fn line(l: &str) -> Option<Profile> {
     let mut f = l.splitn(4, ' ');
     let id = f.next()?.parse().ok()?;
     let seed = f.next().filter(|s| s.len() == 8).and_then(|s| u32::from_str_radix(s, 16).ok())?;
-    let pin = Some(f.next()?).filter(|p| *p != "-").map(str::to_string);
+    let pin = Some(f.next()?).filter(|p| *p != "-");
+    if pin.is_some_and(|p| Pin::read(p).is_none()) {
+        return None;
+    }
     let name = f.next()?;
+    let pin = pin.map(str::to_string);
     (clean(name).ok()? == name).then(|| Profile { id, seed, pin, name: name.into() })
+}
+
+/// A PIN as the list keeps it, never the PIN itself: `p1:<digits>:<iterations>:<salt>:<hash>`,
+/// PBKDF2-HMAC-SHA-256 of the digits with a 16-byte random salt (hex), the 32 bytes it gave
+/// (hex). The number of digits is kept, so typing the last one checks it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Pin {
+    pub len: usize,
+    pub iterations: u32,
+    pub salt: [u8; 16],
+    pub hash: [u8; 32],
+}
+
+/// The iterations a new PIN is hashed with: days of a CPU for every 8-digit PIN.
+pub const ITERATIONS: u32 = 100_000;
+
+impl Pin {
+    /// A PIN's record, if well formed (4 to 8 digits).
+    pub fn read(s: &str) -> Option<Pin> {
+        let f: Vec<&str> = s.split(':').collect();
+        let ["p1", len, iterations, salt, hash] = f[..] else { return None };
+        let len = len.parse().ok().filter(|n| (4..=8).contains(n))?;
+        let iterations = iterations.parse().ok().filter(|&n| n > 0)?;
+        Some(Pin { len, iterations, salt: unhex(salt)?, hash: unhex(hash)? })
+    }
+
+    /// The record the list keeps.
+    pub fn format(&self) -> String {
+        let mut out = String::from("p1:");
+        ui::push_num(&mut out, self.len);
+        out.push(':');
+        ui::push_num(&mut out, self.iterations as usize);
+        for bytes in [&self.salt[..], &self.hash[..]] {
+            out.push(':');
+            bytes.iter().for_each(|b| out.extend([hex(u32::from(*b) >> 4), hex(u32::from(*b))]));
+        }
+        out
+    }
+}
+
+/// `N` bytes from `2N` lowercase hex digits.
+fn unhex<const N: usize>(s: &str) -> Option<[u8; N]> {
+    let digit = |c: u8| b"0123456789abcdef".iter().position(|&d| d == c);
+    let mut out = [0; N];
+    (s.len() == 2 * N).then_some(())?;
+    for (o, p) in out.iter_mut().zip(s.as_bytes().chunks(2)) {
+        *o = (digit(p[0])? * 16 + digit(p[1])?) as u8;
+    }
+    Some(out)
 }
 
 /// A name as kept: control chars dropped, trimmed, at most [`NAME_MAX`] chars; or why not.

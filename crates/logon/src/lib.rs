@@ -12,9 +12,15 @@
 //! - **Logon.** A first visit says hello and starts with **Start**. A return shows the
 //!   [`profiles`] as circles (people are round, apps rounded squares), the one that signed in
 //!   last in focus, and **Add**: a tap, or the arrows and Enter, signs in; holding a circle
-//!   500 ms (or a right-click) opens its menu: Rename, Remove (confirmed, with its files).
-//!   Signing in flies the mark to the bar's (220 ms) as the welcome fades off the desktop. A
-//!   reload of a signed-in tab skips it ([`SESSION`]). Escape always goes back a step.
+//!   500 ms (or a right-click) opens its menu: Rename, Set a PIN (Change PIN, Remove PIN),
+//!   Remove (confirmed, with its files). Signing in flies the mark to the bar's (220 ms) as the
+//!   welcome fades off the desktop. A reload of a signed-in tab skips it ([`SESSION`]), never a
+//!   PIN's. Escape always goes back a step.
+//! - **A PIN** (4 to 8 digits, optional) is a curtain, not a lock: files are not encrypted, and
+//!   the copy says so. It is typed on the phone's number pad, checked by the browser's own
+//!   PBKDF2 ([`Out::Derive`], a random salt), and never kept or sent: the list keeps its
+//!   record ([`profiles::Pin`]). It guards signing in, renaming and changing it; removing a
+//!   profile never needs it (a forgotten PIN means just that).
 //! - **Signing out** happens on the desktop; if its files could not be kept, a card over the
 //!   desktop offers Stay or Sign out anyway ([`Logon::unkept`]).
 //!
@@ -59,7 +65,27 @@ pub enum Out {
     /// Sign out after all, the files unkept; or close the card over the desktop (Stay).
     SignOut,
     Close,
+    /// The text input's keyboard: a phone's number pad (for a PIN) or its letters.
+    Numeric(bool),
+    /// Derive 32 bytes from `pin` by PBKDF2-HMAC-SHA-256 ([`Logon::derived`] hears them as
+    /// `id`): the only thing that ever carries a PIN's digits, and only to the browser's own
+    /// WebCrypto.
+    Derive {
+        id: u32,
+        pin: Vec<u8>,
+        salt: [u8; 16],
+        iterations: u32,
+    },
 }
+
+/// A PIN's words, as said.
+const ENTER: &str = "Enter your PIN";
+const WRONG: &str = "Wrong PIN. Try again.";
+const CHOOSE: &str = "Choose a PIN (4 to 8 digits)";
+const AGAIN: &str = "Enter it again";
+const MISMATCH: &str = "They did not match. Try again.";
+const INSECURE: &str = "PINs need a secure page (https).";
+const UNCHECKED: &str = "The PIN could not be checked.";
 
 /// The profile a tab's [`SESSION`] (`session`, as stored) goes straight back to on a reload,
 /// if it is still listed (`get` reads `localStorage`).
@@ -70,15 +96,37 @@ pub fn session(session: Option<&str>, get: &dyn Fn(&str) -> Option<String>) -> O
 }
 
 /// What the welcome shows: a first visit's hello; the circles to pick from; a name being
-/// given (a new profile, or profile `id` renamed); a removal to confirm; the card over the
-/// desktop when its files could not be kept.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// given (a new profile, or profile `id` renamed); whether a new profile wants a PIN; a new PIN
+/// being chosen (for the new profile, or profile `id`); profile `id`'s PIN asked, then what it
+/// opens; a removal to confirm; the card over the desktop when its files could not be kept.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 enum State {
     Hello,
+    #[default]
     Pick,
     Name(Option<u32>),
+    Ask,
+    NewPin(Option<u32>),
+    Pin(u32, Then),
     Confirm(u32),
     Unkept,
+}
+
+/// What a PIN, once right, opens: the desktop, a rename, a new PIN, or none.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Then {
+    SignIn,
+    Rename,
+    Change,
+    Unpin,
+}
+
+/// A derivation awaited: a PIN to check against its hash (then what it opens), or a new PIN's
+/// record to make (its digits' count and salt).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Pending {
+    Check([u8; 32]),
+    Set(usize, [u8; 16]),
 }
 
 /// What a press lands on.
@@ -96,12 +144,17 @@ enum Target {
     Remove,
     Stay,
     Anyway,
+    Skip,
+    SetPin,
 }
 
-/// What a circle's menu does to its profile.
+/// What a circle's menu does to its profile: rename it, set (or change) its PIN, remove its
+/// PIN, remove it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Act {
     Rename,
+    SetPin,
+    Unpin,
     Remove,
 }
 
@@ -112,11 +165,20 @@ enum Act {
 /// the record) and whether the keys moved it; the name being typed; a line under the block
 /// (an error if so); the pointer (over, pressed, when and where, a finger's); the card; a
 /// circle's menu (asked for, then open) for its profile; whether text input is on (and asked
-/// again); what was drawn where, last frame.
-#[derive(Debug)]
+/// again, and a number pad); what was drawn where, last frame. For a PIN: whether the page can
+/// derive (a secure one), a new profile's name, a new PIN's first entry, the derivation awaited
+/// (its id, the last asked), when a wrong PIN shook.
+#[derive(Debug, Default)]
 pub struct Logon {
+    secure: bool,
+    naming: String,
+    first: String,
+    awaited: Option<(u32, Pending)>,
+    asks: u32,
+    shook: Option<f64>,
+    numeric: bool,
     size: (f32, f32),
-    theme: &'static Theme,
+    look: &'static str,
     grain: bool,
     seen: bool,
     state: State,
@@ -148,8 +210,13 @@ pub struct Logon {
 impl Logon {
     /// The welcome for a screen `size`, reading `localStorage` through `get`: a first visit
     /// (no list, no welcome said hello, no files kept) says hello; a return picks a profile.
-    /// What to ask of the page at once: a damaged list set aside and reported.
-    pub fn new(size: (f32, f32), get: &dyn Fn(&str) -> Option<String>) -> (Logon, Vec<Out>) {
+    /// PINs need a `secure` page (WebCrypto). What to ask of the page at once: a damaged list
+    /// set aside and reported.
+    pub fn new(
+        size: (f32, f32),
+        get: &dyn Fn(&str) -> Option<String>,
+        secure: bool,
+    ) -> (Logon, Vec<Out>) {
         let stored = get(LIST);
         let (list, why) = Profiles::read(stored.as_deref());
         let mut outs = Vec::new();
@@ -164,14 +231,15 @@ impl Logon {
         let first = stored.is_none() && !seen && get(&key(0, "home")).is_none();
         let l = Logon {
             size,
-            theme: ui::theme(&get(&key(id, "theme")).unwrap_or_default()),
+            look: ui::theme(&get(&key(id, "theme")).unwrap_or_default()).name,
             grain: get(&key(id, "grain")).as_deref() != Some("off"),
             seen,
             state: if first { State::Hello } else { State::Pick },
             read_only: why == Some(profiles::NEWER),
             list,
             focus,
-            ..Logon::unkept(size, "")
+            secure,
+            ..Default::default()
         };
         (l, outs)
     }
@@ -179,40 +247,13 @@ impl Logon {
     /// The card over the desktop when sign-out could not keep the files, in the theme named
     /// `theme`: Stay, or Sign out anyway.
     pub fn unkept(size: (f32, f32), theme: &str) -> Logon {
-        Logon {
-            size,
-            theme: ui::theme(theme),
-            grain: false,
-            seen: true,
-            state: State::Unkept,
-            clock: None,
-            start: None,
-            leaving: None,
-            reduced: false,
-            list: Profiles::implied(),
-            read_only: false,
-            focus: 0,
-            keyed: false,
-            typed: String::new(),
-            note: None,
-            hover: None,
-            press: None,
-            down: None,
-            finger: false,
-            card: false,
-            asked: None,
-            menu: None,
-            files: 0,
-            ime: false,
-            retype: false,
-            hits: Vec::new(),
-            fresh: [0; 20],
-        }
+        let look = ui::theme(theme).name;
+        Logon { size, look, seen: true, state: State::Unkept, ..Default::default() }
     }
 
     /// The theme it is drawn in (whose base clears the frame).
     pub fn theme(&self) -> &'static Theme {
-        self.theme
+        ui::theme(self.look)
     }
 
     /// Whether someone signed in: the desktop takes the input, and [`Logon::layer`] draws the
@@ -285,21 +326,163 @@ impl Logon {
                 r.redraw = r.consumed;
             }
             Input::Text(ref s) => {
-                if matches!(self.state, State::Name(_)) {
-                    let room =
-                        profiles::NAME_MAX - self.typed.chars().count().min(profiles::NAME_MAX);
-                    self.typed.extend(s.chars().filter(|c| !c.is_control()).take(room));
-                    (r.redraw, r.consumed) = (true, true);
+                r.redraw = true;
+                match self.state {
+                    State::Name(_) => {
+                        let room =
+                            profiles::NAME_MAX - self.typed.chars().count().min(profiles::NAME_MAX);
+                        self.typed.extend(s.chars().filter(|c| !c.is_control()).take(room));
+                    }
+                    State::Pin(..) | State::NewPin(_) => {
+                        s.chars()
+                            .filter(char::is_ascii_digit)
+                            .for_each(|c| self.digit(c, &mut outs));
+                    }
+                    _ => r.redraw = false,
                 }
             }
             Input::Wheel { .. } => {}
         }
-        let want = matches!(self.state, State::Name(_)) && self.leaving.is_none();
-        if want != self.ime || std::mem::take(&mut self.retype) {
+        self.settle(&mut r, &mut outs);
+        (r, outs)
+    }
+
+    /// Text input as the state wants it (a name's letters, a PIN's number pad), said when it
+    /// changes, or again when asked (a tap on the field brings back a dismissed keyboard).
+    fn settle(&mut self, r: &mut Response, outs: &mut Vec<Out>) {
+        let numeric = matches!(self.state, State::Pin(..) | State::NewPin(_));
+        let want = (numeric || matches!(self.state, State::Name(_))) && self.leaving.is_none();
+        if want && numeric != self.numeric {
+            (self.numeric, self.retype) = (numeric, true);
+            outs.push(Out::Numeric(numeric));
+        }
+        // Asked again or not, it is said once.
+        let again = std::mem::take(&mut self.retype);
+        if want != self.ime || again {
             self.ime = want;
             r.text_input = Some(want);
         }
+    }
+
+    /// A digit typed for a PIN (none while one is checked): the PIN asked is checked at its
+    /// length; a new one is at most 8, and its second entry is compared at the first's length.
+    fn digit(&mut self, c: char, outs: &mut Vec<Out>) {
+        let most = match self.state {
+            State::Pin(id, _) => self.pin(id).map_or(0, |p| p.len),
+            _ if self.first.is_empty() => 8,
+            _ => self.first.len(),
+        };
+        if self.awaited.is_some() || self.typed.len() >= most {
+            return;
+        }
+        self.typed.push(c);
+        if self.typed.len() < most {
+            return;
+        }
+        match self.state {
+            State::Pin(id, _) => {
+                let Some(p) = self.pin(id) else { return };
+                self.derive(Pending::Check(p.hash), p.salt, p.iterations, outs);
+            }
+            _ if self.first.is_empty() => {}
+            _ if self.typed == self.first => {
+                let salt: [u8; 16] = std::array::from_fn(|i| self.fresh[4 + i]);
+                let len = self.typed.len();
+                self.derive(Pending::Set(len, salt), salt, profiles::ITERATIONS, outs);
+            }
+            _ => {
+                self.first.clear();
+                self.typed.clear();
+                self.say(MISMATCH, true);
+            }
+        }
+    }
+
+    /// Profile `id`'s PIN, if it has one.
+    fn pin(&self, id: u32) -> Option<profiles::Pin> {
+        profiles::Pin::read(self.list.get(id)?.pin.as_deref()?)
+    }
+
+    /// Asks the page to derive from the digits typed (which go, here and now), awaiting `then`.
+    fn derive(&mut self, then: Pending, salt: [u8; 16], iterations: u32, outs: &mut Vec<Out>) {
+        self.asks += 1;
+        let pin = std::mem::take(&mut self.typed).into_bytes();
+        outs.push(Out::Derive { id: self.asks, pin, salt, iterations });
+        self.awaited = Some((self.asks, then));
+    }
+
+    /// Derivation `id` came back at `now` (`get` reading `localStorage`): a PIN right opens
+    /// what it guards, one wrong shakes and clears; a new PIN's record is stored (a new profile
+    /// with it, then signed in to). A failure says why. What to draw and ask of the page.
+    pub fn derived(
+        &mut self,
+        id: u32,
+        got: Result<Vec<u8>, String>,
+        now: f64,
+        get: &dyn Fn(&str) -> Option<String>,
+    ) -> (Response, Vec<Out>) {
+        let (mut r, mut outs) = (Response { redraw: true, ..Response::default() }, Vec::new());
+        let Some((_, then)) = self.awaited.take_if(|a| a.0 == id) else { return (r, outs) };
+        let bytes: Option<[u8; 32]> = got.ok().and_then(|b| b.try_into().ok());
+        match (then, bytes, self.state) {
+            (Pending::Check(hash), Some(b), State::Pin(id, then)) => {
+                // All 32 bytes compared, whatever the first that differs.
+                if b.iter().zip(hash).fold(0, |d, (x, y)| d | (x ^ y)) == 0 {
+                    self.opened(id, then, now, get, &mut outs);
+                } else {
+                    (self.shook, self.note) = (Some(now), Some((WRONG, true)));
+                }
+            }
+            (Pending::Set(len, salt), Some(hash), State::NewPin(of)) => {
+                let iterations = profiles::ITERATIONS;
+                let pin = Some(profiles::Pin { len, iterations, salt, hash }.format());
+                match of {
+                    Some(id) => {
+                        if self.change(Op::SetPin(id, pin), get, &mut outs) {
+                            self.go(State::Pick);
+                        }
+                    }
+                    None => self.add(pin, now, get, &mut outs),
+                }
+            }
+            _ => self.say(if self.secure { UNCHECKED } else { INSECURE }, true),
+        }
+        self.settle(&mut r, &mut outs);
         (r, outs)
+    }
+
+    /// What profile `id`'s PIN, right, opens.
+    fn opened(
+        &mut self,
+        id: u32,
+        then: Then,
+        now: f64,
+        get: &dyn Fn(&str) -> Option<String>,
+        outs: &mut Vec<Out>,
+    ) {
+        match then {
+            Then::SignIn => self.sign_in(id, now, outs),
+            Then::Rename => {
+                self.go(State::Name(Some(id)));
+                self.typed = self.list.get(id).map(|p| p.name.clone()).unwrap_or_default();
+            }
+            Then::Change => self.choose(Some(id)),
+            Then::Unpin => {
+                if self.change(Op::SetPin(id, None), get, outs) {
+                    self.go(State::Pick);
+                }
+            }
+        }
+    }
+
+    /// A new PIN to choose, for profile `of` (or the new profile named): not on an insecure
+    /// page, which cannot derive.
+    fn choose(&mut self, of: Option<u32>) {
+        if !self.secure {
+            return self.say(INSECURE, true);
+        }
+        self.go(State::NewPin(of));
+        (self.first, self.note) = (String::new(), Some((CHOOSE, false)));
     }
 
     /// A key: Escape goes back a step; in the menu, the arrows and Enter; on the circles (or
@@ -342,8 +525,15 @@ impl Logon {
                 };
                 self.act(t, now, get, outs);
             }
-            (Key::Enter, State::Name(_)) => self.act(Target::Next, now, get, outs),
-            (Key::Backspace, State::Name(_)) => _ = self.typed.pop(),
+            (Key::Enter, State::Name(_) | State::NewPin(_)) => {
+                self.act(Target::Next, now, get, outs)
+            }
+            (Key::Enter, State::Ask) => self.act(Target::SetPin, now, get, outs),
+            (Key::Backspace, State::Name(_) | State::NewPin(_) | State::Pin(..)) => {
+                if self.awaited.is_none() {
+                    self.typed.pop();
+                }
+            }
             (Key::Enter, State::Confirm(_)) => self.act(Target::Remove, now, get, outs),
             (Key::Enter, State::Unkept) => outs.push(Out::Close),
             _ => return false,
@@ -356,15 +546,24 @@ impl Logon {
     fn back(&mut self, outs: &mut Vec<Out>) {
         match self.state {
             _ if self.card => self.card = false,
-            State::Name(_) | State::Confirm(_) => self.go(State::Pick),
+            State::NewPin(of) if !self.first.is_empty() => self.choose(of),
+            State::NewPin(None) => self.go(State::Ask),
+            State::Ask => {
+                self.go(State::Name(None));
+                self.typed = self.naming.clone();
+            }
+            State::Name(_) | State::Confirm(_) | State::Pin(..) | State::NewPin(_) => {
+                self.go(State::Pick)
+            }
             State::Unkept => outs.push(Out::Close),
             State::Hello | State::Pick => self.keyed = false,
         }
     }
 
-    /// To `state`, with nothing typed and nothing said.
+    /// To `state`, with nothing typed, nothing said and no derivation awaited (one that comes
+    /// back later is let go).
     fn go(&mut self, state: State) {
-        (self.state, self.note, self.typed) = (state, None, String::new());
+        (self.state, self.note, self.typed, self.awaited) = (state, None, String::new(), None);
     }
 
     /// Says `note` under the block (`error`: in the danger color).
@@ -389,53 +588,89 @@ impl Logon {
             self.card = false;
             return;
         }
-        match t {
-            Target::Record => self.card = !self.card,
-            Target::Start => self.sign_in(0, now, outs),
-            Target::Circle(i) => {
+        match (t, self.state) {
+            (Target::Record, _) => self.card = !self.card,
+            (Target::Start, _) => self.sign_in(0, now, outs),
+            // A PIN asked: a tap off its dots goes back to the circles.
+            (Target::Circle(_) | Target::Back, State::Pin(..)) => self.go(State::Pick),
+            (Target::Circle(i), _) => {
                 self.focus = i;
                 match self.list.list.get(i).map(|p| p.id) {
+                    Some(id) if self.pin(id).is_some() => self.ask_pin(id, Then::SignIn),
                     Some(id) => self.sign_in(id, now, outs),
                     None if self.list.list.len() >= profiles::MAX => self.say(profiles::FULL, true),
                     None => self.go(State::Name(None)),
                 }
             }
-            Target::Field => self.retype = true,
-            Target::Cancel => self.back(outs),
-            Target::Stay => outs.push(Out::Close),
-            Target::Anyway => outs.push(Out::SignOut),
-            Target::Next => self.name(now, get, outs),
-            Target::Remove => {
-                if let State::Confirm(id) = self.state {
-                    if self.change(Op::Remove(id), get, outs) {
-                        self.go(State::Pick);
-                    }
+            (Target::Field, _) => self.retype = true,
+            (Target::Cancel, _) => self.back(outs),
+            (Target::Stay, _) => outs.push(Out::Close),
+            (Target::Anyway, _) => outs.push(Out::SignOut),
+            (Target::Next, State::NewPin(_)) => {
+                if self.first.is_empty() && self.typed.len() >= 4 {
+                    self.first = std::mem::take(&mut self.typed);
+                    self.say(AGAIN, false);
                 }
             }
-            Target::Card | Target::Back => {}
+            (Target::Next, _) => self.name(now, get, outs),
+            (Target::Skip, _) => self.add(None, now, get, outs),
+            (Target::SetPin, _) => self.choose(None),
+            (Target::Remove, State::Confirm(id)) if self.change(Op::Remove(id), get, outs) => {
+                self.go(State::Pick)
+            }
+            _ => {}
         }
     }
 
-    /// Gives the name typed: a new profile (then signed in to) or a profile's new name.
+    /// Gives the name typed: a profile's new name; or a new profile's, which may then take a
+    /// PIN (on a page that can derive one) before it is added and signed in to.
     fn name(&mut self, now: f64, get: &dyn Fn(&str) -> Option<String>, outs: &mut Vec<Out>) {
         let name = match profiles::clean(&self.typed) {
             Ok(name) => name,
             Err(why) => return self.say(why, true),
         };
-        let seed = u32::from_le_bytes([self.fresh[0], self.fresh[1], self.fresh[2], self.fresh[3]]);
-        let op = match self.state {
-            State::Name(Some(id)) => Op::Rename(id, name),
-            _ => Op::Add { name, seed, pin: None },
-        };
-        let added = matches!(op, Op::Add { .. });
-        if self.change(op, get, outs) {
-            self.go(State::Pick);
-            if added {
-                let id = self.list.list.last().map_or(0, |p| p.id);
-                self.focus = self.list.list.len() - 1;
-                self.sign_in(id, now, outs);
+        if let State::Name(Some(id)) = self.state {
+            if self.change(Op::Rename(id, name), get, outs) {
+                self.go(State::Pick);
             }
+            return;
         }
+        // Refused now (a name taken, eight already) rather than after a PIN.
+        let mut dry = Profiles::read(get(LIST).as_deref()).0;
+        let op = Op::Add { name: name.clone(), seed: 0, pin: None };
+        if let Err(why) = dry.apply(op, &|_| false) {
+            return self.say(why, true);
+        }
+        self.naming = name;
+        if self.secure { self.go(State::Ask) } else { self.add(None, now, get, outs) }
+    }
+
+    /// Adds the profile named with `pin` (its face from fresh bytes), and signs in to it.
+    fn add(
+        &mut self,
+        pin: Option<String>,
+        now: f64,
+        get: &dyn Fn(&str) -> Option<String>,
+        outs: &mut Vec<Out>,
+    ) {
+        let seed = u32::from_le_bytes([self.fresh[0], self.fresh[1], self.fresh[2], self.fresh[3]]);
+        let name = self.naming.clone();
+        if self.change(Op::Add { name, seed, pin }, get, outs) {
+            self.go(State::Pick);
+            let id = self.list.list.last().map_or(0, |p| p.id);
+            self.focus = self.list.list.len() - 1;
+            self.sign_in(id, now, outs);
+        }
+    }
+
+    /// Asks for profile `id`'s PIN, `then` to open what it guards (none on an insecure page,
+    /// which cannot check one).
+    fn ask_pin(&mut self, id: u32, then: Then) {
+        if !self.secure {
+            return self.say(INSECURE, true);
+        }
+        self.go(State::Pin(id, then));
+        self.say(ENTER, false);
     }
 
     /// Makes the change `op` on the list as stored now and stores it (a removal takes the
@@ -470,21 +705,29 @@ impl Logon {
     /// profile's, never Add's, nor on a list a newer OS wrote.
     fn ask_menu(&mut self, i: usize, at: (f32, f32)) {
         match self.list.list.get(i) {
+            _ if self.state != State::Pick => {}
             Some(_) if self.read_only => self.say(profiles::NEWER, false),
             Some(p) => (self.asked, self.focus) = (Some((p.id, at)), i),
             None => {}
         }
     }
 
-    /// Does a circle's menu item for profile `id`: Rename (the name to edit), Remove (to
-    /// confirm with the size of its files, unless it is the last).
+    /// Does a circle's menu item for profile `id`: Rename (the name to edit), Set a PIN (or
+    /// change it), Remove PIN, each behind its PIN if it has one; Remove (to confirm with the
+    /// size of its files, unless it is the last), which never needs the PIN: the browser's own
+    /// "clear site data" removes anything, and a forgotten PIN means just that.
     fn menu_act(&mut self, id: u32, act: Act, get: &dyn Fn(&str) -> Option<String>) {
         let Some(name) = self.list.get(id).map(|p| p.name.clone()) else { return };
+        let pinned = self.pin(id).is_some();
         match act {
+            Act::Rename if pinned => self.ask_pin(id, Then::Rename),
             Act::Rename => {
                 self.go(State::Name(Some(id)));
                 self.typed = name;
             }
+            Act::SetPin if pinned => self.ask_pin(id, Then::Change),
+            Act::SetPin => self.choose(Some(id)),
+            Act::Unpin => self.ask_pin(id, Then::Unpin),
             Act::Remove if self.list.list.len() <= 1 => self.say(profiles::LAST_ONE, true),
             Act::Remove => {
                 self.go(State::Confirm(id));
@@ -494,14 +737,23 @@ impl Logon {
     }
 
     /// Signs in to profile `id`: the device has said hello and remembers who signed in last,
-    /// the tab keeps its session, and the flight begins.
+    /// the tab keeps its session (never a PIN profile's: its PIN is asked at every page load),
+    /// and the flight begins.
     fn sign_in(&mut self, id: u32, now: f64, outs: &mut Vec<Out>) {
         let mut n = String::new();
         ui::push_num(&mut n, id as usize);
         if !self.seen {
             outs.push(Out::Set(SEEN.into(), "1".into()));
         }
-        outs.extend([Out::Set(LAST.into(), n.clone()), Out::Session(n), Out::SignIn(id)]);
+        outs.push(Out::Set(LAST.into(), n.clone()));
+        if self.pin(id).is_none() {
+            outs.push(Out::Session(n));
+        }
+        // The desktop's keyboard is letters again, not a PIN's number pad.
+        if std::mem::take(&mut self.numeric) {
+            outs.push(Out::Numeric(false));
+        }
+        outs.push(Out::SignIn(id));
         self.leaving = Some(if self.reduced { f64::NEG_INFINITY } else { now });
     }
 

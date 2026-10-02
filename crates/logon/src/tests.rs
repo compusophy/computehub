@@ -1,7 +1,7 @@
 use super::*;
 use crate::paint::{BAND, FADE, FLIGHT, TOUCH, TRACK};
 use gfx::{DrawList, Kind};
-use profiles::fnv;
+use profiles::{Pin, fnv};
 use record::{Record, Timing};
 use ui::TextSystem;
 
@@ -107,7 +107,7 @@ fn the_record_tells_the_real_start_stage_by_stage() {
 
 /// A welcome made from `kv` (no failure to report).
 fn welcome(size: (f32, f32), kv: &[(&str, &str)]) -> Logon {
-    let (l, outs) = Logon::new(size, &store(kv));
+    let (l, outs) = Logon::new(size, &store(kv), true);
     assert_eq!(outs, []);
     l
 }
@@ -152,7 +152,7 @@ fn the_hairline_keeps_gaps_and_lands_on_device_pixels() {
     for dpr in [1.0, 2.0, 3.5] {
         let (l, list, _) = drawn((1280.0, 800.0), dpr, &[(SEEN, "1")]);
         // The segments: the text_dim fills on the track's line, as wide as the mark (233).
-        let dim = l.theme.text_dim;
+        let dim = l.theme().text_dim;
         let segs: Vec<[f32; 4]> = list
             .instances()
             .iter()
@@ -270,7 +270,7 @@ fn a_return_picks_a_profile_and_the_band_opens_the_card() {
     let kv = [(SEEN, "1"), (LIST, TWO), (LAST, "2"), ("compusophy.2.theme", "dawn")];
     for start in [vec![down(Key::Enter)], vec![down(Key::Space)]] {
         let (mut l, ..) = drawn((1280.0, 800.0), 1.0, &kv);
-        assert_eq!((l.theme.name, l.state, l.focus), ("Dawn", State::Pick, 1));
+        assert_eq!((l.theme().name, l.state, l.focus), ("Dawn", State::Pick, 1));
         assert_eq!(feed(&mut l, &kv, &start), signed_in("2"), "{start:?}");
         assert!(l.leaving() && !l.gone(50.0 + FLIGHT - 1.0) && l.gone(50.0 + FLIGHT));
     }
@@ -323,6 +323,7 @@ fn a_first_visit_says_hello_and_starts_with_start() {
 fn add_names_a_new_profile_and_signs_in_to_it() {
     let kv = [(SEEN, "1")];
     let (mut l, _, mut t) = drawn((411.0, 794.0), 3.5, &kv);
+    l.secure = false; // an insecure page: no PIN is offered (a secure one's: below)
     // Add asks for a name, and the phone's keyboard comes up inside the tap.
     let (x, y) = spot(&l, Target::Circle(1));
     let answers: Vec<_> =
@@ -400,7 +401,7 @@ fn a_held_circle_opens_its_menu_to_rename_or_remove_it() {
     let (x, y) = spot(&l, Target::Circle(1));
     feed(&mut l, &kv, &[Input::PointerDown { x, y, button: 2, touch: false }]);
     draw(&mut l, 2000.0);
-    let (x, y) = item(&l, 1);
+    let (x, y) = item(&l, 2);
     feed(&mut l, &kv, &tap(x, y));
     assert_eq!(l.state, State::Confirm(2));
     let said = draw(&mut l, 2000.0).1.join(" ");
@@ -417,7 +418,7 @@ fn a_held_circle_opens_its_menu_to_rename_or_remove_it() {
     let (x, y) = spot(&l, Target::Circle(0));
     feed(&mut l, &kv, &[Input::PointerDown { x, y, button: 2, touch: false }]);
     draw(&mut l, 3000.0);
-    let (x, y) = item(&l, 1);
+    let (x, y) = item(&l, 2);
     feed(&mut l, &kv, &tap(x, y));
     assert_eq!((l.state, l.note), (State::Pick, Some((profiles::LAST_ONE, true))));
 }
@@ -428,7 +429,7 @@ fn the_card_over_the_desktop_offers_stay_or_sign_out_anyway() {
     let (mut t, rec) = (text(3.5), Record::default());
     let mut list = DrawList::new();
     assert_eq!(l.layer(&mut list, &mut t, &rec, 0.0), None);
-    assert!(!list.is_empty() && !l.leaving() && l.theme.name == "Dawn");
+    assert!(!list.is_empty() && !l.leaving() && l.theme().name == "Dawn");
     for (t, want) in [(Target::Stay, Out::Close), (Target::Anyway, Out::SignOut)] {
         let (x, y) = spot(&l, t);
         assert_eq!(feed(&mut l, &[], &tap(x, y)), [want]);
@@ -463,7 +464,7 @@ fn frames_come_only_while_something_moves() {
     assert_eq!(at(&mut calm, &rec, 0.0, true), None);
     let mut list = DrawList::new();
     calm.draw(&mut list, &mut text(1.0), &rec, (0.0, true));
-    let ink = calm.theme.text;
+    let ink = calm.theme().text;
     let dots = list.instances().iter().filter(|i| i.color == ink && i.radius > 0.0).count();
     assert_eq!(dots, 365);
 }
@@ -526,7 +527,7 @@ fn signing_in_flies_the_mark_to_the_bar_and_fades_off_the_desktop() {
     let mut at = |ms: f64| {
         let mut list = DrawList::new();
         let next = l.layer(&mut list, &mut t, &rec, 50.0 + ms);
-        let ink = l.theme.text;
+        let ink = l.theme().text;
         let dots: Vec<_> = list
             .instances()
             .iter()
@@ -553,4 +554,163 @@ fn signing_in_flies_the_mark_to_the_bar_and_fades_off_the_desktop() {
     assert!((cx - bx).abs() < 1.0 && (cy - by).abs() < 1.0, "{cx} {cy}");
     assert!(dots.iter().all(|d| d.1 < 20));
     assert_eq!(at(FLIGHT), (None, vec![]));
+}
+
+/// A stand-in for what the page derives from `digits`: their bytes, padded to 32 (the welcome
+/// only compares what comes back).
+fn hash_of(digits: &str) -> Vec<u8> {
+    let mut h = digits.as_bytes().to_vec();
+    h.resize(32, 0);
+    h
+}
+
+/// The list with kai (id 1) behind the PIN 2468.
+fn pinned() -> String {
+    let hash = hash_of("2468").try_into().expect("32 bytes");
+    let pin = Pin { len: 4, iterations: 9, salt: [7; 16], hash }.format();
+    format!("CSPR 1 2\n0 be5cdbf3 - guest\n1 0c55aa31 {pin} kai")
+}
+
+#[test]
+fn a_pins_record_reads_back_and_only_a_well_formed_one() {
+    let pin = Pin { len: 4, iterations: 100_000, salt: [7; 16], hash: [0xab; 32] };
+    let rec = pin.format();
+    assert_eq!((&rec[..18], Pin::read(&rec)), ("p1:4:100000:070707", Some(pin)));
+    let hex = |n: usize| "ab".repeat(n);
+    let (salt, hash) = (hex(16), hex(32));
+    #[rustfmt::skip]
+    let bad = [format!("p1:3:9:{salt}:{hash}"), format!("p1:9:9:{salt}:{hash}"),
+        format!("p2:4:9:{salt}:{hash}"), format!("p1:4:0:{salt}:{hash}"),
+        format!("p1:4:9:{}:{hash}", hex(15)), format!("p1:4:9:{salt}:{}", hash.to_uppercase()),
+        format!("p1:4:9:{salt}:{hash}:"), String::from("-x")];
+    assert!(bad.iter().all(|b| Pin::read(b).is_none()));
+    // A list keeps a PIN's record and reads it back; a bad one damages it.
+    let list = pinned();
+    assert_eq!(Profiles::read(Some(&list)).0.format(), list);
+    let broken = list.replace("p1:4:9", "p1:4:x");
+    assert_eq!(Profiles::read(Some(&broken)).1, Some(profiles::DAMAGED));
+}
+
+#[test]
+fn a_pin_is_checked_by_the_browser_asked_at_every_load_and_never_kept() {
+    let list = pinned();
+    let kv = [(SEEN, "1"), (LIST, &list[..]), ("compusophy.grain", "off")];
+    let (mut l, _, mut t) = drawn((411.0, 794.0), 3.5, &kv);
+    // No reload goes straight back to a PIN's profile.
+    assert_eq!(session(Some("1"), &store(&kv)), None);
+    // A tap on its circle asks for the PIN, on the phone's number pad, inside the tap.
+    let (x, y) = spot(&l, Target::Circle(1));
+    let up = tap(x, y).map(|i| l.input(&i, 50.0, &store(&kv))).map(|(r, o)| (r.text_input, o));
+    assert_eq!(up[1], (Some(true), vec![Out::Numeric(true)]));
+    assert_eq!((l.state, l.note), (State::Pin(1, Then::SignIn), Some((ENTER, false))));
+    // Digits only; at its length the browser derives, and the digits are gone from here.
+    assert_eq!(feed(&mut l, &kv, &[Input::Text("2a4".into())]), []);
+    let derive = Out::Derive { id: 1, pin: b"2468".to_vec(), salt: [7; 16], iterations: 9 };
+    assert_eq!(feed(&mut l, &kv, &[Input::Text("68".into())]), [derive]);
+    assert!(l.typed.is_empty() && feed(&mut l, &kv, &[Input::Text("1".into())]).is_empty());
+    // Wrong: the dots swing (frames while they do) and clear. Another id is not awaited.
+    assert_eq!(l.derived(9, Ok(hash_of("2468")), 60.0, &store(&kv)).1, []);
+    assert_eq!(l.derived(1, Ok(hash_of("1357")), 100.0, &store(&kv)).1, []);
+    assert_eq!((l.note, l.typed.as_str(), l.leaving()), (Some((WRONG, true)), "", false));
+    let (mut drawn_, rec) = (DrawList::new(), started(true, true));
+    assert_eq!(l.draw(&mut drawn_, &mut t, &rec, (150.0, false)), Some(0));
+    assert_eq!(l.draw(&mut drawn_, &mut t, &rec, (5000.0, false)), None);
+    // Right: signed in, keeping no session; the keyboard goes.
+    let outs = feed(&mut l, &kv, &[Input::Text("2468".into())]);
+    assert!(matches!(outs[..], [Out::Derive { id: 2, .. }]));
+    let (r, outs) = l.derived(2, Ok(hash_of("2468")), 200.0, &store(&kv));
+    let signed = vec![Out::Set(LAST.into(), "1".into()), Out::Numeric(false), Out::SignIn(1)];
+    assert_eq!((outs, r.text_input, l.leaving()), (signed, Some(false), true));
+    // Back from a PIN: Escape, or a tap off its dots; the dots bring back a keyboard.
+    let (mut l, ..) = drawn((411.0, 794.0), 3.5, &kv);
+    let (x, y) = spot(&l, Target::Circle(1));
+    feed(&mut l, &kv, &tap(x, y));
+    l.draw(&mut DrawList::new(), &mut t, &rec, (1000.0, false));
+    let (x, y) = spot(&l, Target::Field);
+    let answers: Vec<_> =
+        tap(x, y).iter().map(|i| l.input(i, 50.0, &store(&kv)).0.text_input).collect();
+    assert_eq!(answers, [None, Some(true)]);
+    feed(&mut l, &kv, &tap(20.0, 100.0));
+    assert_eq!(l.state, State::Pick);
+    // An insecure page cannot check a PIN, so it says so.
+    l.secure = false;
+    let (x, y) = spot(&l, Target::Circle(1));
+    assert_eq!((feed(&mut l, &kv, &tap(x, y)), l.note), (vec![], Some((INSECURE, true))));
+}
+
+#[test]
+fn a_new_profile_may_take_a_pin_chosen_twice() {
+    let kv = [(SEEN, "1")];
+    let (mut l, _, mut t) = drawn((411.0, 794.0), 3.5, &kv);
+    l.fresh = [1, 2, 3, 4, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9];
+    let (x, y) = spot(&l, Target::Circle(1));
+    feed(&mut l, &kv, &tap(x, y));
+    assert_eq!(feed(&mut l, &kv, &[Input::Text("kai".into()), down(Key::Enter)]), []);
+    // Asked whether to take a PIN, in honest words: a curtain, not a lock.
+    let mut list = DrawList::recording();
+    l.draw(&mut list, &mut t, &started(true, true), (1000.0, false));
+    let runs = list.take_sem().expect("recorded").runs;
+    let said: String = runs.iter().map(|r| r.text.clone() + " ").collect();
+    assert!(l.state == State::Ask && said.contains("not a lock") && said.contains("not encrypted"));
+    assert!(spot(&l, Target::Skip).1 > 0.0 && spot(&l, Target::SetPin).1 > 0.0);
+    // Escape goes back to the name, kept; Enter there asks again; Enter here sets a PIN.
+    feed(&mut l, &kv, &[down(Key::Escape)]);
+    assert_eq!((l.state, l.typed.as_str()), (State::Name(None), "kai"));
+    feed(&mut l, &kv, &[down(Key::Enter)]);
+    assert_eq!(feed(&mut l, &kv, &[down(Key::Enter)]), [Out::Numeric(true)]);
+    assert_eq!((l.state, l.note), (State::NewPin(None), Some((CHOOSE, false))));
+    // Four digits at least, then the same again; a mismatch starts over.
+    let text = |s: &str| Input::Text(s.into());
+    feed(&mut l, &kv, &[text("123"), down(Key::Enter)]);
+    assert!(l.first.is_empty());
+    feed(&mut l, &kv, &[text("4"), down(Key::Enter), text("1235")]);
+    assert_eq!((l.first.as_str(), l.note), ("", Some((MISMATCH, true))));
+    let outs = feed(&mut l, &kv, &[text("1234"), down(Key::Enter), text("1234")]);
+    let iterations = profiles::ITERATIONS;
+    assert_eq!(outs, [Out::Derive { id: 1, pin: b"1234".to_vec(), salt: [9; 16], iterations }]);
+    // Its record is kept on the list (never the digits), and the new profile signed in to.
+    let (_, outs) = l.derived(1, Ok(vec![5; 32]), 100.0, &store(&kv));
+    let pin = Pin { len: 4, iterations, salt: [9; 16], hash: [5; 32] }.format();
+    let list = format!("CSPR 1 2\n0 be5cdbf3 - guest\n1 04030201 {pin} kai");
+    let set = Out::Set(LIST.into(), list.clone());
+    let (last, pad) = (Out::Set(LAST.into(), "1".into()), Out::Numeric(false));
+    let want = vec![set, last, pad, Out::SignIn(1)];
+    assert!(outs == want && !list.contains("1234"));
+}
+
+#[test]
+fn a_pin_guards_its_profiles_menu_but_never_removal() {
+    let list = pinned();
+    let kv = [(SEEN, "1"), (LIST, &list[..])];
+    let (mut l, _, mut t) = drawn((1280.0, 800.0), 1.0, &kv);
+    let mut menu = |l: &mut Logon, i: usize| {
+        let (x, y) = spot(l, Target::Circle(1));
+        feed(l, &kv, &[Input::PointerDown { x, y, button: 2, touch: false }]);
+        l.draw(&mut DrawList::new(), &mut t, &started(true, true), (1000.0, false));
+        let m = &l.menu.as_ref().expect("a menu").1;
+        let labels: Vec<&str> = m.items.iter().map(|i| i.0).collect();
+        let r = m.item(i);
+        feed(l, &kv, &tap(r.x + r.w / 2.0, r.y + r.h / 2.0));
+        labels
+    };
+    // Rename asks the PIN first; right, the name to edit, on letters again.
+    let labels = menu(&mut l, 0);
+    let all = ["Rename\u{2026}", "Change PIN\u{2026}", "Remove PIN", "Remove profile\u{2026}"];
+    assert_eq!((labels, l.state), (all.to_vec(), State::Pin(1, Then::Rename)));
+    feed(&mut l, &kv, &[Input::Text("2468".into())]);
+    let (r, outs) = l.derived(1, Ok(hash_of("2468")), 100.0, &store(&kv));
+    assert_eq!((l.state, l.typed.as_str()), (State::Name(Some(1)), "kai"));
+    assert_eq!((outs, r.text_input), (vec![Out::Numeric(false)], Some(true)));
+    // Remove PIN: behind the PIN too, it takes the record off the list.
+    feed(&mut l, &kv, &[down(Key::Escape)]);
+    menu(&mut l, 2);
+    assert_eq!(l.state, State::Pin(1, Then::Unpin));
+    feed(&mut l, &kv, &[Input::Text("2468".into())]);
+    let (_, outs) = l.derived(2, Ok(hash_of("2468")), 100.0, &store(&kv));
+    let bare = "CSPR 1 2\n0 be5cdbf3 - guest\n1 0c55aa31 - kai";
+    assert_eq!((outs, l.state), (vec![Out::Set(LIST.into(), bare.into())], State::Pick));
+    // Removing it never asks the PIN: a forgotten one means just that.
+    let (mut l, ..) = drawn((1280.0, 800.0), 1.0, &kv);
+    menu(&mut l, 3);
+    assert_eq!(l.state, State::Confirm(1));
 }

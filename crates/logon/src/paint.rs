@@ -6,7 +6,7 @@ use gfx::{DrawList, Icon, RectF, Rgba};
 use home::menu::{Item, Menu};
 use host::motion::{Vis, ease, replay};
 use host::paint::{cap_baseline, faded, px, sheen};
-use ui::icon::{PHI, REVEAL_MS, avatar, mark_dots};
+use ui::icon::{PHI, REVEAL_MS, avatar, mark_dots, sin};
 use ui::{FontId, TextStyle, TextSystem};
 
 use crate::record::{self, Record};
@@ -25,10 +25,11 @@ const SIDES: [f32; 4] = [233.0, 144.0, 89.0, 55.0];
 const UNDER_MARK: f32 = 34.0;
 const NAME_H: f32 = 41.0;
 const UNDER_NAME: f32 = 21.0;
-/// A label's line, a line of prose, and a circle's label under it.
+/// A label's line, a line of prose, a circle's label under it, a PIN's dot.
 const LINE_H: f32 = 15.0;
 const PROSE_H: f32 = 20.0;
 const LABEL: f32 = 8.0 + LINE_H;
+const DOT: f32 = 13.0;
 /// A fade in; sign-in's flight, the welcome's content and backdrop fading off the desktop
 /// within it, the mark crossfading into the bar's at its end; the living grain's step (ms).
 pub(crate) const FADE: f64 = 233.0;
@@ -43,6 +44,10 @@ const LINE: &str = "a computer in your browser";
 const STAYS: &str = "Your files stay in this browser, on this device.";
 const CARD_TITLE: &str = "How this start went";
 const CARD_FOOT: &str = "Measured by this browser. Sizes are what crossed the network.";
+const ASK: &str = "A PIN keeps a casual tap out; it is not a lock. Your files are not encrypted, \
+and anyone with this device and browser can read them. The PIN never leaves this browser, so \
+don't reuse one from anywhere else. Forget it and this profile can only be removed, with its \
+files.";
 const UNKEPT_TITLE: &str = "Your files could not be kept.";
 const UNKEPT: &str = "This browser's storage is full or blocked, so changes since they were last \
 kept are lost if you sign out now.";
@@ -83,7 +88,7 @@ impl Logon {
 
     /// The prose of a removal to confirm, in lines at most the column wide.
     fn prose<'a>(&self, text: &mut TextSystem, s: &'a str) -> Vec<&'a str> {
-        let style = TextStyle::new(FontId::Sans, 14.0, self.theme.text);
+        let style = TextStyle::new(FontId::Sans, 14.0, self.theme().text);
         text.wrap(s, style, (self.size.0 - 32.0).min(320.0))
     }
 
@@ -123,6 +128,9 @@ be undone.",
                 let (ask, _) = self.removal(id);
                 PROSE_H * self.prose(text, &ask).len() as f32 + 21.0 + TOUCH + note
             }
+            State::Ask => PROSE_H * self.prose(text, ASK).len() as f32 + 21.0 + TOUCH + note,
+            State::NewPin(_) => DOT + GAP + LINE_H + GAP + TOUCH,
+            State::Pin(..) => self.ring().0 + LABEL + 21.0 + DOT + GAP + LINE_H,
             State::Unkept => 0.0,
         }
     }
@@ -135,7 +143,7 @@ be undone.",
     /// typed (a phone's keyboard needs the room).
     pub(crate) fn layout(&self, text: &mut TextSystem) -> Layout {
         let ((w, h), block) = (self.size, self.block_h(text));
-        let typing = matches!(self.state, State::Name(_));
+        let typing = matches!(self.state, State::Name(_) | State::NewPin(_) | State::Pin(..));
         let record = !typing && block <= h - TRACK - GAP - BAND;
         // A pixel clear of the record's band: snapped to device pixels, the two never touch.
         let bottom = h - if record { TRACK + GAP + 1.0 } else { GAP };
@@ -158,7 +166,7 @@ be undone.",
     /// The living grain's pattern at `now` (a new one each [`GRAIN_MS`] while it lives: the
     /// profile's `grain` on, motion not reduced, a theme with grain), and when the next is due.
     fn grain(&self, now: f64) -> (u32, Option<u32>) {
-        if !self.grain || self.reduced || self.theme.grain == 0 {
+        if !self.grain || self.reduced || self.theme().grain == 0 {
             return (0, None);
         }
         let next = GRAIN_MS * (now / GRAIN_MS).floor() + GRAIN_MS - now;
@@ -188,28 +196,30 @@ be undone.",
             self.ask_menu(i, at);
         }
         if let Some((id, at)) = self.asked.take() {
-            let menu = Menu::new(&items(), at, self.size, self.finger, text);
+            let pinned = self.list.get(id).is_some_and(|p| p.pin.is_some());
+            let menu = Menu::new(&items(pinned), at, self.size, self.finger, text);
             self.menu = Some((id, menu));
         }
         list.clear();
         self.hits.clear();
         let (seed, grain) = self.grain(now);
         let screen = RectF::new(0.0, 0.0, self.size.0, self.size.1);
-        self.theme.draw_backdrop(list, screen, seed as f32);
+        self.theme().draw_backdrop(list, screen, seed as f32);
         let ms = if reduced { f64::NAN } else { now - start };
         if let Some(m) = self.paint(list, text, rec, now) {
-            mark_dots(list, m, text.dpr(), ms, self.theme.text);
+            mark_dots(list, m, text.dpr(), ms, self.theme().text);
         }
         if self.card {
             self.paint_card(list, text, rec);
         }
         if let Some((_, menu)) = &self.menu {
-            menu.draw(list, text, self.theme, self.press.is_some());
+            menu.draw(list, text, self.theme(), self.press.is_some());
         }
         let fading = |since: Option<f64>| since.is_some_and(|t| now - t < FADE);
         let name = fading(rec.fonts[0].map(|f| f.1));
         let stage = rec.stages().iter().any(|s| fading(Some(s.learned)));
-        let moving = !reduced && (now - start < REVEAL_MS || name || stage);
+        let shaking = self.shook.is_some_and(|s| now - s < FADE);
+        let moving = !reduced && (now - start < REVEAL_MS || name || stage || shaking);
         let hold =
             held.filter(|h| now - h.1 < HOLD_MS).map(|h| (HOLD_MS - (now - h.1)).ceil() as u32);
         if moving { Some(0) } else { [grain, hold].into_iter().flatten().min() }
@@ -238,14 +248,14 @@ be undone.",
         }
         let out = |ms: f64| 1.0 - ease((t / ms) as f32);
         let mut layer = DrawList::new();
-        self.theme.draw_backdrop(&mut layer, screen, 0.0);
+        self.theme().draw_backdrop(&mut layer, screen, 0.0);
         replay(list, &layer, Vis { a: out(BACKDROP_OUT), ..Vis::at(screen) });
         layer.clear();
         let mark = self.paint(&mut layer, text, rec, now);
         replay(list, &layer, Vis { a: out(CONTENT_OUT), ..Vis::at(screen) });
         if let Some(m) = mark {
             layer.clear();
-            mark_dots(&mut layer, m, text.dpr(), f64::NAN, self.theme.text);
+            mark_dots(&mut layer, m, text.dpr(), f64::NAN, self.theme().text);
             let (to, e) = (home::bar::mark_rect(), ease((t / FLIGHT) as f32));
             let mid = |r: RectF| (r.x + r.w / 2.0, r.y + r.h / 2.0);
             let ((x0, y0), (x1, y1)) = (mid(m), mid(to));
@@ -265,7 +275,7 @@ be undone.",
         rec: &Record,
         now: f64,
     ) -> Option<RectF> {
-        let (t, (w, h)) = (self.theme, self.size);
+        let (t, (w, h)) = (self.theme(), self.size);
         let lay = self.layout(text);
         if let Some(time) = self.clock {
             home::bar::draw_clock(list, text, t, w, time);
@@ -313,6 +323,38 @@ be undone.",
                 self.buttons(list, text, y, &row);
                 y += TOUCH + GAP;
             }
+            State::Ask => {
+                let body = TextStyle::new(FontId::Sans, 14.0, t.text_dim);
+                for l in self.prose(text, ASK) {
+                    centered(list, text, (cx, cap_baseline(text, y, PROSE_H, 14.0)), l, body);
+                    y += PROSE_H;
+                }
+                y += 21.0;
+                let row = [
+                    ("Skip", Look::Plain, Target::Skip),
+                    ("Set a PIN", Look::Main, Target::SetPin),
+                ];
+                self.buttons(list, text, y, &row);
+                y += TOUCH + GAP;
+            }
+            State::NewPin(_) => {
+                self.dots(list, text, y, now);
+                y += DOT + GAP;
+                // The note between the dots and the buttons: Next only for a first entry.
+                let row =
+                    [("Cancel", Look::Plain, Target::Cancel), ("Next", Look::Main, Target::Next)];
+                let n = if self.first.is_empty() { 2 } else { 1 };
+                self.buttons(list, text, y + LINE_H + GAP, &row[..n]);
+            }
+            State::Pin(id, _) => {
+                let i = self.list.list.iter().position(|p| p.id == id).unwrap_or(0);
+                let c = self.ring().0;
+                let r = RectF::new(text.snap((w - c) / 2.0), y, c, c);
+                self.circle(list, text, r, i);
+                y += c + LABEL + 21.0;
+                self.dots(list, text, y, now);
+                y += DOT + GAP;
+            }
             State::Unkept => {}
         }
         if let Some((note, error)) = self.note {
@@ -330,38 +372,80 @@ be undone.",
     /// under it), then Add, a dim ring around a plus; the focus ring on the focused one. Where
     /// they end.
     fn paint_circles(&mut self, list: &mut DrawList, text: &mut TextSystem, y: f32) -> f32 {
-        let (t, (c, gap, per)) = (self.theme, self.ring());
+        let (c, gap, per) = self.ring();
         let n = self.circles();
-        let label = TextStyle::new(FontId::Sans, 12.0, t.text_dim);
         for i in 0..n {
             let (row, col) = (i / per, i % per);
             let in_row = per.min(n - row * per) as f32;
             let x0 = self.size.0 / 2.0 - (in_row * c + (in_row - 1.0) * gap) / 2.0;
             let top = y + row as f32 * (c + LABEL + GAP);
             let r = RectF::new(text.snap(x0 + col as f32 * (c + gap)), text.snap(top), c, c);
-            let name = match self.list.list.get(i) {
-                Some(p) => {
-                    avatar(list, text, r, p.seed, t);
-                    p.name.as_str()
-                }
-                None => {
-                    list.border(r, c / 2.0, px(text, 1.5), t.text_faint);
-                    list.icon(r.inset(c * 0.34), Icon::Plus, px(text, 2.0), t.text_dim);
-                    "Add"
-                }
-            };
-            if self.focus == i {
-                self.ring_at(list, text, r, c / 2.0, t.accent);
-            } else if self.hover == Some(Target::Circle(i)) {
-                self.ring_at(list, text, r, c / 2.0, t.text_faint);
-            }
-            let shown = text.ellipsize(name, label, c + gap - 4.0);
-            let base = cap_baseline(text, top + c + 8.0, LINE_H, 12.0);
-            let style = if self.focus == i { label.with_color(t.text) } else { label };
-            centered(list, text, (r.x + c / 2.0, base), &shown, style);
-            self.hits.push((RectF::new(r.x, r.y, c, c + LABEL), Target::Circle(i)));
+            self.circle(list, text, r, i);
         }
         y + self.rows_h()
+    }
+
+    /// Circle `i` in the square `r`: a profile's face, or Add (a dim ring around a plus); the
+    /// focus ring if focused (a dim one under the pointer); its name under it.
+    fn circle(&mut self, list: &mut DrawList, text: &mut TextSystem, r: RectF, i: usize) {
+        let (t, (c, gap, _)) = (self.theme(), self.ring());
+        let label = TextStyle::new(FontId::Sans, 12.0, t.text_dim);
+        let name = match self.list.list.get(i) {
+            Some(p) => {
+                avatar(list, text, r, p.seed, t);
+                p.name.as_str()
+            }
+            None => {
+                list.border(r, c / 2.0, px(text, 1.5), t.text_faint);
+                list.icon(r.inset(c * 0.34), Icon::Plus, px(text, 2.0), t.text_dim);
+                "Add"
+            }
+        };
+        if self.focus == i {
+            self.ring_at(list, text, r, c / 2.0, t.accent);
+        } else if self.hover == Some(Target::Circle(i)) {
+            self.ring_at(list, text, r, c / 2.0, t.text_faint);
+        }
+        let shown = text.ellipsize(name, label, c + gap - 4.0);
+        let base = cap_baseline(text, r.y + c + 8.0, LINE_H, 12.0);
+        let style = if self.focus == i { label.with_color(t.text) } else { label };
+        centered(list, text, (r.x + c / 2.0, base), &shown, style);
+        self.hits.push((RectF::new(r.x, r.y, c, c + LABEL), Target::Circle(i)));
+    }
+
+    /// A PIN's dots from `y`, one per digit (a new PIN's grows from four to eight), those typed
+    /// filled: dim while it is checked; swinging in the danger color as a wrong one clears.
+    /// They bring back a dismissed keyboard.
+    fn dots(&mut self, list: &mut DrawList, text: &mut TextSystem, y: f32, now: f64) {
+        let t = self.theme();
+        let n = match self.state {
+            State::Pin(id, _) => self.pin(id).map_or(4, |p| p.len),
+            _ if self.first.is_empty() => self.typed.len().clamp(4, 8),
+            _ => self.first.len(),
+        };
+        let filled = if self.awaited.is_some() { n } else { self.typed.len() };
+        // Three damped half-swings, 8 px at first.
+        let p = self.shook.map_or(1.0, |s| ((now - s) / FADE) as f32);
+        let swing = !self.reduced && (0.0..1.0).contains(&p);
+        let dx = if swing { 8.0 * (1.0 - p) * sin(3.0 * core::f32::consts::PI * p) } else { 0.0 };
+        let ink = match () {
+            _ if swing => t.danger,
+            _ if self.awaited.is_some() => t.text_faint,
+            _ => t.text,
+        };
+        let x0 = (self.size.0 - n as f32 * (DOT + 21.0) + 21.0) / 2.0 + dx;
+        for i in 0..n {
+            let r = RectF::new(text.snap(x0 + i as f32 * (DOT + 21.0)), text.snap(y), DOT, DOT);
+            match i < filled {
+                true => list.fill(r, DOT / 2.0, ink),
+                false => {
+                    list.border(r, DOT / 2.0, px(text, 1.5), if swing { ink } else { t.text_faint })
+                }
+            }
+        }
+        let room = (self.size.0 - 32.0).min(COLUMN);
+        let hit = RectF::new(((self.size.0 - room) / 2.0).round(), y - 15.0, room, TOUCH);
+        self.hits.push((hit, Target::Field));
     }
 
     /// A ring 2 px wide, 3 px out from `r` (corner `radius`), in `color`.
@@ -378,14 +462,14 @@ be undone.",
             _ => false,
         };
         if focused && self.keyed {
-            self.ring_at(list, text, r, (r.h / 2.0).min(13.0), self.theme.accent);
+            self.ring_at(list, text, r, (r.h / 2.0).min(13.0), self.theme().accent);
         }
     }
 
     /// The name field from `y`: a sunken line across the column with what is typed (or a faint
     /// `Name`) and the caret, its ring the accent while typing.
     fn field(&mut self, list: &mut DrawList, text: &mut TextSystem, y: f32) {
-        let t = self.theme;
+        let t = self.theme();
         let fw = (self.size.0 - 32.0).min(280.0);
         let r = RectF::new(text.snap((self.size.0 - fw) / 2.0), y, text.snap(fw), TOUCH);
         list.fill(r, 8.0, t.surface_lo);
@@ -415,7 +499,7 @@ be undone.",
         y: f32,
         row: &[(&str, Look, Target)],
     ) {
-        let t = self.theme;
+        let t = self.theme();
         let style = TextStyle::new(FontId::Sans, 15.0, t.text);
         // A lone button is 144 px at least, one of a row 89.
         let least = if row.len() == 1 { 144.0 } else { 89.0 };
@@ -462,7 +546,7 @@ be undone.",
         (now, h): (f64, f32),
         tw: f32,
     ) {
-        let (t, w) = (self.theme, self.size.0);
+        let (t, w) = (self.theme(), self.size.0);
         let (y, hair, line) = (text.snap(h - TRACK), 1.0 / text.dpr(), px(text, 1.0));
         let x0 = text.snap((w - tw) / 2.0);
         list.fill(RectF::new(x0, y, tw, hair), 0.0, t.border);
@@ -486,7 +570,7 @@ be undone.",
 
     /// A panel from the home screen's menus' recipe in `r`.
     fn panel(&self, list: &mut DrawList, text: &TextSystem, r: RectF) {
-        let (t, line) = (self.theme, px(text, 1.0));
+        let (t, line) = (self.theme(), px(text, 1.0));
         list.shadow_offset(r, 13.0, 34.0, 13.0, t.shadow);
         list.fill(r, 13.0, t.base);
         list.fill(r, 13.0, t.surface);
@@ -497,7 +581,7 @@ be undone.",
     /// The record's card, 13 px above the hairline: each stage's size and time, then Ready's,
     /// and where the numbers come from.
     fn paint_card(&mut self, list: &mut DrawList, text: &mut TextSystem, rec: &Record) {
-        let (t, (w, h)) = (self.theme, self.size);
+        let (t, (w, h)) = (self.theme(), self.size);
         let cw = 280.0f32.min(w - 32.0);
         let small = TextStyle::new(FontId::Sans, 12.0, t.text_dim);
         let foot = text.wrap(CARD_FOOT, small, cw - 2.0 * GAP);
@@ -532,7 +616,7 @@ be undone.",
     /// Over the desktop, dimmed: the card that files could not be kept, with Stay and Sign out
     /// anyway.
     fn paint_unkept(&mut self, list: &mut DrawList, text: &mut TextSystem, screen: RectF) {
-        let t = self.theme;
+        let t = self.theme();
         list.fill(screen, 0.0, t.shadow.with_alpha(t.shadow.3 / 2));
         let cw = (screen.w - 32.0).min(360.0);
         let body = TextStyle::new(FontId::Sans, 14.0, t.text_dim);
@@ -567,9 +651,18 @@ be undone.",
     }
 }
 
-/// A circle's menu.
-fn items() -> [Item<Act>; 2] {
-    [("Rename\u{2026}", "", Some(Act::Rename)), ("Remove profile\u{2026}", "", Some(Act::Remove))]
+/// A circle's menu, for a profile with a PIN (`pinned`) or without.
+fn items(pinned: bool) -> Vec<Item<Act>> {
+    let mut items = vec![("Rename\u{2026}", "", Some(Act::Rename))];
+    match pinned {
+        true => items.extend([
+            ("Change PIN\u{2026}", "", Some(Act::SetPin)),
+            ("Remove PIN", "", Some(Act::Unpin)),
+        ]),
+        false => items.push(("Set a PIN\u{2026}", "", Some(Act::SetPin))),
+    }
+    items.push(("Remove profile\u{2026}", "", Some(Act::Remove)));
+    items
 }
 
 /// `s` centered on `x`, on `baseline`.

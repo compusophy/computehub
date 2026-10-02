@@ -174,11 +174,20 @@ one. Forked crates keep their Apache-2.0 license and note their origin.
   squares: a sigil on its hue, from a random seed, so a rename keeps the
   face), the one that signed in last in focus, then Add; a tap, or the
   arrows and Enter, signs in. Holding a circle 500 ms (or a right-click)
-  opens its menu: Rename, Remove profile (confirmed, with its files' size;
-  never the last). Escape always goes back a step. Signing in puts the
-  profile's /home back and makes its desktop as the mark flies to the
-  bar's and the welcome fades off it (220 ms). A reload of a signed-in tab
-  (its `sessionStorage`) goes straight to its desktop. **Sign out** (the
+  opens its menu: Rename, Set a PIN (or Change PIN, Remove PIN), Remove
+  profile (confirmed, with its files' size; never the last). Escape always
+  goes back a step. Signing in puts the profile's /home back and makes its
+  desktop as the mark flies to the bar's and the welcome fades off it
+  (220 ms). A reload of a signed-in tab (its `sessionStorage`) goes
+  straight to its desktop, never a PIN's. **A PIN** (optional, 4 to 8
+  digits, offered as a profile is added) is a curtain, not a lock, and the
+  words say so: files are not encrypted. It is typed on the phone's number
+  pad (one dot a digit; the last checks it), asked at every page load,
+  checked by the browser's own PBKDF2-HMAC-SHA-256 (WebCrypto, 100,000
+  iterations, a random salt), never sent or kept: the list keeps its
+  record. A wrong one swings the dots and clears them. It guards signing
+  in, renaming and changing it; removal never needs it, so a forgotten PIN
+  means removing the profile with its files. **Sign out** (the
   desktop's menu) keeps /home at once, forgets the tab's profile and
   reloads; if the files could not be kept, a card offers Stay or Sign out
   anyway. Welcome no longer opens by itself.

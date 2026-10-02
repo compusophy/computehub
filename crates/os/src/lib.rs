@@ -148,7 +148,7 @@ impl Desktop {
             let get = |k: &str| ctl.storage_get(k);
             self.signed = logon::session(ctl.session_get(logon::SESSION).as_deref(), &get);
             if self.signed.is_none() {
-                let (l, outs) = Logon::new((w, h), &get);
+                let (l, outs) = Logon::new((w, h), &get, ctl.secure());
                 self.logon = Some(l);
                 return Some(self.outs(outs, Response { redraw: true, ..Default::default() }, ctl));
             }
@@ -190,6 +190,8 @@ impl Desktop {
                 Out::Failed(message, note) => self.report.failed("error", message, note),
                 Out::SignOut => self.sign_out(ctl, true),
                 Out::Close => self.logon = None,
+                Out::Numeric(on) => ctl.input_mode(on),
+                Out::Derive { id, pin, salt, iterations } => ctl.derive(id, pin, salt, iterations),
                 Out::SignIn(id) => {
                     self.signed = Some(id);
                     if let Some(d) = self.desk(ctl) {
@@ -261,6 +263,11 @@ impl Desktop {
                 self.kernel(KernelIn::Wake)
             }
             Event::Hidden => self.kernel(KernelIn::Hidden),
+            Event::Derived { id, result } => {
+                let (now, get) = (ctl.monotonic_ms(), |k: &str| ctl.storage_get(k));
+                let got = self.logon.as_mut().map(|l| l.derived(id, result, now, &get));
+                got.map(|(r, outs)| self.outs(outs, r, ctl))
+            }
             ev => input_of(ev).and_then(|input| self.input(input, ctl)),
         };
         let Some(r) = r else { return Handled::default() };
@@ -380,11 +387,10 @@ impl Desktop {
             shell.draw(&mut self.list);
             base = shell.clear_color();
         }
-        let (logon, text) = (&mut self.logon, text_of(&mut self.shell, &mut self.parts));
-        self.wish = match (logon, text) {
-            (Some(l), Some(text)) if l.leaving() => {
-                l.layer(&mut self.list, text, &self.record, now)
-            }
+        // Over a desktop the welcome is a layer: its flight, or the card files went unkept.
+        let (over, logon) = (self.shell.is_some(), &mut self.logon);
+        self.wish = match (logon, text_of(&mut self.shell, &mut self.parts)) {
+            (Some(l), Some(text)) if over => l.layer(&mut self.list, text, &self.record, now),
             (Some(l), Some(text)) => {
                 text.set_dpr(dpr);
                 base = l.theme().base;
