@@ -41,14 +41,7 @@ impl App for Probe {
         if self.1 == "board" {
             ui.mark(W(1), sem::GRID, 0, &"0".repeat(4100));
             ui.mark(W(2), sem::GRID, 0, &"1".repeat(20_000));
-            ui.mark(
-                W(3),
-                sem::CANVAS,
-                0,
-                &"line 1 2 3 4 5 6
-"
-                .repeat(100),
-            );
+            ui.mark(W(3), sem::CANVAS, 0, &"line 1 2 3 4 5 6\n".repeat(100));
         }
         if self.1 != "page" {
             let sense = if self.1 == "board" { ui::Sense::Pad } else { ui::Sense::Click };

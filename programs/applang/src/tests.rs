@@ -431,15 +431,23 @@ fn every_card_example_compiles_and_smokes_clean() {
         "grid 10, board {",
         "grid 2, [0, 0], words {",
         "\"score \" + n",
+        "canvas 160, 120, scene();",
+        "canvas 160, 120, scene() {",
+        "fn scene() { rect(0, 0, 160, 8, 4); circle(bx, by, 3, 3); text(score, 80, 4, 6, 9); }",
+        "sprite([\"..3..\", \".333.\", \"33333\"], ",
+        "sin(d)  cos(d)",
     ];
     let src = r#"
         state n = 0;   state name = "";   state on = false;
         state board = [0; 200];   state words = ["a", "b"];   state todos = [""; 0];
         saved state best = 0;
-        state speed = 500; state score = 0; state xs = [0; 0];
+        state speed = 500; state score = 0; state xs = [0; 0]; state bx = 80; state by = 60;
         fn at(x: int, y: int) -> int { return y * 10 + x; }
         fn reset() { score = 0; }
         fn mark(on: bool) -> string { if on { return "x"; } return ""; }
+        fn scene() { rect(0, 0, 160, 8, 4); circle(bx, by, 3, 3); text(score, 80, 4, 6, 9); }
+        fn more() { ring(80, 60, 20, 2, 11); line(0, 119, 159, 0, 1, 10);
+          sprite(["..3..", ".333.", "33333"], 70, 90, 2); scene(); }
         every 500 { n += 1; board[random(200)] = random(9); }
         every speed { score += 1; if len(todos) < 9 { push(todos, "t" + score); } }
         on key "left" { reset(); let i = 1; xs = [0; 2]; xs[i] = at(1, 2); push(xs, 1);
@@ -454,10 +462,16 @@ fn every_card_example_compiles_and_smokes_clean() {
         grid 10, board;
         grid 10, board { board[cell] = (board[cell] + 1) % 9; }
         grid 2, [0, 0], words { on = !on; }
+        canvas 160, 120, scene();
+        canvas 160, 120, scene() { bx = x; by = y; }
+        canvas 160, 120, more();
+        label sin(d)  cos(d);
     "#;
     for l in lines.into_iter().chain(["every 500 {", "every speed {"]) {
         assert!(REFERENCE.contains(l) && src.contains(l), "{l}");
     }
+    // The card's `sin(d)  cos(d)` as an expression, d a state.
+    let src = &src.replace("sin(d)  cos(d)", "sin(score) + cos(score)");
     let report = smoke(compile(src).unwrap_or_else(|d| panic!("{}", d.render(src))), 3);
     assert!(report.fault.is_none() && report.warnings.is_empty(), "{report:?}");
     assert!(report.events > TICKS);
@@ -504,9 +518,148 @@ fn each_code_has_a_rule_and_the_card_says_what_models_got_wrong() {
     );
     #[rustfmt::skip]
     let all = [1, 2, 3, 4, 5, 101, 102, 203, 204, 205, 206, 211, 212, 214, 215, 216, 217, 218, 219,
-        220, 221, 301, 302, 303, 304, 305, 306, 307, 308];
+        220, 221, 222, 223, 301, 302, 303, 304, 305, 306, 307, 308, 309];
     for code in all {
         assert!(rule(code).ends_with('.'), "{code}");
     }
     assert_eq!(rule(codes::BAD_EVENT), "");
+}
+
+/// A draw as a canvas's call gives it.
+fn draw(shape: Shape, color: u8, at: [i16; 5], text: &str) -> Draw {
+    Draw { shape, color, at, text: text.into() }
+}
+
+#[test]
+fn canvases_draw_their_shapes_in_order_and_taps_say_where() {
+    let mut a = app("state hits = [0; 0]; state n = 0;
+         fn dot(i: int) { circle(i * 10, 5, 2, 3); }
+         fn scene() {
+           rect(0, 0, 40, 2, 1); ring(20, 10, 6, 2, 4); line(0, 19, 39, 0, 1, 9);
+           text(42, 20, 10, 4, 11); text(\"hi\", 1, 1, 2, 10); sprite([\"1.2\", \".3\"], 30, 15, 1);
+           for i in 0..n { dot(i); }
+         }
+         label \"x\";
+         canvas 40, 20, scene() { push(hits, x); push(hits, y); n = min(3, n + 1); }
+         canvas 2 * 3, 1, scene();");
+    let nodes = a.render().unwrap();
+    let draws = vec![
+        draw(Shape::Rect, 1, [0, 0, 40, 2, 0], ""),
+        draw(Shape::Ring, 4, [20, 10, 6, 2, 0], ""),
+        draw(Shape::Line, 9, [0, 19, 39, 0, 1], ""),
+        draw(Shape::Text, 11, [20, 10, 4, 0, 0], "42"),
+        draw(Shape::Text, 10, [1, 1, 2, 0, 0], "hi"),
+        draw(Shape::Sprite, 0, [30, 15, 1, 0, 0], "1.2\n.3"),
+    ];
+    let canvas = |id, w, draws| Node::Canvas { id, w, h: if w == 40 { 20 } else { 1 }, draws };
+    assert_eq!(nodes[1..], [canvas(Some(0), 40, draws.clone()), canvas(None, 6, draws.clone())]);
+    assert_eq!(draws.iter().map(Draw::ink).collect::<Vec<_>>(), [1, 1, 1, 3, 3, 4]);
+    // A tap is the unit y * w + x: its handler sees x and y.
+    assert_eq!(ev(&mut a, Event::Tap { id: 0, cell: 3 * 40 + 7 }), None);
+    assert_eq!(ev(&mut a, Event::Tap { id: 0, cell: 799 }), None);
+    assert_eq!(vals(&a)[0], ints(&[7, 3, 39, 19]));
+    let Node::Canvas { draws, .. } = &a.render().unwrap()[1] else { panic!() };
+    assert_eq!(
+        draws[6..],
+        [draw(Shape::Circle, 3, [0, 5, 2, 0, 0], ""), draw(Shape::Circle, 3, [10, 5, 2, 0, 0], "")]
+    );
+    // A unit past it, a click on it and a tap on what has no handler are bad events.
+    for e in
+        [Event::Tap { id: 0, cell: 800 }, Event::Click { id: 0 }, Event::Tap { id: 1, cell: 0 }]
+    {
+        assert_eq!(a.handle(&e).unwrap_err().code, Some(codes::BAD_EVENT), "{e:?}");
+    }
+    // A handler's fault rolls the tap back.
+    let mut b = app(
+        "state n = 0; fn s() { rect(0, 0, 1, 1, 1); } canvas 4, 4, s() { n = 1; n = n / (x - 1); }",
+    );
+    assert_eq!(ev(&mut b, Event::Tap { id: 0, cell: 1 }), Some(codes::DIV_BY_ZERO));
+    assert_eq!(vals(&b), [Value::Int(0)]);
+    // The same seed and events draw the same, so a run replays.
+    let src = "state x0 = 0; state ys = [0; 0]; fn s() { for i in 0..len(ys) { rect(x0 + i, ys[i], 1, 1, 2); } }
+               every 50 { x0 = random(10); push(ys, random(20)); } canvas 30, 30, s();";
+    let run = |seed| {
+        let mut a = App::new(compile(src).unwrap(), Limits::default(), seed);
+        (0..5)
+            .map(|_| (a.handle(&Event::Tick { ms: 50 }).unwrap(), a.render().unwrap()))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(run(3), run(3));
+    assert_ne!(run(3), run(4));
+}
+
+#[test]
+fn shapes_past_a_canvas_fault_coded_and_sines_are_whole() {
+    let scene = |body: &str| format!("state n = 0; fn s() {{ {body} }} canvas 9, 9, s();");
+    #[rustfmt::skip]
+    let cases = [
+        ("rect(0, 0, 1, 1, 12);", "color is 12"), ("rect(0, 0, -1, 1, 1);", "w is -1"),
+        ("ring(0, 0, 3, -1, 1);", "width is -1"), ("circle(40000, 0, 1, 1);", "x is 40000"),
+        ("line(0, 0, 1, 1, -2, 1);", "width is -2"), ("text(\"a\\nb\", 0, 0, 1, 1);", "one line"),
+        ("sprite([\"1\", \"2\\n\"], 0, 0, 1);", "one line"), ("text(1, 0, 0, -3, 1);", "size is -3"),
+        ("sprite([\"1\"], 0, -32769, 1);", "y is -32769"),
+        // 4,097 ink: a sprite of 4,096 squares, and itself.
+        ("sprite([\"1\"; 4096], 0, 0, 1);", "4096 ink"),
+        ("for i in 0..2049 { text(\"a\", i, 0, 1, 1); }", "4096 ink"),
+    ];
+    for (body, said) in cases {
+        let mut a = App::new(compile(&scene(body)).unwrap(), Limits::default(), 1);
+        let e = a.render().unwrap_err();
+        assert_eq!(e.code, Some(codes::BAD_DRAW), "{body}");
+        assert!(e.message.contains(said) && e.span.is_some(), "{body}: {}", e.message);
+    }
+    for (w, h) in [(0, 9), (9, 1025), (-1, 1)] {
+        let src = format!("fn s() {{ }} canvas {w}, {h}, s();");
+        let mut a = App::new(compile(&src).unwrap(), Limits::default(), 1);
+        assert_eq!(a.render().unwrap_err().code, Some(codes::BAD_DRAW), "{w} x {h}");
+    }
+    // As much ink as a render holds draws, and 0 sizes draw (nothing): never clamped, never
+    // dropped.
+    app(&scene("sprite([\"1\"; 4094], 0, 0, 1); rect(0, 0, 0, 0, 0);"));
+    // A thousand times the sine and cosine of a degree, any int a degree.
+    let degs = "label sin(0) + \" \" + sin(30) + \" \" + sin(90) + \" \" + sin(210) + \" \" + sin(-90) + \
+                \" \" + cos(0) + \" \" + cos(180) + \" \" + cos(450) + \" \" + sin(9223372036854775807);";
+    let mut a = app(degs);
+    assert_eq!(shown(&mut a), ["0 500 1000 -500 -1000 1000 -1000 0 122"]);
+}
+
+#[test]
+fn the_smoke_test_taps_canvases_and_finds_a_picture_drawn_off_them() {
+    // Drawn in the window's pixels, not the canvas's units: nothing ever reaches inside it.
+    let src = "state n = 0; fn s() { circle(500, 500, 20, 1); text(n, 300, 200, 20, 9); }
+               every 100 { n += 1; } label \"go\"; canvas 100, 100, s() { n = x; }";
+    let report = smoke(compile(src).unwrap(), 1);
+    let f = report.fault.expect("its shapes are off the canvas");
+    assert_eq!((f.diag.code, f.during.as_str()), (Some(codes::OFF_CANVAS), "the whole smoke test"));
+    assert_eq!(f.diag.span.map(|s| &src[s.start..s.start + 6]), Some("canvas"));
+    assert!(f.diag.message.contains("100 x 100 units"), "{}", f.diag.message);
+    // A canvas blank until it is tapped is fine: the smoke test taps it.
+    let src = "state xs = [0; 0]; fn s() { for i in 0..len(xs) { rect(xs[i], 0, 1, 1, 2); } }
+               label \"tap\"; canvas 50, 50, s() { if len(xs) < 99 { push(xs, x); } }";
+    let report = smoke(compile(src).unwrap(), 2);
+    assert!(report.fault.is_none(), "{report:?}");
+    // Tic-tac-toe and breakout on a canvas play clean, from three seeds.
+    for (name, src) in [
+        ("tictactoe", include_str!("../tests/tictactoe.app")),
+        ("breakout", include_str!("../tests/breakout.app")),
+    ] {
+        for seed in 1..=3 {
+            let report =
+                smoke(compile(src).unwrap_or_else(|d| panic!("{name}: {}", d.render(src))), seed);
+            assert!(
+                report.fault.is_none() && report.warnings.is_empty(),
+                "{name} {seed}: {report:?}"
+            );
+        }
+    }
+    // A tap at the middle of tic-tac-toe's board marks its middle square: an X of two lines.
+    let mut t = app(include_str!("../tests/tictactoe.app"));
+    let marks = |t: &mut App| match &t.render().unwrap()[1] {
+        Node::Canvas { draws, .. } => draws.len(),
+        _ => 0,
+    };
+    let before = marks(&mut t);
+    assert_eq!(ev(&mut t, Event::Tap { id: 0, cell: 150 * 300 + 150 }), None);
+    assert_eq!(marks(&mut t), before + 2);
+    assert_eq!(vals(&t)[0], ints(&[0, 0, 0, 0, 1, 0, 0, 0, 0]));
 }

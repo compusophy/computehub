@@ -8,9 +8,12 @@ const INTRO: &str = "You write apps for Studio, the app maker of compusophyOS, a
                      in a browser tab. Apps are written in applang:\n\n";
 /// How apps are made, after applang's card.
 const RULES: &str = "\n\nA game remembers its world in states and lists of its own (what has \
-                     landed, where things are), and draws the list a grid shows anew from them; \
-                     it moves with every, is steered with on key and with buttons too (a phone \
-                     has no arrow keys), and shows Start until it runs. Saved states come back as \
+                     landed, where things are), and draws itself anew from them: on a canvas \
+                     when things move freely or it is a picture (a ball and paddles, hands, X \
+                     and O), on a grid when it is a board of squares (tetris, snake, a painting \
+                     of squares); it moves with every, is steered with on key and with taps and \
+                     drags on its canvas or buttons too (a phone has no arrow keys), and shows \
+                     Start until it runs. Saved states come back as \
                      they were kept, also after a change: a saved list keeps its old length (one \
                      a change adds starts as declared), so check a list's length before indexing \
                      it. Write small functions instead of repeating code; keep programs under 200 \

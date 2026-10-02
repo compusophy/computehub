@@ -252,3 +252,86 @@ fn highlight_classes_every_token_and_goes_on_past_errors() {
         }
     }
 }
+
+#[test]
+fn canvases_draw_only_where_a_canvas_calls_and_fail_coded() {
+    let scene = "fn scene() { rect(0, 0, 9, 9, 1); circle(4, 4, 2, 3); ring(4, 4, 3, 1, 4); \
+                 line(0, 0, 8, 8, 1, 9); text(\"hi\", 4, 4, 3, 11); sprite([\"1.1\"], 0, 0, 2); }";
+    let ok = [
+        format!("{scene} canvas 9, 9, scene();"),
+        format!("state n = 0; {scene} canvas 9, 9, scene() {{ n = x + y * 9; }}"),
+        // What draws may call what draws, and what changes nothing; a state x beside a canvas
+        // without a handler.
+        "state x = 1; fn dot(x: int, y: int) { circle(x, y, 1, sin(90) / 1000); } \
+         fn scene() { for i in 0..3 { dot(i, i + x); } } canvas 9, 9, scene();"
+            .into(),
+        // Before canvases a program could have its own `line` and `text`: without one, it may.
+        "fn line(a: int) -> int { return a + cos(0); } fn text() { } label line(1); \
+         button \"b\" { text(); }"
+            .into(),
+        // In a row, a loop and an if; drawing a shape alone.
+        "fn s(i: int) { rect(i, 0, 1, 1, 1); } for i in 0..3 { row { if i > 0 { canvas 3, 1, \
+         s(i) { } } } } canvas 1, 1, rect(0, 0, 1, 1, 2);"
+            .into(),
+    ];
+    for src in &ok {
+        assert!(compile(src).is_ok(), "{src}: {:?}", compile(src).err());
+    }
+    #[rustfmt::skip]
+    let cases = [
+        ("fn s() { } canvas 9, 9, 3;", UNEXPECTED_TOKEN), ("canvas 9, 9;", UNEXPECTED_TOKEN),
+        // Shapes in a handler, an every, an on key, a widget's expression; with no canvas.
+        ("fn s() { } canvas 9, 9, s() { rect(0, 0, 1, 1, 1); }", DRAW_OUTSIDE),
+        ("fn s() { rect(0, 0, 1, 1, 1); } every 100 { s(); } canvas 9, 9, s();", DRAW_OUTSIDE),
+        ("fn s() { line(0, 0, 1, 1, 1, 1); } on key \"a\" { s(); } canvas 9, 9, s();",
+         DRAW_OUTSIDE),
+        ("fn s() { rect(0, 0, 1, 1, 1); } fn v() -> int { s(); return 1; } label v(); \
+          canvas 9, 9, s();", DRAW_OUTSIDE),
+        ("button \"b\" { rect(0, 0, 1, 1, 1); }", DRAW_OUTSIDE),
+        ("fn s() { sprite([\"1\"], 0, 0, 1); }", DRAW_OUTSIDE),
+        // What draws changes nothing; nor does what a canvas calls.
+        ("state n = 0; fn s() { n += 1; rect(0, 0, 1, 1, 1); } canvas 9, 9, s();",
+         IMPURE_RENDER),
+        ("fn s() { rect(0, 0, 1, 1, random(3)); } canvas 9, 9, s();", IMPURE_RENDER),
+        ("state n = 0; fn s() { n += 1; } canvas 9, 9, s();", IMPURE_RENDER),
+        // Each shape's arguments: their count and types.
+        ("fn s() { rect(0, 0, 1, 1); } canvas 9, 9, s();", ARITY),
+        ("fn s() { text([1], 0, 0, 1, 1); } canvas 9, 9, s();", TYPE_MISMATCH),
+        ("fn s() { sprite(1, 0, 0, 1); } canvas 9, 9, s();", TYPE_MISMATCH),
+        ("fn s() { rect(0, 0, 1, 1, \"red\"); } canvas 9, 9, s();", TYPE_MISMATCH),
+        ("fn s() { } canvas \"9\", 9, s();", TYPE_MISMATCH),
+        ("fn s() { } label sin(true);", TYPE_MISMATCH),
+        // The tap's x and y hide no state or loop variable; beside a canvas the shapes, sin
+        // and cos are built in.
+        ("state x = 0; fn s() { } canvas 9, 9, s() { }", DUP_STATE),
+        ("fn s() { } for y in 0..2 { canvas 9, 9, s() { } }", DUP_STATE),
+        ("fn line() { } fn s() { } canvas 9, 9, s();", DUP_STATE),
+        ("fn sin(a: int) -> int { return a; } fn s() { } canvas 9, 9, s();", DUP_STATE),
+        ("fn s() { } canvas 9, 9, s() { let n = z; }", UNKNOWN_NAME),
+    ];
+    for (src, want) in cases {
+        assert_eq!(code(src), Some(want), "{src}");
+    }
+    // Each says where to draw and what was wrong.
+    let said = |src: &str| compile(src).unwrap_err().message;
+    assert!(said("button \"b\" { rect(0, 0, 1, 1, 1); }").contains("add canvas W, H, scene();"));
+    let m = said("fn s() { } canvas 9, 9, s() { circle(0, 0, 1, 1); }");
+    assert!(m.contains("only a canvas, or a function a canvas calls"), "{m}");
+    let m = said("state n = 0; fn s() { n = 1; rect(0, 0, 1, 1, 1); } canvas 9, 9, s();");
+    assert!(m.starts_with("`s` draws, so it changes nothing"), "{m}");
+    assert!(said("fn s() { line(0, 0, 1, 1); } canvas 1, 1, s();").contains("x1, y1, x2, y2"));
+    let e = compile("fn s() { } canvas 9, 9, 3;").unwrap_err();
+    assert!(
+        e.message.contains("as in canvas 160, 120, scene();") && e.span == Some(Span::new(24, 25))
+    );
+    // The handler's x and y are its first locals after what it captured.
+    let p = compile("fn s() { } for i in 0..2 { canvas 9, 9, s() { let n = y * 9 + x + i; } }")
+        .unwrap();
+    let Widget::For { body, .. } = &p.widgets()[0] else { panic!() };
+    let Widget::Canvas { handler: Some(h), .. } = &body[0] else { panic!() };
+    let Stmt::Let { value: Expr::Binary(_, sum, i, _), .. } = &h.body[0] else { panic!() };
+    let Expr::Binary(_, yx, x, _) = &**sum else { panic!() };
+    let Expr::Binary(_, y, _, _) = &**yx else { panic!() };
+    let slot = |e: &Expr| if let Expr::Var(v) = e { v.slot } else { panic!() };
+    assert_eq!([slot(y), slot(x), slot(i)], [Slot::Local(2), Slot::Local(1), Slot::Local(0)]);
+}

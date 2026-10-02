@@ -333,7 +333,8 @@ fn edits_apply_atomically_where_they_match_one_place() {
 #[test]
 fn the_system_prompt_is_stable_and_whole() {
     let s = system();
-    for part in [applang::REFERENCE, applang::SHOTS[0].1, applang::SHOTS[1].1, ai::HONEST] {
+    let shots = applang::SHOTS.map(|s| s.1);
+    for part in [applang::REFERENCE, shots[0], shots[1], shots[2], ai::HONEST] {
         assert!(s.contains(part));
     }
     assert!(s.contains("<<<<<<< SEARCH\nlines copied exactly") && !s.contains(DEFAULT_MODEL));
@@ -352,7 +353,7 @@ fn the_system_prompt_is_stable_and_whole() {
 }
 
 /// The system prompt's hash (see the test above).
-const FNV: u64 = 0xd602_7fc2_a7ab_ebdf;
+const FNV: u64 = 0x2b50_88f5_166a_a674;
 
 #[test]
 fn a_clean_write_is_one_request() {

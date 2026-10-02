@@ -14,9 +14,12 @@ use uiwire::scene::{Hit, Mark, Scene, Win, state};
 /// The most bytes of screen text a request carries.
 pub const MAX_TEXT: usize = 12 << 10;
 /// The roles of `ui::sem`, by code; 0 is the hit's sense's.
-const ROLES: [&str; 11] = [
+const ROLES: [&str; 12] = [
     "", "button", "tab", "switch", "option", "textbox", "item", "code", "terminal", "link", "grid",
+    "canvas",
 ];
+/// A canvas's role (`ui::sem::CANVAS`): its value is its size in units, then its shapes.
+pub const CANVAS: u8 = 11;
 /// The most refs a session keeps; past it they start over.
 const MAX_REFS: usize = 4096;
 
@@ -170,6 +173,8 @@ fn describe(role: &str, name: &str, mark: Option<&Mark>) -> String {
         "textbox" => out += " empty",
         // The text in its squares, then its columns and a row of square colors (0 empty) a line.
         "grid" => out += &format!(" {} squares {}", quoted(name), quoted(value)),
+        // The text drawn on it, then its size in units and its shapes, a line each.
+        "canvas" => out += &format!(" {} shapes {}", quoted(name), quoted(value)),
         _ if !name.is_empty() => out += &[" ", &quoted(name)].concat(),
         _ => {}
     }

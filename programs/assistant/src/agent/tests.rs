@@ -345,6 +345,29 @@ fn the_screen_reads_as_text_whose_refs_last_the_session() {
     grid.marks[0] = Mark { id: 1, role: 10, flags: 0, value: "2 columns\n01\n80".into() };
     let text = render(&Scene { focus: 2, wins: vec![grid], ..Scene::default() }, &mut refs, 0).0;
     assert!(text.contains("e1 grid \"Privacy\" squares \"2 columns\\n01\\n80\"\n"), "{text}");
+    // A canvas shows the text drawn on it, its size and its shapes; a click at x and y taps the
+    // unit there, y * w + x.
+    let mut canvas = page(2, true);
+    let value = "300 x 200 units\nring 150 150 30 8 4".into();
+    canvas.marks[0] = Mark { id: 1, role: 11, flags: 0, value };
+    let scene = Scene { focus: 2, wins: vec![canvas], ..Scene::default() };
+    let (screen, shown) = render(&scene, &mut refs, 0);
+    let want = "e1 canvas \"Privacy\" shapes \"300 x 200 units\\nring 150 150 30 8 4\"\n";
+    assert!(screen.contains(want), "{screen}");
+    #[rustfmt::skip]
+    let t = Task { prompt: String::new(), over: 0, steps: Vec::new(), screen, scene, shown,
+        wait: Wait::User, calls: 0, acts: 0, fails: 0, repeat: (0, 0), approved: false,
+        usage: (0, 0) };
+    let click = |args: &str| {
+        let c = Call { id: "c".into(), name: "click".into(), args: args.into() };
+        Agent::default().prepare(&t, &c).map(|p| p.0)
+    };
+    let tap = Act::Tap { win: 2, id: 1, cell: 50 * 300 + 250 };
+    assert_eq!(click(r#"{"ref":"e1","x":250,"y":50}"#), Ok(tap));
+    let errs = [r#""e1","x":300,"y":0"#, r#""e1","x":3"#, r#""e2","x":3,"y":4"#];
+    let errs = errs.map(|a| click(&["{\"ref\":", a, "}"].concat()).unwrap_err());
+    assert!(errs[0].starts_with("E0918: the canvas is x 0 to 299, y 0 to 199"), "{errs:?}");
+    assert!(errs[1].contains("both") && errs[2].contains("a canvas's point"), "{errs:?}");
 }
 
 #[test]
