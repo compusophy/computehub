@@ -346,6 +346,27 @@ fn measures_draws_and_wraps() {
 }
 
 #[test]
+fn a_recording_list_notes_text_and_never_touches_the_atlas() {
+    let mut t = ts();
+    t.atlas_mut().take_dirty();
+    let mut list = DrawList::recording();
+    // A line advances as drawn; cells a char at a time, spaces skipped, read as words (a wider
+    // gap, an em or more, starts another run).
+    let adv = t.draw_text(&mut list, 10.0, 30.0, "Send feedback", SANS14);
+    assert_eq!(adv, t.measure("Send feedback", SANS14));
+    let cell = t.cell_width(13.0);
+    for (i, c) in "ls -la   x".chars().enumerate() {
+        t.draw_cell_char(&mut list, 5.0 + i as f32 * cell, 60.0, cell, c, 13.0, WHITE);
+    }
+    t.draw_vector(&mut list, RectF::new(0.0, 0.0, 20.0, 20.0), 1, square, WHITE);
+    let sem = list.sem().unwrap();
+    let runs: Vec<&str> = sem.runs.iter().map(|r| r.text.as_str()).collect();
+    assert_eq!(runs, ["Send feedback", "ls -la", "x"]);
+    assert_eq!(sem.runs[0].rect, RectF::new(10.0, 16.0, adv, 17.5));
+    assert!(list.is_empty() && t.atlas_mut().take_dirty().is_none());
+}
+
+#[test]
 fn editor_edits_across_lines() {
     let mut e = Editor::new("row {\n  label 1;\n}");
     assert_eq!((e.len(), e.is_empty(), Editor::default().is_empty()), (18, false, true));

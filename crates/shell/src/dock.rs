@@ -63,7 +63,9 @@ impl Shell {
                 let name = &self.dock[i].0;
                 (self.dock_tile(i), self.motion.lift(name, now), app_label(name))
             }
-            Some(Target::Ai) => (self.strip.button, self.motion.ai.value(now), "Assistant".into()),
+            Some(Target::Ai) if !self.overlay.open => {
+                (self.strip.button, self.motion.ai.value(now), "Assistant".into())
+            }
             _ => return,
         };
         let (top, sw) = (self.size.1 - home::dock::BOTTOM - home::dock::H, self.size.0);

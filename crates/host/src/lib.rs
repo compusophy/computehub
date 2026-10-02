@@ -12,16 +12,19 @@
 //! platform can do comes back as [`Effect`]s in a [`Response`]. GUI process
 //! frames go to every app's [`ui::App::frame`], never the platform. A closing
 //! window's app hears [`ui::App::closing`], then stays, deaf, while the shell
-//! animates it away, until [`Host::reap`] drops it and ends its processes.
+//! animates it away, until [`Host::reap`] drops it and ends its processes. The Assistant is never
+//! a window: it is the overlay, the AI that uses the desktop as a person does ([`agent`]).
 
 #![forbid(unsafe_code)]
 
+pub mod agent;
 pub mod frame;
 pub mod motion;
 pub mod paint;
 
 use std::mem;
 
+pub use agent::{ASSISTANT, OVERLAY};
 use gfx::{DrawList, RectF};
 use kernel::Kernel;
 use motion::Themes;
@@ -187,6 +190,8 @@ pub struct Host {
     /// The windows maximized only because the work area is narrow, with their snap and normal
     /// rect from before, put back when it widens.
     forced: Vec<(WinId, Option<Snap>, Rect)>,
+    /// The overlay's acts and status, and what the shell shows of it.
+    pub agent: agent::Agent,
 }
 
 impl Host {
@@ -196,7 +201,8 @@ impl Host {
         let (now_ms, themes, focus) = (0.0, Vec::new(), None);
         let (ai, forced) = (AiStatus::default(), Vec::new());
         Host { generation: vfs.generation(), kernel: Kernel::new(), wm, text, vfs, registry, wins,
-            now_ms, theme, themes, fonts, focus, icons, ai, grain: true, forced }
+            now_ms, theme, themes, fonts, focus, icons, ai, grain: true, forced,
+            agent: Default::default() }
     }
 
     pub fn wm(&self) -> &Wm {
@@ -257,8 +263,12 @@ impl Host {
     }
 
     /// Opens `name`, if the registry knows it, in a new focused window placed as the crate docs
-    /// say, `size` (window px) if given.
+    /// say, `size` (window px) if given; the Assistant summons the overlay instead.
     pub fn open(&mut self, name: &str, size: Option<(i32, i32)>, out: &mut Response) {
+        if name == ASSISTANT {
+            self.agent.summon = true;
+            return;
+        }
         let Some(app) = (self.registry)(name) else { return };
         let (a, alone, compact) = (self.wm.area(), self.wm.layout().is_empty(), app.compact());
         let preferred = app.preferred_size().and_then(window_size).filter(|_| compact);
@@ -278,7 +288,7 @@ impl Host {
 
     /// Drops the app of `win` once its window is closed, killing what it ran.
     pub fn reap(&mut self, win: WinId) {
-        if self.wm.normal_rect(win).is_none() {
+        if self.wm.normal_rect(win).is_none() && win != OVERLAY {
             self.wins.retain(|w| w.id != win);
             self.kernel.kill_owned(win.0);
         }
@@ -311,6 +321,7 @@ impl Host {
                     e => out.effects.push(Effect::Kernel(e)),
                 }
             }
+            self.agent_step(out);
         }
     }
 
@@ -322,11 +333,15 @@ impl Host {
         }
     }
 
-    /// Hands `call` to the app of `win` if open, owning what it spawns; does what it asked.
+    /// Hands `call` to the app of `win` if open (or the overlay's), owning what it spawns; does
+    /// what it asked.
     fn call(&mut self, win: WinId, call: Call<'_>, out: &mut Response) {
+        let overlay = win == OVERLAY;
         let shown = self.wm.layout().iter().any(|p| p.win == win);
+        let shown = shown || overlay && self.agent.shown.is_some();
         let rect = self.wm.normal_rect(win);
-        let Some(w) = self.wins.iter_mut().find(|w| w.id == win && rect.is_some()) else { return };
+        let open = rect.is_some() || overlay;
+        let Some(w) = self.wins.iter_mut().find(|w| w.id == win && open) else { return };
         self.kernel.set_owner(win.0);
         let mut cx = Cx::new(&mut self.vfs, &mut self.kernel, self.now_ms);
         (cx.ai, cx.grain) = (self.ai.clone(), self.grain);
@@ -341,12 +356,14 @@ impl Host {
         out.redraw |= redraw && shown;
         for request in cx.take_requests() {
             // Nothing more once the app closed itself.
-            if !self.live(win) {
+            if !(self.live(win) || overlay && self.win(win).is_some()) {
                 break;
             }
             match request {
                 Request::Open { name, .. } => self.open(&name, None, out),
+                Request::CloseSelf if overlay => self.drop_overlay(),
                 Request::CloseSelf => out.redraw |= self.close_then(Cmd::Close(win), out),
+                Request::Agent(req) => self.agent_request(win, req),
                 Request::LoadFallbackFonts => self.load_fonts(out),
                 Request::SetTheme(name) => self.themes.push(name),
                 Request::Pref { key, value } => {

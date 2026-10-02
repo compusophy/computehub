@@ -19,7 +19,8 @@
 //! instead. A mouse dragged on the bare desktop draws a box that selects the icons it touches;
 //! dragging a selected icon carries them all. Bindings, pointer rules and motion are those of
 //! `DESIGN.md`. While anything moves (or a held finger waits to long-press), [`Shell::draw`] asks
-//! for the next frame; otherwise none, but for the living grain's ([`Shell::grain_in`]).
+//! for the next frame; otherwise none, but for the living grain's ([`Shell::grain_in`]). Above the
+//! windows lies the overlay, the Assistant that uses the desktop as a person does.
 
 #![forbid(unsafe_code)]
 
@@ -31,6 +32,7 @@ mod grid;
 mod keys;
 mod menus;
 mod motion;
+mod overlay;
 mod touch;
 
 pub use host::{Cursor, Effect, Input, KernelIn, LocalTime, Registry, Response};
@@ -86,6 +88,8 @@ struct Visuals {
     /// Carried icons: lifted, their slot, the pointer; the selection box's far corner.
     carry: Option<(bool, usize, (f32, f32))>,
     lasso: Option<(f32, f32)>,
+    /// The overlay, and whether it works.
+    agent: (overlay::Overlay, bool),
 }
 
 /// The desktop: the host (the wm, text, files, apps and theme) and the home screen, chrome,
@@ -139,6 +143,7 @@ pub struct Shell {
     kept: Option<Kept>,
     /// A layer drawn, then replayed scaled and faded.
     scratch: DrawList,
+    overlay: overlay::Overlay,
 }
 
 impl Shell {
@@ -155,7 +160,8 @@ impl Shell {
             strip: Default::default(), icons: Vec::new(), order, listed: None,
             selected: Vec::new(), carry: None, lasso: None, reduced: false, menu: None,
             touch: None, fling: None, motion: Default::default(), instant: false,
-            startup: !prefs.seen, kept: None, scratch: DrawList::new() };
+            startup: !prefs.seen, kept: None, scratch: DrawList::new(),
+            overlay: Default::default() };
         shell.host.grain = !prefs.grain_off;
         shell.host.kernel.set_isolated(prefs.isolated);
         let mut out = Response::default();
@@ -291,7 +297,7 @@ impl Shell {
         match input {
             Input::Key { key, mods } => self.key(key, mods, &mut out),
             Input::Text(s) => {
-                if let Some(win) = self.host.focused_app().filter(|_| !s.is_empty()) {
+                if let Some(win) = self.key_target().filter(|_| !s.is_empty()) {
                     self.host.deliver(win, AppEvent::Text(s), &mut out);
                     out.consumed = true;
                 }
@@ -387,7 +393,9 @@ impl Shell {
                 theme.draw_backdrop(list, screen, self.grain_seed() as f32);
                 self.draw_icons(list, &theme, now);
                 self.draw_windows(list, &theme, now);
+                self.draw_overlay(list, &theme);
                 self.draw_dock(list, &theme);
+                self.draw_agent(list, &theme, now);
                 self.draw_bar(list, &theme);
                 self.draw_carried(list, &theme);
                 self.draw_menu(list, &theme);
@@ -412,13 +420,14 @@ impl Shell {
     /// that takes the focus ends the home screen's selection: Enter and Escape are then its own.
     fn settle(&mut self, out: &mut Response) {
         self.host.settle(out);
-        let focus = self.host.focused_app();
+        self.place_overlay(out);
+        let focus = self.key_target();
         if mem::replace(&mut self.focus, focus) != focus && focus.is_some() {
             self.selected.clear();
         }
-        let h = &self.host;
+        let keep = |w: &Widget| self.host.live(w.0) || w.0 == host::OVERLAY && self.overlay.open;
         (self.app_hover, self.app_press) =
-            (self.app_hover.filter(|w| h.live(w.0)), self.app_press.filter(|w| h.live(w.0)));
+            (self.app_hover.filter(keep), self.app_press.filter(keep));
         self.dock = self.host.dock_apps(&self.favs);
         let favs = self.dock.iter().take_while(|d| self.favs.contains(&d.0)).count();
         self.strip = home::dock::Strip::new(favs, self.dock.len() - favs, self.size);
@@ -444,6 +453,7 @@ impl Shell {
             home: (self.dock.len() + self.favs.len(), self.icons.len(), self.selected.len()),
             carry,
             lasso,
+            agent: (self.overlay, self.host.agent.working),
         }
     }
 
@@ -467,7 +477,7 @@ impl Shell {
         out.redraw |= out.animating || self.visuals() != before;
         self.pending.append(&mut out.effects);
         out.effects = mem::take(&mut self.pending);
-        let focus = self.host.focused_app();
+        let focus = self.key_target();
         let app = focus.and_then(|w| self.host.win(w));
         let wants = app.is_some_and(|w| w.app.wants_text_input());
         if self.ime != Some((focus, wants)) {

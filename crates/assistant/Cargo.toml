@@ -1,6 +1,6 @@
 [package]
 name = "compusophy-assistant"
-description = "compusophyOS Assistant: chat with a model and have it build applang apps, compiled, saved and opened for you. A wasm32-wasip1 GUI program on the remote UI protocol; built into dist/bin/, never committed."
+description = "compusophyOS Assistant: the AI that uses the computer, run as the desktop's overlay; it reads the screen as text and acts as a person would. A wasm32-wasip1 GUI program on the remote UI protocol; built into dist/bin/, never committed."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -19,3 +19,11 @@ path = "src/main.rs"
 compusophy-applang.workspace = true
 compusophy-lang.workspace = true
 compusophy-uiwire.workspace = true
+
+# A real desktop for the agent to drive in tests: the host, Settings and its toolkit.
+[dev-dependencies]
+compusophy-host.workspace = true
+compusophy-apps.workspace = true
+compusophy-ui.workspace = true
+compusophy-wm.workspace = true
+compusophy-vfs.workspace = true

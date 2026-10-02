@@ -11,6 +11,9 @@
 //! - Each instance keeps the clip current at its push ([`NO_CLIP`] if none).
 //! - Glyphs sample the [`Atlas`] 1:1: a glyph's rect is its uv size over the device pixel ratio,
 //!   on a device pixel.
+//! - A [`DrawList::recording`] list draws nothing to see: it keeps what the screen says instead
+//!   ([`Sem`]), the text drawn where it shows and the marks widgets leave, for the AI that reads
+//!   the screen.
 
 #![forbid(unsafe_code)]
 
@@ -141,11 +144,36 @@ pub struct Instance {
     pub color2: Rgba,
 }
 
-/// An ordered list of instances and a stack of clip rects.
+/// What a recording [`DrawList`] noted: each line of text where it shows, and the marks.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Sem {
+    pub runs: Vec<Run>,
+    pub marks: Vec<Mark>,
+}
+
+/// A line of text and the part of its em box (from an em above its baseline, 1.25 em tall) the
+/// clip shows.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Run {
+    pub rect: RectF,
+    pub text: String,
+}
+
+/// What widget `id` says of itself, past its text: its role, state flags and value (`ui::sem`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Mark {
+    pub id: u32,
+    pub role: u8,
+    pub flags: u8,
+    pub value: String,
+}
+
+/// An ordered list of instances and a stack of clip rects; recording, what the screen says.
 #[derive(Default, Clone, Debug)]
 pub struct DrawList {
     items: Vec<Instance>,
     clips: Vec<RectF>,
+    sem: Option<Box<Sem>>,
 }
 
 impl DrawList {
@@ -153,10 +181,62 @@ impl DrawList {
         DrawList::default()
     }
 
-    /// Removes every instance and clip, keeping the allocations.
+    /// A list that records what is drawn as [`Sem`] (text and marks) and draws no text.
+    pub fn recording() -> DrawList {
+        DrawList { sem: Some(Box::default()), ..DrawList::default() }
+    }
+
+    /// What it recorded, if it records.
+    pub fn sem(&self) -> Option<&Sem> {
+        self.sem.as_deref()
+    }
+
+    /// What it recorded, leaving it a list that does not record.
+    pub fn take_sem(&mut self) -> Option<Sem> {
+        self.sem.take().map(|s| *s)
+    }
+
+    /// Notes `text`, `adv` wide, drawn at pen `x` on `baseline` at `size` px per em, if it
+    /// records and the text shows in the clip. On the line of the last run noted (its baseline
+    /// and size), less than an em after it, it joins that run: with a space unless under 0.15 em
+    /// apart, so text drawn a char or a cell at a time reads as lines (but not a label as one
+    /// with the next widget's).
+    pub fn note_text(&mut self, x: f32, baseline: f32, size: f32, adv: f32, text: &str) {
+        let clip = self.clip();
+        let Some(sem) = self.sem.as_mut().filter(|_| !text.trim().is_empty()) else { return };
+        let rect = RectF::new(x, baseline - size, adv, 1.25 * size).intersect(clip);
+        if rect.w <= 0.0 || rect.h <= 0.0 {
+            return;
+        }
+        if let Some(last) = sem.runs.last_mut().filter(|l| l.rect.y == rect.y && l.rect.h == rect.h)
+        {
+            let gap = x - (last.rect.x + last.rect.w);
+            if (-1.0..size).contains(&gap) {
+                if gap >= 0.15 * size && !last.text.ends_with(' ') {
+                    last.text.push(' ');
+                }
+                last.text.push_str(text);
+                last.rect.w = rect.x + rect.w - last.rect.x;
+                return;
+            }
+        }
+        sem.runs.push(Run { rect, text: text.to_string() });
+    }
+
+    /// Notes widget `id`'s role, `flags` and `value`, if it records.
+    pub fn mark(&mut self, id: u32, role: u8, flags: u8, value: &str) {
+        if let Some(sem) = &mut self.sem {
+            sem.marks.push(Mark { id, role, flags, value: value.to_string() });
+        }
+    }
+
+    /// Removes every instance and clip (and what it recorded), keeping the allocations.
     pub fn clear(&mut self) {
         self.items.clear();
         self.clips.clear();
+        if let Some(sem) = &mut self.sem {
+            **sem = Sem::default();
+        }
     }
 
     pub fn len(&self) -> usize {

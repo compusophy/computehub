@@ -329,3 +329,46 @@ fn writes_copy_rows_and_widen_the_dirty_band() {
     }
     assert_eq!((a.take_dirty(), a.pixels()), (None, &[0; 16][..]));
 }
+
+#[test]
+fn a_recording_list_keeps_the_text_that_shows_and_the_marks() {
+    // An ordinary list records nothing.
+    let mut list = DrawList::new();
+    list.note_text(0.0, 10.0, 10.0, 20.0, "hi");
+    list.mark(1, 2, 3, "v");
+    assert!(list.sem().is_none());
+    let mut list = DrawList::recording();
+    list.push_clip(RectF::new(0.0, 0.0, 100.0, 50.0));
+    // Runs on one baseline and size join: closer than 0.15 em as one word, else with a space.
+    list.note_text(10.0, 20.0, 10.0, 6.0, "a");
+    list.note_text(16.5, 20.0, 10.0, 6.0, "b");
+    list.note_text(30.0, 20.0, 10.0, 6.0, "c");
+    // An em on, another baseline, another size, blank or outside the clip: none joins.
+    list.note_text(66.0, 20.0, 10.0, 6.0, "d");
+    list.note_text(72.0, 21.0, 10.0, 6.0, "e");
+    list.note_text(78.0, 21.0, 12.0, 6.0, "f");
+    list.note_text(84.0, 21.0, 12.0, 6.0, "  ");
+    list.note_text(0.0, 90.0, 10.0, 6.0, "gone");
+    // A run is cut to the clip.
+    list.note_text(95.0, 20.0, 10.0, 30.0, "edge");
+    list.mark(7, 3, 2, "on");
+    list.pop_clip();
+    let sem = list.sem().unwrap();
+    let runs: Vec<(&str, RectF)> = sem.runs.iter().map(|r| (&*r.text, r.rect)).collect();
+    assert_eq!(
+        runs,
+        [
+            ("ab c", RectF::new(10.0, 10.0, 26.0, 12.5)),
+            ("d", RectF::new(66.0, 10.0, 6.0, 12.5)),
+            ("e", RectF::new(72.0, 11.0, 6.0, 12.5)),
+            ("f", RectF::new(78.0, 9.0, 6.0, 15.0)),
+            ("edge", RectF::new(95.0, 10.0, 5.0, 12.5)),
+        ]
+    );
+    assert_eq!(sem.marks, [Mark { id: 7, role: 3, flags: 2, value: "on".into() }]);
+    // Nothing is drawn; clearing keeps it recording, taking leaves it an ordinary list.
+    assert!(list.is_empty());
+    list.clear();
+    assert_eq!(list.sem(), Some(&Sem::default()));
+    assert!(list.take_sem().is_some() && list.sem().is_none());
+}

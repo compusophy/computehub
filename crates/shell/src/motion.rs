@@ -158,6 +158,7 @@ impl Shell {
             || self.host.theme.is_running(now)
             || self.touch.is_some_and(|t| !t.0.done)
             || self.fling.is_some()
+            || self.agent_moves(now)
             || self
                 .host
                 .wm()

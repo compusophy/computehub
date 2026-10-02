@@ -294,10 +294,8 @@ fn windows_open_placed_for_the_screen_and_stay_full_on_a_phone() {
     s.k(Char('q'), "a");
     s.rest(1000.0);
     s.k(Enter, "a");
-    assert_eq!(
-        s.placement(WinId(3)).map(|p| (p.state, p.rect)),
-        Some((State::Maximized, s.wm().area()))
-    );
+    let p = s.placement(WinId(3)).map(|p| (p.state, p.rect));
+    assert_eq!(p, Some((State::Maximized, s.wm().area())));
     s.k(Down, "a");
     assert_eq!(s.rect(3), Some(Rect::new(96, 94, 1088, 570)));
     // On a phone every window is full; titlebars do not drag; the controls are a fingertip wide.
@@ -311,14 +309,9 @@ fn windows_open_placed_for_the_screen_and_stay_full_on_a_phone() {
     s.k(Left, "a");
     assert_eq!(s.wm().layout()[1].rect, Rect::new(0, 44, 390, 671));
     // No maximize there: minimize takes its place, beside close.
-    assert_eq!(
-        [(350.0, 80.0), (330.0, 50.0), (280.0, 50.0)].map(|(x, y)| s.hit(x, y)),
-        [
-            Some(Target::Ctl(WinId(4), 2)),
-            Some(Target::Ctl(WinId(4), 0)),
-            Some(Target::Title(WinId(4)))
-        ]
-    );
+    let (ctl, title) = (|i| Some(Target::Ctl(WinId(4), i)), Some(Target::Title(WinId(4))));
+    let hits = [(350.0, 80.0), (330.0, 50.0), (280.0, 50.0)].map(|(x, y)| s.hit(x, y));
+    assert_eq!(hits, [ctl(2), ctl(0), title]);
     let r = rectf(s.rect(4).unwrap());
     assert_eq!(controls(r, s.ctl_step()).unwrap()[2].x, 362.0);
     let ctl: Vec<_> = s.controls(r).iter().map(|c| (c.0, c.1.x)).collect();
@@ -359,14 +352,9 @@ fn titlebars_drag_and_double_click() {
 fn drops_snap_and_snapped_windows_come_back_under_the_pointer() {
     let (mut s, _) = desk();
     let area = s.wm().area();
-    let cases = [
-        ((3.0, 400.0), Some(Snap::Left)),
-        ((1278.0, 400.0), Some(Snap::Right)),
-        ((10.0, 10.0), Some(Snap::TopLeft)),
-        ((1270.0, 790.0), Some(Snap::BottomRight)),
-        ((640.0, 4.0), None),
-    ];
-    for (to, snap) in cases {
+    let tos = [(3.0, 400.0), (1278.0, 400.0), (10.0, 10.0), (1270.0, 790.0), (640.0, 4.0)];
+    let snaps = [Some(Snap::Left), Some(Snap::Right), Some(Snap::TopLeft), Some(Snap::BottomRight)];
+    for (to, snap) in tos.into_iter().zip(snaps.into_iter().chain([None])) {
         let r = rectf(s.rect(1).unwrap());
         let grab = (r.x + r.w / 2.0, r.y + 10.0);
         s.to(grab);
@@ -504,32 +492,58 @@ fn the_dock_opens_minimizes_and_focuses_and_keeps_the_persons_favorites() {
 }
 
 #[test]
-fn the_ai_button_shows_the_assistant() {
+fn the_ai_button_opens_the_overlay_which_halts_when_the_person_takes_over() {
     let (mut s, log) = desk();
     // Bottom center, under no window; named while hovered.
     assert_eq!(s.hit(AI.0, AI.1), Some(Target::Ai));
     assert!(s.to(AI).redraw && s.animating());
-    // A click shows the Assistant: opens it, then brings it back; so does Alt+Space.
+    // A click opens the overlay above it with the keys, told its size; never a window. It takes
+    // keys, text and the pointer as a window's content does.
     s.click(AI);
-    assert_eq!((s.names(), s.wm().focused()), (vec!["welcome", "assistant"], Some(WinId(2))));
-    for show in [
-        Input::PointerUp { x: AI.0, y: AI.1, button: 0 },
-        Input::Key { key: Space, mods: Mods { alt: true, ..Mods::default() } },
-    ] {
-        s.host.apply(Cmd::Focus(WinId(1)));
-        if matches!(show, Input::PointerUp { .. }) {
-            s.down(AI);
-        }
-        assert!(s.input(show).redraw);
-        assert_eq!((s.names().len(), s.wm().focused()), (2, Some(WinId(2))));
-    }
-    // Its menu (a right click, or a finger held on it) asks the Assistant too.
-    s.host.apply(Cmd::Close(WinId(2)));
+    let (card, sized) = (RectF::new(360.0, 239.0, 560.0, 480.0), |w, h| E::Resized { w, h });
+    assert_eq!((s.overlay_rects(), s.key_target()), ((card, card), Some(host::OVERLAY)));
+    s.k(Char('x'), "");
+    s.input(Input::Text("hi".into()));
+    s.click((370.0, 245.0));
+    let key = E::Key { key: Char('x'), mods: Mods::default() };
+    let down = E::PointerDown { x: 10.0, y: 6.0, id: Some(W(1)) };
+    let got: Vec<E> = log.take().into_iter().filter(|e| e.0 == "assistant").map(|e| e.1).collect();
+    assert_eq!(got, [sized(560.0, 480.0), key, E::Text("hi".into()), down, E::Click(W(1))]);
+    assert_eq!(s.names(), ["welcome"]);
+    // A press on a window takes the keys back, the overlay staying; the button hides it and
+    // shows it again; Escape hides it; its menu (or Alt+Space) asks the Assistant.
+    s.click((320.0, 300.0));
+    assert!(s.overlay.open && s.key_target() == Some(WinId(1)));
+    s.click(AI);
+    assert!(!s.overlay.open && s.hit(370.0, 245.0) == Some(Target::Body(WinId(1))));
+    s.click(AI);
+    s.k(Escape, "");
     s.right(AI);
-    assert_eq!(s.labels(), ["Ask the Assistant"]);
+    assert!(!s.overlay.open && s.labels() == ["Ask the Assistant"]);
     s.click(s.item("Ask the Assistant"));
-    assert_eq!(s.names(), ["welcome", "assistant"]);
-    assert!(log.take().iter().all(|e| !matches!(e.1, E::Click(_))));
+    assert!(s.overlay.open && s.overlay.focus);
+    // While it works: a pill over a line of buttons, a ring running round the button. A press,
+    // key or wheel in it is its own; outside it, the person takes over: it hears Halt, once.
+    s.host.agent.working = true;
+    s.input(Input::PointerLeave);
+    let pill = RectF::new(430.0, 667.0, 420.0, 52.0);
+    assert!(s.overlay_rects() == (pill, RectF { y: 657.0, h: 72.0, ..pill }) && s.animating());
+    s.click((440.0, 680.0));
+    s.k(Char('y'), "");
+    s.input(Input::Wheel { x: 440.0, y: 680.0, dy: 3.0 });
+    assert!(s.host.agent.working && log.take().contains(&("assistant", sized(420.0, 72.0))));
+    s.click((320.0, 300.0));
+    s.k(Char('y'), "");
+    let halts = log.take().iter().filter(|e| e.1 == E::Agent(ui::uiwire::Event::Halt)).count();
+    assert_eq!((halts, s.host.agent.working, s.overlay_rects().0), (1, false, card));
+    // An act's mark flashes for 600 ms; then, the overlay hidden by a press on the bare desktop,
+    // the desktop is idle again: no frames.
+    s.rest(1000.0);
+    let now = s.host.now_ms;
+    s.host.agent.flash = Some((RectF::new(10.0, 50.0, 20.0, 20.0), now));
+    assert!(s.at(now + 599.0) && !s.at(now + 600.0));
+    s.click((200.0, 640.0));
+    assert!(!s.overlay.open && !s.at(now + 2000.0));
     // The work area keeps its place as the dock fills and empties.
     let area = s.wm().area();
     s.k(Enter, "a");
@@ -561,8 +575,8 @@ fn menus_open_where_pressed_follow_the_keys_and_act() {
     assert_eq!(s.menu.as_ref().unwrap().0.sel, Some(3));
     s.k(Up, "");
     s.k(Enter, "");
-    assert_eq!((s.names(), s.menu.is_none()), (vec!["welcome", "assistant"], true));
-    s.k(Char('q'), "a");
+    assert_eq!((s.names(), s.menu.is_none(), s.overlay.open), (vec!["welcome"], true, true));
+    s.k(Escape, "");
     // A click on an item: a terminal opens.
     s.right((600.0, 640.0));
     s.click(s.item("Open Terminal"));
@@ -571,10 +585,8 @@ fn menus_open_where_pressed_follow_the_keys_and_act() {
     s.rest(1000.0);
     s.k(Char('`'), "a");
     s.right((600.0, 90.0));
-    assert_eq!(
-        (s.labels(), s.wm().focused()),
-        (vec!["Minimize", "Maximize", "Close"], Some(WinId(3)))
-    );
+    assert_eq!(s.labels(), ["Minimize", "Maximize", "Close"]);
+    assert_eq!(s.wm().focused(), Some(WinId(2)));
     s.click(s.item("Maximize"));
     s.right((600.0, 60.0));
     assert_eq!(s.labels(), ["Minimize", "Restore", "Close"]);
@@ -645,10 +657,7 @@ fn a_finger_held_still_long_presses_and_only_a_menu_ends_its_press() {
     assert!(!s.carry.as_ref().unwrap().moved);
     s.to((STUDIO.0, STUDIO.1 + 192.0));
     s.up((STUDIO.0, STUDIO.1 + 192.0));
-    assert_eq!(
-        (s.menu.is_none(), &s.labels_home()[..3]),
-        (true, &["Assistant", "Terminal", "Studio"][..])
-    );
+    assert!(s.menu.is_none() && s.labels_home()[..3] == ["Assistant", "Terminal", "Studio"]);
     s.push((600.0, 640.0), 0, true);
     s.to((400.0, 500.0));
     assert!(s.lasso.is_none() && s.up((400.0, 500.0)).gesture);
@@ -701,10 +710,8 @@ fn fingers_scroll_what_they_hold_and_fling_it_on() {
     }
     let steps = wheels(&log);
     let sum: f32 = steps.iter().sum();
-    assert!(
-        steps.len() > 60 && steps.windows(2).all(|w| w[0] > w[1]) && (sum - 251.0).abs() < 4.0,
-        "{sum}"
-    );
+    let slowing = steps.windows(2).all(|w| w[0] > w[1]);
+    assert!(steps.len() > 60 && slowing && (sum - 251.0).abs() < 4.0, "{sum}");
     assert!(!s.at(t + 100.0));
     // A press stops a fling; a mouse dragged over content never scrolls it.
     s.push(at, 0, true);
@@ -727,13 +734,11 @@ fn the_home_screen_shows_every_app_and_the_top_bar_its_buttons() {
         ["Studio", "Assistant", "Terminal", "Files", "Settings", "Feedback", "About", "Welcome"];
     assert_eq!(s.labels_home(), all);
     // Icons light up under the pointer and open with a click.
-    assert_eq!(
-        (s.hit(STUDIO.0, STUDIO.1), s.hit(200.0, 640.0)),
-        (Some(Target::Icon(0)), Some(Target::Desktop))
-    );
+    assert_eq!(s.hit(STUDIO.0, STUDIO.1), Some(Target::Icon(0)));
+    assert_eq!(s.hit(200.0, 640.0), Some(Target::Desktop));
     assert!(s.to(STUDIO).redraw && !s.to((STUDIO.0 + 5.0, STUDIO.1)).redraw);
     s.click((57.0, 201.0));
-    assert_eq!((s.names(), s.wm().focused()), (vec!["welcome", "assistant"], Some(WinId(2))));
+    assert_eq!((s.names(), s.overlay.open), (vec!["welcome"], true));
     // A new app saved to ~/apps shows up last, with its sigil, and stays last: the order is kept.
     let mine = [Vfs::HOME, "/apps"].concat();
     s.host.vfs.mkdir_all(&mine).unwrap();
@@ -750,7 +755,7 @@ fn the_home_screen_shows_every_app_and_the_top_bar_its_buttons() {
     s.click((1280.0 - 71.0, 22.0));
     s.click((1280.0 - 27.0, 22.0));
     s.click((1280.0 - 27.0, 22.0));
-    assert_eq!(s.names(), ["welcome", "assistant", "feedback", "settings"]);
+    assert_eq!(s.names(), ["welcome", "feedback", "settings"]);
 }
 
 /// The middle of the icon in cell `i` of a 1280 x 800 desktop.
@@ -768,10 +773,8 @@ fn icons_move_by_drag_and_the_person_keeps_the_order() {
     s.to((cell(0).0 + 3.0, cell(0).1));
     assert!(s.carry.as_ref().is_some_and(|c| !c.lifted));
     let r = s.to(cell(3));
-    assert_eq!(
-        (r.redraw, r.cursor, s.carry.as_ref().map(|c| c.slot)),
-        (true, Some(Cursor::Grabbing), Some(3))
-    );
+    assert_eq!((r.redraw, r.cursor), (true, Some(Cursor::Grabbing)));
+    assert_eq!(s.carry.as_ref().map(|c| c.slot), Some(3));
     assert!(s.animating() && s.hit(cell(3).0, cell(3).1) == Some(Target::Desktop));
     // Dropped: there it stays, and the order is kept; nothing opened.
     let r = s.up(cell(3));
@@ -817,7 +820,7 @@ fn a_box_selects_icons_which_open_and_move_together() {
     // Enter opens what is selected, and the selection ends.
     s.drag((5.0, 50.0), (95.0, 160.0));
     assert!(s.k(Enter, "").consumed && s.selected.is_empty());
-    assert_eq!(s.names(), ["welcome", "studio", "assistant"]);
+    assert_eq!((s.names(), s.overlay.open), (vec!["welcome", "studio"], true));
     // Dragging a selected icon carries the selection: they land together, in their order.
     s.k(Char('q'), "a");
     s.k(Char('q'), "a");
@@ -835,7 +838,7 @@ fn a_box_selects_icons_which_open_and_move_together() {
     assert!(s.selected.is_empty() && log.take() == [("terminal", enter)]);
     s.drag((5.0, 50.0), (95.0, 260.0));
     s.k(Space, "a");
-    assert!(s.selected.is_empty() && s.names().ends_with(&["terminal", "assistant"]));
+    assert!(s.selected.is_empty() && s.overlay.focus && s.names().ends_with(&["terminal"]));
 }
 
 #[test]
@@ -852,10 +855,8 @@ fn the_grain_lives_eight_times_a_second_by_timer_unless_told_not_to() {
         (grain.unwrap(), animating, s.grain_in())
     };
     let [a, b, c] = [10_000.0, 10_100.0, 10_125.0].map(|t| frame(&mut s, t));
-    assert_eq!(
-        (a.1, a.2, b.0 == a.0, b.2, c.0 == a.0, c.2),
-        (false, Some(125), true, Some(25), false, Some(125))
-    );
+    assert_eq!((a.1, a.2, b.0 == a.0, b.2), (false, Some(125), true, Some(25)));
+    assert_eq!((c.0 == a.0, c.2), (false, Some(125)));
     // Not while the page asks for reduced motion, nor once Settings turned it off: then still.
     s.set_reduced_motion(true);
     assert_eq!((frame(&mut s, 10_300.0), frame(&mut s, 10_500.0).0), ((0.0, false, None), 0.0));
@@ -888,11 +889,10 @@ fn bindings_drive_the_wm() {
     }
     assert!(s.k(Char('q'), "a").consumed);
     assert_eq!(s.names(), ["terminal"]);
-    // Alt+A opens the Assistant once, then brings it back.
+    // Alt+A shows the Assistant with the keys, and hides it again.
     s.k(Char('a'), "a");
-    s.k(Down, "a");
-    assert!(s.k(Char('a'), "a").consumed);
-    assert_eq!((s.names(), s.wm().focused()), (vec!["terminal", "assistant"], Some(WinId(3))));
+    assert!(s.overlay.focus && s.k(Char('a'), "a").consumed && !s.overlay.open);
+    assert_eq!(s.names(), ["terminal"]);
     assert!(log.take().iter().all(|e| !matches!(e.1, E::Key { .. })));
 }
 

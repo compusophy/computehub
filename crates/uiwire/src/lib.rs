@@ -15,6 +15,11 @@
 //!
 //! While the user edits an Input, Code or Area the host keeps its text, sending [`Event::Change`]
 //! with its edit count as the version; a Code at that version takes its spans, above it its text.
+//!
+//! The overlay (the Assistant over the desktop) may also act as a person would: [`Request::Act`]
+//! is answered by one [`Event::Acted`] once the screen settles, carrying the [`scene`] as it is
+//! then; [`Event::Halt`] says the person took over. A request carries its [`Act`] as the act's
+//! own bytes, so only the overlay links the act's encoder and only the desktop its decoder.
 
 #![forbid(unsafe_code)]
 
@@ -73,6 +78,8 @@ codes! {
     /// The key of an [`Event::Key`]: the four arrows are Up to Right, and Char is a
     /// character key (the event's `ch` says which).
     Key { Enter = 1, Escape = 2, Tab = 3, Up = 4, Down = 5, Left = 6, Right = 7, Char = 8, }
+    /// What an [`Act::Window`] does to a window: the title bar's controls, and raising it.
+    WinOp { Focus = 0, Close = 1, Minimize = 2, Maximize = 3, Restore = 4, }
 }
 
 impl Default for Style {
@@ -90,6 +97,70 @@ pub mod mods {
     pub const ALT: u8 = 4;
     pub const META: u8 = 8;
     pub const ALL: u8 = 15;
+}
+
+/// The codes of an [`Event::Acted`]: done, or why not. [`acted::BUSY`] is soft (the act was
+/// done; a window still works).
+pub mod acted {
+    pub const OK: u16 = 0;
+    /// The window is gone.
+    pub const GONE: u16 = 911;
+    /// The element is not on screen (scrolled out, or the page changed).
+    pub const OFF_SCREEN: u16 = 912;
+    pub const NOT_TEXT: u16 = 913;
+    pub const UNKNOWN_APP: u16 = 914;
+    pub const BUSY: u16 = 915;
+    /// Not the overlay's to ask, or aimed at the overlay.
+    pub const REFUSED: u16 = 916;
+    /// Another act is still settling.
+    pub const IN_FLIGHT: u16 = 917;
+    /// An unknown key, a scroll out of range.
+    pub const MALFORMED: u16 = 918;
+}
+
+/// What the overlay does on the desktop, the way a person's pointer and keys do: windows by id
+/// (`win` 0 for a Key is the focused one), widgets by the id their app gives them.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Act {
+    /// Nothing: let `ms` pass (at most 5,000), then see the screen.
+    Wait {
+        ms: u16,
+    },
+    /// Press and release widget `id` of window `win`.
+    Click {
+        win: u32,
+        id: u32,
+    },
+    /// Focus text field `id`, type `text`, then Enter if `submit`.
+    Type {
+        win: u32,
+        id: u32,
+        text: String,
+        submit: bool,
+    },
+    /// A key by its `KeyboardEvent.code` (`"KeyS"`, `"Enter"`) with [`mods`] bits.
+    Key {
+        win: u32,
+        code: String,
+        mods: u8,
+    },
+    /// The wheel over widget `id` (0: the content's middle), `dy` px down.
+    Scroll {
+        win: u32,
+        id: u32,
+        dy: i16,
+    },
+    /// Open an app by name, or bring its window up.
+    Open {
+        name: String,
+    },
+    Window {
+        win: u32,
+        op: WinOp,
+    },
+    Theme {
+        name: String,
+    },
 }
 
 /// A highlighted byte range of a [`Node::Code`]'s text: `len` bytes from `start`.
@@ -187,6 +258,12 @@ pub enum Request {
     /// Send feedback the person wrote to compusophy: `kind` ("bug", "idea" or "love"), the
     /// `text`, and with `context` the desktop's (build, device, windows, recent events).
     Feedback { kind: String, text: String, context: bool },
+    /// The overlay only: do the act `act` encodes ([`Act::encode`]); one at a time, answered by
+    /// [`Event::Acted`].
+    Act { id: u32, act: Vec<u8> },
+    /// The overlay only: whether it works on a task (the desktop shows it, and the person's
+    /// own input outside the overlay then halts it).
+    Status { working: bool },
 }
 
 /// Something that happened in the window, host to program.
@@ -217,13 +294,18 @@ pub enum Event {
     /// The window gained (`on`) or lost the keyboard focus: a time to look again at what it
     /// shows (Files lists its folder anew).
     Focus { on: bool },
+    /// Act `id` settled with `code` ([`acted`]) and the host's `note`; `scene` is the screen
+    /// now ([`scene::Scene`] bytes).
+    Acted { id: u32, code: u16, note: String, scene: Vec<u8> },
+    /// The person took over (a press, key or wheel outside the overlay): stop acting.
+    Halt,
 }
 
 /// The public `encode` and `decode` of each message, from its `put` and `get`.
 macro_rules! wire {
     ($($t:ident)*) => {$(
         impl $t {
-            /// The bytes (a [`Node`]'s are its tree, in pre-order).
+            /// The bytes (a [`Node`](crate::Node)'s are its tree, in pre-order).
             pub fn encode(&self) -> Vec<u8> {
                 let mut o = Out(Vec::new());
                 self.put(&mut o);
@@ -239,7 +321,9 @@ macro_rules! wire {
     )*};
 }
 
-wire!(Frame Node Request Event);
+wire!(Frame Node Request Event Act);
+
+pub mod scene;
 
 impl Node {
     /// The children; empty for a leaf.
@@ -437,6 +521,8 @@ impl Request {
             Self::Feedback { kind, text, context } => {
                 o.u8(7).str(kind).str(text).u8((*context).into())
             }
+            Self::Act { id, act } => o.u8(8).u32(*id).bytes(act),
+            Self::Status { working } => o.u8(9).u8((*working).into()),
         }
     }
 
@@ -449,6 +535,46 @@ impl Request {
             5 => Self::AiCancel { id: r.u32()? },
             6 => Self::Focus { id: r.u32()? },
             7 => Self::Feedback { kind: r.str()?, text: r.str()?, context: r.bool()? },
+            8 => {
+                let (id, act) = (r.u32()?, r.bytes()?);
+                Act::decode(act).map(|_| Self::Act { id, act: act.into() })?
+            }
+            9 => Self::Status { working: r.bool()? },
+            _ => return None,
+        })
+    }
+}
+
+impl Act {
+    fn put(&self, o: &mut Out) {
+        _ = match self {
+            Self::Wait { ms } => o.u8(1).u16(*ms),
+            Self::Click { win, id } => o.u8(2).u32(*win).u32(*id),
+            Self::Type { win, id, text, submit } => {
+                o.u8(3).u32(*win).u32(*id).str(text).u8((*submit).into())
+            }
+            Self::Key { win, code, mods } => o.u8(4).u32(*win).str(code).u8(*mods),
+            Self::Scroll { win, id, dy } => o.u8(5).u32(*win).u32(*id).i16(*dy),
+            Self::Open { name } => o.u8(6).str(name),
+            Self::Window { win, op } => o.u8(7).u32(*win).u8(*op as u8),
+            Self::Theme { name } => o.u8(8).str(name),
+        };
+    }
+
+    fn get(r: &mut Reader<'_>) -> Option<Self> {
+        Some(match r.u8()? {
+            1 => Self::Wait { ms: r.u16()? },
+            2 => Self::Click { win: r.u32()?, id: r.u32()? },
+            3 => Self::Type { win: r.u32()?, id: r.u32()?, text: r.str()?, submit: r.bool()? },
+            4 => Self::Key {
+                win: r.u32()?,
+                code: r.str()?,
+                mods: r.u8().filter(|m| m & !mods::ALL == 0)?,
+            },
+            5 => Self::Scroll { win: r.u32()?, id: r.u32()?, dy: r.i16()? },
+            6 => Self::Open { name: r.str()? },
+            7 => Self::Window { win: r.u32()?, op: WinOp::from_u8(r.u8()?)? },
+            8 => Self::Theme { name: r.str()? },
             _ => return None,
         })
     }
@@ -470,6 +596,10 @@ impl Event {
             Self::AiEnd { id, status, error } => o.u8(9).u32(*id).u16(*status).str(error),
             Self::Ask { text } => o.u8(10).str(text),
             Self::Focus { on } => o.u8(11).u8((*on).into()),
+            Self::Acted { id, code, note, scene } => {
+                o.u8(12).u32(*id).u16(*code).str(note).bytes(scene)
+            }
+            Self::Halt => o.u8(13),
         }
     }
 
@@ -491,6 +621,13 @@ impl Event {
             9 => Self::AiEnd { id: r.u32()?, status: r.u16()?, error: r.str()? },
             10 => Self::Ask { text: r.str()? },
             11 => Self::Focus { on: r.bool()? },
+            12 => Self::Acted {
+                id: r.u32()?,
+                code: r.u16()?,
+                note: r.str()?,
+                scene: r.bytes()?.to_vec(),
+            },
+            13 => Self::Halt,
             _ => return None,
         })
     }
@@ -537,7 +674,7 @@ macro_rules! ints {
     };
 }
 
-ints!(u8 u16 u32);
+ints!(u8 u16 u32 i16);
 
 /// The unread input; every read is bounds-checked.
 struct Reader<'a>(&'a [u8]);

@@ -36,7 +36,7 @@ pub(crate) const STACK: [(&str, &str); 29] = [
     ("kernel", "Processes, consoles and files; deterministic"),
     ("wasi", "WASI for programs, in their worker"), ("cpu", "The program worker"),
     ("uiwire", "How GUI programs draw and hear"), ("uiview", "How the desktop draws them"),
-    ("studio", "Write, check and run apps"), ("assistant", "Ask anything; it builds apps"),
+    ("studio", "Write, check and run apps"), ("assistant", "Ask; it does it on the desktop"),
     ("guest", "The shell the Terminal runs"), ("term", "Terminal screen model"),
     ("vt", "Terminal escape-sequence parser"), ("applang", "The tier 0 app language"),
     ("applang-syntax", "applang's lexer and parser"), ("lang", "Diagnostics, lexer and parser kit"),

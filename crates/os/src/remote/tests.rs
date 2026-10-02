@@ -118,10 +118,8 @@ fn names_open_studio_and_the_first_size_starts_it() {
     let sys = |n: &str| open(n).map(|a| (a.title(), a.icon(), a.preferred_size(), a.compact()));
     let want =
         |i: usize, compact| Some((SYSTEM[i].1.into(), SYSTEM[i].2, Some(SYSTEM[i].3), compact));
-    assert_eq!(
-        [sys("about"), sys("feedback"), sys("files:~/a")],
-        [want(0, true), want(1, true), want(2, false)]
-    );
+    let got = [sys("about"), sys("feedback"), sys("files:~/a")];
+    assert_eq!(got, [want(0, true), want(1, true), want(2, false)]);
     assert!(SYSTEM[2].2.glyph == Glyph::Folder && open("system").is_none());
     // Before a frame: a still note, the title its own; no process yet.
     let mut s = Sys::new(false);
@@ -160,7 +158,7 @@ fn names_open_studio_and_the_first_size_starts_it() {
     assert!(s.ev(AppEvent::Io));
     let why = ("studio stopped with status 101", "panicked\n");
     assert_eq!((s.r.note.as_str(), s.r.log.as_str()), why);
-    assert!(s.asked.is_empty() && s.r.frame.is_none());
+    assert!(s.asked == [R::Agent(Request::Status { working: false })] && s.r.frame.is_none());
 }
 
 #[test]
@@ -187,10 +185,16 @@ fn clicks_keys_and_requests_go_through() {
     let k = |key, mods, ch| Event::Key { id: 0, key, mods, ch };
     let (char, ms) = (uiwire::Key::Char, mods::META | mods::SHIFT);
     let keys = [k(char, mods::CTRL, 's'), k(uiwire::Key::Enter, 0, '\0'), k(char, ms, ' ')];
-    assert_eq!(
-        s.events(),
-        [&[Event::Click { id: 1 }, Event::Focus { on: false }][..], &keys].concat()
-    );
+    let want = [&[Event::Click { id: 1 }, Event::Focus { on: false }][..], &keys].concat();
+    assert_eq!(s.events(), want);
+    // Acts go to the host, answers to the program; busy while starting or until a click is drawn.
+    assert!(Sys::new(true).r.busy() && !Sys::new(false).r.busy() && s.r.busy());
+    let act = Request::Act { id: 4, act: uiwire::Act::Wait { ms: 0 }.encode() };
+    s.show(vec![], vec![act.clone(), Request::Status { working: true }]);
+    assert_eq!(s.asked[4..], [R::Agent(act), R::Agent(Request::Status { working: true })]);
+    let ev = [AppEvent::Click(WidgetId(1)), AppEvent::Agent(Event::Halt)].map(|e| s.ev(e));
+    assert!(ev == [false; 2] && s.r.busy() && s.events() == [Event::Click { id: 1 }, Event::Halt]);
+    assert!(s.show(vec![], vec![]) && !s.r.busy());
     // Closing says Close once; the program's exit then ends the window.
     (0..2).for_each(|_| s.cx(|r, cx| r.closing(cx)));
     assert_eq!(s.events(), [Event::Close]);

@@ -1,9 +1,10 @@
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use gfx::{Kind, Rgba};
 use kernel::wire::{Msg, Stdout, VERSION};
-use ui::{App, AppEvent as E, THEMES, Ui};
+use ui::uiwire::{Act, Event, Request as Ask, WinOp, acted, scene::Scene};
+use ui::{App, AppEvent as E, THEMES, Ui, WidgetId as W, sem};
 
 use super::motion::{Lerp, Themes, Tween, Vis, blend, ease, replay};
 use super::*;
@@ -11,8 +12,14 @@ use super::*;
 const SANS: &[u8] = include_bytes!("../../../assets/fonts/Inter-Regular.ttf");
 const SYM_A: &[u8] = include_bytes!("../../../assets/fonts/lazy/symbols-a.ttf");
 const SYM_B: &[u8] = include_bytes!("../../../assets/fonts/lazy/symbols-b.ttf");
-/// The names the registry knows (`welcome` and `sized` are compact).
-const KNOWN: &str = "welcome terminal /apps/counter.app sized huge nan assistant files about";
+/// The names the registry knows (`welcome` and `sized` are compact; `page` draws a page).
+const KNOWN: &str = "welcome terminal /apps/counter.app sized huge nan assistant files about page";
+
+thread_local! {
+    /// What a Probe told `agent` asks of the desktop, and the Probe that is busy.
+    static ASKS: RefCell<Vec<Ask>> = RefCell::default();
+    static BUSY: Cell<u32> = const { Cell::new(0) };
+}
 
 type Log = Rc<RefCell<Vec<(u32, E)>>>;
 
@@ -25,7 +32,18 @@ impl App for Probe {
         self.1.to_uppercase()
     }
     fn draw(&mut self, ui: &mut Ui<'_>) {
-        ui.hit(ui::WidgetId(1), ui.rect(), ui::Sense::Click);
+        if self.1 != "page" {
+            return ui.hit(ui::WidgetId(1), ui.rect(), ui::Sense::Click);
+        }
+        // A heading, a switch that is on, a field, and more text than the window shows.
+        ui.heading("Privacy");
+        ui.button(W(30), "Reports");
+        ui.mark(W(30), sem::SWITCH, sem::CHECKED, "");
+        ui.text_field(W(5), "Ada", true, "Name");
+        ui.label(&"word ".repeat(2000));
+    }
+    fn busy(&self) -> bool {
+        BUSY.with(|b| b.get() == self.0)
     }
     fn event(&mut self, ev: E, cx: &mut Cx<'_>) -> bool {
         self.2.borrow_mut().push((self.0, ev.clone()));
@@ -39,6 +57,7 @@ impl App for Probe {
                 ("spawn", _) => _ = cx.kernel.spawn(spin()),
                 ("size", _) => cx.set_size(500, 300),
                 ("seen", _) => cx.pref("seen", &cx.ai.model.clone()),
+                ("agent", _) => ASKS.with(|a| a.take().into_iter().for_each(|r| cx.agent(r))),
                 ("pref", kv) => {
                     let (key, value) = kv.split_once('=').unwrap_or((kv, ""));
                     cx.pref(key, value);
@@ -112,6 +131,26 @@ impl Host {
     fn names(&self) -> Vec<(u32, &str, bool)> {
         self.wins.iter().map(|w| (w.id.0, &*w.name, !self.live(w.id))).collect()
     }
+    /// Window `from` asks `asks` of the desktop.
+    fn ask(&mut self, from: u32, asks: Vec<Ask>) -> Response {
+        ASKS.with(|a| *a.borrow_mut() = asks);
+        self.say(from, "agent")
+    }
+    /// The overlay acts: `act` as act `id`.
+    fn acts(&mut self, id: u32, act: Act) -> Response {
+        self.ask(0, vec![Ask::Act { id, act: act.encode() }])
+    }
+}
+
+/// Each Acted heard by Probe `n`: its id, code and scene.
+fn heard(log: &Log, n: u32) -> Vec<(u32, u16, Scene)> {
+    let acted = |(p, e): &(u32, E)| match e {
+        E::Agent(Event::Acted { id, code, scene, .. }) if *p == n => {
+            Some((*id, *code, Scene::decode(scene).unwrap_or_default()))
+        }
+        _ => None,
+    };
+    log.borrow().iter().filter_map(acted).collect()
 }
 
 #[test]
@@ -477,4 +516,138 @@ fn glyphs_draw_on_whole_pixels_and_time_reads_as_the_bar_shows_it() {
 fn a_window_on_a_file_counts_as_its_app() {
     let names = ["studio:/apps/x.app", "files:/tmp", "studio", "/apps/a:b.app"];
     assert_eq!(names.map(app_of), ["studio", "files", "studio", "/apps/a:b.app"]);
+}
+
+#[test]
+fn the_scene_holds_each_window_its_hits_its_marks_and_the_text_that_shows() {
+    let (mut h, _, _) = host();
+    h.open("page", None, &mut Response::default());
+    h.apply(Cmd::Minimize(WinId(1)));
+    (h.agent.screen, h.agent.apps) = ((1280.0, 800.0), vec!["page".into()]);
+    assert!(h.open_overlay() && h.win(OVERLAY).is_some() && !h.live(OVERLAY));
+    h.text.atlas_mut().take_dirty();
+    let s = h.scene();
+    let head = (s.w, s.h, &*s.theme, s.focus, &*s.apps);
+    assert_eq!(head, (1280, 800, "Midnight", 3, &["page".to_string()][..]));
+    // Shown windows top first, then the minimized; never the overlay.
+    let wins: Vec<_> = s.wins.iter().map(|w| (w.id, &*w.app, &*w.title, w.state)).collect();
+    let want =
+        [(3, "page", "PAGE", 0), (2, "terminal", "TERMINAL", 0), (1, "welcome", "WELCOME", 2)];
+    assert_eq!(wins, want);
+    let (page, c) = (&s.wins[0], content_rect(rectf(h.rect_of(3).unwrap())));
+    let r = h.rect_of(3).unwrap();
+    assert_eq!(page.rect.map(i32::from), [r.x, r.y, r.w, r.h]);
+    let marks: Vec<_> = page.marks.iter().map(|m| (m.id, m.role, m.flags, &*m.value)).collect();
+    assert_eq!(
+        marks,
+        [(30, sem::SWITCH, sem::CHECKED, ""), (5, sem::TEXTBOX, sem::FOCUSED, "Ada")]
+    );
+    let hits: Vec<_> = page.hits.iter().map(|h| (h.id, h.sense)).collect();
+    assert_eq!(hits, [(30, 0), (5, 1)]);
+    // The text drawn, as lines; only what shows in the window.
+    let runs: Vec<&str> = page.runs.iter().map(|r| &*r.text).collect();
+    assert_eq!(runs[..3], ["Privacy", "Reports", "Ada"]);
+    assert!(runs[3].starts_with("word word") && runs.len() < 60, "{}", runs.len());
+    assert!(page.runs.iter().all(|r| f32::from(r.rect[1]) < c.y + c.h));
+    assert!(s.wins[2].hits.is_empty() && s.wins[2].runs.is_empty());
+    // Reading the screen drew nothing on the atlas.
+    assert!(h.text.atlas_mut().take_dirty().is_none());
+}
+
+#[test]
+fn the_overlay_acts_as_a_person_and_hears_once_the_screen_settles() {
+    let (mut h, log, made) = host();
+    h.open_overlay();
+    let me = *made.borrow();
+    h.now_ms = 1000.0;
+    // A click raises the window, tells it its focus, then presses its widget's middle: the
+    // events a person's press and release make. The overlay hears the screen after.
+    h.acts(1, Act::Click { win: 1, id: 1 });
+    let c = content_rect(rectf(h.rect_of(1).unwrap()));
+    let down = E::PointerDown { x: c.w / 2.0, y: c.h / 2.0, id: Some(W(1)) };
+    let to_1: Vec<E> = log.borrow().iter().filter(|e| e.0 == 1).map(|e| e.1.clone()).collect();
+    assert_eq!(to_1, [E::Focus(true), down, E::Click(W(1))]);
+    let got = heard(&log, me);
+    assert_eq!((got.len(), got[0].0, got[0].1, got[0].2.focus), (1, 1, acted::OK, 1));
+    assert_eq!(h.agent.flash, Some((c, 1000.0)));
+    // A window verb is its title bar control's; opening is the home screen's tile.
+    h.acts(2, Act::Window { win: 2, op: WinOp::Close });
+    h.acts(3, Act::Open { name: "sized".into() });
+    assert_eq!(
+        h.names()[1..],
+        [(2, "terminal", true), (0, "assistant", true), (3, "sized", false)]
+    );
+    // Coded failures: a window gone, an unknown app or key, the overlay itself, a scroll out of
+    // range, typing into a button, an id not on screen, an unknown theme.
+    let fails = [
+        (Act::Click { win: 2, id: 1 }, acted::GONE),
+        (Act::Open { name: "nope".into() }, acted::UNKNOWN_APP),
+        (Act::Open { name: "assistant".into() }, acted::REFUSED),
+        (Act::Key { win: 0, code: "Nope".into(), mods: 0 }, acted::MALFORMED),
+        (Act::Scroll { win: 1, id: 0, dy: 3001 }, acted::MALFORMED),
+        (Act::Type { win: 1, id: 1, text: "x".into(), submit: false }, acted::NOT_TEXT),
+        (Act::Click { win: 1, id: 9 }, acted::OFF_SCREEN),
+        (Act::Theme { name: "nope".into() }, acted::MALFORMED),
+    ];
+    for (i, (act, code)) in (10..).zip(fails) {
+        h.acts(i, act.clone());
+        assert_eq!(heard(&log, me).last().map(|a| (a.0, a.1)), Some((i, code)), "{act:?}");
+    }
+    // A key and a theme reach their ends; another app may not act.
+    h.acts(20, Act::Key { win: 0, code: "KeyS".into(), mods: 2 });
+    let ctrl_s = E::Key { key: Key::Char('s'), mods: Mods { ctrl: true, ..Mods::default() } };
+    assert!(log.borrow().contains(&(1, ctrl_s)));
+    h.acts(21, Act::Theme { name: "dawn".into() });
+    assert_eq!(h.theme.current().name, "Dawn");
+    let n = log.borrow().len();
+    h.ask(1, vec![Ask::Act { id: 5, act: Act::Window { win: 1, op: WinOp::Close }.encode() }]);
+    let no = Event::Acted { id: 5, code: acted::REFUSED, note: "".into(), scene: vec![] };
+    assert!(log.borrow()[n..].contains(&(1, E::Agent(no))) && h.live(WinId(1)));
+}
+
+#[test]
+fn acts_wait_for_busy_windows_and_their_time() {
+    let (mut h, log, made) = host();
+    h.open_overlay();
+    let me = *made.borrow();
+    h.ask(0, vec![Ask::Status { working: true }]);
+    assert!(h.agent.working);
+    // A busy window holds the answer (and arms the timer) until it is done...
+    h.now_ms = 100.0;
+    BUSY.with(|b| b.set(2));
+    let r = h.acts(1, Act::Click { win: 2, id: 1 });
+    assert!(heard(&log, me).is_empty());
+    assert!(r.effects.contains(&Effect::Kernel(kernel::Effect::Wake { ms: 1501 })));
+    // ...and a second act meanwhile is refused as in flight.
+    h.acts(2, Act::Wait { ms: 0 });
+    let codes = |log: &Log| heard(log, me).iter().map(|a| (a.0, a.1)).collect::<Vec<_>>();
+    assert_eq!(codes(&log), [(2, acted::IN_FLIGHT)]);
+    BUSY.with(|b| b.set(0));
+    h.kernel_in(KernelIn::Wake, &mut Response::default());
+    assert_eq!(codes(&log)[1..], [(1, acted::OK)]);
+    // ...or until the deadline, which says it is still busy (the scene comes all the same).
+    BUSY.with(|b| b.set(2));
+    h.acts(3, Act::Click { win: 2, id: 1 });
+    h.now_ms = 1599.0;
+    h.kernel_in(KernelIn::Wake, &mut Response::default());
+    assert_eq!(codes(&log).len(), 2);
+    h.now_ms = 1700.0;
+    h.kernel_in(KernelIn::Wake, &mut Response::default());
+    let last = heard(&log, me).pop().unwrap();
+    assert_eq!((last.0, last.1, last.2.wins.len()), (3, acted::BUSY, 2));
+    // A wait lets its time pass, busy or not.
+    BUSY.with(|b| b.set(0));
+    h.acts(4, Act::Wait { ms: 300 });
+    h.kernel_in(KernelIn::Wake, &mut Response::default());
+    assert_eq!(codes(&log).len(), 3);
+    h.now_ms = 2000.0;
+    h.kernel_in(KernelIn::Wake, &mut Response::default());
+    assert_eq!(codes(&log)[3..], [(4, acted::OK)]);
+    // The person takes over: a working overlay hears it once; its program's end ends it all.
+    h.halt(&mut Response::default());
+    h.halt(&mut Response::default());
+    let halts = log.borrow().iter().filter(|e| e.1 == E::Agent(Event::Halt)).count();
+    assert_eq!((halts, h.agent.working), (1, false));
+    h.say(0, "close");
+    assert!(h.win(OVERLAY).is_none() && h.open_overlay() && *made.borrow() == me + 1);
 }

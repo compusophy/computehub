@@ -29,7 +29,7 @@ devices. Author handle: compusophy.
    HashMap/HashSet, no clocks, no randomness. State must replay bit-for-bit
    and hash identically.
 5. **wasm32 always green:** `cargo check --workspace --target wasm32-unknown-unknown`.
-6. **Budgets** (`scripts/budget.sh`, gzip -9): boot ≤180 KB (top-level
+6. **Budgets** (`scripts/budget.sh`, gzip -9): boot ≤192 KB (top-level
    `dist/` files), deferred fonts ≤30 KB (`dist/fonts/deferred/`), lazy
    fonts ≤60 KB (the rest of `dist/fonts/`), system ≤40 KB (`dist/cpu/`),
    programs ≤64 KB (`dist/bin/`), licenses not counted;
@@ -64,10 +64,10 @@ crates/
   apps/      Settings, Terminal
   system/    About, Feedback, Files, Welcome (one wasip1 program)
   studio/    Studio (wasip1 GUI program): make apps by describing them
-  assistant/ the Assistant (wasip1 GUI program): chat; AI code Studio shares
+  assistant/ the Assistant (wasip1): the overlay AI using the desktop
   uiwire/    remote UI protocol: GUI programs send widget trees, get events
   uiview/    draws them with ui; holds edited text
-  host/      wm + one app per window (placement); motion, frame geometry
+  host/      wm + one app per window; agent (scene, acts); motion, frames
   home/      the home grid (every app), AI button + dock strip, menus, touch
   shell/     the desktop: top bar, window chrome, keys; wires host + home (no web deps)
   platform/  the browser boundary: canvas, WebGL2, input, textarea, fetch,

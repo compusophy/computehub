@@ -51,6 +51,8 @@ impl Shell {
         let (icons, new) = icons::arrange(&self.order, self.host.home(&APPS), |e| &e.name);
         let before = self.order.clone();
         self.icons = icons;
+        let apps = self.icons.iter().map(|e| &e.name).filter(|n| *n != host::ASSISTANT);
+        self.host.agent.apps = apps.cloned().collect();
         self.note_order(!first && new);
         if self.order != before {
             self.carry = None;

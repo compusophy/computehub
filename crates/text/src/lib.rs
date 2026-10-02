@@ -9,6 +9,8 @@
 //!   pixels (the atlas samples 1:1). A full atlas is cleared and
 //!   [`TextSystem::take_atlas_reset`] asks for the frame again.
 //! - Vector shapes ([`TextSystem::draw_vector`]: icons) share the cache and atlas.
+//! - On a recording list ([`DrawList::recording`]) text is noted, not drawn, and shapes are
+//!   skipped: recording never touches the atlas.
 //! - [`Editor`] is the text buffer behind `ui`'s code editor.
 
 #![forbid(unsafe_code)]
@@ -201,7 +203,8 @@ impl TextSystem {
         self.face(font).map_or(MONO_METRICS, |(_, f)| f.metrics())
     }
 
-    /// Draws `text` on one line from pen `x` on `baseline`; returns its advance.
+    /// Draws `text` on one line from pen `x` on `baseline` (a recording list notes it); returns
+    /// its advance.
     pub fn draw_text(
         &mut self,
         list: &mut DrawList,
@@ -212,6 +215,11 @@ impl TextSystem {
     ) -> f32 {
         if !usable(style.size) {
             return 0.0;
+        }
+        if list.sem().is_some() {
+            let adv = self.measure(text, style);
+            list.note_text(x, baseline, style.size, adv, text);
+            return adv;
         }
         let px = (style.size * self.dpr * 4.0).round() / 4.0; // cached to a quarter px
         let mut adv = 0.0;
@@ -312,6 +320,9 @@ impl TextSystem {
     ) {
         let mono = FontId::Mono as usize;
         let skip = c == ' ' || c.is_control() || !usable(size) || !usable(cell_w);
+        if !skip && list.sem().is_some() {
+            return list.note_text(x, baseline, size, cell_w, c.encode_utf8(&mut [0; 4]));
+        }
         if skip || self.faces[mono].is_none() {
             return;
         }
@@ -412,7 +423,7 @@ impl TextSystem {
         color: Rgba,
     ) {
         let (d, side) = (self.dpr, (r.w.min(r.h) * self.dpr).round());
-        if !(1.0..=MAX_PX).contains(&side) {
+        if !(1.0..=MAX_PX).contains(&side) || list.sem().is_some() {
             return;
         }
         let slot = self.cached(key | side as u64, |t| {

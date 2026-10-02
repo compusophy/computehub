@@ -87,9 +87,8 @@ fn reports_wait_in_the_outbox_until_the_inbox_takes_them() {
     let sent = streamed(&ctl);
     assert_eq!(sent.len(), 1);
     let (id, json) = &sent[0];
-    assert!(json.starts_with(
-        r#"{"kind":"feedback","title":"Idea: Dark mode for the dock","body":"Dark mode"#
-    ));
+    let start = r#"{"kind":"feedback","title":"Idea: Dark mode for the dock","body":"Dark mode"#;
+    assert!(json.starts_with(start));
     assert!(json.contains("windows  2 open") && sig_of(json).len() == 16, "{json}");
     assert_eq!(ctl.storage_get(OUTBOX).as_deref(), Some(json.as_str()));
     // No inbox yet (503): it stays, held; the next report sends both, the first as it was.
@@ -141,9 +140,8 @@ fn errors_are_reported_once_a_session_unless_reports_are_off() {
     assert_eq!(titles.len(), 3, "{titles:?}");
     assert!(has("The program hello failed to load or run"));
     assert!(has("The AI request failed: HTTP 503") && has("The AI request got no answer"));
-    assert!(
-        titles.iter().all(|j| j.starts_with(r#"{"kind":"error""#) && !j.ends_with(r#""sig":""}"#))
-    );
+    let error = |j: &String| j.starts_with(r#"{"kind":"error""#) && !j.ends_with(r#""sig":""}"#);
+    assert!(titles.iter().all(error));
     let recent = notes(6).lines().collect::<Vec<_>>().join(" | ");
     assert!(recent.ends_with("proc 7 hello failed | proc 9 hello failed | ai 429 | ai 503 | ai 0 network | ai 0 network"), "{recent}");
     // Unanswered, they wait; the switch, stored and told, drops them; typed feedback still goes.
@@ -188,7 +186,12 @@ fn the_desktop_sends_feedback_and_reports_failures_and_tells_apps() {
     let mut ctl = Ctl::default();
     let fx =
         shell::Effect::Feedback { kind: "bug".into(), text: "Dock flickers".into(), context: true };
-    apply(vec![fx], &mut ctl, &desk.ai.clone(), &mut desk.report);
+    apply(vec![fx], &mut ctl, (&desk.ai.clone(), &mut 0.0), &mut desk.report);
+    // Of two timers asked for, the sooner stands (the page clock reads 0 here).
+    let (mut timer, ai) = (Ctl::default(), desk.ai.clone());
+    let wake = |ms| shell::Effect::Kernel(ui::kernel::Effect::Wake { ms });
+    apply([1500, 2000, 100].map(wake).into(), &mut timer, (&ai, &mut 0.0), &mut desk.report);
+    assert_eq!(timer.effects(), [Fx::Wake(1500), Fx::Wake(100)]);
     desk.flush(&mut ctl);
     let sent = streamed(&ctl);
     assert_eq!(sent.len(), 1);

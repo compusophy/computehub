@@ -4,7 +4,7 @@ use gfx::RectF;
 use ui::REPORTS;
 use ui::icon::Glyph;
 use ui::{AI_MODEL, App, AppEvent, AppIcon, CARD_PAD, Cx, GRAIN, PAD, RADIUS_LG, RADIUS_SM};
-use ui::{SPACING, Sense, THEMES, Theme, Ui, WidgetId};
+use ui::{SPACING, Sense, THEMES, Theme, Ui, WidgetId, sem};
 
 use crate::kit::{self, Scroll};
 
@@ -189,6 +189,7 @@ impl Settings {
         let at = ui.snapped(RectF::new(link.x + 8.0 + end + 5.0, link.y + 16.0, 13.0, 13.0));
         ui.glyph(at, Glyph::Chevron, t.accent);
         ui.hit(id, link, Sense::Click);
+        ui.mark(id, sem::LINK, 0, "");
         ui.advance_to(link.y + link.h);
         link.y + link.h
     }
@@ -233,6 +234,7 @@ fn switch_row(ui: &mut Ui<'_>, id: u32, label: &str, on: bool) -> f32 {
     ui.text(row.x + CARD_PAD, base, &shown, style);
     kit::switch(ui, row.inset(CARD_PAD), on);
     ui.hit(id, row, Sense::Click);
+    ui.mark(id, sem::SWITCH, if on { sem::CHECKED } else { 0 }, "");
     ui.advance_to(row.y + row.h);
     ui.space(SPACING);
     w
@@ -268,6 +270,7 @@ fn item(ui: &mut Ui<'_>, id: u32, label: &str, rect: RectF, [on, tab]: [bool; 2]
     let x = ui.text_system().snap(x);
     ui.text(x, base, label, style);
     ui.hit(id, rect, Sense::Click);
+    ui.mark(id, sem::TAB, if on { sem::SELECTED } else { 0 }, "");
 }
 
 /// Model `i` in `row`: its name over what it is best at, ringed and checked in the accent if `on`.
@@ -300,6 +303,7 @@ fn model_row(ui: &mut Ui<'_>, i: usize, row: RectF, (name, best): (&str, &str), 
         ui.text(at, base, CHECK, check);
     }
     ui.hit(id, row, Sense::Click);
+    ui.mark(id, sem::OPTION, if on { sem::SELECTED } else { 0 }, "");
 }
 
 /// The Appearance page from the cursor, the grain's switch `on` or off; returns its bottom.
@@ -358,6 +362,7 @@ fn theme_card(ui: &mut Ui<'_>, i: usize, card: RectF, th: &Theme, ph: f32) {
         ui.text(x, base, CHECK, check);
     }
     ui.hit(id, card, Sense::Click);
+    ui.mark(id, sem::OPTION, if current { sem::SELECTED } else { 0 }, "");
 }
 
 /// `th`'s desktop in small inside `p` (light, a window, a dock), its corners

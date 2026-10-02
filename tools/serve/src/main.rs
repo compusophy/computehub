@@ -6,7 +6,8 @@
 //! (a `.`, `..` or empty segment, a backslash or a drive colon) is a 404;
 //! paths are not percent-decoded, so `%2e` hides none. Two POSTs stand in for
 //! the site's server functions: `/api/ai` streams a mock model's answer
-//! ([`sse`]); `/api/feedback` prints the body to stdout, prefixed with
+//! ([`sse`]; to a request with tools, a scripted agent's next step, [`agent`]);
+//! `/api/feedback` prints the body to stdout, prefixed with
 //! `feedback: `, and answers 201 with `{"url":"local"}`.
 
 #![forbid(unsafe_code)]
@@ -120,10 +121,13 @@ fn resolve(root: &Path, target: &str) -> Option<PathBuf> {
 }
 
 /// The mock's answer to a chat request `body`: chat.completion.chunk lines, a
-/// usage chunk and `[DONE]`. When the last message's content (else the body) says
-/// "app", a sentence and a fenced `app` block of Studio's counter, a line a
-/// chunk; else "Hello from the mock model.", a word a chunk.
+/// usage chunk and `[DONE]`. With tools, [`agent`]'s step. When the last message's
+/// content (else the body) says "app", a sentence and a fenced `app` block of
+/// Studio's counter, a line a chunk; else "Hello from the mock model.", a word a chunk.
 fn sse(body: &str) -> String {
+    if body.contains("\"tools\":[") {
+        return agent(body);
+    }
     let last = body.rfind("\"content\"").map_or(body, |i| &body[i..]);
     let pieces: Vec<&str> = if last.contains("app") {
         let program = include_str!("../../../crates/studio/samples/counter.app");
@@ -142,6 +146,59 @@ fn sse(body: &str) -> String {
     let usage =
         format!("\"prompt_tokens\":{},\"completion_tokens\":{}", body.len() / 4, pieces.len());
     out + &format!("{head}\"choices\":[],\"usage\":{{{usage}}}}}\n\ndata: [DONE]\n\n")
+}
+
+/// The scripted agent's next step for a request with tools, read off the raw JSON `body` (its
+/// latest screen's lines, quotes escaped): asked about error reports, as a person turns them
+/// off: open Settings, its Privacy tab, the switch, close Settings, then say so. Anything else
+/// it answers in words. A call comes as providers stream one: its name, then its arguments in
+/// pieces.
+fn agent(body: &str) -> String {
+    // A line break in a JSON string may come as \n or as \u000a.
+    let body = &body.replace(r"\u000a", r"\n");
+    let screen = body.rfind("Screen ").map_or("", |i| &body[i..]);
+    let line = |want: &str| screen.split("\\n").map(str::trim).find(|l| l.contains(want));
+    let first = |l: &str| l.split(' ').next().unwrap_or("").to_string();
+    let (head, end) = (r#"data: {"id":"mock","choices":[{"index":0,"delta":"#, "}]}\n\n");
+    // The task: the last message the user wrote (the system prompt names reports too).
+    let task = body.rsplit(r#""role":"user","content":""#).next().unwrap_or("");
+    let reports = task.split("\\n").next().unwrap_or("").to_ascii_lowercase().contains("report");
+    let step = if !reports {
+        None
+    } else if !body.contains(r#""role":"tool""#) {
+        Some(("open_app", r#"{"name":"settings"}"#.to_string()))
+    } else if let Some(l) = line(r#"tab \"Privacy\""#).filter(|l| !l.ends_with("selected")) {
+        Some(("click", format!(r#"{{"ref":"{}"}}"#, first(l))))
+    } else if let Some(l) = line(r#"switch \"Send error reports automatically\" on"#) {
+        Some(("click", format!(r#"{{"ref":"{}"}}"#, first(l))))
+    } else {
+        let w = line("(settings)").map(first);
+        w.map(|w| ("window", format!(r#"{{"window":"{w}","action":"close"}}"#)))
+    };
+    let mut out = String::new();
+    let say = |text: &str| format!("{head}{{\"content\":\"{text}\"}}{end}");
+    match step {
+        Some((name, args)) => {
+            let call = format!(
+                r#"{{"index":0,"id":"call_{name}","type":"function","function":{{"name":"{name}","arguments":""}}}}"#
+            );
+            out += &format!("{head}{{\"tool_calls\":[{call}]}}{end}");
+            for piece in
+                args.as_bytes().chunks(6).map(|p| String::from_utf8_lossy(p).replace('"', "\\\""))
+            {
+                let delta = format!(
+                    r#"{{"tool_calls":[{{"index":0,"function":{{"arguments":"{piece}"}}}}]}}"#
+                );
+                out += &format!("{head}{delta}{end}");
+            }
+        }
+        None if reports => {
+            out += &say("Error reports are off.");
+        }
+        None => out += &say("I am the mock model: ask me to turn error reports off."),
+    }
+    out + r#"data: {"id":"mock","choices":[],"usage":{"prompt_tokens":1000,"completion_tokens":20}}"#
+        + "\n\ndata: [DONE]\n\n"
 }
 
 fn mime(path: &Path) -> &'static str {
@@ -186,6 +243,44 @@ fn the_mock_streams_hello_or_an_app() {
     assert!(lines.len() == 7 && lines[5].contains(r#""usage":{"#) && lines[6] == "data: [DONE]");
     let app = sse(r#"[{"role":"user","content":"a counter app"}]"#);
     assert!(app.contains(r#":"```app\n"}"#) && app.contains(r#":"label \"Counter\";\n"}"#));
+}
+
+#[test]
+fn the_mock_agent_turns_error_reports_off_a_step_at_a_time() {
+    // A step's call: its name and its arguments, joined from their pieces.
+    let call = |sse: String| {
+        let name = sse.split(r#""name":""#).nth(1).and_then(|n| n.split('"').next());
+        let pieces = sse.split(r#""arguments":""#).skip(1).map(|p| p.split(r#""}}]}"#).next());
+        let args: String = pieces.flatten().collect();
+        (name.unwrap_or("").to_string(), args.replace("\\\"", "\""))
+    };
+    let ask = r#"{"tools":[],"messages":[{"role":"user","content":"turn off error reports"}]}"#;
+    let step = |screen: &str| {
+        let tool =
+            [r#"turn off error reports"},{"role":"tool","content":"Screen 1x1\n"#, screen].concat();
+        call(sse(&ask.replace("turn off error reports", &tool)))
+    };
+    assert_eq!(call(sse(ask)), ("open_app".into(), r#"{"name":"settings"}"#.into()));
+    let nav =
+        r#"w1 \"Settings\" (settings)\n  e1 tab \"Appearance\" selected\n  e3 tab \"Privacy\"\n"#;
+    assert_eq!(step(nav), ("click".into(), r#"{"ref":"e3"}"#.into()));
+    // Line breaks escaped as the Assistant's JSON writes them.
+    let unicode = nav.replace(r"\n", r"\u000a");
+    assert_eq!(step(&unicode), ("click".into(), r#"{"ref":"e3"}"#.into()));
+    let on = r#"w1 \"Settings\" (settings)\n  e3 tab \"Privacy\" selected
+  e8 switch \"Send error reports automatically\" on\n"#
+        .replace('\n', "\\n");
+    assert_eq!(step(&on), ("click".into(), r#"{"ref":"e8"}"#.into()));
+    let off = on.replace("\" on", "\" off");
+    assert_eq!(step(&off), ("window".into(), r#"{"window":"w1","action":"close"}"#.into()));
+    let done = agent(
+        &ask.replace("reports\"}", "reports\"},{\"role\":\"tool\",\"content\":\"Screen 1x1\"}"),
+    );
+    assert!(
+        done.contains(r#"{"content":"Error reports are off."}"#) && done.ends_with("[DONE]\n\n")
+    );
+    let other = agent(r#"{"tools":[],"messages":[{"content":"hi"}]}"#);
+    assert!(other.contains("ask me to turn error reports off"));
 }
 
 #[test]

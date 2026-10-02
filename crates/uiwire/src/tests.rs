@@ -253,13 +253,86 @@ fn malformations_fail() {
     assert!(key(8, 15, 'x' as u32).is_some());
     assert!(key(0, 0, 0).is_none() && key(9, 0, 0).is_none());
     assert!(key(1, 16, 0).is_none() && key(1, 0, 0xD800).is_none());
-    assert!(Event::decode(&[12]).is_none() && Request::decode(&[8, 0, 0, 0, 0]).is_none());
+    assert!(Event::decode(&[14]).is_none() && Request::decode(&[10, 0, 0, 0, 0]).is_none());
     assert!(Event::decode(&[11, 2]).is_none() && Event::decode(&[11, 1]).is_some());
+}
+
+/// Every act, the overlay's status, an Acted carrying `scene()`, and Halt.
+fn agent() -> (Vec<Request>, Vec<Event>) {
+    let acts = [
+        Act::Wait { ms: 5000 },
+        Act::Click { win: 2, id: 31 },
+        Act::Type { win: 2, id: 4, text: "h\u{e9}llo".into(), submit: true },
+        Act::Key { win: 0, code: "KeyS".into(), mods: mods::CTRL | mods::SHIFT },
+        Act::Scroll { win: 3, id: 0, dy: -3000 },
+        Act::Open { name: "settings".into() },
+        Act::Window { win: 2, op: WinOp::Restore },
+        Act::Theme { name: "Dawn".into() },
+    ];
+    acts.iter().for_each(|a| strict(a, Act::encode, Act::decode));
+    let ask = |(id, act): (u32, Act)| Request::Act { id, act: act.encode() };
+    let mut requests: Vec<_> = (1..).zip(acts).map(ask).collect();
+    requests.extend([Request::Status { working: true }, Request::Status { working: false }]);
+    let scene = scene().encode();
+    let acted = Event::Acted { id: 9, code: acted::OFF_SCREEN, note: "e9".into(), scene };
+    (requests, vec![acted, Event::Halt])
+}
+
+/// A shown window with a hit of each kind, a mark and a run; a minimized one.
+fn scene() -> scene::Scene {
+    use scene::*;
+    let hits = vec![Hit { id: 30, sense: 2, rect: [10, 20, -5, 400] }, Hit::default()];
+    let marks = vec![Mark { id: 30, role: 3, flags: 2, value: "on".into() }];
+    let runs = vec![Run { rect: [1, 2, 3, i16::MIN], text: "Send error reports".into() }];
+    let (app, title) = ("settings".into(), "Settings".into());
+    let shown = Win { id: 2, app, title, rect: [1, 2, 3, 4], state: 3, hits, marks, runs };
+    let min = Win { id: 1, app: "terminal".into(), state: state::MIN, ..Win::default() };
+    let apps = vec!["settings".into(), "files".into()];
+    Scene { w: 1440, h: 900, theme: "Mono".into(), focus: 2, apps, wins: vec![shown, min] }
+}
+
+#[test]
+fn acts_and_scenes_round_trip_strictly() {
+    let (requests, acted) = agent();
+    requests.iter().for_each(|r| strict(r, Request::encode, Request::decode));
+    acted.iter().for_each(|e| strict(e, Event::encode, Event::decode));
+    let scenes = [scene(), scene::Scene::default()];
+    scenes.iter().for_each(|s| strict(s, scene::Scene::encode, scene::Scene::decode));
+    // The kinds after the last, and their fields in order.
+    let click = Request::Act { id: 1, act: Act::Click { win: 2, id: 3 }.encode() };
+    assert_eq!(click.encode(), [8, 1, 0, 0, 0, 9, 0, 0, 0, 2, 2, 0, 0, 0, 3, 0, 0, 0]);
+    let scroll = Act::Scroll { win: 1, id: 0, dy: -2 };
+    assert_eq!(scroll.encode(), [5, 1, 0, 0, 0, 0, 0, 0, 0, 254, 255]);
+    // A request whose bytes are no act never decodes.
+    assert!(Request::decode(&[8, 1, 0, 0, 0, 1, 0, 0, 0, 9]).is_none());
+    assert_eq!(
+        (Request::Status { working: true }.encode(), Event::Halt.encode()),
+        (vec![9, 1], vec![13])
+    );
+    let acted = Event::Acted { id: 1, code: 916, note: "".into(), scene: vec![7] };
+    assert_eq!(acted.encode(), [12, 1, 0, 0, 0, 0x94, 3, 0, 0, 0, 0, 1, 0, 0, 0, 7]);
+    let ops = (0..=255).filter(|&n| WinOp::from_u8(n).is_some_and(|o| o as u8 == n)).count();
+    assert_eq!(ops, 5);
+    // Unknown acts and window ops, modifier bits past ALL, a bool that is not 0 or 1.
+    let act = Act::decode;
+    assert!(act(&[0]).is_none() && act(&[9]).is_none() && act(&[1, 1, 0]).is_some());
+    assert!(act(&[7, 1, 0, 0, 0, 5]).is_none() && act(&[7, 1, 0, 0, 0, 4]).is_some());
+    assert!(act(&[4, 0, 0, 0, 0, 0, 0, 0, 0, 16]).is_none());
+    assert!(act(&[3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2]).is_none());
+    // A window's state past snapped, a hit's sense past scroll.
+    let bytes = scene().encode();
+    let at = 2 + 2 + (4 + 4) + 4 + 4 + (4 + 8) + (4 + 5) + 4 + 4 + (4 + 8) + (4 + 8) + 8;
+    assert_eq!((bytes[at], bytes[at + 1 + 4 + 4]), (3, 2));
+    assert!(scene::Scene::decode(&set(bytes.clone(), at, 4)).is_none());
+    assert!(scene::Scene::decode(&set(bytes.clone(), at + 9, 3)).is_none());
+    assert!(scene::Scene::decode(&set(bytes, at + 9, 0)).is_some());
 }
 
 #[test]
 fn fuzzed_decodes_never_panic_and_stay_canonical() {
-    let mut corpus = vec![sample().encode(), Frame::default().encode()];
+    let mut corpus = vec![sample().encode(), Frame::default().encode(), scene().encode()];
+    let (requests, acted) = agent();
+    corpus.extend(requests.iter().map(Request::encode).chain(acted.iter().map(Event::encode)));
     corpus.extend(events().iter().map(Event::encode));
     corpus.extend(sample().requests.iter().map(Request::encode));
     corpus.extend(sample().nodes.iter().map(Node::encode));
@@ -293,7 +366,8 @@ fn fuzzed_decodes_never_panic_and_stay_canonical() {
             [Frame::decode(&input).map(|v| v.encode()), Event::decode(&input).map(|v| v.encode())];
         let more =
             [Request::decode(&input).map(|v| v.encode()), Node::decode(&input).map(|v| v.encode())];
-        for bytes in again.into_iter().chain(more).flatten() {
+        let scene = scene::Scene::decode(&input).map(|v| v.encode());
+        for bytes in again.into_iter().chain(more).chain([scene]).flatten() {
             assert_eq!(bytes, input);
             decoded += 1;
         }
