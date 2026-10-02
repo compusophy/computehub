@@ -21,16 +21,12 @@ pub const MAX_REPLY: usize = 64 * 1024;
 /// The most bytes a request's body takes: the free AI (`api/ai.mjs`) takes 96 KiB at most, so
 /// this leaves room.
 pub const MAX_BODY: usize = 80 * 1024;
-/// A program in the form replies give it, for system prompts: its first comment says what it is.
-pub const EXAMPLE: &str = "```app\n// Counter: - and + change the number.\nstate count = 0;\nlabel \
-                           \"Counter\";\nrow {\n  button \"-\" { count = count - 1; }\n  label \
-                           count;\n  button \"+\" { count = count + 1; }\n}\n```";
-/// What a prompt that makes apps asks of the program, before [`EXAMPLE`]: to say what it is, and
-/// what of the ask applang could not do.
+/// What a prompt that makes apps asks of the program, before its examples
+/// ([`applang::SHOTS`]): to say what it is, and what of the ask applang could not do.
 pub const HONEST: &str = "Begin the program with a // comment of one or two short lines: what the \
                           app does and how to use it. If applang cannot do part of what was asked, \
                           make the closest app it can, and end that comment with \"Without:\" and \
-                          what it leaves out. For example:\n";
+                          what it leaves out. For example, for ";
 /// What a make asks for after a reply that ran out of room before its program ended.
 pub const SHORTER: &str = "Your reply ran out of room before the program ended. Write the same app, \
                            shorter: under 100 lines, extras left out (named after \"Without:\" in \
@@ -38,9 +34,15 @@ pub const SHORTER: &str = "Your reply ran out of room before the program ended. 
 /// How a make ends that kept running out of room.
 pub const ROOM: &str = "E0907 the AI ran out of room before its reply ended; ask for less";
 
-/// A system prompt: `intro`, applang's card, `rules`, then [`HONEST`] and [`EXAMPLE`].
+/// A system prompt: `intro`, applang's card, `rules`, then [`HONEST`] and the example replies
+/// ([`applang::SHOTS`], each tested to compile and pass the smoke test).
 pub fn system(intro: &str, rules: &str) -> String {
-    [intro, applang::REFERENCE, rules, HONEST, EXAMPLE].concat()
+    let mut out = [intro, applang::REFERENCE, rules, HONEST].concat();
+    for (i, (ask, src)) in applang::SHOTS.iter().enumerate() {
+        let and = if i == 0 { "" } else { "\nAnd for " };
+        out += &[and, "\"", ask, "\":\n```app\n", src, "```\n"].concat();
+    }
+    out
 }
 
 /// A streamed chat-completions request for `model` with the JSON members `options` (each with
