@@ -35,13 +35,29 @@ the short operating map; this file is the why and the shape.
 The constitution. `scripts/caps.sh` and `scripts/budget.sh` enforce what
 they can, in CI.
 
-1. **Rust only.** JavaScript is wasm-bindgen's generated glue and a
-   two-line bootstrap in `web/index.html`, nothing else.
+1. **Rust only.** JavaScript is wasm-bindgen's generated glue, the one-line
+   bootstraps (`web/index.html`, `web/worker.js`) and the server functions
+   (`api/*.mjs`, Node's own modules only): what cannot live in a tab, the
+   free AI's credentials and the feedback inbox.
 2. **Zero external dependencies.** Only workspace siblings, except the web
    crates `platform` and `os`, which take wasm-bindgen (pinned), js-sys
    and web-sys. Build-time tools never ship.
-3. **Small:** at most 2,000 lines of Rust per crate (tests count) and
-   25,000 in total. At a cap: split, shrink or delete. Never raise it.
+3. **Scale without bloat.** Every cap measures a real cost, never size for
+   its own sake:
+   - *speed* is bytes: what boots, and each program, which loads only when
+     opened (the budgets below), so a thousand programs cost nothing until
+     one is used;
+   - *understanding* is module size: a crate, a program or a server
+     function holds at most 2,000 lines (tests 1,000 more), small enough to
+     read whole; the OS (`crates/`, `tools/`), which everything stands on,
+     at most 25,000 (tests 12,500) in all;
+   - *coupling* is the boundary: a program depends only on `programs/` and
+     the OS's pure shared libraries (`uiwire`, `icons`, `vfs`), and reaches
+     the OS only through uiwire.
+
+   So growth is new modules, never bigger ones: `programs/` has no total,
+   and programs can live in repos of their own, a library anyone adds to.
+   At a cap: split, shrink or delete. Never raise it.
 4. **Budgets** (gzip -9; a real host's brotli is smaller):
 
    | budget | cap |
@@ -49,6 +65,8 @@ they can, in CI.
    | boot: every top-level file in `dist/` (page, glue, wasm with the boot font) | 192 KB |
    | deferred: `dist/fonts/deferred/`, fetched right after the first frame | 30 KB |
    | lazy: the rest of `dist/fonts/`, fetched when a terminal first opens | 60 KB |
+   | system: `dist/cpu/`, the program worker | 40 KB |
+   | each program: `dist/bin/*.wasm`, fetched when it first runs | 96 KB |
    | licenses: `dist/licenses/`, never fetched by the page | not counted |
    | first frame after the wasm arrives | 100 ms |
    | idle | zero frames: one only on input or while an animation runs; the one opt-out exception, the living grain, 8 a second by timer |

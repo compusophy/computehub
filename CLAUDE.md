@@ -15,16 +15,18 @@ AI for all); later pooled compute across tabs and devices. Author handle: compus
 
 1. **Rust only.** No hand-written JS beyond two one-line bootstraps
    (web/index.html, web/worker.js) and `api/*.mjs`, the server functions
-   (≤200 lines in all, no npm deps): what cannot live in a tab, the free
-   AI's credentials (`/api/ai`) and the feedback inbox (`/api/feedback`).
+   (`node:` modules only): what cannot live in a tab, the free AI's
+   credentials (`/api/ai`) and the feedback inbox (`/api/feedback`).
 2. **Zero external dependencies.** Only `compusophy-*` workspace siblings.
    Exception: the web crates `platform`, `os` and `cpu` may take
    wasm-bindgen (pinned), js-sys, web-sys. Build-time tools never ship.
-3. **Caps:** product Rust ≤2,000 lines per crate, tests (`tests.rs`,
-   `tests/`) ≤1,000; totals ≤25,000 + 12,500 for the OS (`crates/`,
-   `tools/`) and as much again for `programs/`, never traded; this file
-   ≤8,000 chars. At a cap: split, shrink, or delete; a full `programs/`
-   moves programs to repos of their own. Never raise one.
+3. **Caps measure real costs** (speed is rule 6). A module (crate,
+   program, `api/*.mjs` file) ≤2,000 lines, tests (`tests.rs`, `tests/`)
+   ≤1,000: one reader holds it whole. The OS (`crates/`, `tools/`) ≤25,000
+   + 12,500 in all: everything stands on it. A program depends only on
+   `programs/` and `uiwire`, `icons`, `vfs`. Growth is new modules, not
+   bigger ones; this file ≤8,000 chars. At a cap: split, shrink, or
+   delete. Never raise one.
 4. **Deterministic crates** (`wm`, `vfs`, `kernel`, `wasi`): no floats, no
    HashMap/HashSet, no clocks, no randomness. State must replay bit-for-bit
    and hash identically.
@@ -32,10 +34,9 @@ AI for all); later pooled compute across tabs and devices. Author handle: compus
 6. **Budgets** (`scripts/budget.sh`, gzip -9): boot ≤192 KB (top-level
    `dist/` files), deferred fonts ≤30 KB (`dist/fonts/deferred/`), lazy
    fonts ≤60 KB (the rest of `dist/fonts/`), system ≤40 KB (`dist/cpu/`),
-   programs ≤96 KB (`dist/bin/`), licenses not counted;
-   first frame ≤100 ms after the wasm arrives; idle draws zero frames
-   (a frame only on input or while an animation runs; one opt-out
-   exception: the living grain, 8/s by timer).
+   programs ≤96 KB each (`dist/bin/`), licenses not counted; first frame
+   ≤100 ms after the wasm arrives; idle draws zero frames (only input or
+   an animation draws; one opt-out exception: the living grain, 8/s).
 7. **Every failure is coded and spanned** in the language crates; never a
    wrong-but-clean result. `#![forbid(unsafe_code)]` in every crate.
 8. **Designed for computehub now:** determinism, fuel + receipts, messages
@@ -80,13 +81,12 @@ programs/    wasm32-wasip1 programs (dist/bin/), the app language they share
   assistant/ the Assistant: the overlay AI using the desktop
   system/    About, Feedback, Files, Welcome (one multicall program)
   toolbox/   test programs (one multicall binary)
-assets/fonts/  Inter Regular (boot, in the wasm); deferred/ Inter SemiBold +
-               JetBrains Mono; lazy/ symbol fallbacks; OFL texts; README.md
+assets/fonts/  the fonts (see Fonts below)
 api/           server functions (Vercel, Node): ai.mjs, feedback.mjs
 tools/serve/   dev-only static server for dist/ (never shipped); mocks /api/*
 web/index.html the page: <canvas id="os"> + the one-line module bootstrap
 web/worker.js  the program worker's one-line bootstrap
-scripts/       caps.sh, budget.sh, build-web.sh, deploy.sh (Vercel, prebuilt)
+scripts/       caps.sh, budget.sh, build-web.sh, deploy.sh (`prod`: production)
 ```
 
 Forks: litelite 0.2.0, `4f5e056`. Packages are `compusophy-<x>`; each
@@ -112,8 +112,8 @@ bash scripts/budget.sh
 cargo run -p serve --release -- dist 8080   # preview; --plain: no COOP/COEP
 ```
 
-`?debug` in the page URL marks each frame (`performance.mark("frame")`):
-an idle desktop adds none but the living grain's.
+`?debug` in the URL marks each frame (`performance.mark("frame")`); idle
+adds none but the grain's.
 
 Fonts, each group with its budget: **boot** (Inter Regular, in `os`),
 **deferred** (`fonts/deferred/*`, after the first frame; until then bold is
