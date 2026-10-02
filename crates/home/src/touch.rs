@@ -8,6 +8,11 @@ pub const SCROLL_PX: f32 = 8.0;
 /// How far a finger may wander, and how long it must stay, to long-press.
 pub const HOLD_PX: f32 = 10.0;
 pub const HOLD_MS: f64 = 500.0;
+/// A gap between checks (frames) longer than this is a stall: input may wait behind it, and a
+/// browser may run a frame or two after a long task before that input. A hold that saw a stall
+/// fires at a check this long after the first that found it due, so a queued lift is heard.
+pub const STALL_MS: f64 = 50.0;
+pub const LATE_MS: f64 = 100.0;
 /// A fling's time constant, and the speed where it stops.
 pub const DECAY_MS: f32 = 325.0;
 pub const STOP: f32 = 0.02;
@@ -17,8 +22,9 @@ const REST_MS: f64 = 100.0;
 const NEW: f32 = 0.8;
 
 /// A finger down: where and when it went down, whether what it pressed scrolls, whether it
-/// scrolls now, whether a long press is out (it wandered, scrolled or already fired), where it
-/// was last (height, time) and its speed.
+/// scrolls now, whether a long press is out (it wandered, scrolled or already fired), the last
+/// check (from the press), whether checks stalled and when one first found it due, where it was
+/// last (height, time) and its speed.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Touch {
     pub at: (f32, f32),
@@ -26,13 +32,17 @@ pub struct Touch {
     pub scrolls: bool,
     pub scrolling: bool,
     pub done: bool,
+    seen: f64,
+    stalled: bool,
+    due: Option<f64>,
     last: (f32, f64),
     v: f32,
 }
 
 impl Touch {
     pub fn new(at: (f32, f32), now: f64, scrolls: bool) -> Touch {
-        Touch { at, t0: now, scrolls, scrolling: false, done: false, last: (at.1, now), v: 0.0 }
+        let (seen, stalled, due, last, v) = (now, false, None, (at.1, now), 0.0);
+        Touch { at, t0: now, scrolls, scrolling: false, done: false, seen, stalled, due, last, v }
     }
 
     /// The finger moved to `(x, y)`: how far to scroll (down if positive), once scrolling. It
@@ -54,9 +64,16 @@ impl Touch {
         Some(dy)
     }
 
-    /// Whether the finger, still since it went down, long-presses at `now` (once).
+    /// A check (a frame) at `now`: whether the finger, still since it went down, long-presses
+    /// (once). On a page keeping up, at the first check past [`HOLD_MS`]; after a stall, at a
+    /// check [`LATE_MS`] after that one, never at it: a busy page may see the time pass while a
+    /// quick tap's lift waits behind its frames, and heard meanwhile, it is a tap.
     pub fn held(&mut self, now: f64) -> bool {
-        let fire = !self.done && now - self.t0 >= HOLD_MS;
+        self.stalled |= now - std::mem::replace(&mut self.seen, now) > STALL_MS;
+        if self.done || now - self.t0 < HOLD_MS {
+            return false;
+        }
+        let fire = !self.stalled || now - *self.due.get_or_insert(now) >= LATE_MS;
         self.done |= fire;
         fire
     }

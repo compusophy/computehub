@@ -31,7 +31,8 @@ const MAX_W: u16 = 610;
 /// Feedback: chips for the kind (Bug, Idea, Love), a text that wraps and grows, a switch to
 /// include the desktop's context, and Send, which hands it all to the page
 /// ([`Request::Feedback`]) and thanks; Ctrl+Enter sends too. Near 8,000 bytes a count shows
-/// beside Send; past it, nothing is cut: Send waits for a shorter text.
+/// beside Send and in the title, which stays in view however far a long text has grown; past
+/// it, nothing is cut: Send waits for a shorter text.
 #[derive(Debug)]
 pub struct Feedback {
     /// An index into [`KINDS`]: Idea at first.
@@ -140,9 +141,14 @@ impl View for Feedback {
             Node::Row { id: 0, gap: 13, children: end },
         ];
         let pane = center(Node::Pane { id: 0, w: MAX_W, children: column });
+        let title = match n {
+            _ if n > MAX => ["Feedback \u{2014} too long: ", &count].concat(),
+            _ if n >= NEAR => ["Feedback \u{2014} ", &count].concat(),
+            _ => "Feedback".into(),
+        };
         let first = [Request::Focus { id: self.area() }];
         let first = (!std::mem::replace(&mut self.framed, true)).then_some(first);
         let requests = first.into_iter().flatten().chain(std::mem::take(&mut self.requests));
-        Frame { seq: 0, title: "Feedback".into(), requests: requests.collect(), nodes: vec![pane] }
+        Frame { seq: 0, title, requests: requests.collect(), nodes: vec![pane] }
     }
 }

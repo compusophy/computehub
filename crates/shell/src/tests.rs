@@ -100,6 +100,10 @@ impl Shell {
         self.set_now(t);
         self.draw(&mut DrawList::new())
     }
+    /// Frames at `t` and 100 ms on: a finger still (no frames) since `t - 500` long-presses.
+    fn held(&mut self, t: f64) -> bool {
+        self.at(t) && self.at(t + home::touch::LATE_MS)
+    }
     /// Lets every animation finish, `t` ms on.
     fn rest(&mut self, t: f64) {
         let now = self.host.now_ms;
@@ -294,10 +298,8 @@ fn windows_open_placed_for_the_screen_and_stay_full_on_a_phone() {
     s.k(Char('q'), "a");
     s.rest(1000.0);
     s.k(Enter, "a");
-    assert_eq!(
-        s.placement(WinId(3)).map(|p| (p.state, p.rect)),
-        Some((State::Maximized, s.wm().area()))
-    );
+    let p = s.placement(WinId(3)).map(|p| (p.state, p.rect));
+    assert_eq!(p, Some((State::Maximized, s.wm().area())));
     s.k(Down, "a");
     assert_eq!(s.rect(3), Some(Rect::new(96, 94, 1088, 570)));
     // On a phone every window is full; titlebars do not drag; the controls are a fingertip wide.
@@ -311,14 +313,9 @@ fn windows_open_placed_for_the_screen_and_stay_full_on_a_phone() {
     s.k(Left, "a");
     assert_eq!(s.wm().layout()[1].rect, Rect::new(0, 44, 390, 671));
     // No maximize there: minimize takes its place, beside close.
-    assert_eq!(
-        [(350.0, 80.0), (330.0, 50.0), (280.0, 50.0)].map(|(x, y)| s.hit(x, y)),
-        [
-            Some(Target::Ctl(WinId(4), 2)),
-            Some(Target::Ctl(WinId(4), 0)),
-            Some(Target::Title(WinId(4)))
-        ]
-    );
+    let hits = [(350.0, 80.0), (330.0, 50.0), (280.0, 50.0)].map(|(x, y)| s.hit(x, y).unwrap());
+    let (c, w) = (Target::Ctl, WinId(4));
+    assert_eq!(hits, [c(w, 2), c(w, 0), Target::Title(w)]);
     let r = rectf(s.rect(4).unwrap());
     assert_eq!(controls(r, s.ctl_step()).unwrap()[2].x, 362.0);
     let ctl: Vec<_> = s.controls(r).iter().map(|c| (c.0, c.1.x)).collect();
@@ -598,17 +595,17 @@ fn menus_open_where_pressed_follow_the_keys_and_act() {
 fn a_finger_held_still_long_presses_and_only_a_menu_ends_its_press() {
     let (mut s, log) = desk();
     let c = content_rect(rectf(s.rect(1).unwrap()));
-    // On a button in a window: frames come while it waits (and only then); at 500 ms nothing
-    // opens (content has no menu), so its press goes on: lifted there, it taps it.
+    // On a button in a window: frames come while it waits (and only then); at 500 ms (frames
+    // 16 ms apart) nothing opens (content has no menu), so its press goes on: lifted, it taps.
     s.set_now(2000.0);
     assert!(s.push((c.x + 10.0, c.y + 10.0), 0, true).animating);
-    assert!(s.at(2100.0) && s.at(2499.0) && !s.at(2500.0));
+    assert!((1..32).all(|i| s.at(2000.0 + 16.0 * f64::from(i))) && !s.at(2512.0));
     assert!(!s.up((c.x + 10.0, c.y + 10.0)).gesture);
     assert!(matches!(log.take()[..], [(_, E::PointerDown { .. }), (_, E::Click(W(1)))]));
     // On the desktop: its menu, where the finger is, with touch-high items; lifting keeps it.
     s.set_now(3000.0);
     s.push((600.0, 640.0), 0, true);
-    s.set_now(3600.0);
+    s.held(3600.0);
     s.up((600.0, 640.0));
     let m = &s.menu.as_ref().expect("a menu").0;
     assert_eq!((m.row, m.items.len()), (44.0, 6));
@@ -633,22 +630,19 @@ fn a_finger_held_still_long_presses_and_only_a_menu_ends_its_press() {
     // 8 px, a drag, which a mouse starts at 4. A finger on the bare desktop draws no box.
     s.set_now(10_000.0);
     s.push(STUDIO, 0, true);
-    s.at(10_600.0);
+    s.held(10_600.0);
     assert!(s.carry.as_ref().is_some_and(|c| c.lifted && !c.moved) && s.menu.is_none());
     s.up(STUDIO);
     assert_eq!((s.carry.is_none(), s.labels()), (true, vec!["Open", "Add to dock"]));
     s.k(Escape, "");
     s.set_now(11_000.0);
     s.push(STUDIO, 0, true);
-    s.at(11_600.0);
+    s.held(11_600.0);
     s.to((STUDIO.0 + 7.0, STUDIO.1));
     assert!(!s.carry.as_ref().unwrap().moved);
     s.to((STUDIO.0, STUDIO.1 + 192.0));
     s.up((STUDIO.0, STUDIO.1 + 192.0));
-    assert_eq!(
-        (s.menu.is_none(), &s.labels_home()[..3]),
-        (true, &["Assistant", "Terminal", "Studio"][..])
-    );
+    assert!(s.menu.is_none() && s.labels_home()[..3] == ["Assistant", "Terminal", "Studio"]);
     s.push((600.0, 640.0), 0, true);
     s.to((400.0, 500.0));
     assert!(s.lasso.is_none() && s.up((400.0, 500.0)).gesture);
@@ -656,7 +650,7 @@ fn a_finger_held_still_long_presses_and_only_a_menu_ends_its_press() {
     s.set_now(13_000.0);
     s.push(STUDIO, 0, true);
     s.to((STUDIO.0 + 9.0, STUDIO.1));
-    s.at(13_600.0);
+    s.held(13_600.0);
     s.to((STUDIO.0 + 16.0, STUDIO.1));
     s.up((STUDIO.0 + 16.0, STUDIO.1));
     assert_eq!(s.labels(), ["Open", "Add to dock"]);
@@ -664,7 +658,7 @@ fn a_finger_held_still_long_presses_and_only_a_menu_ends_its_press() {
     s.k(Escape, "");
     s.set_now(14_000.0);
     s.push(AI, 0, true);
-    s.at(14_600.0);
+    s.held(14_600.0);
     assert!(s.labels() == ["Ask the Assistant"] && s.hover != Some(Target::Ai));
 }
 
@@ -727,10 +721,8 @@ fn the_home_screen_shows_every_app_and_the_top_bar_its_buttons() {
         ["Studio", "Assistant", "Terminal", "Files", "Settings", "Feedback", "About", "Welcome"];
     assert_eq!(s.labels_home(), all);
     // Icons light up under the pointer and open with a click.
-    assert_eq!(
-        (s.hit(STUDIO.0, STUDIO.1), s.hit(200.0, 640.0)),
-        (Some(Target::Icon(0)), Some(Target::Desktop))
-    );
+    let hits = (s.hit(STUDIO.0, STUDIO.1), s.hit(200.0, 640.0));
+    assert_eq!(hits, (Some(Target::Icon(0)), Some(Target::Desktop)));
     assert!(s.to(STUDIO).redraw && !s.to((STUDIO.0 + 5.0, STUDIO.1)).redraw);
     s.click((57.0, 201.0));
     assert_eq!((s.names(), s.wm().focused()), (vec!["welcome", "assistant"], Some(WinId(2))));
@@ -768,10 +760,8 @@ fn icons_move_by_drag_and_the_person_keeps_the_order() {
     s.to((cell(0).0 + 3.0, cell(0).1));
     assert!(s.carry.as_ref().is_some_and(|c| !c.lifted));
     let r = s.to(cell(3));
-    assert_eq!(
-        (r.redraw, r.cursor, s.carry.as_ref().map(|c| c.slot)),
-        (true, Some(Cursor::Grabbing), Some(3))
-    );
+    let got = (r.redraw, r.cursor, s.carry.as_ref().map(|c| c.slot));
+    assert_eq!(got, (true, Some(Cursor::Grabbing), Some(3)));
     assert!(s.animating() && s.hit(cell(3).0, cell(3).1) == Some(Target::Desktop));
     // Dropped: there it stays, and the order is kept; nothing opened.
     let r = s.up(cell(3));
@@ -975,18 +965,20 @@ fn degenerate_sizes_never_panic() {
 }
 
 #[test]
-fn a_finger_taps_an_apps_widget_however_late_its_lift_is_heard() {
-    // The phone bug: a busy page heard a tap's lift after a frame saw 500 ms pass, and that long
-    // press (opening nothing) ended the press. Only a menu ends a press now.
+fn a_finger_taps_however_late_its_lift_is_heard() {
+    // The phone bug: a busy page heard a tap's lift after frames (here two, back to back) saw
+    // 500 ms pass, and that long press ended the press. Only a menu ends a press now, and after
+    // a stall only a frame 100 ms on long-presses: on an icon, the AI button, a dock tile...
     let (mut s, log) = desk_with(390.0, 844.0, Prefs { seen: true, ..Prefs::default() });
     s.rest(1000.0);
     let tap = |s: &mut Shell, at: (f32, f32), t: f64, late: f64| {
-        let _ = (s.set_now(t), s.push(at, 0, true), s.at(t + late), s.set_now(t + late + 10.0));
+        let _ = (s.set_now(t), s.push(at, 0, true), s.at(t + late), s.at(t + late + 2.0));
+        s.set_now(t + late + 10.0);
         s.up(at)
     };
     let term = home::icons::cell(2, rectf(s.wm().area()), true);
-    let r = tap(&mut s, (term.x + term.w / 2.0, term.y + 30.0), 2000.0, 100.0);
-    assert_eq!((s.names(), r.text_input), (vec!["terminal"], Some(true)));
+    let r = tap(&mut s, (term.x + term.w / 2.0, term.y + 30.0), 2000.0, 600.0);
+    assert_eq!((s.names(), r.text_input, s.carry.is_none()), (vec!["terminal"], Some(true), true));
     assert_eq!(tap(&mut s, (390.0 - 22.0, BAR_H / 2.0), 3000.0, 100.0).text_input, Some(false));
     // The first tap lands while Settings still opens (one frame, mid-motion): it finds it too.
     let c = content_rect(rectf(s.rect(2).unwrap()));
@@ -997,4 +989,11 @@ fn a_finger_taps_an_apps_widget_however_late_its_lift_is_heard() {
             log.take().into_iter().filter(|e| !matches!(e.1, E::Resized { .. })).collect();
         assert!(matches!(got[..], [(_, E::PointerDown { .. }), (_, E::Click(W(1)))]), "{got:?}");
     }
+    let (ai, title) = (s.dock_rect(), (200.0, rectf(s.rect(2).unwrap()).y + 10.0));
+    tap(&mut s, (ai.x + ai.w / 2.0, ai.y + ai.h / 2.0), 9000.0, 600.0);
+    assert!(tap(&mut s, title, 10_000.0, 600.0).redraw && s.menu.is_none());
+    let tile = s.tile_at(0);
+    tap(&mut s, tile, 11_000.0, 600.0);
+    let names = vec!["terminal", "settings", "assistant"];
+    assert_eq!((s.names(), s.wm().focused(), s.menu.is_none()), (names, Some(WinId(1)), true));
 }

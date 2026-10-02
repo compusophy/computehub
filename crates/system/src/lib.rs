@@ -88,6 +88,17 @@ pub fn hint(name: &str) -> String {
     [name, ": an app with a window; open it with: open ", name].concat()
 }
 
+/// Where the hint goes, by which of stdin, stdout and stderr are a terminal (`ttys`): to
+/// stdout (1) when it is one, else to stderr (2) when any is (`about > out.txt` leaves stdin and
+/// stderr on the terminal); `None` when none is, as in a window, whose console no fd is.
+pub fn hint_to(ttys: [bool; 3]) -> Option<u8> {
+    match ttys {
+        [_, true, _] => Some(1),
+        [true, ..] | [.., true] => Some(2),
+        _ => None,
+    }
+}
+
 /// Runs `view` on `ui`, a frame per event that changes it, until Close or the end of the events;
 /// an event that does not decode is skipped.
 pub fn serve<R: Read, W: Write>(

@@ -13,13 +13,16 @@
 //!
 //! The pointer: button 0 presses, button 2 (or a finger held still for 500 ms) opens a context
 //! menu (where there is none, the finger's press goes on: lifted there, it taps, as on an app's
-//! widget); a finger that travels over a window's content scrolls it as the wheel does, and flings
-//! it on when it lifts moving. Icons move: a mouse drags one past 4 px; a finger held on one for
-//! 500 ms picks it up, then moving it 8 px drags it, and lifting it unmoved opens its menu
-//! instead. A mouse dragged on the bare desktop draws a box that selects the icons it touches;
-//! dragging a selected icon carries them all. Bindings, pointer rules and motion are those of
-//! `DESIGN.md`. While anything moves (or a held finger waits to long-press), [`Shell::draw`] asks
-//! for the next frame; otherwise none, but for the living grain's ([`Shell::grain_in`]).
+//! widget). Frames judge a long press, never a lift: the first past 500 ms on a page keeping up,
+//! one 100 ms after it on a page that stalled, so a quick tap's lift that a busy page hears late,
+//! after frames saw the time pass, is a tap. A finger that travels over a window's content
+//! scrolls it as the wheel does, and flings it on when it lifts moving. Icons move: a mouse drags
+//! one past 4 px; a finger held on one for 500 ms picks it up, then moving it 8 px drags it, and
+//! lifting it unmoved opens its menu instead. A mouse dragged on the bare desktop draws a box
+//! that selects the icons it touches; dragging a selected icon carries them all. Bindings,
+//! pointer rules and motion are those of `DESIGN.md`. While anything moves (or a held finger
+//! waits to long-press), [`Shell::draw`] asks for the next frame; otherwise none, but for the
+//! living grain's ([`Shell::grain_in`]).
 
 #![forbid(unsafe_code)]
 
@@ -287,7 +290,6 @@ impl Shell {
             Input::PointerLeave => None,
             _ => self.pointer,
         };
-        self.hold(&mut out);
         match input {
             Input::Key { key, mods } => self.key(key, mods, &mut out),
             Input::Text(s) => {

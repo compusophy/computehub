@@ -108,8 +108,13 @@ fn the_name_it_runs_as_picks_the_app() {
         assert!(view(&argv(no)).is_none(), "{no:?}");
     }
     assert!(view(&[]).is_none());
-    // In a terminal there is no window: it says so, and how to open one.
+    // In a terminal there is no window: it says so, and how to open one, where it is seen.
     assert_eq!(hint("files"), "files: an app with a window; open it with: open files");
+    assert_eq!([hint_to([true; 3]), hint_to([false, true, false])], [Some(1); 2]);
+    // `about > out.txt`, and `about < in.txt > out.txt`: stdout a file, still a terminal.
+    assert_eq!([hint_to([true, false, true]), hint_to([false, false, true])], [Some(2); 2]);
+    assert_eq!(hint_to([true, false, false]), Some(2));
+    assert_eq!(hint_to([false; 3]), None, "a window's console is no terminal");
 }
 
 #[test]
@@ -211,14 +216,17 @@ fn feedback_sends_its_kind_text_and_context_and_thanks() {
         (t, error, send(f))
     };
     let f = w.last(&[change(AREA + 1, &"x".repeat(NEAR - 1))]);
-    assert!(!texts(&f.nodes).contains(&THANKS) && said(&f).0.is_none());
+    assert!(!texts(&f.nodes).contains(&THANKS) && said(&f).0.is_none() && f.title == "Feedback");
     let f = w.last(&[change(AREA + 1, &"x".repeat(NEAR))]);
     assert_eq!(said(&f), (Some("7,000 of 8,000 bytes".into()), false, Some(Variant::Primary)));
+    // The title says it too: a long text grows the box, and what is under it, below the fold.
+    assert_eq!(f.title, "Feedback \u{2014} 7,000 of 8,000 bytes");
     let enter = |m| Event::Key { id: AREA + 1, key: Key::Enter, mods: m, ch: '\0' };
     let long = "é".repeat(MAX);
     let f = w.last(&[change(AREA + 1, &long)]);
     let over = Some("Too long to send: 16,000 of 8,000 bytes".into());
     assert_eq!(said(&f), (over, true, Some(Variant::Normal)));
+    assert_eq!(f.title, "Feedback \u{2014} too long: 16,000 of 8,000 bytes");
     assert!(w.send(&[enter(mods::CTRL), Event::Click { id: GO }]).is_empty(), "nothing cut");
     assert!(w.send(&[enter(0), enter(mods::SHIFT)]).is_empty());
     let f = w.last(&[change(AREA + 1, &long[..MAX]), enter(mods::META)]);

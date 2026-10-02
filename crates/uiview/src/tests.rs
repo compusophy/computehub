@@ -307,6 +307,44 @@ fn a_press_on_a_control_keeps_the_keyboard_and_a_waiting_edit_keeps_its_text() {
 }
 
 #[test]
+fn a_button_pressed_while_typing_may_clear_or_rewrite_the_text() {
+    // `input name; button "Clear" { name = ""; }`: "Ada" typed, each edit echoed.
+    let input = |value: &str| [Node::Input { id: 5, value: value.into(), placeholder: "".into() }];
+    let mut t = Texts::default();
+    t.adopt(&input("x"), &[]);
+    assert!(t.press(5, 0.0, 0.0) && t.focus == 5);
+    (t.inputs[0].1, t.inputs[0].2) = ("Ada".into(), 3);
+    // A frame the program sent before the edits reached it, or that echoes them: the person's.
+    t.adopt(&input("x"), &[]);
+    t.adopt(&input("Ad"), &[]);
+    t.adopt(&input("Ada"), &[]);
+    assert_eq!(t.inputs[0].1, "Ada");
+    // Clear pressed, the keyboard still in the Input: a value the program changes is its own.
+    assert!(t.press(2, 0.0, 0.0) && t.focus == 5);
+    t.adopt(&input("Ada"), &[]);
+    assert_eq!(t.inputs[0].1, "Ada", "unchanged: still the person's");
+    t.adopt(&input(""), &[]);
+    assert_eq!((t.inputs[0].1.as_str(), t.focus), ("", 5));
+    t.adopt(&input("ADA"), &[]);
+    assert_eq!(t.inputs[0].1, "ADA");
+    // Typed again, the text is the person's; and one whose Change waits is always.
+    (t.inputs[0].1, t.inputs[0].2) = ("B".into(), 4);
+    t.adopt(&input("Ada"), &[]);
+    assert_eq!(t.inputs[0].1, "B");
+    assert!(t.press(2, 0.0, 0.0));
+    t.adopt(&input("Z"), &[5]);
+    assert_eq!(t.inputs[0].1, "B");
+    // An Area too.
+    let area = |value: &str| [Node::Area { id: 9, value: value.into(), placeholder: "".into() }];
+    t.adopt(&area("old"), &[]);
+    assert!(t.press(9, 0.0, 0.0) && t.areas[0].1.insert(" typed"));
+    t.adopt(&area("old typed"), &[]);
+    assert!(t.press(2, 0.0, 0.0));
+    t.adopt(&area(""), &[]);
+    assert_eq!(t.areas[0].1.text, "");
+}
+
+#[test]
 fn scrolls_keep_the_bar_above_them_still_and_start_at_the_top_when_new() {
     let up = Node::Button { id: 1, variant: Variant::Quiet, label: "\u{2191}".into() };
     let nodes = |id, n: u32| {

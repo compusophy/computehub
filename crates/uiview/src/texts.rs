@@ -15,6 +15,11 @@ pub struct Texts {
     pub codes: Vec<(u32, Code)>,
     pub areas: Vec<(u32, Area)>,
     pub focus: u32,
+    /// Each Input's and Area's value as the program last sent it.
+    pub(crate) said: Vec<(u32, String)>,
+    /// The focused Input or Area, at its version, when a press on another node left it the
+    /// keyboard: until its next edit, a value the program changes is the program's.
+    pub(crate) left: Option<(u32, u32)>,
 }
 
 impl Texts {
@@ -24,9 +29,16 @@ impl Texts {
         i || c || self.areas.iter().any(|a| a.0 == id)
     }
 
+    /// The edits so far of Input or Area `id`.
+    fn version(&self, id: u32) -> Option<u32> {
+        let input = self.inputs.iter().find(|i| i.0 == id).map(|i| i.2);
+        input.or_else(|| self.areas.iter().find(|a| a.0 == id).map(|a| a.1.version))
+    }
+
     /// A press on node `id` (0: none) at `(x, y)` in the content. An Input, Code or Area takes
     /// the keyboard (a Code or Area its caret there too); any other node leaves it where it is,
-    /// so a chip or a switch pressed while typing loses nothing; empty space takes it away.
+    /// so a chip or a switch pressed while typing loses nothing, but what the program then does
+    /// to the text (a Clear button) shows ([`Texts::adopt`]); empty space takes it away.
     /// Whether to redraw.
     pub fn press(&mut self, id: u32, x: f32, y: f32) -> bool {
         if let Some(c) = self.codes.iter_mut().find(|c| c.0 == id && id != 0) {
@@ -40,24 +52,34 @@ impl Texts {
             id if self.has(id) => id,
             _ => self.focus,
         };
+        let control = id != 0 && !self.has(id);
+        self.left = self.version(focus).filter(|_| control).map(|v| (focus, v));
         mem::replace(&mut self.focus, focus) != focus || focus != 0
     }
 
-    /// Takes the Inputs, Codes and Areas of a frame's `nodes`. One the person is in, or whose
-    /// edit has not reached the program yet (`dirty`: its Change waits), keeps the host's text;
-    /// the others take the frame's. A Code at its version takes the frame's spans, above it its
-    /// text. The keyboard stays where it was while that is in the frame.
+    /// Takes the Inputs, Codes and Areas of a frame's `nodes`. One whose edit has not reached
+    /// the program yet (`dirty`: its Change waits) keeps the host's text, and so does the one the
+    /// person is in, unless a press on another node left it the keyboard, no edit came since, and
+    /// the program changed the value it sent: then the program's value wins (a button that
+    /// clears it). The others take the frame's. A Code at its version takes the frame's spans,
+    /// above it its text. The keyboard stays where it was while that is in the frame.
     pub fn adopt(&mut self, nodes: &[Node], dirty: &[u32]) {
         let mut old = mem::take(self);
-        let keep = |focus: u32, id: u32| focus == id || dirty.contains(&id);
+        let (said, left, focus) = (mem::take(&mut old.said), old.left, old.focus);
+        let keep = |id: u32, version: u32, value: &str| {
+            let changed = said.iter().find(|s| s.0 == id).is_none_or(|s| s.1 != value);
+            let theirs = left == Some((id, version)) && changed;
+            dirty.contains(&id) || (focus == id && !theirs)
+        };
         each(nodes, &mut |n| match n {
             Node::Input { id, value, .. } if *id != 0 => {
                 let i = old.inputs.iter().position(|i| i.0 == *id).map(|i| old.inputs.remove(i));
                 let mut i = i.unwrap_or((*id, String::new(), 0));
-                if !keep(old.focus, *id) {
+                if !keep(*id, i.2, value) {
                     i.1.clone_from(value);
                 }
                 self.inputs.push(i);
+                self.said.push((*id, value.clone()));
             }
             Node::Code { id, version, text, spans, .. } if *id != 0 => {
                 let c = old.codes.iter().position(|c| c.0 == *id).map(|c| old.codes.remove(c).1);
@@ -74,15 +96,16 @@ impl Texts {
             Node::Area { id, value, .. } if *id != 0 => {
                 let a = old.areas.iter().position(|a| a.0 == *id).map(|a| old.areas.remove(a));
                 let mut a = a.unwrap_or_else(|| (*id, Area::new(value)));
-                if !keep(old.focus, *id) {
+                if !keep(*id, a.1.version, value) {
                     a.1.set(value);
                 }
                 self.areas.push(a);
+                self.said.push((*id, value.clone()));
             }
             _ => {}
         });
-        if self.has(old.focus) {
-            self.focus = old.focus;
+        if self.has(focus) {
+            (self.focus, self.left) = (focus, left);
         }
     }
 }

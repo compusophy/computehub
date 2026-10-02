@@ -80,17 +80,23 @@ pub fn failure(status: u16, error: &str, said: &str) -> Option<(Style, String)> 
 /// The program in `reply`'s first fenced block whose info string is `app`
 /// (to the end of the reply if the block is not closed).
 pub fn app_block(reply: &str) -> Option<&str> {
+    fenced(reply).map(|(src, _)| src)
+}
+
+/// [`app_block`], and whether its block was closed: a reply cut off by the token limit
+/// (`finish_reason` length) inside an open block holds part of a program, never a program.
+pub fn fenced(reply: &str) -> Option<(&str, bool)> {
     let (mut at, mut start) = (0, None);
     for line in reply.split_inclusive('\n') {
         let fence = line.trim().strip_prefix("```");
         match start {
             None if fence.map(str::trim) == Some("app") => start = Some(at + line.len()),
-            Some(s) if fence.is_some() => return Some(&reply[s..at]),
+            Some(s) if fence.is_some() => return Some((&reply[s..at], true)),
             _ => {}
         }
         at += line.len();
     }
-    start.map(|s| &reply[s..])
+    start.map(|s| (&reply[s..], false))
 }
 
 /// A slug for `src`'s file: its first label's text, lowercase ASCII words

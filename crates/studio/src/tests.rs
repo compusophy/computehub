@@ -277,7 +277,7 @@ fn makes_checks_fixes_and_saves() {
     assert!(has(&frames[0], "Writing\u{2026} 5 chars"));
     let n = frames.len();
     assert!(has(&frames[n - 2], "Checking\u{2026}") && frames[n - 2].requests.is_empty());
-    assert!(has(&frames[n - 1], "Fixing (1 of 3) \u{2014} asking\u{2026}"));
+    assert!(has(&frames[n - 1], "Retrying (1 of 3) \u{2014} asking\u{2026}"));
     let (id, body) = ai(&frames[n - 1]);
     let (role, fix) = message(&body, 1);
     let want = "You were asked: a counter\n\nYour program did not compile: E0101 at line 3, col 1: \
@@ -290,11 +290,11 @@ fn makes_checks_fixes_and_saves() {
     // A reply with no program asks again, never sending the empty reply back.
     let f = w.answer(id, "").pop().unwrap();
     let (id, body) = ai(&f);
-    assert!(has(&f, "Fixing (2 of 3)") && messages(&body) == 2);
+    assert!(has(&f, "Retrying (2 of 3)") && messages(&body) == 2);
     assert_eq!(message(&body, 1).1, ["a counter\n\n", NO_BLOCK].concat());
     let f = w.answer(id, "Sorry.").pop().unwrap();
     let (id, body) = ai(&f);
-    assert!(has(&f, "Fixing (3 of 3)") && message(&body, 1).1.ends_with(NO_BLOCK));
+    assert!(has(&f, "Retrying (3 of 3)") && message(&body, 1).1.ends_with(NO_BLOCK));
     // The fix compiles: saved under its first label's name, running, in the corpus; what its
     // first comment says is what Studio says of it.
     let f = w.answer(id, &app(COUNTER)).pop().unwrap();
@@ -354,11 +354,9 @@ fn a_change_sends_the_program_and_keeps_its_file() {
     for _ in 0..4 {
         let f = w.answer(id, &app("label nope;\n")).pop().unwrap();
         if has(&f, "E0906") {
-            assert!(
-                has(&f, "E0906 still not compiling after 3 fixes: E0302 1:7 "),
-                "{:?}",
-                words(&f)
-            );
+            let want = "E0906 still not compiling after 3 retries (3 for a fix, 0 shorter, 0 for \
+                        a program): E0302 1:7 ";
+            assert!(has(&f, want), "{:?}", words(&f));
             assert!(has(&f, "x2") && input(&f).1 == "break it" && f.requests.is_empty());
             break;
         }
@@ -392,16 +390,21 @@ fn a_program_that_faults_when_it_first_renders_goes_back_and_is_never_saved() {
     for attempt in 1..=4 {
         let f = w.answer(id, &app(average)).pop().unwrap();
         if attempt == 4 {
-            let want = "E0906 still faulting after 3 fixes: E0203 3:";
+            let want = "E0906 still faulting after 3 retries (3 for a fix, 0 shorter, 0 for a \
+                        program): E0203 3:";
             assert!(has(&f, want) && has(&f, "Reset") && f.requests.is_empty(), "{:?}", words(&f));
             break;
         }
         let body;
         (id, body) = ai(&f);
+        // A change's fix carries the program it changes: a reply may have left parts out.
         let (role, fix) = message(&body, 1);
-        let want = "You were asked: show the average\n\nYour program faults when it first \
-                    renders: E0203 at line 3, col 21: ";
-        assert!(role == "user" && fix.starts_with(want), "{fix}");
+        let want = format!(
+            "The program now:\n```app\n{}\n```\nChange it: show the average\n\nYour program \
+             faults when it first renders: E0203 at line 3, col 21: ",
+            COUNTER.trim_end()
+        );
+        assert!(role == "user" && fix.starts_with(&want), "{fix}");
         assert!(fix.contains("\nRule: guard every / and % so the divisor is never 0.\n"));
     }
     assert!(w.disk["/apps/counter.app"] == COUNTER && !w.disk.contains_key(CORPUS));
@@ -430,9 +433,60 @@ fn a_reply_out_of_room_asks_for_the_same_app_shorter_and_ends_in_e0907() {
         (id, body) = ai(&f);
         let shorter = ["make a tetris game\n\n", SHORTER].concat();
         assert_eq!((messages(&body), message(&body, 1).1), (2, shorter.as_str()));
-        assert!(has(&f, &format!("Fixing ({attempt} of 3)")), "{:?}", words(&f));
+        assert!(has(&f, &format!("Retrying ({attempt} of 3)")), "{:?}", words(&f));
     }
     assert!(w.disk.is_empty() && ROOM.starts_with("E0907 "));
+}
+
+/// Answers request `id` with `reply`, then ends it as cut off by the token limit (`cut`) or not.
+fn reply(w: &mut Win, id: u32, reply: &str, cut: bool) -> Frame {
+    let length = "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"length\"}]}\n\n";
+    let mut evs: Vec<_> = reply.as_bytes().chunks(5).map(|c| content(id, c)).collect();
+    evs.extend(cut.then(|| Event::AiData { id, data: length.into() }));
+    evs.push(Event::AiEnd { id, status: 200, error: String::new() });
+    w.frames(&evs).pop().unwrap()
+}
+
+#[test]
+fn a_reply_cut_off_inside_its_block_is_never_run() {
+    // What it holds compiles and runs, but it is part of a program: asked for shorter, unsaved.
+    let mut w = Win::new(&[], Mem::new());
+    let f = w.last(&[WIDE]);
+    let (_, id, _) = w.make(&f, "a counter");
+    let f = reply(&mut w, id, &["```app\n", COUNTER].concat(), true);
+    let (id, body) = ai(&f);
+    assert_eq!(message(&body, 1).1, ["a counter\n\n", SHORTER].concat());
+    assert!(has(&f, "Retrying (1 of 3)") && !has(&f, "Reset") && w.disk.is_empty());
+    // Cut off after its block, the program is whole: saved and run.
+    let f = reply(&mut w, id, &app(COUNTER), true);
+    assert!(has(&f, "saved ~/apps/counter.app") && has(&f, "Reset"), "{:?}", words(&f));
+    assert_eq!(w.disk[&[HOME, "/apps/counter.app"].concat()], COUNTER);
+}
+
+#[test]
+fn a_make_that_gives_up_says_what_was_tried() {
+    let mut w = Win::new(&[], Mem::new());
+    let f = w.last(&[WIDE]);
+    let bad = app("row {\n  label 1\n}\n");
+    // No program, one cut off, no program, then one that does not compile: no fix was asked.
+    let (_, mut id, _) = w.make(&f, "a counter");
+    let tries = [("Sorry.", false), ("```app\nstate n = 0;\nlabel", true), ("Hm.", false)];
+    for (text, cut) in tries {
+        id = ai(&reply(&mut w, id, text, cut)).0;
+    }
+    let f = reply(&mut w, id, &bad, false);
+    let want = "E0906 still not compiling after 3 retries (0 for a fix, 1 shorter, 2 for a \
+                program): E0101";
+    assert!(has(&f, want) && f.requests.is_empty() && w.disk.is_empty(), "{:?}", words(&f));
+    // With a fix among them, the fixes are counted as such.
+    let (_, mut id, _) = w.make(&f, "a counter");
+    for text in ["Sorry.", &bad, &bad] {
+        id = ai(&reply(&mut w, id, text, false)).0;
+    }
+    let f = reply(&mut w, id, &bad, false);
+    let want = "E0906 still not compiling after 3 retries (2 for a fix, 0 shorter, 1 for a \
+                program): E0101";
+    assert!(has(&f, want), "{:?}", words(&f));
 }
 
 #[test]
@@ -488,20 +542,31 @@ fn edits_and_prompts_made_while_the_ai_writes_are_kept() {
 
 #[test]
 fn makes_fit_what_the_free_ai_takes() {
-    // A fix carries the program it fixes, never the one it changes (`ai` checks the size).
-    let big = "label 1;\n".repeat(3500);
-    let mut w = Win::new(&["edit", "/apps/big.app"], with(&[("/apps/big.app", &big)]));
-    let f = w.last(&[WIDE]);
-    let (_, id, body) = w.make(&f, "add a title");
-    assert!(message(&body, 1).1.contains(big.trim_end()));
-    let (reply, done) = (app(&[&big, "label;\n"].concat()), b"data: [DONE]\n\n".to_vec());
-    let end = Event::AiEnd { id, status: 200, error: String::new() };
-    let f = w.last(&[content(id, reply.as_bytes()), Event::AiData { id, data: done }, end]);
-    let (_, body) = ai(&f);
-    let fix = message(&body, 1).1;
-    assert!(messages(&body) == 2 && fix.starts_with("You were asked: add a title\n\n"));
-    assert!(fix.contains(&[&big, "label;\n```"].concat()) && !fix.contains("The program now"));
-    // One too big even so is not made, and nothing is sent.
+    // A change's fix carries the program it changes and the one it fixes (`ai` checks the size).
+    for lines in [2000, 3500] {
+        let big = "label 1;\n".repeat(lines);
+        let mut w = Win::new(&["edit", "/apps/big.app"], with(&[("/apps/big.app", &big)]));
+        let f = w.last(&[WIDE]);
+        let (_, id, body) = w.make(&f, "add a title");
+        assert!(message(&body, 1).1.contains(big.trim_end()));
+        let (reply, done) = (app(&[&big, "label;\n"].concat()), b"data: [DONE]\n\n".to_vec());
+        let end = Event::AiEnd { id, status: 200, error: String::new() };
+        let f = w.last(&[content(id, reply.as_bytes()), Event::AiData { id, data: done }, end]);
+        if lines == 3500 {
+            // One whose fix is too big to send ends there, its file as it was.
+            assert!(has(&f, "Not made: too big to send to the AI (80 KiB at most)"));
+            assert!(!f.requests.iter().any(|r| matches!(r, Request::Ai { .. })));
+            assert_eq!(w.disk["/apps/big.app"], big);
+            break;
+        }
+        let (_, body) = ai(&f);
+        let fix = message(&body, 1).1;
+        let asked =
+            ["The program now:\n```app\n", big.trim_end(), "\n```\nChange it: add a title\n\n"];
+        assert!(messages(&body) == 2 && fix.starts_with(&asked.concat()));
+        assert!(fix.contains(&[&big, "label;\n```"].concat()));
+    }
+    // One too big even to ask for is not made, and nothing is sent.
     let big = "label 1;\n".repeat(9000);
     let mut w = Win::new(&["edit", "/apps/big.app"], with(&[("/apps/big.app", &big)]));
     let f = w.last(&[WIDE]);

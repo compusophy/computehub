@@ -1,16 +1,18 @@
 //! Making with the AI: the prompt (with the program it changes) goes out as a chat request (at
 //! most [`MAX_BODY`] bytes), the reply streams in, then is checked. A program that does not
-//! compile or faults when it first renders goes back in a fresh request, with what was asked, its
-//! problem (its line, a caret, the rule broken) and the program; a reply that ran out of room asks
-//! for the same app shorter, and one without a program asks again: at most [`RETRIES`] times
-//! (then E0906, or E0907 out of room). Never with an empty or cut-off reply as context, and never
-//! asking for reasoning (the free AI bounds it to 1,024 tokens). One that runs is saved, run and added
-//! to the corpus, unless the code was edited meanwhile; what its first comment says is said for it.
+//! compile or faults when it first renders goes back in a fresh request, with what was asked (and
+//! the program a change changes), its problem (its line, a caret, the rule broken) and the
+//! program; a reply cut off by the token limit before its program ended asks for the same app
+//! shorter (what it holds is never run), and one without a program asks again: at most
+//! [`RETRIES`] times (then E0906, saying what was tried, or E0907 out of room). Never with an
+//! empty or cut-off reply as context, and never asking for reasoning (the free AI bounds it to
+//! 1,024 tokens). One that runs is saved, run and added to the corpus, unless the code was edited
+//! meanwhile; what its first comment says is said for it.
 
 use crate::{Disk, Studio};
 use applang::Class;
 use assistant::ai::{self, CORPUS, MAX_BODY, MAX_REPLY, RETRIES, ROOM, SHORTER};
-use assistant::ai::{app_block, clip, corpus_line, failure, fault, free_path, slug};
+use assistant::ai::{clip, corpus_line, failure, fault, fenced, free_path, slug};
 use assistant::json::Stream;
 use uiwire::{Request, Style};
 
@@ -35,12 +37,23 @@ const SYSTEM: [&str; 2] = [
 const OPTIONS: &str = ",\"max_tokens\":8192,\"temperature\":0.3";
 /// A fix's last line, and the retry after a reply without a program.
 const AGAIN: &str = "Reply with the corrected complete program in one app block.";
+/// A change's first request ends with this line, after what was asked.
+const NEW: &str = "\nReply with the complete new program in one app block.";
 pub(crate) const NO_BLOCK: &str =
     "Your reply held no app block. Reply with the complete program in one app block.";
 
+/// What a retry asks for: a fix, the same app shorter (the reply ran out of room before its
+/// program ended), or a program at all (the reply held none).
+#[derive(Clone, Copy, Debug)]
+enum Retry {
+    Fix,
+    Shorter,
+    Again,
+}
+
 /// A make in flight: its request, what was asked, the program it changes ("" for a first
-/// make), the first request's message and this attempt's, which attempt it is (from 1) and the
-/// reply as read so far.
+/// make), what was asked as the first request put it (a change's with its program), this
+/// attempt's message, how many retries of each kind (by [`Retry`]) and the reply as read so far.
 #[derive(Debug)]
 pub(crate) struct Make {
     pub(crate) id: u32,
@@ -48,11 +61,26 @@ pub(crate) struct Make {
     base: String,
     first: String,
     asked: String,
-    attempt: u32,
+    tried: [u32; 3],
     stream: Stream,
     reply: String,
     /// The reply is all in: [`Studio::verify`] checks it next.
     done: bool,
+}
+
+impl Make {
+    /// Which attempt this is, from 1.
+    fn attempt(&self) -> u32 {
+        self.tried.iter().sum::<u32>() + 1
+    }
+
+    /// The message asking for `src`, which has the problem `account` tells, fixed: what was
+    /// asked, a change's with the program it changes (a reply may have left parts of it out).
+    fn fix(&self, account: &str, src: &str) -> String {
+        let lead = if self.base.is_empty() { "You were asked: " } else { "" };
+        let mine = "\n\nYour program:\n```app\n";
+        [lead, &self.first, "\n\n", account, mine, src.trim_end(), "\n```\n", AGAIN].concat()
+    }
 }
 
 impl Studio {
@@ -69,15 +97,14 @@ impl Studio {
         let base = if self.text.trim().is_empty() { String::new() } else { self.text.clone() };
         let first = match base.is_empty() {
             true => ask.clone(),
-            false => format!(
-                "The program now:\n```app\n{}\n```\nChange it: {ask}\nReply with the complete \
-                 new program in one app block.",
-                base.trim_end()
-            ),
+            false => {
+                format!("The program now:\n```app\n{}\n```\nChange it: {ask}", base.trim_end())
+            }
         };
-        let (asked, stream, reply) = (first.clone(), Stream::default(), String::new());
-        let m =
-            Make { id: 0, prompt: ask, base, first, asked, attempt: 1, stream, reply, done: false };
+        let asked = [first.as_str(), if base.is_empty() { "" } else { NEW }].concat();
+        let (stream, reply) = (Stream::default(), String::new());
+        let (tried, done) = ([0; 3], false);
+        let m = Make { id: 0, prompt: ask, base, first, asked, tried, stream, reply, done };
         self.make = Some(m);
         self.ask();
     }
@@ -127,11 +154,14 @@ impl Studio {
     }
 
     /// Checks a reply that is all in: a program that compiles and renders is the app now; else
-    /// the next request asks for it fixed, shorter (the reply ran out of room) or at all.
+    /// the next request asks for it fixed, shorter (the reply ran out of room before its program
+    /// ended: what it holds is part of a program, even if that part runs) or at all.
     /// Whether there was a reply to check.
     pub(crate) fn verify(&mut self, disk: &mut dyn Disk) -> bool {
         let Some(mut m) = self.make.take_if(|m| m.done) else { return false };
-        let src = app_block(&m.reply);
+        let block = fenced(&m.reply);
+        let cut = m.stream.finish == "length" && !block.is_some_and(|(_, closed)| closed);
+        let src = block.filter(|_| !cut).map(|(src, _)| src);
         let why = match src.map(|src| (src, fault(src))) {
             Some((src, None)) => {
                 self.made(src.to_string(), &m, disk);
@@ -140,28 +170,21 @@ impl Studio {
             Some((_, why)) => why,
             None => None,
         };
-        let long = m.stream.finish == "length";
-        if m.attempt > RETRIES {
+        if m.attempt() > RETRIES {
             let why = match why {
-                _ if long => ROOM.into(),
-                Some(([_, still], p, _)) => {
-                    format!("E0906 still {still} after {RETRIES} fixes: {p}")
-                }
+                _ if cut => ROOM.into(),
+                Some(([_, still], p, _)) => gave_up(still, &p, m.tried),
                 None => "E0906 the AI replied without a program".into(),
             };
             self.status = (Style::Error, why);
             return true;
         }
-        m.asked = match (why, src) {
-            _ if long => [&m.first, "\n\n", SHORTER].concat(),
-            (Some((_, _, account)), Some(src)) => format!(
-                "You were asked: {}\n\n{account}\n\nYour program:\n```app\n{}\n```\n{AGAIN}",
-                m.prompt,
-                src.trim_end()
-            ),
-            _ => [&m.first, "\n\n", NO_BLOCK].concat(),
+        let (retry, asked) = match (why, src) {
+            _ if cut => (Retry::Shorter, [&m.first, "\n\n", SHORTER].concat()),
+            (Some((_, _, account)), Some(src)) => (Retry::Fix, m.fix(&account, src)),
+            _ => (Retry::Again, [&m.first, "\n\n", NO_BLOCK].concat()),
         };
-        m.attempt += 1;
+        (m.tried[retry as usize], m.asked) = (m.tried[retry as usize] + 1, asked);
         self.make = Some(m);
         self.ask();
         true
@@ -194,7 +217,7 @@ impl Studio {
         }
         let note = if note.is_empty() { "Ready \u{2713}" } else { note.as_str() };
         let (style, mut said) = self.save(disk, &[note, " \u{2014} saved "].concat());
-        let line = corpus_line(&m.prompt, &self.text, &m.base, m.attempt, self.model());
+        let line = corpus_line(&m.prompt, &self.text, &m.base, m.attempt(), self.model());
         if let Err(e) = disk.append(CORPUS, &line) {
             said.push_str(&format!(" (not added to the corpus: {e})"));
         }
@@ -202,7 +225,7 @@ impl Studio {
     }
 
     /// How the make is going: asking, thinking or writing (with the chars so far), and which
-    /// fix it is.
+    /// retry it is.
     pub(crate) fn progress(&self) -> String {
         let Some(m) = &self.make else { return String::new() };
         let (word, n) = match (m.reply.chars().count(), m.stream.thought) {
@@ -211,14 +234,23 @@ impl Studio {
             (c, _) => ("Writing", c),
         };
         let n = if n == 0 { String::new() } else { [" ", &count(n), " chars"].concat() };
-        match m.attempt {
+        match m.attempt() {
             1 => format!("{word}\u{2026}{n}"),
             a => {
                 let word = word.to_ascii_lowercase();
-                format!("Fixing ({} of {RETRIES}) \u{2014} {word}\u{2026}{n}", a - 1)
+                format!("Retrying ({} of {RETRIES}) \u{2014} {word}\u{2026}{n}", a - 1)
             }
         }
     }
+}
+
+/// How a make ends whose program is `still` not compiling or faulting after the retries
+/// `tried` (by [`Retry`]): E0906, saying what each retry asked for.
+fn gave_up(still: &str, problem: &str, [fixes, shorter, again]: [u32; 3]) -> String {
+    format!(
+        "E0906 still {still} after {RETRIES} retries ({fixes} for a fix, {shorter} shorter, \
+         {again} for a program): {problem}"
+    )
 }
 
 /// What `src` says it is: its leading comments, markers and spaces trimmed, joined, at most 400

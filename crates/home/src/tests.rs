@@ -35,10 +35,16 @@ fn fingers_scroll_past_eight_px_long_press_when_still_and_fling_on() {
     assert_eq!(t.lift(141.0), None);
     assert!(!t.held(9999.0));
     // A finger on what does not scroll never does; held still (10 px of wander) for 500 ms, it
-    // long-presses, once.
+    // long-presses, once: on a page keeping up (frames 16 ms apart), at the first frame past.
     let mut t = Touch::new((0.0, 0.0), 1000.0, false);
     assert_eq!((t.moved((10.0, -10.0), 1200.0), t.scrolling), (None, false));
-    assert!(!t.held(1499.0) && t.held(1500.0) && !t.held(1600.0));
+    assert!((1..32).all(|i| !t.held(1000.0 + 16.0 * f64::from(i))));
+    assert!(t.held(1512.0) && t.done && !t.held(1600.0));
+    // After a stall, 100 ms after the first frame past it: frames back to back after a busy
+    // spell, before the lift queued behind it, never.
+    let mut t = Touch::new((0.0, 0.0), 1000.0, false);
+    assert!(!t.held(1016.0) && !t.held(1520.0) && !t.held(1522.0) && !t.held(1619.0));
+    assert!(t.held(1620.0) && t.done);
     assert_eq!(t.lift(1700.0), None);
     let mut t = Touch::new((0.0, 0.0), 0.0, false);
     t.moved((0.0, 10.5), 10.0);

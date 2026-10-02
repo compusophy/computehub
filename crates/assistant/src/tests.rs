@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use super::*;
-use ai::{HOME, problem};
+use ai::{HOME, app_block, problem};
 use json::{Json, quote};
 
 /// A disk in memory; a full one fails every write.
@@ -287,6 +287,16 @@ fn a_reply_out_of_room_asks_for_the_same_app_shorter_then_says_e0907() {
     assert_eq!(notes(&w), [ROOM]);
     let (_, body) = w.ask("next");
     assert_eq!(message(&body, messages(&body) - 2), ("assistant", "Once upon"));
+    // Cut off inside its block, a reply holds part of a program, even one that compiles: it is
+    // asked for shorter, never built. A whole program that faults gets a fix.
+    let mut w = Win::new();
+    let (id, _) = w.ask("a counter");
+    let f = w.answer(id, &format!("```app\n{COUNTER}"), long, 64);
+    assert!(has(&f, "The program ran out of room; asking for a shorter one.") && !has(&f, "Built"));
+    let (id, body) = ai(&f);
+    assert!(message(&body, messages(&body) - 1) == ("user", SHORTER) && w.disk.0.is_empty());
+    let f = w.answer(id, "```app\nlabel\n```\nIt shows", long, 64);
+    assert!(has(&f, "The program did not compile: E") && has(&f, "; asking for a fix."));
 }
 
 #[test]
@@ -407,6 +417,8 @@ fn slugs_blocks_and_problems() {
     assert_eq!(slug(&format!("label \"{}\";", "ab ".repeat(20))).len(), 32);
     assert_eq!(app_block("```app \nlabel 1;"), Some("label 1;"));
     assert_eq!(app_block("```rust\nfn x\n```\n"), None);
+    assert_eq!(fenced("```app \nlabel 1;"), Some(("label 1;", false)));
+    assert_eq!(fenced("a\n```app\nlabel 1;\n```\nb"), Some(("label 1;\n", true)));
     let src = "state n = 0;\n  label;";
     let d = applang::compile(src).unwrap_err();
     assert!(problem(&d, src).starts_with(&format!("E{:04} 2:", d.code.unwrap())));

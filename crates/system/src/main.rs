@@ -1,7 +1,7 @@
 //! The `system` program (see the library): About, Feedback, Files or Welcome, as its name says.
-//! Run in a terminal, it says how to open its window instead. Exit status: 0 when its window
-//! closes or its events end (or after the hint), 1 when its devices fail, 2 for a name or
-//! arguments it does not know.
+//! Run in a terminal (on any of its std fds: `about > out.txt` too), it says how to open its
+//! window instead. Exit status: 0 when its window closes or its events end (or after the hint),
+//! 1 when its devices fail, 2 for a name or arguments it does not know.
 
 #![forbid(unsafe_code)]
 
@@ -14,9 +14,13 @@ fn main() -> ExitCode {
         eprintln!("usage: about | feedback | files [dir] | welcome");
         return ExitCode::from(2);
     };
-    // A terminal's tty, not a window's console: no window would ever hear from it.
-    if io::stdout().is_terminal() {
-        println!("{}", system::hint(name));
+    // A terminal's tty on any std fd, not a window's console: no window would ever hear from it.
+    let ttys = [io::stdin().is_terminal(), io::stdout().is_terminal(), io::stderr().is_terminal()];
+    if let Some(fd) = system::hint_to(ttys) {
+        match fd {
+            1 => println!("{}", system::hint(name)),
+            _ => eprintln!("{}", system::hint(name)),
+        }
         return ExitCode::SUCCESS;
     }
     let served = uiwire::client::open()

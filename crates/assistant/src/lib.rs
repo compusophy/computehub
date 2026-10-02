@@ -24,9 +24,9 @@ mod tests;
 
 use std::io::{self, ErrorKind, Read, Write};
 
-use ai::{CORPUS, MAX_BODY, MAX_REPLY, ROOM, SHORTER, app_block, clip, corpus_line, failure};
+use ai::{CORPUS, MAX_BODY, MAX_REPLY, ROOM, SHORTER, clip, corpus_line, failure};
 pub use ai::{DEFAULT_MODEL, RETRIES};
-use ai::{fault, free_path, slug};
+use ai::{fault, fenced, free_path, slug};
 use json::Stream;
 use uiwire::client::Client;
 use uiwire::{Event, Frame, Node, Request, Style, Variant};
@@ -210,7 +210,8 @@ impl Assistant {
 
     /// Ends the request in flight with `status` and the host's `error`: notes what went wrong,
     /// else builds the app the reply holds, if any; a reply cut off where it ran out of room
-    /// (`finish_reason` length) says so, and its program is asked for again, shorter.
+    /// (`finish_reason` length) says so, and one cut off inside its app block, whatever part of
+    /// a program it holds, has that program asked for again, shorter.
     fn finish(&mut self, status: u16, error: &str, disk: &mut dyn Disk) {
         let (Some(mut run), Some(turn)) = (self.run.take(), self.turns.last_mut()) else { return };
         run.stream.end(&mut turn.reply, MAX_REPLY);
@@ -227,24 +228,26 @@ impl Assistant {
             true => _ = self.history.pop(),
             false => self.history.push(("assistant", reply.clone())),
         }
-        let src = app_block(&reply).filter(|_| failed.is_none());
-        let (why, text) = match src.map(|src| (src, fault(src))) {
+        let block = fenced(&reply).filter(|_| failed.is_none());
+        // Cut off inside its block: part of a program, even one that compiles.
+        let cut = long && block.is_some_and(|(_, closed)| !closed);
+        let (why, text) = match block.map(|(src, _)| (src, fault(src))) {
             None => {
                 return if long {
                     self.note((Style::Error, ROOM.into()))
                 };
             }
+            Some(_) if cut => ("The program ran out of room".into(), SHORTER.into()),
             Some((src, None)) => return self.build(src, &run, disk),
-            Some(_) if long => ("The program ran out of room".into(), SHORTER.into()),
             Some((_, Some(([what, _], problem, account)))) => {
                 let again = "\nReply with the corrected full program in one app block.";
                 (format!("The program {what}: {problem}"), [account.as_str(), again].concat())
             }
         };
         if run.attempt > RETRIES {
-            return self.note((Style::Error, if long { ROOM.into() } else { why }));
+            return self.note((Style::Error, if cut { ROOM.into() } else { why }));
         }
-        let next = if long { "; asking for a shorter one." } else { "; asking for a fix." };
+        let next = if cut { "; asking for a shorter one." } else { "; asking for a fix." };
         self.note((Style::Dim, [&why, next].concat()));
         self.ask(text, run.prompt, run.attempt + 1);
     }

@@ -44,12 +44,14 @@ impl Shell {
         }
     }
 
-    /// A finger held still long enough picks up the icon under it where the finger is now (its
-    /// drag starts from there; its menu waits for it to lift unmoved), else is a secondary press
-    /// where it went down. Only a menu that opens ends what the finger holds (a button, a window,
-    /// a press into content), and the menu is then what is under it; a long press that opens
-    /// nothing, such as one on an app's widget, is still a tap when it lifts there. So a late
-    /// lift (a busy page handles it after the frame that saw 500 ms pass) loses no tap.
+    /// A frame: a finger held still long enough ([`home::touch::Touch::held`]: after a stall,
+    /// 100 ms more, so a lift queued behind it is heard first) picks up the icon under it
+    /// where the finger is now (its drag starts from there; its menu waits for it to lift
+    /// unmoved), else is a secondary press where it went down. Only a menu that opens ends what
+    /// the finger holds (a button, a window, a press into content), and the menu is then what is
+    /// under it; a long press that opens nothing, such as one on an app's widget, is still a tap
+    /// when it lifts there. So a late lift (a busy page handles it after the frame that saw
+    /// 500 ms pass) loses no tap, on what has a menu or not.
     pub(crate) fn hold(&mut self, out: &mut Response) {
         let now = self.host.now_ms;
         let Some((finger, _)) = &mut self.touch else { return };
