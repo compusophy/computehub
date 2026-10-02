@@ -171,6 +171,9 @@ pub struct Stream {
     pub usage: Option<(String, String)>,
     /// The chars of reasoning deltas so far: the model thinking, never part of the text.
     pub thought: usize,
+    /// The reasoning tokens the usage chunk counted (0 until it came, or if it did not say):
+    /// thinking a provider spent, streamed as reasoning or not.
+    pub reasoning: u64,
     /// Why the reply ended, once a chunk said: `stop`, or `length` when it ran out of room.
     pub finish: String,
 }
@@ -227,6 +230,10 @@ impl Stream {
         let tokens = |k| usage.and_then(|u| u.get(k)).and_then(Json::text).map(str::to_string);
         if let (Some(i), Some(o)) = (tokens("prompt_tokens"), tokens("completion_tokens")) {
             self.usage = Some((i, o));
+        }
+        let details = usage.and_then(|u| u.get("completion_tokens_details"));
+        if let Some(n) = details.and_then(|d| d.get("reasoning_tokens")?.text()?.parse().ok()) {
+            self.reasoning = n;
         }
     }
 }

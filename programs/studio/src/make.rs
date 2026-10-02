@@ -1,20 +1,21 @@
 //! Making with the AI: the prompt (with the program it changes) goes out as a chat request (at
 //! most [`MAX_BODY`] bytes) under applang's card and its example programs, the reply streams in,
 //! then is checked. A program that does not compile or faults when it runs ([`applang::smoke`]:
-//! drawn, clicked, ticked, keyed, tapped, typed into) goes back in a fresh request, with what was
-//! asked (and the program a change changes), its problem (its line, a caret, the rule broken,
-//! what led to it) and the program; a reply cut off by the token limit before its program ended
-//! asks for the same app
-//! shorter (what it holds is never run), and one without a program asks again: at most
-//! [`RETRIES`] times (then E0906, saying what was tried, or E0907 out of room). Never with an
-//! empty or cut-off reply as context, and never asking for reasoning (the free AI bounds it to
-//! 1,024 tokens). One that runs is saved, run and added to the corpus, unless the code was edited
-//! meanwhile; what its first comment says is said for it.
+//! drawn, clicked, ticked, keyed, tapped, typed into; then drawn and clicked from the states the
+//! app keeps, as it will really start) goes back in a fresh request, with what was asked (and the
+//! program a change changes), its problem (its line, a caret, the rule broken, what led to it or
+//! the states it started from) and the program; a reply cut off by the token limit before its
+//! program ended asks for the same app shorter (what it holds is never run), or for the same
+//! again if thinking took the room, and one without a program asks again: at most [`RETRIES`]
+//! times (then E0906, saying what was tried, or E0907 out of room). Never with an empty or
+//! cut-off reply as context, and never asking for reasoning (the free AI bounds it to 1,024
+//! tokens, though a provider may think on). One that runs is saved, run and added to the corpus,
+//! unless the code was edited meanwhile; what its first comment says is said for it.
 
 use crate::{Disk, Studio};
 use applang::Class;
-use assistant::ai::{self, CORPUS, MAX_BODY, MAX_REPLY, RETRIES, ROOM, SHORTER};
-use assistant::ai::{clip, corpus_line, failure, fault, fenced, free_path, slug};
+use assistant::ai::{self, CORPUS, MAX_BODY, MAX_REPLY, RETRIES, ROOM, SHORTER, THOUGHT};
+use assistant::ai::{clip, corpus_line, failure, fault, fenced, free_path, slug, state_path};
 use assistant::json::Stream;
 use uiwire::{Request, Style};
 
@@ -29,8 +30,10 @@ const SYSTEM: [&str; 2] = [
     "\n\nA game remembers its world in states and lists of its own (what has landed, where \
      things are), and draws the list a grid shows anew from them; it moves with every, is \
      steered with on key and with buttons too (a phone has no arrow keys), and shows Start until \
-     it runs. Write small functions instead of \
-     repeating code; keep programs under 200 lines. Decide quickly what applang can make, then \
+     it runs. Saved states come back as they were kept, also after a change: a saved list keeps \
+     its old length (one a change adds starts as declared), so check a list's length before \
+     indexing it. Write small functions instead of repeating code; keep programs under 200 \
+     lines. Decide quickly what applang can make, then \
      write it: your reply has room for the program, not for long deliberation.\n\n\
      Reply with the complete program in one fenced block whose info string is app, and nothing \
      else; after its first comment, a label naming the app. ",
@@ -39,6 +42,9 @@ const SYSTEM: [&str; 2] = [
 /// model a thinking budget of 1,024 tokens (asked for at a low effort, or turned off, GLM 5.3
 /// took all 8,192 and left none for the program).
 const OPTIONS: &str = ",\"max_tokens\":8192,\"temperature\":0.3";
+/// Past this many reasoning tokens (half that room), a reply cut off ran out of room thinking:
+/// some providers think on past the free AI's budget.
+const THINKING: u64 = 4096;
 /// A fix's last line, and the retry after a reply without a program.
 const AGAIN: &str = "Reply with the corrected complete program in one app block.";
 /// A change's first request ends with this line, after what was asked.
@@ -47,7 +53,8 @@ pub(crate) const NO_BLOCK: &str =
     "Your reply held no app block. Reply with the complete program in one app block.";
 
 /// What a retry asks for: a fix, the same app shorter (the reply ran out of room before its
-/// program ended), or a program at all (the reply held none).
+/// program ended), or a program at all (the reply held none, or thinking took its room: then
+/// the same request again).
 #[derive(Clone, Copy, Debug)]
 enum Retry {
     Fix,
@@ -165,16 +172,23 @@ impl Studio {
         }
     }
 
-    /// Checks a reply that is all in: a program that compiles and renders is the app now; else
-    /// the next request asks for it fixed, shorter (the reply ran out of room before its program
-    /// ended: what it holds is part of a program, even if that part runs) or at all.
-    /// Whether there was a reply to check.
+    /// Checks a reply that is all in: a program that compiles and runs, from the states the app
+    /// keeps too, is the app now; else the next request asks for it fixed, shorter (the reply ran
+    /// out of room before its program ended: what it holds is part of a program, even if that
+    /// part runs), the same again (thinking took the room: most of the reply, or over half of the
+    /// room by the usage) or at all. Whether there was a reply to check.
     pub(crate) fn verify(&mut self, disk: &mut dyn Disk) -> bool {
         let Some(mut m) = self.make.take_if(|m| m.done) else { return false };
         let block = fenced(&m.reply);
         let cut = m.stream.finish == "length" && !block.is_some_and(|(_, closed)| closed);
+        let thought = cut && (m.stream.thought > m.reply.len() || m.stream.reasoning > THINKING);
         let src = block.filter(|_| !cut).map(|(src, _)| src);
-        let why = match src.map(|src| (src, fault(src))) {
+        // What it will really start from: the states the app at this path keeps.
+        let kept = match self.path.is_empty() {
+            true => String::new(),
+            false => disk.read(&state_path(&self.path)).unwrap_or_default(),
+        };
+        let why = match src.map(|src| (src, fault(src, &kept))) {
             Some((src, None)) => {
                 self.made(src.to_string(), &m, disk);
                 return true;
@@ -184,6 +198,7 @@ impl Studio {
         };
         if m.attempt() > RETRIES {
             let why = match why {
+                _ if thought => THOUGHT.into(),
                 _ if cut => ROOM.into(),
                 Some(([_, still], p, _)) => gave_up(still, &p, m.tried),
                 None => "E0906 the AI replied without a program".into(),
@@ -192,6 +207,7 @@ impl Studio {
             return true;
         }
         let (retry, asked) = match (why, src) {
+            _ if thought => (Retry::Again, m.asked.clone()),
             _ if cut => (Retry::Shorter, [&m.first, "\n\n", SHORTER].concat()),
             (Some((_, _, account)), Some(src)) => (Retry::Fix, m.fix(&account, src)),
             _ => (Retry::Again, [&m.first, "\n\n", NO_BLOCK].concat()),
@@ -226,10 +242,11 @@ impl Studio {
         self.made.drain(..self.made.len().saturating_sub(5));
         if self.prompt.trim() == m.prompt {
             self.set_prompt("");
-        }
-        // A game that takes keys has the keyboard at once.
-        if self.live.as_mut().is_some_and(|live| live.play().1) {
-            self.requests.push(Request::Focus { id: 0 });
+            // A game that takes keys has the keyboard at once, if it shows; never over a prompt
+            // typed meanwhile.
+            if !self.code && self.live.as_mut().is_some_and(|live| live.play().1) {
+                self.requests.push(Request::Focus { id: 0 });
+            }
         }
         let note = if note.is_empty() { "Ready \u{2713}" } else { note.as_str() };
         let (style, mut said) = self.save(disk, &[note, " \u{2014} saved "].concat());
