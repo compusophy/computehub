@@ -32,7 +32,7 @@ devices. Author handle: compusophy.
 6. **Budgets** (`scripts/budget.sh`, gzip -9): boot ≤192 KB (top-level
    `dist/` files), deferred fonts ≤30 KB (`dist/fonts/deferred/`), lazy
    fonts ≤60 KB (the rest of `dist/fonts/`), system ≤40 KB (`dist/cpu/`),
-   programs ≤64 KB (`dist/bin/`), licenses not counted;
+   programs ≤96 KB (`dist/bin/`), licenses not counted;
    first frame ≤100 ms after the wasm arrives; idle draws zero frames
    (a frame only on input or while an animation runs; one opt-out
    exception: the living grain, 8/s by timer).

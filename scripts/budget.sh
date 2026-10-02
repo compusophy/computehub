@@ -19,8 +19,9 @@
 #             restored. Cap 40 KB.
 #   programs  dist/bin/: the programs (toolbox.wasm, the test programs,
 #             studio.wasm, assistant.wasm and system.wasm: About, Feedback,
-#             Files), each fetched when it first runs. Cap 64 KB per file: a
-#             program is downloaded on its own.
+#             Files), each fetched when it first runs. Cap 96 KB per file: a
+#             program is downloaded on its own (64 KB until R8, when applang
+#             v2's compiler and runtime joined Studio).
 #   licenses  dist/licenses/: the font licenses, shipped but never fetched by
 #             the page. Not counted.
 #
@@ -34,7 +35,7 @@ BOOT_CAP=$((192 * 1024))
 DEFERRED_CAP=$((30 * 1024))
 LAZY_CAP=$((60 * 1024))
 SYSTEM_CAP=$((40 * 1024))
-PROGRAMS_CAP=$((64 * 1024))
+PROGRAMS_CAP=$((96 * 1024))
 
 if [ ! -d dist ]; then
   echo "budget: SKIP, no dist/ yet (run scripts/build-web.sh)"
