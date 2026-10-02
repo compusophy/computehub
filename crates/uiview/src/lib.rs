@@ -14,7 +14,7 @@
 #![forbid(unsafe_code)]
 
 mod area;
-pub mod canvas;
+mod canvas;
 #[cfg(test)]
 mod tests;
 mod texts;
