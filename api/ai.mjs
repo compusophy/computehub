@@ -17,9 +17,13 @@ const GATEWAY = 'https://ai-gateway.vercel.sh/v1/chat/completions';
 // The models allowed, the first the default, with their list prices in dollars per million
 // tokens in and out.
 const MODELS = { 'zai/glm-5.3': [1.4, 4.4], 'zai/glm-5.3-flash': [0.15, 0.5] };
-// The providers tried first, as the gateway names them: those measured keeping to a thinking
-// budget (see below). Another joins once measured doing so.
+// The providers asked first, as the gateway names them: those measured keeping to a thinking
+// budget (see below). Another joins once measured doing so. A model's fallback there, and the
+// statuses (busy, at capacity, down) that send a request on to the next of TRIES.
 const PROVIDERS = ['fireworks'];
+const FALLBACK = { 'zai/glm-5.3': ['zai/glm-5.3-flash'] };
+const TRIES = [{ only: PROVIDERS }, { only: PROVIDERS, wait: 1200 }, { order: PROVIDERS }];
+const BUSY = [429, 500, 502, 503, 504];
 const ROLES = ['system', 'user', 'assistant', 'tool'];
 // Tools (the agent that uses the desktop): how many, their JSON, the calls a reply may make, a
 // call's arguments, the output a request with tools may ask for; names and call ids.
@@ -127,6 +131,34 @@ function fail(res, status, error) {
   res.end(JSON.stringify({ error: { message: error } }));
 }
 
+// Counts into `seen` what `text`, the next of a stream, carried: its events, and the chars of text
+// their deltas held (content, reasoning, tool calls' arguments), a line at a time (a part may end
+// mid-line; the rest waits in `seen.line`).
+function streamed(seen, text) {
+  const lines = (seen.line + text).split('\n');
+  seen.line = lines.pop();
+  for (const line of lines) {
+    if (!line.startsWith('data:')) continue;
+    seen.events += 1;
+    let j;
+    try {
+      j = JSON.parse(line.slice(5));
+    } catch {
+      continue;
+    }
+    for (const c of object(j) && Array.isArray(j.choices) ? j.choices : []) {
+      const d = object(c) && object(c.delta) ? c.delta : {};
+      for (const v of [d.content, d.reasoning, d.reasoning_content]) {
+        if (typeof v === 'string') seen.chars += v.length;
+      }
+      for (const t of Array.isArray(d.tool_calls) ? d.tool_calls : []) {
+        const f = object(t) && object(t.function) ? t.function : {};
+        if (typeof f.arguments === 'string') seen.chars += f.arguments.length;
+      }
+    }
+  }
+}
+
 async function readBody(req, max) {
   const parts = [];
   let n = 0;
@@ -179,12 +211,14 @@ export default async function handler(req, res) {
   // 8,192 and no program). Only a token budget bounds it, and only where the provider keeps to
   // one: Fireworks does, for GLM 5.3 and Flash (a budget of 1,024 held it to 1,037, in 37
   // replies; one of 256 to 1,036, so none holds under about 1,024); Baseten, DigitalOcean and
-  // Alibaba do not (2,000 of 2,000; 7,333 of 8,192 and no program). The gateway picks a
-  // provider itself (by weight, by affinity, after a failure), so every request tries
-  // PROVIDERS first, in order; when they are down or full (Fireworks answered 429, at
-  // capacity, on 2026-10-02), the gateway falls back to the others: an answer that may think
-  // past its budget beats none (Studio re-asks when thinking eats a reply's room). The budget is 1,024 tokens, or a program's own (at most 4,096); an
-  // effort or thinking off, which bound nothing, are not sent.
+  // Alibaba do not (2,000 of 2,000; 7,333 of 8,192 and no program), and a reply there that
+  // thinks its whole room makes nothing (17 of 20 eval requests fell back on 2026-10-02, and
+  // tetris, 2048 and minesweeper got no program). The gateway picks a provider itself (by
+  // weight, by affinity, after a failure), so it is asked in TRIES: PROVIDERS only, the model
+  // then its FALLBACK there; again after a breath; only then any provider, since an answer
+  // that may think past its budget beats none (Studio re-asks when thinking eats a reply's
+  // room). The budget is 1,024 tokens, or a program's own (at most 4,096); an effort or
+  // thinking off, which bound nothing, are not sent.
   const r = (body && body.reasoning) || {};
   const budget = Math.floor(Number(r.max_tokens));
   const reasoning = { max_tokens: budget >= 1 ? Math.min(budget, 4096) : 1024 };
@@ -195,7 +229,6 @@ export default async function handler(req, res) {
     stream_options: { include_usage: true },
     max_tokens: asked >= 1 ? Math.min(asked, MAX_TOKENS) : 4096,
     reasoning,
-    providerOptions: { gateway: { order: PROVIDERS } },
   };
   if (tools.length) {
     Object.assign(out, { tools, tool_choice: choice, max_tokens: Math.min(out.max_tokens, TOOL_OUT) });
@@ -203,7 +236,12 @@ export default async function handler(req, res) {
   const t = body.temperature;
   if (typeof t === 'number' && t >= 0 && t <= 2) out.temperature = t;
   // What it could cost (a token per 3 chars in, every output token used), held until the usage
-  // says what it did cost.
+  // says what it did cost: its own `cost` (the gateway's price, cached tokens at theirs), else its
+  // tokens at list price. A request the client stopped (Studio stops one once its program is in)
+  // never gets the usage: it costs the input and the text streamed, a token per 2.5 of its chars
+  // (GLM 5.3 writes 2.64 to 4.2 a token, measured on 29 replies, so this books a little over),
+  // or per event if more, never more than was held. Not a token per event: Fireworks sends about
+  // one an event, but Baseten and Runware 2.7 to 5.2, which booked a stopped reply at 38 to 48%.
   const [priceIn, priceOut] = MODELS[model];
   const chars = JSON.stringify(messages).length + (tools.length ? JSON.stringify(tools).length : 0);
   const entry = { t: now, who, usd: ((chars / 3) * priceIn + out.max_tokens * priceOut) / 1e6 };
@@ -215,13 +253,21 @@ export default async function handler(req, res) {
   const abort = new AbortController();
   res.on('close', () => res.writableFinished || abort.abort());
   let [up, tail] = [null, ''];
+  const [seen, utf8] = [{ events: 0, chars: 0, line: '' }, new TextDecoder()];
   try {
-    up = await fetch(GATEWAY, {
-      method: 'POST',
-      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-      body: JSON.stringify(out),
-      signal: abort.signal,
-    });
+    for (const { wait, ...gateway } of TRIES) {
+      if (wait) await new Promise((done) => setTimeout(done, wait));
+      if (gateway.only) gateway.models = FALLBACK[model];
+      out.providerOptions = { gateway };
+      up = await fetch(GATEWAY, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: JSON.stringify(out),
+        signal: abort.signal,
+      });
+      if (up.ok || !BUSY.includes(up.status)) break;
+      await up.text().catch(() => '');
+    }
     // A refusal costs nothing.
     if (!up.ok) entry.usd = 0;
     res.statusCode = up.status;
@@ -229,18 +275,25 @@ export default async function handler(req, res) {
     res.setHeader('cache-control', 'no-store');
     for await (const part of up.body) {
       res.write(part);
-      tail = (tail + Buffer.from(part).toString('latin1')).slice(-4096);
+      const text = utf8.decode(part, { stream: true });
+      streamed(seen, text);
+      tail = (tail + text).slice(-4096);
     }
     res.end();
   } catch {
-    // Never reached, it cost nothing.
-    if (!up) entry.usd = 0;
+    // Never reached (or only refused), it cost nothing.
+    if (!up || !up.ok) entry.usd = 0;
     if (!res.headersSent) return fail(res, 502, "couldn't reach the AI");
     // Cut off mid-answer: say so, on a line of its own, so it never reads as a whole answer.
     res.end('\n\ndata: {"error":{"message":"the answer was cut off"}}\n\n');
   }
   const usage = tail.slice(tail.lastIndexOf('"usage"'));
-  const tokens = (k) => Number((new RegExp(`"${k}":\\s*(\\d+)`).exec(usage) || [])[1]);
-  const [i, o] = [tokens('prompt_tokens'), tokens('completion_tokens')];
-  if (i >= 0 && o >= 0) entry.usd = (i * priceIn + o * priceOut) / 1e6;
+  const num = (k) => Number((new RegExp(`"${k}":\\s*([\\d.]+)`).exec(usage) || [])[1]);
+  const [i, o, cost] = [num('prompt_tokens'), num('completion_tokens'), num('cost')];
+  if (cost >= 0) entry.usd = cost;
+  else if (i >= 0 && o >= 0) entry.usd = (i * priceIn + o * priceOut) / 1e6;
+  else if (up && up.ok) {
+    const tokens = Math.min(out.max_tokens, Math.max(seen.events, seen.chars / 2.5));
+    entry.usd = Math.min(entry.usd, ((chars / 3) * priceIn + tokens * priceOut) / 1e6);
+  }
 }

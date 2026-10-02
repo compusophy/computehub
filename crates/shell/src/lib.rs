@@ -1,19 +1,16 @@
 //! The compusophyOS desktop: floating windows around a [`host::Host`], which runs one
 //! [`ui::App`] per window, and the home screen around them (the `home` crate): a top bar, every
-//! app as an icon behind the windows, the AI button at the bottom center with the dock above it,
-//! context menus and touch. No browser: [`Shell`] turns [`Input`] into wm commands and app
-//! events, draws into a [`gfx::DrawList`] and hands back what only the platform can do in a
-//! [`Response`].
+//! app as an icon behind the windows, the bottom row (the person's dock at its left, the
+//! Assistant alone at the bottom-right corner), context menus and touch. No browser: [`Shell`]
+//! turns [`Input`] into wm commands and app events, draws into a [`gfx::DrawList`] and hands back
+//! what only the platform can do in a [`Response`].
 //!
-//! Logical pixels, origin top-left; non-finite sizes and positions count as 0. Windows live in the
-//! work area, the screen below the [`BAR_H`] top bar less the AI button's row at the bottom
-//! ([`DOCK_CLEAR`]) and the dock's above it while the dock shows ([`home::dock::clear`]), which
-//! every resize hands the wm; the windows' rects follow at once. The dock shows while an app runs
-//! or is kept there: a window opening while it hides first gives it its row (`Host::docked`), so
-//! the window opens where it stays; the last one gone, the work area grows back. The icons lay
-//! out in the work area without the dock's row, so they stay put. On a first visit ([`Prefs::seen`]
-//! unset) Welcome opens as soon as the work area is not empty, at [`Shell::new`] or at the first
-//! [`Input::Resize`] that makes it so, and the shell sets the `seen` preference.
+//! Logical pixels, origin top-left; non-finite sizes and positions count as 0. Windows and icons
+//! live in the work area, the screen below the [`BAR_H`] top bar less the bottom row
+//! ([`DOCK_CLEAR`]), which every resize hands the wm; the windows' rects follow at once. On a
+//! first visit ([`Prefs::seen`] unset) Welcome opens as soon as the work area is not empty, at
+//! [`Shell::new`] or at the first [`Input::Resize`] that makes it so, and the shell sets the
+//! `seen` preference.
 //!
 //! The pointer: button 0 presses, button 2 (or a finger held still for 500 ms) opens a context
 //! menu (where there is none, the finger's press goes on: lifted there, it taps, as on an app's
@@ -22,12 +19,14 @@
 //! after frames saw the time pass, is a tap. A finger that travels over a window's content
 //! scrolls it as the wheel does, and flings it on when it lifts moving. Icons move: a mouse drags
 //! one past 4 px; a finger held on one for 500 ms picks it up, then moving it 8 px drags it, and
-//! lifting it unmoved opens its menu instead. A mouse dragged on the bare desktop draws a box
-//! that selects the icons it touches; dragging a selected icon carries them all. Bindings,
-//! pointer rules and motion are those of `DESIGN.md`. While anything moves (or a held finger
-//! waits to long-press), [`Shell::draw`] asks for the next frame; otherwise none, but for the
-//! living grain's and an app's timer's ([`Shell::frame_in`]). Above the windows lies the overlay,
-//! the Assistant that uses the desktop as a person does.
+//! lifting it unmoved opens its menu instead; a tile kept on the dock moves so along it, and an
+//! icon dropped on the bottom row puts its app on the dock and goes back to its place. A mouse
+//! dragged on the bare desktop draws a box that selects the icons it touches; dragging a
+//! selected icon carries them all. Bindings, pointer rules and motion are those of `DESIGN.md`.
+//! While anything moves (or a held finger waits to long-press), [`Shell::draw`] asks for the
+//! next frame; otherwise none, but for the living grain's and an app's timer's
+//! ([`Shell::frame_in`]). Above the windows lies the overlay, the Assistant that uses the
+//! desktop as a person does.
 
 #![forbid(unsafe_code)]
 
@@ -52,10 +51,9 @@ use gfx::{DrawList, RectF, Rgba};
 use host::{Host, rectf};
 use ui::{AppEvent, TextSystem, WidgetId};
 use vfs::Vfs;
-use wm::{Cmd, Rect, WinId, Wm};
+use wm::{Rect, WinId, Wm};
 
-/// The top bar's height, and what the work area leaves free at the bottom for the AI button (at
-/// least: the dock's row too while it shows).
+/// The top bar's height, and what the work area leaves free at the bottom: the bottom row.
 pub const BAR_H: f32 = home::bar::H;
 pub const DOCK_CLEAR: f32 = home::CLEAR;
 /// How long one pattern of the living grain shows: 8 a second.
@@ -89,7 +87,8 @@ struct Visuals {
     zone: Option<host::frame::Zone>,
     menu: Option<(RectF, Option<usize>)>,
     home: (usize, usize, usize),
-    /// Carried icons: lifted, their slot, the pointer; the selection box's far corner.
+    /// Carried icons (or a dock tile): lifted, their slot, the pointer; the selection box's far
+    /// corner.
     carry: Option<(bool, usize, (f32, f32))>,
     lasso: Option<(f32, f32)>,
     /// The overlay, and whether it works.
@@ -120,10 +119,10 @@ pub struct Shell {
     focus: Option<WinId>,
     cursor: Cursor,
     clock: Option<LocalTime>,
-    /// The dock: the favorites, the apps it shows (favorites first), the strip they sit on.
-    favs: Vec<String>,
-    dock: Vec<dock::Item>,
-    strip: home::dock::Strip,
+    /// The dock (its favorites, the row's layout, a tile carried) and the apps it shows, as
+    /// they show (favorites first).
+    dock: home::dock::Dock,
+    tiles: Vec<dock::Item>,
     /// The home screen's icons.
     grid: home::grid::Grid,
     /// Whether the page asks for reduced motion (the grain stays still).
@@ -150,13 +149,13 @@ impl Shell {
     #[rustfmt::skip]
     pub fn new(w: f32, h: f32, text: TextSystem, vfs: Vfs, reg: Registry, prefs: Prefs) -> Shell {
         let size = (coord(w).max(0.0), coord(h).max(0.0));
-        let host = Host::new(Wm::new(work_area(size, false)), text, vfs, reg, &prefs.theme);
-        let favs = home::dock::favorites(prefs.dock.as_deref());
+        let host = Host::new(Wm::new(work_area(size)), text, vfs, reg, &prefs.theme);
+        let dock = home::dock::Dock::new(prefs.dock.as_deref());
         let grid = home::grid::Grid::new(prefs.home.as_deref());
         let mut shell = Shell { host, pending: Vec::new(), size, pointer: None, hover: None,
             armed: None, app_hover: None, app_press: None, down: None, grab: None, last_title: None,
-            ime: None, focus: None, cursor: Cursor::Default, clock: None, favs, dock: Vec::new(),
-            strip: Default::default(), grid, reduced: false, menu: None, touch: None, fling: None,
+            ime: None, focus: None, cursor: Cursor::Default, clock: None, dock, tiles: Vec::new(),
+            grid, reduced: false, menu: None, touch: None, fling: None,
             finger: false, motion: Default::default(), instant: false, startup: !prefs.seen,
             scratch: DrawList::new(), overlay: Default::default() };
         shell.place();
@@ -277,9 +276,10 @@ impl Shell {
         let (mut out, before) = (Response::default(), self.visuals());
         self.instant = false;
         if matches!(input, Input::PointerLeave) {
-            // Carried icons slide back from where they show, which needs the pointer.
+            // Carried icons and tiles slide back from where they show, which needs the pointer.
             (self.touch, self.grid.lasso) = (None, None);
             self.drop_icons(false);
+            self.dock.drop(false, &mut self.pending);
         }
         if let Input::PointerDown { touch, .. } = input {
             self.finger = touch;
@@ -309,7 +309,7 @@ impl Shell {
                 if self.pointer != was {
                     self.drag_app(&mut out);
                 }
-                if self.grid.carry_to(self.pointer) {
+                if self.grid.carry_to(self.pointer) | self.dock.carry_to(self.pointer) {
                     self.armed = None;
                 }
                 self.grid.lasso_to(self.pointer);
@@ -339,23 +339,21 @@ impl Shell {
     /// A new screen size: a new work area, which a keyboard shortening the page while the person
     /// types squeezes the windows into only until it goes (`Host::resize`).
     fn resize(&mut self, size: (f32, f32)) {
-        let (typing, area) =
-            (matches!(self.ime, Some((_, true))), work_area(size, !self.dock.is_empty()));
-        self.host.resize((self.size, size), area, typing);
+        let typing = matches!(self.ime, Some((_, true)));
+        self.host.resize((self.size, size), work_area(size), typing);
         self.size = size;
         self.place();
     }
 
-    /// The work area once the dock shows, where a window opens; the grid's, without its row.
+    /// The grid lays out in the work area.
     fn place(&mut self) {
-        self.host.docked = Some(work_area(self.size, true));
-        let a = work_area(self.size, false);
+        let a = work_area(self.size);
         (self.grid.area, self.grid.narrow) = (rectf(a), a.w < host::NARROW);
     }
 
     /// Opens Welcome on a first visit once there is a work area, and remembers it was shown.
     fn start(&mut self, out: &mut Response) {
-        let a = work_area(self.size, true);
+        let a = work_area(self.size);
         if self.startup && a.w > 0 && a.h > 0 {
             self.startup = false;
             self.host.open("welcome", None, out);
@@ -409,13 +407,16 @@ impl Shell {
     /// that takes the focus ends the home screen's selection: Enter and Escape are then its own.
     fn settle(&mut self, out: &mut Response) {
         self.host.settle(out);
-        self.dock = self.host.dock_apps(&self.favs);
-        let favs = self.dock.iter().take_while(|d| self.favs.contains(&d.0)).count();
-        self.strip = home::dock::Strip::new(favs, self.dock.len() - favs, self.size);
-        // The dock came or went: so does its row in the work area.
-        let area = work_area(self.size, !self.dock.is_empty());
-        if self.host.wm().area() != area {
-            self.host.apply(Cmd::SetArea(area));
+        self.tiles = self.host.dock_apps(&self.dock.favs);
+        let favs = &self.dock.favs;
+        let kept: Vec<usize> =
+            self.tiles.iter().map_while(|d| favs.iter().position(|f| *f == d.0)).collect();
+        // Icons carried onto the row open a gap there for their apps.
+        let (over, x) = (self.grid.below(self.pointer), self.pointer.map_or(0.0, |p| p.0));
+        self.dock.layout(kept, self.tiles.len(), self.size, (&over, x));
+        // A tile carried shows where it would land.
+        if let Some((from, to)) = self.dock.moving() {
+            home::dock::shift(&mut self.tiles, from, to);
         }
         self.place_overlay(out);
         let focus = self.key_target();
@@ -432,7 +433,8 @@ impl Shell {
     fn visuals(&self) -> Visuals {
         let button = |t: Option<Target>| t.filter(|t| t.is_button());
         let g = &self.grid;
-        let carry = g.carry.as_ref().map(|c| (c.lifted, c.slot, self.pointer.unwrap_or_default()));
+        let at = self.pointer.unwrap_or_default();
+        let carry = self.carried().map(|c| (c.lifted, c.slot, at));
         let lasso = g.lasso.and(self.pointer);
         Visuals {
             wm: self.host.wm().state_hash(),
@@ -441,7 +443,7 @@ impl Shell {
             wins: self.host.wins.len(),
             zone: self.grab.and_then(|g| g.zone()),
             menu: self.menu.as_ref().map(|m| (m.0.rect, m.0.sel)),
-            home: (self.dock.len() + self.favs.len(), g.icons.len(), g.selected.len()),
+            home: (self.tiles.len() + self.dock.favs.len(), g.icons.len(), g.selected.len()),
             carry,
             lasso,
             agent: (self.overlay, self.host.agent.working),
@@ -451,10 +453,12 @@ impl Shell {
     /// Ends every event: settles, finds what is under the pointer, and fills in the response.
     fn finish(&mut self, before: Visuals, out: &mut Response) {
         self.settle(out);
+        // Nothing is under what the pointer holds.
+        let free = self.grab.is_none() && !self.carrying();
         let under = self.pointer.and_then(|(x, y)| Some((self.hit(x, y)?, x, y)));
-        self.hover = under.map(|u| u.0).filter(|_| self.grab.is_none());
+        self.hover = under.map(|u| u.0).filter(|_| free);
         let widget = under.and_then(|(t, x, y)| match t {
-            Target::Body(win) if self.grab.is_none() => Some((win, self.widget_at(win, x, y)?)),
+            Target::Body(win) if free => Some((win, self.widget_at(win, x, y)?)),
             _ => None,
         });
         self.app_hover = widget.map(|(win, hit)| (win, hit.id));
@@ -488,9 +492,9 @@ fn coord(v: f32) -> f32 {
     v.max(-max).min(max)
 }
 
-/// The work area of a `w` x `h` screen, with the dock's row free (`docked`) or not.
-fn work_area((w, h): (f32, f32), docked: bool) -> Rect {
-    let h = (h - BAR_H - home::dock::clear(docked)).max(0.0);
+/// The work area of a `w` x `h` screen: below the bar, above the bottom row.
+fn work_area((w, h): (f32, f32)) -> Rect {
+    let h = (h - BAR_H - DOCK_CLEAR).max(0.0);
     Rect::new(0, BAR_H as i32, w.round() as i32, h.round() as i32)
 }
 

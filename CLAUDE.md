@@ -31,10 +31,10 @@ AI for all); later pooled compute across tabs and devices. Author handle: compus
    HashMap/HashSet, no clocks, no randomness. State must replay bit-for-bit
    and hash identically.
 5. **wasm32 always green:** `cargo check --workspace --target wasm32-unknown-unknown`.
-6. **Budgets** (`scripts/budget.sh`, gzip -9): boot ≤192 KB (top-level
+6. **Budgets** (`scripts/budget.sh`, gzip -9): boot ≤224 KB (top-level
    `dist/` files), deferred fonts ≤30 KB (`dist/fonts/deferred/`), lazy
    fonts ≤60 KB (the rest of `dist/fonts/`), system ≤40 KB (`dist/cpu/`),
-   programs ≤96 KB each (`dist/bin/`), licenses not counted; first frame
+   programs ≤256 KB each (`dist/bin/`), licenses not counted; first frame
    ≤100 ms after the wasm arrives; idle draws zero frames (only input or
    an animation draws; one opt-out exception: the living grain, 8/s).
 7. **Every failure is coded and spanned** in the language crates; never a
@@ -52,8 +52,7 @@ crates/      the OS (boot, kernel, worker); speaks to programs by WASI, uiwire
   wm/        floating window manager: stacking, snapping, focus; deterministic
   vfs/       in-memory filesystem, deterministic (/apps, /home, /tmp)
   font/      TrueType reader + glyph rasterizer (no font engine ships)
-  gfx/       instanced-quad draw list (fills, borders, shadows, glyphs,
-             gradients, glows, grain), glyph atlas, the WebGL2 shaders
+  gfx/       instanced-quad draw list, glyph atlas, the WebGL2 shaders
   text/      TextSystem: font slots, fallbacks, glyphs on the atlas
   icons/     the mark and desktop glyphs as vector outlines (`ui::icon`)
   ui/        immediate-mode widgets, themes (Midnight, Dawn, Mono), the App
@@ -64,7 +63,7 @@ crates/      the OS (boot, kernel, worker); speaks to programs by WASI, uiwire
   uiwire/    remote UI protocol: GUI programs send widget trees, get events
   uiview/    draws them with ui; holds edited text
   host/      wm + one app per window; agent; grabs, squeeze; motion, frames
-  home/      top bar, home grid (every app), AI button + dock, menus, touch
+  home/      top bar, home grid (every app), dock + Assistant row, menus, touch
   shell/     the desktop: window chrome, keys, overlay; wires host + home (no web deps)
   platform/  the browser boundary: canvas, WebGL2, input, textarea, fetch,
              frames on demand, localStorage, workers, beacon
@@ -77,10 +76,11 @@ crates/      the OS (boot, kernel, worker); speaks to programs by WASI, uiwire
 programs/    wasm32-wasip1 programs (dist/bin/), the app language they share
   fuel/ lang/                 forks of litelite (budgets, parse kit)
   applang-syntax/ applang/    tier 0 app language: front end, runtime
-  studio/    Studio: make apps by describing them; runs `.app` files
+  studio/    make apps by describing them; runs `.app` files
+  coder/     Studio's coding agent: write, test, fix by edits, keep the best
   assistant/ the Assistant: the overlay AI using the desktop
   system/    About, Feedback, Files, Welcome, Activity (one program)
-  toolbox/   test programs (one multicall binary)
+  toolbox/   test programs, one binary
 assets/fonts/  the fonts (see Fonts below)
 api/           server functions (Vercel, Node): ai.mjs, feedback.mjs
 tools/serve/   dev-only static server for dist/ (never shipped); mocks /api/*

@@ -63,11 +63,11 @@ they can, in CI.
 
    | budget | cap |
    |---|---|
-   | boot: every top-level file in `dist/` (page, glue, wasm with the boot font) | 192 KB |
+   | boot: every top-level file in `dist/` (page, glue, wasm with the boot font) | 224 KB |
    | deferred: `dist/fonts/deferred/`, fetched right after the first frame | 30 KB |
    | lazy: the rest of `dist/fonts/`, fetched when a terminal first opens | 60 KB |
    | system: `dist/cpu/`, the program worker | 40 KB |
-   | each program: `dist/bin/*.wasm`, fetched when it first runs | 96 KB |
+   | each program: `dist/bin/*.wasm`, fetched when it first runs, then cached | 256 KB |
    | licenses: `dist/licenses/`, never fetched by the page | not counted |
    | first frame after the wasm arrives | 100 ms |
    | idle | zero frames: one only on input or while an animation runs; the one opt-out exception, the living grain, 8 a second by timer |
@@ -109,9 +109,10 @@ frame: os → shell::draw → gfx::DrawList → platform::Renderer: one draw cal
 | `apps` | Terminal, Settings |
 | `system` | About, Feedback, Files, Welcome and Activity: one wasip1 GUI program (`dist/bin/system.wasm`), off the boot download |
 | `studio` | the applang editor, and `AppHost`, which runs `.app` files |
+| `coder` | the coding agent Studio runs: write, check (compile, smoke on 3 seeds), fix by SEARCH/REPLACE edits, keep the best so far, stop by budget; sans-IO, replayable |
 | `uiwire`, `uiview` | the remote UI protocol GUI programs speak; the desktop's half, which draws their trees |
 | `host` | the wm plus one app per window, the home screen's apps, windows held by the pointer, the keyboard's squeeze; motion, frame geometry |
-| `home` | the top bar, the home grid in the person's order (icons carried, the selection box), the AI button and the dock above it, menus, touch |
+| `home` | the top bar, the home grid in the person's order (icons carried, the selection box), the bottom row (the person's dock at the left, the Assistant at the right), menus, touch |
 | `shell` | the desktop around `host`: chrome, keys, the overlay; wires the home screen to the pointer |
 | `platform` | the browser boundary: canvas, WebGL2, input, textarea, fetch, storage, cursor |
 | `os` | the wasm entry: fonts, VFS, the app registry, theme storage, event glue |
@@ -155,7 +156,7 @@ one. Forked crates keep their Apache-2.0 license and note their origin.
 ### The desktop
 
 - Bottom to top: the wallpaper (the theme's base color, up to four soft
-  glows and grain), the home screen's icons, the windows, the bottom strip,
+  glows and grain), the home screen's icons, the windows, the bottom row,
   the top bar, carried icons, menus, tooltips.
 - **Top bar** (44 px): the mark at the left opens Welcome; the date and
   time sit in the middle; Feedback (a bug) and Settings at the right.
@@ -184,27 +185,33 @@ one. Forked crates keep their Apache-2.0 license and note their origin.
   box that selects the icons it touches; Enter opens them, dragging one
   carries them all, and an app that takes the focus ends the selection. The
   order is kept (`home.order`).
-- **AI button**: always at the bottom center, where the early iPad's home
-  button was, 13 px above the screen's edge: a 64 px round of glass with the
-  ring and dot (1/φ² of its side). It opens and hides the Assistant
-  (Alt+Space too; its menu asks it), which is never a window: the overlay, a
-  card above the strip (a sheet on a phone) that uses the desktop for the
-  person. A finger's tap leaves the keyboard down until its field is tapped.
-  While it works it is a pill, one line of what it does and Stop, and a dot
-  runs round the button; each act flashes what it touched, and the person's
-  own press, key or wheel stops it. A program that failed starts again at
-  the next summon. Later it listens.
-- **Dock**: one centered glass shelf in its own row 8 px above the AI
-  button, there only while it holds an app: the favorites first (none at
-  first; "Add to dock" from any app's menu), then the other running apps, a
-  hairline between the groups, a dot under each running one (the accent's
-  when focused), a lift and a tooltip on hover. Tiles are 44 px and shrink
-  evenly to fit between 13 px margins (9 apps still get 31 px on a 390 px
-  phone; never off the screen). A click opens, focuses or minimizes; windows minimize into
-  their tile. The work area leaves the button's row, and the dock's while it
-  shows: a window opening while it hides gives it its row first, so nothing
-  jumps; the last one gone, the work area grows back. Icons lay out as if it
-  never showed.
+- **Bottom row**: one row of 44 px tiles along the screen's bottom (62 px
+  with its margins), always there, so the work area never changes with it.
+  No shelf, no button: tiles on the wallpaper, as the home grid's are.
+- **Assistant**: alone in the bottom-right corner, its own app tile (the
+  sparkle on its hue, as on the home grid); its hit reaches out to the
+  corner. It opens and hides the Assistant (Alt+Space too; its menu asks
+  it), which is never a window: the overlay, a card above the tile, its
+  right edge the tile's (a sheet on a phone, its edges the row's), that
+  uses the desktop for the person. A finger's tap leaves the keyboard down
+  until its field is tapped. A dot under the tile while the overlay shows
+  (the accent's while it has the keys). While it works the overlay is a
+  pill, one line of what it does and Stop, and the dot beats; each act
+  flashes what it touched, and the person's own press, key or wheel stops
+  it. A program that failed starts again at the next summon. Later it
+  listens.
+- **Dock**: the person's own, left-aligned from the bottom-left corner:
+  nothing in it at first ("Add to dock" from any app's menu, or its icon
+  dragged onto the row, which opens a gap under the pointer, the icon
+  going back to its place; "Remove from dock" from its tile's), then the
+  other running apps, so a phone can still switch windows, past a
+  hairline; a dot under each running one (the accent's while it has the
+  keys), a lift and a tooltip on hover. Kept tiles move as icons do: a
+  mouse drags one past 4 px, a finger held on one picks it up (moved 8 px
+  it drags; lifted unmoved, its menu); the others slide aside and the
+  order is kept (`dock`). Tiles shrink evenly to fit beside the Assistant
+  (8 apps get 34 px on a 411 px phone; never off the screen). A click
+  opens, focuses or minimizes; windows minimize into their tile.
 - **Keys** (`mod` is Alt or Meta, without Ctrl):
 
   | keys | action |
@@ -220,8 +227,9 @@ one. Forked crates keep their Apache-2.0 license and note their origin.
 - **Motion**: one ease-out curve, CSS `cubic-bezier(0.2, 0.8, 0.2, 1)`.
   Windows open (fade and grow from 96%, 180 ms), close (140 ms), minimize
   and come back (220 ms), and glide when they maximize, restore or snap
-  (200 ms); dock tiles lift (120 ms), icons slide aside (180 ms), themes
-  crossfade (200 ms). Drags and resizes follow the pointer exactly.
+  (200 ms); dock tiles lift (120 ms), icons and dock tiles slide aside
+  (180 ms), themes crossfade (200 ms). Drags and resizes follow the pointer
+  exactly.
 - **Themes**: Midnight (the default: near-black `#07080C` with violet, cyan
   and magenta light), Dawn (warm paper with peach, lilac and sky light) and
   Mono (black, white and grays, no light). A theme is plain data: backdrop,
@@ -246,8 +254,10 @@ one. Forked crates keep their Apache-2.0 license and note their origin.
   over the VFS (`ls`, `cd`, `cat`, `mkdir`, `mv`, `open`, `edit`, `run`,
   `theme`, ...). `term` already speaks xterm, keys and replies included, for
   the programs the kernel will run.
-- **Studio** edits applang; `studio::AppHost` runs a `.app` in its own
-  window. **Welcome** (a program, its mark revealed by the desktop's clock)
+- **Studio** makes and edits applang apps: the `coder` loop asks the free
+  AI, checks each reply and fixes it by edits, showing what moves (thinking,
+  writing 48 lines, fixing line 43, testing); `studio::AppHost` runs a `.app`
+  in its own window. **Welcome** (a program, its mark revealed by the desktop's clock)
   is the first screen; **Settings** picks the theme and
   lists what compusophyOS is made of.
 - **Activity**, the resource monitor: one word for the whole machine (Busy,
@@ -347,6 +357,7 @@ and the theme are kept there too.
   Alt+Q, Alt+arrows and Alt+Backquote before a terminal sees them
   (readline's Alt+F still arrives). A way through for apps that want them
   waits on the Super key question.
-- **The boot budget** is nearly spent (about 5.5 KB of headroom). Studio
-  and applang are the largest optional part of the boot wasm; separately
-  loaded modules (R4) are how the OS grows past it.
+- **The boot budget** (224 KB since 2026-10-02, about 35 KB of headroom)
+  pays for what must draw the first frame. Everything else should be a
+  program, fetched when it first runs (Studio and applang already are;
+  Settings and the Terminal could be).

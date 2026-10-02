@@ -401,7 +401,7 @@ fn welcome_lists_the_apps_under_the_mark_it_reveals() {
             welcome::HINT
         ]
     );
-    assert!(welcome::HINT.contains("home screen") && welcome::HINT.contains("AI button"));
+    assert!(welcome::HINT.contains("home screen") && welcome::HINT.contains("bottom right"));
     assert!(all(&f.nodes).iter().any(|n| matches!(n, Node::Text { style: Style::Display, .. })));
     // The apps, a row each: name over what it is for, its icon, a chevron; a click opens it.
     let rows: Vec<_> = said[3..].iter().map(|t| t.split('\n').next().unwrap()).collect();

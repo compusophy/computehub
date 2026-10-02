@@ -33,7 +33,7 @@ fn every_glyph_draws_inside_its_box() {
         }
     }
     assert!(Glyph::ALL.iter().enumerate().all(|(i, &g)| g as usize == i));
-    // The mark's center is a dot, as is the AI button's; the cog's center a hole.
+    // The mark's center is a dot, as is the ring's; the cog's center a hole.
     let mid = |b: Bitmap| b.data[(b.h / 2 * b.w + b.w / 2) as usize];
     assert_eq!([Glyph::Mark, Glyph::Apps, Glyph::Cog].map(|g| mid(draw(g, 55))), [255, 255, 0]);
 }

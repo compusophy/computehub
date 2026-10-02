@@ -1,0 +1,89 @@
+```app
+// Snake: arrows or the buttons steer; eat the food; walls and your tail end it. Best score is kept.
+state cells = [0; 300];   // 20 x 15 squares
+state xs = [0; 0];        // the body, head last
+state ys = [0; 0];
+state dx = 1;
+state dy = 0;
+state fx = 0;
+state fy = 0;
+state over = false;
+saved state best = 0;
+
+fn at(x: int, y: int) -> int { return y * 20 + x; }
+
+fn turnH(d: int) { if dy != 0 { dx = d; dy = 0; } }
+fn turnV(d: int) { if dx != 0 { dy = d; dx = 0; } }
+
+fn paint() {
+  for i in 0..len(cells) { cells[i] = 0; }
+  for i in 0..len(xs) { cells[at(xs[i], ys[i])] = 2; }
+  cells[at(fx, fy)] = 1;
+}
+
+fn dropFood() {
+  let freex = [0; 0];
+  let freey = [0; 0];
+  for y in 0..15 {
+    for x in 0..20 {
+      if cells[at(x, y)] == 0 { push(freex, x); push(freey, y); }
+    }
+  }
+  if len(freex) > 0 {
+    let p = random(len(freex));
+    fx = freex[p];
+    fy = freey[p];
+  }
+}
+
+fn start() {
+  clear(xs);
+  clear(ys);
+  for i in 3..6 { push(xs, i); push(ys, 7); }
+  dx = 1;
+  dy = 0;
+  over = false;
+  paint();
+  dropFood();
+}
+
+every 150 {
+  if !over && len(xs) > 0 {
+    let hx = xs[len(xs) - 1] + dx;
+    let hy = ys[len(ys) - 1] + dy;
+    if hx < 0 || hx >= 20 || hy < 0 || hy >= 15 || cells[at(hx, hy)] == 2 {
+      over = true;
+      best = max(best, len(xs) - 3);
+    } else {
+      push(xs, hx);
+      push(ys, hy);
+      if hx == fx && hy == fy {
+        dropFood();
+      } else {
+        remove(xs, 0);
+        remove(ys, 0);
+      }
+      paint();
+    }
+  }
+}
+
+on key "left" { turnH(-1); }
+on key "right" { turnH(1); }
+on key "up" { turnV(-1); }
+on key "down" { turnV(1); }
+
+label "Snake";
+label "Length " + len(xs) + "   Best " + best;
+grid 20, cells;
+row {
+  button "Left" { turnH(-1); }
+  button "Up" { turnV(-1); }
+  button "Down" { turnV(1); }
+  button "Right" { turnH(1); }
+}
+if over || len(xs) == 0 {
+  if over { label "Game over"; }
+  button "Start" { start(); }
+}
+```

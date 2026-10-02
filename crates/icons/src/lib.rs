@@ -37,7 +37,7 @@ type Outline = Vec<Vec<Point>>;
 pub enum Glyph {
     /// compusophy's logo: 365 dots in Fibonacci rings, on nothing (the background shows).
     Mark,
-    /// The AI button: a ring around a dot.
+    /// A ring around a dot (the AI button's, before the Assistant's tile took its place).
     Apps,
     /// Settings: an eight-tooth gear.
     Cog,

@@ -199,9 +199,6 @@ pub struct Host {
     kept: Option<Kept>,
     /// The overlay's acts and status, and what the shell shows of it.
     pub agent: agent::Agent,
-    /// The work area once the dock shows (the shell sets it): a window opening while it is
-    /// another shrinks the work area to it first, so the window opens where it stays.
-    pub docked: Option<Rect>,
 }
 
 impl Host {
@@ -212,7 +209,7 @@ impl Host {
         let (ai, forced) = (AiStatus::default(), Vec::new());
         Host { generation: vfs.generation(), kernel: Kernel::new(), wm, text, vfs, registry, wins,
             now_ms, theme, themes, fonts, focus, icons, ai, grain: true, forced,
-            agent: Default::default(), docked: None, kept: None }
+            agent: Default::default(), kept: None }
     }
 
     pub fn wm(&self) -> &Wm {
@@ -315,9 +312,6 @@ impl Host {
             return;
         }
         let Some(app) = (self.registry)(name) else { return };
-        if let Some(a) = self.docked.filter(|&a| a != self.wm.area()) {
-            self.apply(Cmd::SetArea(a));
-        }
         let (a, alone, compact) = (self.wm.area(), self.wm.layout().is_empty(), app.compact());
         let preferred = app.preferred_size().and_then(window_size).filter(|_| compact);
         let size = size.or(preferred).unwrap_or((a.w * 85 / 100, a.h * 85 / 100));

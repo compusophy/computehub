@@ -1,18 +1,17 @@
 //! The overlay: the Assistant over the desktop (see `host::agent`), a layer above the windows,
-//! never one of them. A glass card above the AI button (a sheet on a phone), a pill while it
-//! works; its content routes as a window's does. The AI button opens and hides it, as does
-//! Alt+Space; Escape (or a press on the bare desktop) hides it, or while it works stops the task,
-//! as the person's own press, key or wheel outside it does. A press in it gives it the keys; one
-//! on a window takes them back, the overlay staying. Shown by a finger, it holds the keyboard
-//! back until its text field is tapped. A failed program starts again at the next summon
-//! (`Host::open_overlay`). What the agent touches flashes; while it works, a ring runs round the
-//! AI button.
+//! never one of them. A glass card above the Assistant's tile in the bottom-right corner (a
+//! sheet on a phone), a pill while it works; its content routes as a window's does. The tile
+//! opens and hides it, as does Alt+Space; Escape (or a press on the bare desktop) hides it, or
+//! while it works stops the task, as the person's own press, key or wheel outside it does. A
+//! press in it gives it the keys; one on a window takes them back, the overlay staying. Shown by
+//! a finger, it holds the keyboard back until its text field is tapped. A failed program starts
+//! again at the next summon (`Host::open_overlay`). What the agent touches flashes; while it
+//! works, the dot under the Assistant's tile beats (`Shell::draw_dock`).
 
 use gfx::{DrawList, RectF};
 use host::agent::FLASH_MS;
 use host::paint::{faded, px, sheen};
 use host::{OVERLAY, TITLEBAR_H};
-use ui::icon::{cos, sin};
 use ui::{Theme, UiState};
 use wm::{Placement, Rect, State, WinId};
 
@@ -32,7 +31,7 @@ impl Shell {
     /// below, so the content's padding centers its one line of buttons.
     pub(crate) fn overlay_rects(&self) -> (RectF, RectF) {
         let pill = self.host.agent.working;
-        let r = self.strip.overlay(self.size, BAR_H, pill);
+        let r = self.dock.strip.overlay(self.size, BAR_H, pill);
         let grow = if pill { ui::PAD - (r.h - ui::BUTTON_H) / 2.0 } else { 0.0 };
         (r, RectF::new(r.x, r.y - grow, r.w, r.h + 2.0 * grow))
     }
@@ -116,25 +115,16 @@ impl Shell {
         self.host.draw_content(list, OVERLAY, [layout, r], theme, state);
     }
 
-    /// The ring of the last act, fading out; while the overlay works, a dot running round the
-    /// AI button.
+    /// The ring of the last act, fading out.
     pub(crate) fn draw_agent(&mut self, list: &mut DrawList, theme: &Theme, now: f64) {
         if let Some((r, k)) = self.host.agent.flash.map(|(r, t)| (r, 1.0 - (now - t) / FLASH_MS)) {
             if (0.0..=1.0).contains(&k) {
                 list.border(r.inset(-3.0), 11.0, 2.0, faded(theme.accent, k as f32));
             }
         }
-        if self.host.agent.working {
-            let b = self.strip.button;
-            list.border(b.inset(-3.0), b.w / 2.0 + 3.0, 1.5, theme.accent.with_alpha(90));
-            let a = ((now / 1200.0).fract() as f32) * std::f32::consts::TAU;
-            let (cx, cy, rr) = (b.x + b.w / 2.0, b.y + b.h / 2.0, b.w / 2.0 + 3.0);
-            let dot = RectF::new(cx + rr * cos(a) - 3.0, cy + rr * sin(a) - 3.0, 6.0, 6.0);
-            list.fill(dot, 3.0, theme.accent);
-        }
     }
 
-    /// Whether the agent's marks move: a flash fading, or the ring running.
+    /// Whether the agent's marks move: a flash fading, or the Assistant's dot beating.
     pub(crate) fn agent_moves(&self, now: f64) -> bool {
         let flash = self.host.agent.flash.is_some_and(|(_, t)| (t..t + FLASH_MS).contains(&now));
         flash || self.host.agent.working

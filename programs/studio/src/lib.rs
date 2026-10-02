@@ -4,11 +4,12 @@
 //!
 //! [`view`] reads the arguments: none is [`Studio`] with nothing open, asking what to make;
 //! `edit <path>` is [`Studio`] on that file; `run <path>` is [`AppHost`], one `.app` file running.
-//! [`serve`] runs a view until its window closes. Studio asks the AI (through the desktop, as the
-//! Assistant does) for a program, checks it with [`applang`], sends it back with its problem at
-//! most [`assistant::RETRIES`] times, then saves it and runs it live in its window ([`Live`]). A
-//! view asks the desktop to open a `.app` path (to run it), `studio` or `studio:<path>`. Files go
-//! through a [`Disk`]: [`Fs`] in the program, a map in tests.
+//! [`serve`] runs a view until its window closes. Studio runs the coding agent ([`coder`]): it
+//! asks the AI (through the desktop, as the Assistant does) for a program, which the agent
+//! checks with [`applang`] and fixes with edits until it runs clean or its budget is spent; then
+//! Studio saves the best so far and runs it live in its window ([`Live`]). A view asks the
+//! desktop to open `studio:<path>`. Files go through a [`Disk`]: [`Fs`] in the program, a map in
+//! tests.
 
 #![forbid(unsafe_code)]
 
@@ -20,7 +21,6 @@ mod view;
 pub use edit::{MAX_TEXT, Studio};
 pub use run::{APP, AppHost, INPUT, Live};
 use std::io::{self, ErrorKind, Read, Write};
-use std::path::Path;
 use uiwire::{Event, Frame, Node, Style, client::Client};
 
 /// A window's program: events in, frames out.
@@ -61,19 +61,27 @@ impl Disk for Fs {
     }
 
     fn write(&mut self, path: &str, text: &str) -> io::Result<()> {
-        // If this fails, the write says why.
-        let _ = Path::new(path).parent().map(std::fs::create_dir_all);
+        dirs(path);
         std::fs::write(path, text)
     }
 
     fn append(&mut self, path: &str, text: &str) -> io::Result<()> {
-        let _ = Path::new(path).parent().map(std::fs::create_dir_all);
+        dirs(path);
         let mut file = std::fs::OpenOptions::new().create(true).append(true).open(path)?;
         file.write_all(text.as_bytes())
     }
 
     fn exists(&mut self, path: &str) -> bool {
-        Path::new(path).exists()
+        std::fs::metadata(path).is_ok()
+    }
+}
+
+/// Makes each directory above `path` that is missing (if one cannot be, the write says why).
+fn dirs(path: &str) {
+    for (i, b) in path.bytes().enumerate().skip(1) {
+        if b == b'/' || b == b'\\' {
+            let _ = std::fs::create_dir(&path[..i]);
+        }
     }
 }
 
@@ -119,8 +127,14 @@ pub(crate) fn text(style: Style, text: &str) -> Node {
     Node::Text { id: 0, style, text: text.into() }
 }
 
+/// The clock's milliseconds: a make's time, and the seed for `random` (each run deals afresh).
+pub(crate) fn clock() -> u64 {
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH);
+    now.map_or(1, |d| d.as_millis() as u64)
+}
+
 fn file_name(path: &str) -> &str {
-    path.rsplit('/').next().unwrap_or(path)
+    &path[path.rfind('/').map_or(0, |i| i + 1)..]
 }
 
 #[cfg(test)]

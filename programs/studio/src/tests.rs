@@ -1,9 +1,9 @@
 use super::*;
-use crate::edit::{CHECK, CHIP, CODE, MAKE, NEW, OPEN, PROMPT, STOP, TOGGLE, spans};
-use crate::make::NO_BLOCK;
+use crate::edit::{CODE, MAKE, PROMPT, STOP, TOGGLE, spans};
 use crate::run::{EDIT, TOO_BIG};
-use assistant::ai::{CORPUS, HOME, HONEST, MAX_BODY, ROOM, SHORTER, THOUGHT};
-use assistant::json::{Json, quote};
+use coder::ai::{CORPUS, HOME, MAX_BODY};
+use coder::json::{Json, quote};
+use coder::receipt::MAKES;
 use std::collections::BTreeMap;
 use uiwire::{Class, Key, Request, Variant, mods};
 
@@ -89,7 +89,7 @@ impl Win {
     fn last(&mut self, evs: &[Event]) -> Frame {
         self.send(evs).expect("a frame")
     }
-    /// Types `prompt` into Studio's prompt (named in `f`) and makes it: the request.
+    /// Types `prompt` into Studio's prompt (named in `f`) and makes it: the frame and request.
     fn make(&mut self, f: &Frame, prompt: &str) -> (Frame, u32, Json) {
         let id = input(f).0;
         let f = self
@@ -107,16 +107,13 @@ impl Win {
 }
 
 const WIDE: Event = Event::Resize { w: 860, h: 520 };
-const NARROW: Event = Event::Resize { w: 420, h: 640 };
+const NARROW: Event = Event::Resize { w: 411, h: 794 };
 
 fn click(id: u32) -> Event {
     Event::Click { id }
 }
 fn change(id: u32, version: u32, text: &str) -> Event {
     Event::Change { id, version, text: text.into() }
-}
-fn config() -> Event {
-    Event::Config { model: "m/x".into() }
 }
 /// An SSE event with a content delta of `bytes` (whole chars here).
 fn content(id: u32, bytes: &[u8]) -> Event {
@@ -181,27 +178,34 @@ fn ai(f: &Frame) -> (u32, Json) {
     };
     f.requests.iter().find_map(ai).expect("an Ai request")
 }
-/// The `i`th message of a request body: (role, content).
-fn message(body: &Json, i: usize) -> (&str, &str) {
-    let m = body.get("messages").and_then(|m| m.at(i)).expect("a message");
-    (m.get("role").and_then(Json::text).unwrap(), m.get("content").and_then(Json::text).unwrap())
+/// The user message of a request body.
+fn user(body: &Json) -> &str {
+    let m = body.get("messages").and_then(|m| m.at(1)).expect("a user message");
+    m.get("content").and_then(Json::text).unwrap()
 }
-fn messages(body: &Json) -> usize {
-    (0..).take_while(|i| body.get("messages").and_then(|m| m.at(*i)).is_some()).count()
+/// The status line: the first Text of the row with `</>` or, before there is any code, the
+/// Text before the prompt row.
+fn status(f: &Frame) -> &str {
+    let rows: Vec<&Node> = f.nodes.iter().filter(|n| matches!(n, Node::Row { .. })).collect();
+    let row = rows.len().checked_sub(2).map(|i| rows[i]).expect("a status row");
+    match row.children().first() {
+        Some(Node::Text { text, .. }) => text,
+        other => panic!("{other:?}"),
+    }
 }
 fn classes<'t>(text: &'t str, spans: &[uiwire::Span]) -> Vec<(&'t str, Class)> {
     let at = |s: &uiwire::Span| &text[s.start as usize..(s.start + s.len) as usize];
     spans.iter().map(|s| (at(s), s.class)).collect()
 }
 
+const BROKEN: &str = "state n = 0;\nlabel nope;\n";
+
 #[test]
-fn opens_empty_asking_what_to_make() {
+fn opens_empty_with_only_the_prompt_centered() {
     let mut w = Win::new(&[], Mem::new());
     let f = w.last(&[WIDE]);
     assert_eq!(f.title, "Studio");
-    let focus = Request::Focus { id: PROMPT };
-    assert_eq!(f.requests, [Request::Size { w: 880, h: 560 }, focus]);
-    // Centered: room above and below, room either side of a 520 px column.
+    assert_eq!(f.requests, [Request::Size { w: 880, h: 560 }, Request::Focus { id: PROMPT }]);
     let [Node::Fill { .. }, Node::Row { children, .. }, Node::Fill { .. }, Node::Spacer { .. }] =
         &f.nodes[..]
     else {
@@ -211,114 +215,69 @@ fn opens_empty_asking_what_to_make() {
         &children[..],
         [Node::Col { .. }, Node::Pane { w: 520, .. }, Node::Col { .. }]
     ));
-    assert_eq!(input(&f), (PROMPT, "", "Describe an app\u{2026}"));
-    let chips: Vec<_> = all(&f.nodes)
-        .into_iter()
-        .filter_map(|n| match n {
-            Node::Button { id, variant: Variant::Chip, label } => Some((*id, label.as_str())),
-            _ => None,
-        })
-        .collect();
-    let want: Vec<_> = (CHIP..)
-        .zip(["a tip calculator", "a pomodoro timer", "a habit tracker", "a dice roller"])
-        .collect();
-    assert_eq!(chips, want);
-    assert_eq!(
-        words(&f),
-        [
-            "What do you want to make?",
-            "Make",
-            "a tip calculator",
-            "a pomodoro timer",
-            "a habit tracker",
-            "a dice roller"
-        ]
-    );
-    // A blank prompt makes nothing; neither do the buttons of an app not yet made.
+    assert_eq!(input(&f), (PROMPT, "", "Describe an app"));
+    assert_eq!(words(&f), ["Make"]);
+    // A blank prompt makes nothing; `</>` without code does nothing.
     assert!(w.last(&[click(MAKE)]).requests.is_empty());
-    assert!(w.send(&[click(TOGGLE), click(OPEN), click(CHECK)]).is_none());
-    // A chip fills the prompt and makes it; the chips go while it runs.
-    let f = w.last(&[config(), click(CHIP + 3)]);
-    let (_, body) = ai(&f);
-    assert_eq!(message(&body, 1), ("user", "a dice roller"));
-    assert!(f.requests.contains(&Request::Focus { id: PROMPT + 1 }));
-    assert_eq!(input(&f).1, "a dice roller");
-    assert!(has(&f, "Stop") && !has(&f, "Make") && !has(&f, "a tip calculator"));
-    assert!(has(&f, "Asking\u{2026}") && !has(&f, "m/x"));
-    // New opens another Studio.
-    assert_eq!(w.last(&[click(NEW)]).requests, [Request::Open { name: "studio".into() }]);
+    assert!(w.send(&[click(TOGGLE)]).is_none());
 }
 
 #[test]
-fn makes_checks_fixes_and_saves() {
+fn makes_through_the_coder_then_saves_runs_and_records() {
     let mut w = Win::new(&[], Mem::new());
     let f = w.last(&[WIDE]);
-    assert!(w.send(&[config()]).is_none());
+    assert!(w.send(&[Event::Config { model: "m/x".into() }]).is_none());
     let (f, id, body) = w.make(&f, "  a counter ");
     let s = |k| body.get(k).and_then(Json::text);
     assert_eq!(
         [s("model"), s("max_tokens"), s("temperature")],
-        [Some("m/x"), Some("8192"), Some("0.3")]
+        [Some("m/x"), Some("6144"), Some("0.3")]
     );
-    // No reasoning field: the free AI bounds thinking (asked for, it took the whole room).
-    assert_eq!((body.get("reasoning"), body.get("stream")), (None, Some(&Json::Bool(true))));
-    let (role, system) = message(&body, 0);
-    assert!(role == "system" && system.contains(applang::REFERENCE) && system.contains("```app\n"));
-    assert!(system.contains(HONEST) && !system.contains("count with buttons"));
-    assert_eq!((messages(&body), message(&body, 1)), (2, ("user", "a counter")));
-    assert!(has(&f, "Asking\u{2026}") && has(&f, "Stop"));
-    // Reasoning shows as thinking, never as the program.
-    let f = w.last(&[think(id, "Hm\u{e9}. "), think(id, "Ok.")]);
-    assert!(has(&f, "Thinking\u{2026} 8 chars"), "{:?}", words(&f));
-    // A reply that does not compile goes back with its problem, once checked: a fresh request
-    // with what was asked, the problem at its line with a caret, the rule, and the program. Its
-    // request stops once the program's block closes (what follows is never used).
-    let bad = "row {\n  label 1\n}\n";
-    let frames = w.answer(id, &[&app(bad), "Now a second draft:\n```app\nlabel 2;\n"].concat());
-    assert!(has(&frames[0], "Writing\u{2026} 5 chars"));
+    assert_eq!((body.get("reasoning"), user(&body)), (None, "Make: a counter"));
+    let system = body.get("messages").and_then(|m| m.at(0)?.get("content")?.text()).unwrap();
+    assert_eq!(system, coder::system());
+    // While it makes: Stop, its status, the draft; never the model's name.
+    assert_eq!(status(&f), "asking");
+    assert!(has(&f, "Stop") && !has(&f, "Make") && !has(&f, "m/x") && code(&f).0 == 0);
+    // Thinking shows as such, at most a frame a second; the program streams into the draft.
+    let frames = w.frames(&[think(id, "Hm\u{e9}. "), think(id, "Ok.")]);
+    assert_eq!((frames.len(), status(&frames[0])), (1, "thinking \u{b7} 0 s"));
+    let frames = w.answer(id, &app(COUNTER));
+    assert!(frames.iter().any(|f| status(f) == "writing \u{b7} 5 lines" && code(f).2.starts_with("// A counter")));
+    // Its block's end stops the request; testing shows, then the program runs clean.
     let n = frames.len();
-    assert!(has(&frames[n - 2], "Checking\u{2026}"));
-    assert_eq!(frames[n - 2].requests, [Request::AiCancel { id }]);
-    assert!(has(&frames[n - 1], "Retrying (1 of 3) \u{2014} asking\u{2026}"));
-    let (id, body) = ai(&frames[n - 1]);
-    let (role, fix) = message(&body, 1);
-    let want = "You were asked: a counter\n\nYour program did not compile: E0101 at line 3, col 1: \
-                expected `;`, found `}`\n  }\n  ^\nRule: every widget, let, assignment, call \
-                and return ends with ;, also inside the braces of if, row, col and for";
-    assert!(messages(&body) == 2 && role == "user" && fix.starts_with(want), "{fix}");
-    let tail = "fix every occurrence.\n\nYour program:\n```app\nrow {\n  label 1\n}\n```\nReply \
-                with the corrected complete program in one app block.";
-    assert!(fix.ends_with(tail), "{fix}");
-    // A reply with no program asks again, never sending the empty reply back.
-    let f = w.answer(id, "").pop().unwrap();
-    let (id, body) = ai(&f);
-    assert!(has(&f, "Retrying (2 of 3)") && messages(&body) == 2);
-    assert_eq!(message(&body, 1).1, ["a counter\n\n", NO_BLOCK].concat());
-    let f = w.answer(id, "Sorry.").pop().unwrap();
-    let (id, body) = ai(&f);
-    assert!(has(&f, "Retrying (3 of 3)") && message(&body, 1).1.ends_with(NO_BLOCK));
-    // The fix compiles: saved under its first label's name, running, in the corpus; what its
-    // first comment says is what Studio says of it.
-    let f = w.answer(id, &app(COUNTER)).pop().unwrap();
+    assert_eq!(
+        (frames[n - 2].requests.as_slice(), status(&frames[n - 2])),
+        (&[Request::AiCancel { id }][..], "testing")
+    );
+    let f = &frames[n - 1];
     let path = [HOME, "/apps/counter.app"].concat();
     assert_eq!(w.disk.get(&path).map(String::as_str), Some(COUNTER));
-    let said = "A counter: two buttons change one number. \u{2014} saved ~/apps/counter.app";
-    assert!(has(&f, said) && !has(&f, "Ready"), "{:?}", words(&f));
-    assert_eq!(f.title, "Studio \u{2014} counter.app");
+    assert!(status(f).starts_with("ready \u{b7} ") && f.title == "Studio \u{2014} counter.app");
+    assert_eq!(f.nodes[0], text(Style::Small, "A counter: two buttons change one number."));
+    // Full-bleed, no card: its label, its row of buttons; then the status with `</>`.
+    assert_eq!(f.nodes[1], text(Style::Body, "Counter"));
+    assert!(has(f, "</>") && !all(&f.nodes).iter().any(|n| matches!(n, Node::Card { .. })));
+    assert_eq!((input(f).1, input(f).2), ("", "Change it"));
+    assert!(f.requests.contains(&Request::Focus { id: input(f).0 }));
     let line = format!(
-        "{{\"prompt\":\"a counter\",\"program\":{},\"attempts\":4,\"model\":\"m/x\"}}\n",
+        "{{\"prompt\":\"a counter\",\"program\":{},\"attempts\":1,\"model\":\"m/x\"}}\n",
         quote(COUNTER)
     );
     assert_eq!(w.disk[CORPUS], line);
-    // The prompt empties, keeps the keyboard and is remembered; the app runs in a card.
-    assert_eq!(input(&f).1, "");
-    assert!(f.requests.contains(&Request::Focus { id: input(&f).0 }));
-    assert!(has(&f, "\u{201c}a counter\u{201d}") && has(&f, "Counter") && has(&f, "Make"));
-    let card = all(&f.nodes).into_iter().find(|n| matches!(n, Node::Card { .. })).unwrap();
-    assert!(words(&Frame { nodes: vec![card.clone()], ..Frame::default() }).contains(&"Reset"));
+    let made = &w.disk[MAKES];
+    let want = format!(
+        "{{\"v\":1,\"path\":{},\"kind\":\"make\",\"outcome\":\"ready\",\"version\":1,\"lines\":13,",
+        quote(&path)
+    );
+    assert!(
+        made.starts_with(&want)
+            && made.ends_with(",\"fault\":\"\"}\n")
+            && made.lines().count() == 1,
+        "{made}"
+    );
     // Its buttons work in place: "+" is the app's second button.
-    let f = w.last(&[click(APP + 1)]);
-    assert!(words(&f).contains(&"1"));
+    assert!(words(&w.last(&[click(APP + 1)])).contains(&"1"));
     // A second first make of a counter would not overwrite it.
     let mut w2 = Win { view: Box::new(Studio::new("")), disk: w.disk.clone() };
     let f = w2.last(&[WIDE]);
@@ -328,311 +287,259 @@ fn makes_checks_fixes_and_saves() {
 }
 
 #[test]
-fn a_change_sends_the_program_and_keeps_its_file() {
+fn problems_go_back_as_fixes_once_testing_shows() {
+    let mut w = Win::new(&[], Mem::new());
+    let f = w.last(&[WIDE]);
+    let (_, id, _) = w.make(&f, "count");
+    let frames = w.answer(id, &app(BROKEN));
+    let f = frames.last().unwrap();
+    let (fix, body) = ai(f);
+    assert!(
+        fix != id
+            && user(&body)
+                .starts_with("You were asked: count\n\nThe program, numbered:\n  1| state n = 0;")
+    );
+    // The program being fixed shows whole, numbered, its problem marked.
+    assert_eq!(status(f), "fixing line 2 \u{b7} 0 s");
+    let (cid, _, src, spans) = code(f);
+    assert!(cid == 0 && src == BROKEN && classes(src, spans).contains(&("nope", Class::Error)));
+    let edit = "<<<<<<< SEARCH\nlabel nope;\n=======\nlabel n;\n>>>>>>> REPLACE\n";
+    let f = w.answer(fix, edit).pop().unwrap();
+    assert!(
+        status(&f).starts_with("ready") && w.disk.contains_key(&[HOME, "/apps/app.app"].concat())
+    );
+    assert!(w.disk[CORPUS].contains("\"attempts\":2"));
+}
+
+#[test]
+fn a_change_edits_the_open_app_and_never_makes_it_worse() {
     let disk = with(&[("/apps/counter.app", COUNTER)]);
     let mut w = Win::new(&["edit", "counter.app"], disk);
     let f = w.last(&[WIDE]);
-    assert_eq!(f.title, "Studio \u{2014} counter.app");
-    assert!(has(&f, "/apps/counter.app") && input(&f).2 == "Describe a change\u{2026}");
+    assert_eq!((f.title.as_str(), status(&f)), ("Studio \u{2014} counter.app", ""));
     let (_, id, body) = w.make(&f, "add a double button");
-    let (role, ask) = message(&body, 1);
-    let want = format!(
-        "The program now:\n```app\n{}\n```\nChange it: add a double button\nReply with the complete new program in one app block.",
-        COUNTER.trim_end()
+    let asked = user(&body);
+    assert!(asked.starts_with("The program, numbered:\n  1| // A counter: two buttons change one number.\n  2| state count = 0;"));
+    assert!(asked.ends_with("\nChange it: add a double button\nKeep its first comment true."));
+    let add = "<<<<<<< SEARCH\nbutton \"Reset\" { count = 0; }\n=======\nbutton \"Reset\" { count = 0; }\nbutton \"x2\" { count = count * 2; }\n>>>>>>> REPLACE\n";
+    let f = w.answer(id, add).pop().unwrap();
+    let doubled = COUNTER.replace(
+        "button \"Reset\" { count = 0; }\n",
+        "button \"Reset\" { count = 0; }\nbutton \"x2\" { count = count * 2; }\n",
     );
-    assert_eq!((role, ask), ("user", want.as_str()));
-    let doubled = [COUNTER, "button \"x2\" { count = count * 2; }\n"].concat();
-    let f = w.answer(id, &app(&doubled)).pop().unwrap();
     assert_eq!(w.disk["/apps/counter.app"], doubled);
-    let said = "A counter: two buttons change one number. \u{2014} saved /apps/counter.app";
-    assert!(has(&f, said) && has(&f, "x2"));
-    let corpus = &w.disk[CORPUS];
-    assert!(
-        corpus.contains("\"attempts\":1")
-            && corpus.ends_with(&format!(",\"base\":{}}}\n", quote(COUNTER)))
-    );
-    // A make that fails leaves the working program as it was.
-    let (_, mut id, _) = w.make(&f, "break it");
-    for _ in 0..4 {
-        let f = w.answer(id, &app("label nope;\n")).pop().unwrap();
-        if has(&f, "E0906") {
-            let want = "E0906 still not compiling after 3 retries (3 for a fix, 0 shorter, 0 for \
-                        a program): E0302 1:7 ";
-            assert!(has(&f, want), "{:?}", words(&f));
-            assert!(has(&f, "x2") && input(&f).1 == "break it" && f.requests.is_empty());
-            break;
-        }
-        id = ai(&f).0;
-    }
-    assert_eq!(w.disk["/apps/counter.app"], doubled);
-    // So does an AI that fails, and Stop.
-    let f = w.last(&[click(MAKE)]);
-    let id = ai(&f).0;
+    assert!(has(&f, "x2") && status(&f).starts_with("ready"));
+    assert!(w.disk[CORPUS].ends_with(&format!(",\"base\":{}}}\n", quote(COUNTER))));
+    assert!(w.disk[MAKES].contains("\"kind\":\"change\",\"outcome\":\"ready\""));
+    // The AI failing, and Stop, leave the working program as it was.
+    let id = ai(&w.last(&[change(input(&f).0, 1, "break it"), click(MAKE)])).0;
     let f = w.last(&[Event::AiEnd { id, status: 429, error: String::new() }]);
-    assert!(has(&f, "E0903 the free AI is busy, try again in a minute") && has(&f, "Make"));
+    assert_eq!(status(&f), "AI busy \u{b7} try in a minute");
+    assert!(has(&f, "x2") && has(&f, "Make") && input(&f).1 == "break it");
     let id = ai(&w.last(&[click(MAKE)])).0;
     let f = w.last(&[content(id, b"```app\n"), click(STOP)]);
-    assert_eq!(f.requests, [Request::AiCancel { id }]);
-    assert!(has(&f, "Stopped.") && has(&f, "Make"));
+    assert_eq!((f.requests.as_slice(), status(&f)), (&[Request::AiCancel { id }][..], "stopped"));
     assert!(w.send(&[Event::AiEnd { id, status: 0, error: "cancelled".into() }]).is_none());
-    assert_eq!(w.disk["/apps/counter.app"], doubled);
-    // Open in window runs the file.
+    // A change that never runs clean: the app runs on as it was, saying why.
+    let id = ai(&w.last(&[click(MAKE)])).0;
+    let worse = app(&doubled.replace("label count;", "label 1 / (count - count);"));
+    let f = w.answer(id, &worse).pop().unwrap();
+    let id = ai(&f).0;
+    let f = w.answer(id, &worse).pop().unwrap();
+    let id = ai(&f).0;
+    let f = w.answer(id, &worse).pop().unwrap();
+    assert_eq!(status(&f), "couldn't change it \u{b7} E0203 line 7");
+    assert!(w.disk["/apps/counter.app"] == doubled && has(&f, "x2") && f.requests.is_empty());
+    let outcomes: Vec<&str> =
+        w.disk[MAKES].lines().map(|l| &l[l.find("\"outcome\"").unwrap()..][..18]).collect();
     assert_eq!(
-        w.last(&[click(OPEN)]).requests,
-        [Request::Open { name: "/apps/counter.app".into() }]
+        outcomes,
+        [
+            "\"outcome\":\"ready\",",
+            "\"outcome\":\"failed\"",
+            "\"outcome\":\"stopped",
+            "\"outcome\":\"broken\""
+        ]
     );
 }
 
 #[test]
-fn a_program_that_faults_when_it_first_renders_goes_back_and_is_never_saved() {
-    let mut w = Win::new(&["edit", "/apps/counter.app"], with(&[("/apps/counter.app", COUNTER)]));
+fn a_new_app_that_never_compiles_leaves_its_draft_marked() {
+    let mut w = Win::new(&[], Mem::new());
     let f = w.last(&[WIDE]);
-    let (_, mut id, _) = w.make(&f, "show the average");
-    let average = "state total = 0;\nstate count = 0;\nlabel \"Average: \" + total / count;\n";
-    for attempt in 1..=4 {
-        let f = w.answer(id, &app(average)).pop().unwrap();
-        if attempt == 4 {
-            let want = "E0906 still faulting after 3 retries (3 for a fix, 0 shorter, 0 for a \
-                        program): E0203 3:";
-            assert!(has(&f, want) && has(&f, "Reset") && f.requests.is_empty(), "{:?}", words(&f));
-            break;
-        }
-        let body;
-        (id, body) = ai(&f);
-        // A change's fix carries the program it changes: a reply may have left parts out.
-        let (role, fix) = message(&body, 1);
-        let want = format!(
-            "The program now:\n```app\n{}\n```\nChange it: show the average\n\nYour program \
-             faults when it runs: E0203 at line 3, col 21: ",
-            COUNTER.trim_end()
+    let (_, mut id, _) = w.make(&f, "count");
+    for _ in 0..2 {
+        id = ai(w.answer(id, &app(BROKEN)).last().unwrap()).0;
+    }
+    let f = w.answer(id, &app(BROKEN)).pop().unwrap();
+    assert_eq!((status(&f), f.title.as_str()), ("couldn't \u{b7} E0302 line 2", "Studio"));
+    assert!(
+        !w.disk.keys().any(|p| p.ends_with(".app"))
+            && w.disk[MAKES].contains("\"outcome\":\"broken\"")
+    );
+    // `</>` shows it, its problem marked; fixed there, `</>` saves and runs it under its name.
+    let f = w.last(&[click(TOGGLE)]);
+    let (cid, _, src, spans) = code(&f);
+    assert!(src == BROKEN && classes(src, spans).contains(&("nope", Class::Error)));
+    let f = w.last(&[change(cid, 2, "state n = 0;\nlabel \"Tally\";\nlabel n;\n"), click(TOGGLE)]);
+    assert!(status(&f).starts_with("saved ~/apps/tally.app") && has(&f, "Tally"));
+}
+
+/// A program that compiles but faults as it first renders (E0203 at line 4).
+const AVG: &str =
+    "// Avg: what you add, averaged.\nstate t = 0;\nstate c = 0;\nlabel \"avg \" + t / c;\n";
+
+#[test]
+fn make_again_after_nothing_compiled_makes_a_new_app() {
+    let mut w = Win::new(&[], Mem::new());
+    let f = w.last(&[WIDE]);
+    let (_, mut id, _) = w.make(&f, "an average");
+    for _ in 0..2 {
+        id = ai(w.answer(id, &app(BROKEN)).last().unwrap()).0;
+    }
+    assert_eq!(status(&w.answer(id, &app(BROKEN)).pop().unwrap()), "couldn't \u{b7} E0302 line 2");
+    // Make again with the words the prompt kept: a first write again, never a change of the draft
+    // showing, so what compiles but faults is installed as a first make's is.
+    let (mut id, body) = ai(&w.last(&[click(MAKE)]));
+    assert_eq!(user(&body), "Make: an average");
+    for _ in 0..2 {
+        id = ai(w.answer(id, &app(AVG)).last().unwrap()).0;
+    }
+    let f = w.answer(id, &app(AVG)).pop().unwrap();
+    assert_eq!(status(&f), "runs, but faults \u{b7} E0203 line 4");
+    assert_eq!(w.disk.get(&[HOME, "/apps/avg.app"].concat()).map(String::as_str), Some(AVG));
+    assert!(
+        w.disk[MAKES]
+            .lines()
+            .last()
+            .unwrap()
+            .contains("\"kind\":\"make\",\"outcome\":\"faulting\"")
+    );
+}
+
+#[test]
+fn edits_fenced_one_by_one_all_apply_and_cant_saves_nothing() {
+    // A change whose edits come each in its own app fence: all of them, not the first.
+    let mut w = Win::new(&["edit", "/apps/c.app"], with(&[("/apps/c.app", COUNTER)]));
+    let f = w.last(&[WIDE]);
+    let (_, id, _) = w.make(&f, "add x2 and x10");
+    let (reset, title) = ("button \"Reset\" { count = 0; }\n", "label \"Counter\";\n");
+    let x2 = [reset, "button \"x2\" { count = count * 2; }\n"].concat();
+    let x10 = [title, "button \"x10\" { count = count * 10; }\n"].concat();
+    let edit = |s: &str, r: &str| format!("<<<<<<< SEARCH\n{s}=======\n{r}>>>>>>> REPLACE\n");
+    let f = w.answer(id, &(app(&edit(reset, &x2)) + &app(&edit(title, &x10)))).pop().unwrap();
+    assert!(status(&f).starts_with("ready") && has(&f, "x2") && has(&f, "x10"));
+    assert_eq!(w.disk["/apps/c.app"], COUNTER.replace(reset, &x2).replace(title, &x10));
+    // A new app whose write faults, then only a comment: can't make that, nothing saved.
+    let mut w = Win::new(&[], Mem::new());
+    let f = w.last(&[WIDE]);
+    let (_, id, _) = w.make(&f, "an average");
+    let id = ai(w.answer(id, &app(AVG)).last().unwrap()).0;
+    let f = w.answer(id, "```app\n// applang has no floats, so no average.\n```\n").pop().unwrap();
+    assert_eq!(
+        (status(&f), w.disk.keys().any(|p| p.ends_with(".app"))),
+        ("can't make that", false)
+    );
+    assert!(w.disk[MAKES].contains("\"outcome\":\"cant\",\"version\":0"));
+}
+
+#[test]
+fn narrow_windows_show_the_make_with_the_keyboard_away() {
+    let mut w = Win::new(&[], Mem::new());
+    let f = w.last(&[NARROW]);
+    let (f, id, _) = w.make(&f, "a long one");
+    assert!(f.requests.contains(&Request::Focus { id: 0 }));
+    // The draft shows its newest lines, as many as the window holds: (794 - 140) / 18.
+    let long: String = (0..80).map(|i| format!("label {i};\n")).collect();
+    let f = w.last(&[content(id, ["```app\n", &long].concat().as_bytes())]);
+    let (_, _, tail, _) = code(&f);
+    assert_eq!((tail.lines().count(), tail.lines().next()), (36, Some("label 44;")));
+    // One column: the draft, the status, the prompt; no `</>` while it makes.
+    let f = w.last(&[click(STOP)]);
+    assert!(matches!(f.nodes.last(), Some(Node::Row { .. })) && has(&f, "</>"));
+}
+
+#[test]
+fn code_edits_check_save_and_mark_problems() {
+    let mut w = Win::new(&["edit", "/apps/x.app"], with(&[("/apps/x.app", COUNTER)]));
+    w.send(&[WIDE]);
+    let f = w.last(&[click(TOGGLE)]);
+    let (id, version, text, spans) = code(&f);
+    assert_eq!((id, version, text), (CODE + 1, 1, COUNTER));
+    let comment = ("// A counter: two buttons change one number.", Class::Comment);
+    assert_eq!(classes(text, &spans[..2]), [comment, ("state", Class::Keyword)]);
+    // Unedited, `</>` goes back; edited with a problem, it stays and marks it, the app as it was.
+    assert!(
+        !has(&w.last(&[click(TOGGLE)]), "</> ")
+            && w.last(&[click(TOGGLE)])
+                .nodes
+                .iter()
+                .any(|n| matches!(n, Node::Fill { children, .. } if !children.is_empty()))
+    );
+    let bad = "state count = 0;\nlabel count;\nlabel nope;";
+    assert_eq!(status(&w.last(&[change(id, 2, bad)])), "edited");
+    let f = w.last(&[click(TOGGLE)]);
+    assert!(status(&f).starts_with("E0302 3:7 ") && w.disk["/apps/x.app"] == COUNTER);
+    let (_, version, src, spans) = code(&f);
+    assert_eq!(version, 2);
+    assert!(classes(src, spans).ends_with(&[("nope", Class::Error), (";", Class::Punct)]));
+    // An edit takes the underline away; Ctrl+Enter checks, saves and runs it.
+    let fixed = "state count = 0;\nlabel \"n = \" + count;";
+    let f = w.last(&[change(id, 3, fixed)]);
+    assert!(code(&f).3.iter().all(|s| s.class != Class::Error));
+    let f = w.last(&[Event::Key { id, key: Key::Enter, mods: mods::CTRL, ch: '\0' }]);
+    assert!(
+        status(&f) == "saved /apps/x.app" && w.disk["/apps/x.app"] == fixed && has(&f, "n = 0")
+    );
+    // Ctrl+S checks too; a save that fails says why.
+    let mut w = Win::new(&["edit", "/ro/x.app"], Mem::new());
+    let f = w.last(&[WIDE]);
+    assert_eq!(status(&f), "/ro/x.app \u{b7} new file");
+    let f = w.last(&[change(input(&f).0, 1, "x")]);
+    assert!(w.send(&[click(TOGGLE)]).is_none() && !has(&f, "</>"));
+}
+
+#[test]
+fn stale_or_unreadable_text_is_never_sent_or_saved() {
+    let mut w = Win::new(&["edit", "/apps/x.app"], with(&[("/apps/x.app", COUNTER)]));
+    let f = w.last(&[WIDE, click(TOGGLE)]);
+    let id = code(&f).0;
+    // An event that does not decode: the text may be stale.
+    let f = w.raw(vec![vec![2, 4, 0]]).pop().unwrap();
+    assert_eq!(status(&f), "an event did not arrive whole");
+    w.send(&[
+        change(id, 2, "label 2;"),
+        Event::Key { id, key: Key::Char, mods: mods::META, ch: 's' },
+    ]);
+    assert_eq!(w.disk["/apps/x.app"], "label 2;");
+    // Saved, it shows the app; `</>` shows the code again.
+    w.send(&[click(TOGGLE)]);
+    let f = w.last(&[change(id, 6, &"x".repeat(MAX_TEXT + 1))]);
+    assert!(status(&f).contains("over 256 KiB") && code(&f).2 == "label 2;");
+    let f = w.last(&[change(input(&f).0, 1, "more"), click(MAKE)]);
+    assert!(status(&f).starts_with("not made: an edit was lost") && f.requests.is_empty());
+    let f = w.last(&[Event::Key { id, key: Key::Char, mods: mods::CTRL, ch: 's' }]);
+    assert!(status(&f).starts_with("not checked: an edit was lost"));
+    // A file too big to edit, or one that cannot be read, is never saved over.
+    let big = "x".repeat(MAX_TEXT + 1);
+    for (path, why) in [
+        ("/apps/big.app", "the file is over 256 KiB"),
+        ("/bad/x.app", "cannot read it: device busy"),
+    ] {
+        let mut w = Win::new(&["edit", path], with(&[("/apps/big.app", &big)]));
+        let f = w.last(&[WIDE]);
+        assert_eq!(status(&f), why);
+        let f = w.last(&[change(input(&f).0, 1, "a tip calculator"), click(MAKE)]);
+        assert!(status(&f).starts_with("not made: ") && f.requests.is_empty());
+        assert_eq!(
+            w.disk.get(path).map(String::len),
+            (path == "/apps/big.app").then_some(big.len())
         );
-        assert!(role == "user" && fix.starts_with(&want), "{fix}");
-        let rule = "\nRule: guard every / and % so the divisor is never 0.\nIt came while the \
-                    first render.\n";
-        assert!(fix.contains(rule), "{fix}");
-    }
-    assert!(w.disk["/apps/counter.app"] == COUNTER && !w.disk.contains_key(CORPUS));
-}
-
-#[test]
-fn a_program_must_run_from_the_states_its_app_kept() {
-    // A change adding a saved list beside kept ones runs afresh, but faults from them: it goes
-    // back saying so (and what they hold), never saved.
-    let todo = applang::SHOTS[1].1;
-    let (path, state) =
-        ([HOME, "/apps/todo.app"].concat(), [HOME, "/.appdata/todo.state"].concat());
-    let kept = "tasks = [\"milk\", \"eggs\"];\ndone = [false, true];\n";
-    let mut w = Win::new(&["edit", &path], with(&[(&path, todo), (&state, kept)]));
-    let f = w.last(&[WIDE]);
-    let (_, id, _) = w.make(&f, "give each task a due date");
-    let due = todo
-        .replace("done = [false; 0];", "done = [false; 0];\nsaved state due = [\"\"; 0];")
-        .replace("push(done, false);", "push(done, false); push(due, \" today\");")
-        .replace("label tasks[i];", "label tasks[i] + due[i];");
-    let f = w.answer(id, &app(&due)).pop().unwrap();
-    let fix = message(&ai(&f).1, 1).1.to_string();
-    let from = "faults when it runs from its saved states: E0215 at line 34, col 22: index 0 is \
-                outside `due`, which has 0 items\n";
-    let when = "\nIt came while the first render, started from the states it keeps between runs: \
-                `tasks` has 2 items, `done` has 2 items, `due` has 0 items.\n";
-    assert!(fix.contains(from) && fix.contains(when), "{fix}");
-    assert!(w.disk[&path] == todo && has(&f, "milk") && has(&f, "Retrying (1 of 3)"));
-    // Checked as typed, it is saved saying it faults, and runs afresh, keeping nothing over them;
-    // as in its own window, which offers Studio.
-    let code_id = code(&w.last(&[click(STOP), click(TOGGLE)])).0;
-    let f = w.last(&[change(code_id, 2, &due), click(CHECK)]);
-    assert!(has(&f, "It faults as it starts \u{2014} saved ~/apps/todo.app"));
-    assert_eq!(w.disk[&path], due);
-    let note = "outside `due`, which has 0 items, from the states kept in ~/.appdata/todo.state: \
-                it started afresh, and keeps nothing until it runs from them";
-    let f = w.last(&[click(TOGGLE), change(INPUT + 3, 1, "tea"), click(APP)]);
-    assert!(has(&f, "tea") && has(&f, note) && !has(&f, "milk") && w.disk[&state] == kept);
-    let f = Win::new(&["run", &path], w.disk.clone()).last(&[WIDE]);
-    assert!(has(&f, note) && words(&f).last() == Some(&"Edit in Studio"), "{:?}", words(&f));
-}
-
-#[test]
-fn a_reply_out_of_room_asks_for_the_same_app_shorter_or_again_and_ends_in_e0907() {
-    // What GLM 5.3 did with "make a tetris game" when asked to think: all 8,192 tokens of
-    // reasoning and no program (the same again: thinking took the room); then programs cut off
-    // mid-line (shorter). Or a provider thinking on past its budget, by the usage, each time.
-    for overthinks in [false, true] {
-        let mut w = Win::new(&[], Mem::new());
-        let f = w.last(&[WIDE]);
-        let (_, mut id, body) = w.make(&f, "make a tetris game");
-        let first = message(&body, 1).1.to_string();
-        let usage = ",\"usage\":{\"completion_tokens_details\":{\"reasoning_tokens\":7333}}";
-        let cut =
-            ["data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"length\"}]", usage, "}\n"];
-        let cut = cut.map(|s| if overthinks || s != usage { s } else { "" }).concat();
-        for attempt in 1..=4 {
-            let mut evs = vec![think(id, "Rows of ten, so ten states each\u{2026}")];
-            let program = b"```app\nstate a = 0;\nlabel \"Tetris, falling\";\nlabel \"Tet";
-            evs.extend((overthinks || attempt > 1).then(|| content(id, program)));
-            evs.push(Event::AiData { id, data: cut.clone().into() });
-            evs.push(Event::AiEnd { id, status: 200, error: String::new() });
-            let f = w.frames(&evs).pop().unwrap();
-            if attempt == 4 {
-                let end = if overthinks { THOUGHT } else { ROOM };
-                assert!(has(&f, end) && f.requests.is_empty(), "{:?}", words(&f));
-                break;
-            }
-            // The same ask, shorter or not, alone: no empty or cut-off reply goes back.
-            let body;
-            (id, body) = ai(&f);
-            let shorter = ["make a tetris game\n\n", SHORTER].concat();
-            let want = if overthinks || attempt == 1 { &first } else { &shorter };
-            assert_eq!((messages(&body), message(&body, 1).1), (2, want.as_str()));
-            assert!(has(&f, &format!("Retrying ({attempt} of 3)")), "{:?}", words(&f));
-        }
-        assert!(w.disk.is_empty() && ROOM.starts_with("E0907 ") && THOUGHT.starts_with("E0907 "));
     }
 }
 
-/// Answers request `id` with `reply`, then ends it as cut off by the token limit (`cut`) or not.
-fn reply(w: &mut Win, id: u32, reply: &str, cut: bool) -> Frame {
-    let length = "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"length\"}]}\n\n";
-    let mut evs: Vec<_> = reply.as_bytes().chunks(5).map(|c| content(id, c)).collect();
-    evs.extend(cut.then(|| Event::AiData { id, data: length.into() }));
-    evs.push(Event::AiEnd { id, status: 200, error: String::new() });
-    w.frames(&evs).pop().unwrap()
-}
-
 #[test]
-fn a_reply_cut_off_inside_its_block_is_never_run() {
-    // What it holds compiles and runs, but it is part of a program: asked for shorter, unsaved.
-    let mut w = Win::new(&[], Mem::new());
-    let f = w.last(&[WIDE]);
-    let (_, id, _) = w.make(&f, "a counter");
-    let f = reply(&mut w, id, &["```app\n", COUNTER].concat(), true);
-    let (id, body) = ai(&f);
-    assert_eq!(message(&body, 1).1, ["a counter\n\n", SHORTER].concat());
-    assert!(has(&f, "Retrying (1 of 3)") && !has(&f, "Reset") && w.disk.is_empty());
-    // Cut off after its block, the program is whole: saved and run.
-    let f = reply(&mut w, id, &app(COUNTER), true);
-    assert!(has(&f, "saved ~/apps/counter.app") && has(&f, "Reset"), "{:?}", words(&f));
-    assert_eq!(w.disk[&[HOME, "/apps/counter.app"].concat()], COUNTER);
-}
-
-#[test]
-fn a_make_that_gives_up_says_what_was_tried() {
-    let mut w = Win::new(&[], Mem::new());
-    let f = w.last(&[WIDE]);
-    let bad = app("row {\n  label 1\n}\n");
-    // No program, one cut off, no program, then one that does not compile: no fix was asked.
-    let (_, mut id, _) = w.make(&f, "a counter");
-    let tries = [("Sorry.", false), ("```app\nstate n = 0;\nlabel", true), ("Hm.", false)];
-    for (text, cut) in tries {
-        id = ai(&reply(&mut w, id, text, cut)).0;
-    }
-    let f = reply(&mut w, id, &bad, false);
-    let want = "E0906 still not compiling after 3 retries (0 for a fix, 1 shorter, 2 for a \
-                program): E0101";
-    assert!(has(&f, want) && f.requests.is_empty() && w.disk.is_empty(), "{:?}", words(&f));
-    // With a fix among them, the fixes are counted as such.
-    let (_, mut id, _) = w.make(&f, "a counter");
-    for text in ["Sorry.", &bad, &bad] {
-        id = ai(&reply(&mut w, id, text, false)).0;
-    }
-    let f = reply(&mut w, id, &bad, false);
-    let want = "E0906 still not compiling after 3 retries (2 for a fix, 0 shorter, 1 for a \
-                program): E0101";
-    assert!(has(&f, want), "{:?}", words(&f));
-}
-
-#[test]
-fn what_the_first_comment_says_is_said_instead_of_ready() {
-    // An honest program says what applang could not do; Studio says so, not "Ready".
-    let mut w = Win::new(&[], Mem::new());
-    let f = w.last(&[WIDE]);
-    let (_, id, _) = w.make(&f, "make a tetris game");
-    let src = "// Tetris, simplified: applang has no clock, so Drop moves the piece.\n\
-               //   Without: rotation.\nstate rows = 0;\nlabel \"Tetris\";\n\
-               button \"Drop\" { rows = rows + 1; }\n";
-    let f = w.answer(id, &app(src)).pop().unwrap();
-    let said = "Tetris, simplified: applang has no clock, so Drop moves the piece. Without: \
-                rotation. \u{2014} saved ~/apps/tetris.app";
-    assert!(has(&f, said) && !has(&f, "Ready"), "{:?}", words(&f));
-    // A block comment says it too (a game taking keys gets the keyboard); one after code is not.
-    let (_, id, _) = w.make(&f, "count");
-    let count = "/* Count: a number */ state n = 0; on key \"up\" { n += 1; } label n;\n";
-    let f = w.answer(id, &app(count)).pop().unwrap();
-    assert!(has(&f, "Count: a number \u{2014} saved ~/apps/tetris.app"));
-    assert!(f.requests.ends_with(&[Request::Focus { id: 0 }, Request::Keys { on: true }]));
-    let (_, id, _) = w.make(&f, "plain");
-    let f = w.answer(id, &app("state n = 0; // the count\nlabel n;\n")).pop().unwrap();
-    assert!(has(&f, "Ready \u{2713} \u{2014} saved ~/apps/tetris.app") && !has(&f, "the count"));
-    // A long one is cut at 400 bytes.
-    let (_, id, _) = w.make(&f, "long");
-    let f = w.answer(id, &app(&["// ", &"word ".repeat(200), "\nlabel 1;\n"].concat()));
-    let cut = ["word ".repeat(80), "\u{2026} \u{2014} saved".into()].concat();
-    assert!(has(f.last().unwrap(), &cut), "{:?}", words(f.last().unwrap()));
-}
-
-#[test]
-fn edits_and_prompts_made_while_the_ai_writes_are_kept() {
-    let mut w = Win::new(&["edit", "/apps/counter.app"], with(&[("/apps/counter.app", COUNTER)]));
-    let f = w.last(&[WIDE]);
-    let titled = [COUNTER, "label \"Title\"; on key \"up\" { count += 1; }\n"].concat();
-    // A prompt typed meanwhile stays, in the same Input, with the keyboard (the game made then
-    // takes keys).
-    let (f, id, _) = w.make(&f, "add a title");
-    w.send(&[change(input(&f).0, 2, "bigger buttons")]);
-    let f = w.answer(id, &app(&titled)).pop().unwrap();
-    assert!(has(&f, "A counter: two") && w.disk["/apps/counter.app"] == titled);
-    assert_eq!(f.requests, [Request::Keys { on: true }]);
-    assert_eq!(input(&f), (PROMPT, "bigger buttons", "Describe a change\u{2026}"));
-    // Code edited meanwhile, here checked and saved, wins over the reply, on screen and on disk.
-    let (_, id, _) = w.make(&f, "add a footer");
-    let code_id = code(&w.last(&[click(TOGGLE)])).0;
-    let zero = titled.replace("Reset", "Zero");
-    let f = w.last(&[change(code_id, 2, &zero), click(CHECK)]);
-    assert!(has(&f, "Checked \u{2713}") && w.disk["/apps/counter.app"] == zero);
-    let f = w.answer(id, &app(&[&titled, "label \"Footer\";\n"].concat())).pop().unwrap();
-    assert!(has(&f, "Kept your edits, not the AI's"), "{:?}", words(&f));
-    assert_eq!((code(&f).2, w.disk["/apps/counter.app"].as_str()), (zero.as_str(), zero.as_str()));
-    assert_eq!(input(&f).1, "add a footer");
-    assert_eq!(w.disk[CORPUS].lines().count(), 1);
-}
-
-#[test]
-fn makes_fit_what_the_free_ai_takes() {
-    // A change's fix carries the program it changes and the one it fixes (`ai` checks the size).
-    for lines in [2000, 3500] {
-        let big = "label 1;\n".repeat(lines);
-        let mut w = Win::new(&["edit", "/apps/big.app"], with(&[("/apps/big.app", &big)]));
-        let f = w.last(&[WIDE]);
-        let (_, id, body) = w.make(&f, "add a title");
-        assert!(message(&body, 1).1.contains(big.trim_end()));
-        let (reply, done) = (app(&[&big, "label;\n"].concat()), b"data: [DONE]\n\n".to_vec());
-        let end = Event::AiEnd { id, status: 200, error: String::new() };
-        let f = w.last(&[content(id, reply.as_bytes()), Event::AiData { id, data: done }, end]);
-        if lines == 3500 {
-            // One whose fix is too big to send ends there, its file as it was.
-            assert!(has(&f, "Not made: too big to send to the AI (80 KiB at most)"));
-            assert!(!f.requests.iter().any(|r| matches!(r, Request::Ai { .. })));
-            assert_eq!(w.disk["/apps/big.app"], big);
-            break;
-        }
-        let (_, body) = ai(&f);
-        let fix = message(&body, 1).1;
-        let asked =
-            ["The program now:\n```app\n", big.trim_end(), "\n```\nChange it: add a title\n\n"];
-        assert!(messages(&body) == 2 && fix.starts_with(&asked.concat()));
-        assert!(fix.contains(&[&big, "label;\n```"].concat()));
-    }
-    // One too big even to ask for is not made, and nothing is sent.
-    let big = "label 1;\n".repeat(9000);
-    let mut w = Win::new(&["edit", "/apps/big.app"], with(&[("/apps/big.app", &big)]));
-    let f = w.last(&[WIDE]);
-    let id = input(&f).0;
-    let f = w.last(&[change(id, 1, "add a title"), Event::Submit { id }]);
-    assert!(!f.requests.iter().any(|r| matches!(r, Request::Ai { .. })) && has(&f, "Make"));
-    assert!(has(&f, "Not made: too big to send to the AI (80 KiB at most)"));
-}
-
-#[test]
-fn studio_ids_stay_below_the_apps() {
+fn studio_ids_stay_below_the_apps_and_the_overlay_finds_them() {
     let mut w = Win::new(&["edit", "/apps/greeter.app"], with(&[("/apps/greeter.app", GREETER)]));
     w.send(&[WIDE]);
     let f = w.last(&[change(INPUT, 2, "Ada"), click(APP)]);
@@ -648,147 +555,15 @@ fn studio_ids_stay_below_the_apps() {
     unique.sort();
     unique.dedup();
     assert_eq!(unique.len(), ids.len(), "{ids:?}");
-    let card = all(&f.nodes).into_iter().find(|n| matches!(n, Node::Card { .. })).unwrap();
-    for n in all(&f.nodes) {
-        let (Node::Button { id, .. } | Node::Input { id, .. }) = n else { continue };
-        let inside = all(card.children()).iter().any(|c| std::ptr::eq(*c, n));
-        assert_eq!(*id >= APP, inside, "{n:?}");
-    }
-    assert!(
-        [MAKE, STOP, TOGGLE, OPEN, NEW, CHECK, CHIP + 3, PROMPT, CODE].iter().all(|id| *id < APP)
+    assert!([MAKE, STOP, TOGGLE, PROMPT, CODE].iter().all(|id| *id < APP));
+    assert_eq!(
+        (STOP, PROMPT, CODE),
+        (coder::ids::STOP, coder::ids::PROMPT, coder::ids::PROMPT_END)
     );
     const { assert!(PROMPT + 0xFF_FFFF < CODE && CODE + 0xFF_FFFF < APP && APP < INPUT) };
-    // The code view's editor is Studio's too.
     let f = w.last(&[click(TOGGLE)]);
-    assert!((CODE..APP).contains(&code(&f).0) && has(&f, "Preview") && has(&f, "Check"));
+    assert!((CODE..APP).contains(&code(&f).0));
 }
-
-#[test]
-fn narrow_windows_stack_with_the_prompt_last() {
-    let mut w = Win::new(&["edit", "/apps/counter.app"], with(&[("/apps/counter.app", COUNTER)]));
-    let f = w.last(&[WIDE]);
-    let [Node::Row { children: head, .. }, Node::Row { children: body, .. }] = &f.nodes[..] else {
-        panic!("{:?}", f.nodes)
-    };
-    assert!(
-        matches!(&head[..2], [Node::Text { style: Style::Heading, text, .. }, Node::Col { .. }] if text == "Counter")
-    );
-    assert!(matches!(&body[..], [Node::Card { .. }, Node::Pane { w: 280, .. }]));
-    // Narrower than 600: one column, the app keeping its height and the prompt at the bottom.
-    let f = w.last(&[NARROW]);
-    assert!(matches!(&f.nodes[..3], [Node::Text { .. }, Node::Row { .. }, Node::Card { .. }]));
-    assert!(matches!(f.nodes[3], Node::Fill { .. }));
-    let Some(Node::Row { children, .. }) = f.nodes.last() else { panic!("{:?}", f.nodes) };
-    assert!(matches!(&children[..], [Node::Input { .. }, Node::Button { id: MAKE, .. }]));
-    // A size on the same side draws nothing; the code fills the column itself.
-    assert!(w.send(&[Event::Resize { w: 599, h: 300 }]).is_none());
-    let f = w.last(&[click(TOGGLE)]);
-    assert!(
-        matches!(&f.nodes[2], Node::Col { children, .. } if matches!(children[0], Node::Fill { .. }))
-    );
-    assert!(!f.nodes.iter().any(|n| matches!(n, Node::Fill { .. })));
-    assert!(w.send(&[Event::Resize { w: 600, h: 300 }]).is_some());
-}
-
-#[test]
-fn code_edits_check_save_and_mark_problems() {
-    let mut w = Win::new(&["edit", "/apps/x.app"], with(&[("/apps/x.app", COUNTER)]));
-    w.send(&[WIDE]);
-    let f = w.last(&[click(TOGGLE)]);
-    let (id, version, text, spans) = code(&f);
-    assert_eq!((id, version, text), (CODE + 1, 1, COUNTER));
-    let comment = ("// A counter: two buttons change one number.", Class::Comment);
-    assert_eq!(classes(text, &spans[..2]), [comment, ("state", Class::Keyword)]);
-    // An edit with a problem: Check marks it and leaves the app running as it was.
-    let bad = "state count = 0;\nlabel count;\nlabel nope;";
-    let f = w.last(&[change(id, 2, bad)]);
-    assert_eq!(words(&f).last(), Some(&"Edited"));
-    let f = w.last(&[click(CHECK)]);
-    assert!(has(&f, "E0302 3:7 ") && w.disk["/apps/x.app"] == COUNTER);
-    let (_, version, src, spans) = code(&f);
-    assert_eq!(version, 2);
-    assert!(classes(src, spans).ends_with(&[("nope", Class::Error), (";", Class::Punct)]));
-    // An edit takes the underline away; Ctrl+Enter checks, saves and runs it.
-    let fixed = "state count = 0;\nlabel \"n = \" + count;";
-    let f = w.last(&[change(id, 3, fixed)]);
-    assert!(code(&f).3.iter().all(|s| s.class != Class::Error));
-    let f = w.last(&[Event::Key { id, key: Key::Enter, mods: mods::CTRL, ch: '\0' }]);
-    assert!(
-        has(&f, "Checked \u{2713} \u{2014} saved /apps/x.app") && w.disk["/apps/x.app"] == fixed
-    );
-    assert!(has(&w.last(&[click(TOGGLE)]), "n = 0"));
-    // Open in window says when it runs the saved file, not the edits.
-    let f = w.last(&[change(id, 4, "label 4;"), click(OPEN)]);
-    assert!(has(&f, "Opened the saved version") && f.requests.len() == 1);
-    // Ctrl+S checks too; a save that fails says why.
-    let mut w = Win::new(&["edit", "/ro/x.app"], Mem::new());
-    let f = w.last(&[WIDE]);
-    assert!(has(&f, "/ro/x.app \u{b7} new file") && has(&f, "Nothing here yet"));
-    let id = code(&w.last(&[click(TOGGLE)])).0;
-    let f = w.last(&[
-        change(id, 2, "label 1;"),
-        Event::Key { id, key: Key::Char, mods: mods::META, ch: 's' },
-    ]);
-    assert!(has(&f, "Couldn't save /ro/x.app: read-only"));
-}
-
-#[test]
-fn stale_or_unreadable_text_is_never_sent_or_saved() {
-    let mut w = Win::new(&["edit", "/apps/x.app"], with(&[("/apps/x.app", COUNTER)]));
-    let f = w.last(&[WIDE, click(TOGGLE)]);
-    let id = code(&f).0;
-    // An event that does not decode: the text may be stale.
-    let f = w.raw(vec![vec![2, 4, 0]]).pop().unwrap();
-    assert!(has(&f, "An event did not arrive whole"));
-    let f = w.last(&[click(CHECK)]);
-    assert!(has(&f, "Not checked: an edit was lost; edit again to send it"));
-    let f = w.last(&[change(input(&f).0, 1, "more"), click(MAKE)]);
-    assert!(has(&f, "Not made: an edit was lost") && f.requests.is_empty());
-    // The next edit brings them back; one too big for a frame is lost.
-    w.send(&[change(id, 5, "label 5;"), click(CHECK)]);
-    assert_eq!(w.disk["/apps/x.app"], "label 5;");
-    let f = w.last(&[change(id, 6, &"x".repeat(MAX_TEXT + 1))]);
-    assert!(has(&f, "over 256 KiB") && code(&f).2 == "label 5;");
-    // A file too big to edit, or one that cannot be read, is never saved over.
-    let big = "x".repeat(MAX_TEXT + 1);
-    for (path, why) in [
-        ("/apps/big.app", "the file is over 256 KiB"),
-        ("/bad/x.app", "cannot read it: device busy"),
-    ] {
-        let mut w = Win::new(&["edit", path], with(&[("/apps/big.app", &big)]));
-        let f = w.last(&[WIDE]);
-        let id = code(&w.last(&[click(TOGGLE)])).0;
-        assert!(has(&f, why));
-        let f = w.last(&[change(id, 2, "label 1;"), click(CHECK)]);
-        assert!(has(&f, &["Not checked: ", why].concat()));
-        assert_eq!(
-            w.disk.get(path).map(String::len),
-            (path == "/apps/big.app").then_some(big.len())
-        );
-    }
-}
-
-#[test]
-fn asks_from_the_everything_bar_make_in_turn() {
-    let mut w = Win::new(&[], Mem::new());
-    w.send(&[WIDE]);
-    let ask = |text: &str| Event::Ask { text: text.into() };
-    assert!(w.send(&[ask("  ")]).is_none());
-    let f = w.last(&[ask("a counter")]);
-    let (id, body) = ai(&f);
-    assert_eq!((message(&body, 1).1, input(&f).1), ("a counter", "a counter"));
-    // One while a make runs waits for it, then changes what it made.
-    let f = w.last(&[ask("add a double button")]);
-    assert!(!f.requests.iter().any(|r| matches!(r, Request::Ai { .. })));
-    let frames = w.answer(id, &app(COUNTER));
-    let f = frames.last().unwrap();
-    let (_, body) = ai(f);
-    assert!(message(&body, 1).1.contains("Change it: add a double button"));
-    assert!(
-        has(&frames[frames.len() - 2], "A counter: two") && input(f).1 == "add a double button"
-    );
-}
-
 #[test]
 fn arguments_pick_the_view() {
     assert!(applang::compile(COUNTER).is_ok());

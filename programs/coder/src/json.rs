@@ -1,5 +1,6 @@
 //! Just enough JSON: a strict reader for the AI service's chunks and a string
-//! quoter for the requests; and [`Stream`], the SSE body read as it arrives.
+//! quoter for the requests; and [`Stream`], the SSE body read as it arrives, with what it cost
+//! ([`Usage`]).
 
 /// A JSON value; a number keeps its text.
 #[derive(Clone, Debug, PartialEq)]
@@ -145,16 +146,36 @@ impl Parser<'_> {
 
 /// `s` as a JSON string.
 pub fn quote(s: &str) -> String {
-    let mut out = String::from('"');
+    let mut out = String::new();
+    put(&mut out, s);
+    out
+}
+
+/// Appends `s` to `out` as a JSON string.
+pub fn put(out: &mut String, s: &str) {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    out.push('"');
     for c in s.chars() {
         match c {
             '"' | '\\' => out.extend(['\\', c]),
-            c if c < ' ' => out.push_str(&format!("\\u{:04x}", u32::from(c))),
+            c if c < ' ' => {
+                let hex = |n: u32| char::from(HEX[n as usize & 15]);
+                out.extend(['\\', 'u', '0', '0', hex(u32::from(c) >> 4), hex(u32::from(c))]);
+            }
             c => out.push(c),
         }
     }
     out.push('"');
-    out
+}
+
+/// What a reply cost, as its usage chunk said: tokens in (of them, read from the provider's
+/// cache) and out (of them, reasoning: thinking a provider spent, streamed or not).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Usage {
+    pub input: u32,
+    pub cached: u32,
+    pub output: u32,
+    pub reasoning: u32,
 }
 
 /// A server-sent-events chat-completion body, read in chunks of any size:
@@ -167,13 +188,10 @@ pub struct Stream {
     other: String,
     /// The AI service's error message, if it sent one.
     pub error: String,
-    /// The tokens in and out, once the usage chunk came.
-    pub usage: Option<(String, String)>,
+    /// What the reply cost, once the usage chunk came (a cancelled reply never has it).
+    pub usage: Option<Usage>,
     /// The chars of reasoning deltas so far: the model thinking, never part of the text.
     pub thought: usize,
-    /// The reasoning tokens the usage chunk counted (0 until it came, or if it did not say):
-    /// thinking a provider spent, streamed as reasoning or not.
-    pub reasoning: u64,
     /// Why the reply ended, once a chunk said: `stop`, or `length` when it ran out of room.
     pub finish: String,
 }
@@ -197,12 +215,14 @@ impl Stream {
     pub fn end(&mut self, text: &mut String, max: usize) {
         let rest = std::mem::take(&mut self.rest);
         self.line(&String::from_utf8_lossy(&rest), text, max);
-        let body = Json::parse(&self.other);
-        if let (true, Some(m)) = (self.error.is_empty(), body.as_ref().and_then(message)) {
-            self.error = m.into();
+        if let (true, Some(m)) = (self.error.is_empty(), error(self.other.as_bytes())) {
+            self.error = m;
         }
     }
 
+    /// One line. A chunk is read for the members it may hold (a choice's `finish_reason`, a
+    /// delta's `content`, `reasoning` or `reasoning_content`, an `error`, the `usage`), by key,
+    /// rather than whole: a key in a string is escaped (`\"content\":`), so it never matches.
     fn line(&mut self, line: &str, text: &mut String, max: usize) {
         let line = line.trim_end_matches('\r');
         let Some(data) = line.strip_prefix("data:").map(str::trim_start) else {
@@ -211,35 +231,91 @@ impl Stream {
             }
             return;
         };
-        let Some(v) = Json::parse(data) else { return };
-        let choice = v.get("choices").and_then(|c| c.at(0));
-        if let Some(f) = choice.and_then(|c| c.get("finish_reason")?.text()) {
-            self.finish = f.into();
+        let b = data.as_bytes();
+        if let Some(f) = string(b, "finish_reason") {
+            self.finish = f;
         }
-        let delta = choice.and_then(|c| c.get("delta"));
-        let field = |k| delta.and_then(|d| d.get(k)?.text());
-        if let Some(d) = field("content").filter(|_| text.len() < max) {
-            text.push_str(d);
+        if let Some(d) = string(b, "content").filter(|_| text.len() < max) {
+            text.push_str(&d);
         }
-        let thought = field("reasoning").or_else(|| field("reasoning_content"));
+        let thought = string(b, "reasoning").or_else(|| string(b, "reasoning_content"));
         self.thought += thought.map_or(0, |t| t.chars().count());
-        if let Some(m) = message(&v) {
-            self.error = m.into();
+        if let Some(m) = error(b) {
+            self.error = m;
         }
-        let usage = v.get("usage");
-        let tokens = |k| usage.and_then(|u| u.get(k)).and_then(Json::text).map(str::to_string);
-        if let (Some(i), Some(o)) = (tokens("prompt_tokens"), tokens("completion_tokens")) {
-            self.usage = Some((i, o));
-        }
-        let details = usage.and_then(|u| u.get("completion_tokens_details"));
-        if let Some(n) = details.and_then(|d| d.get("reasoning_tokens")?.text()?.parse().ok()) {
-            self.reasoning = n;
+        // The last usage: the gateway's own metadata comes earlier in the chunk.
+        let Some(at) = (0..b.len()).rev().find(|&i| b[i..].starts_with(b"\"usage\":{")) else {
+            return;
+        };
+        let n = |k| number(&b[at..], k).and_then(whole);
+        if let (Some(input), Some(output)) = (n("prompt_tokens"), n("completion_tokens")) {
+            let (cached, reasoning) = (n("cached_tokens"), n("reasoning_tokens"));
+            let (cached, reasoning) = (cached.unwrap_or(0), reasoning.unwrap_or(0));
+            self.usage = Some(Usage { input, cached, output, reasoning });
         }
     }
 }
 
-/// `error.message`, or `error` when it is a string.
-fn message(v: &Json) -> Option<&str> {
-    let e = v.get("error")?;
-    e.get("message").unwrap_or(e).text()
+/// Where the value of the first `"key":` in `b` starts.
+fn value(b: &[u8], key: &str) -> Option<usize> {
+    let pat = ["\"", key, "\":"].concat();
+    let pat = pat.as_bytes();
+    b.windows(pat.len()).position(|w| w == pat).map(|i| i + pat.len())
+}
+
+/// The string value of the first `"key":` in `b`, if it is one.
+fn string(b: &[u8], key: &str) -> Option<String> {
+    Parser { s: b, i: value(b, key)? }.string()
+}
+
+/// The text of the number value of the first `"key":` in `b`, if it is one.
+fn number<'a>(b: &'a [u8], key: &str) -> Option<&'a str> {
+    let at = value(b, key)?;
+    let rest = &b[at..];
+    let start = rest.iter().position(|c| !c.is_ascii_whitespace())?;
+    // Signs and exponents are taken too, so that they fail to read rather than read short.
+    let n = rest[start..].iter().take_while(|c| b"+-.eE0123456789".contains(c)).count();
+    core::str::from_utf8(&rest[start..start + n]).ok().filter(|s| !s.is_empty())
+}
+
+/// Where the value of the outermost object's member `"key":` starts in `b` (`b` from that
+/// object's `{`): a member of a nested object is not it.
+fn member(b: &[u8], key: &str) -> Option<usize> {
+    let pat = ["\"", key, "\""].concat();
+    let (mut depth, mut text, mut i) = (0, false, 0);
+    while i < b.len() {
+        match b[i] {
+            b'\\' if text => i += 1,
+            b'"' if !text && depth == 1 && b[i..].starts_with(pat.as_bytes()) => {
+                let mut p = Parser { s: b, i: i + pat.len() };
+                if p.eat(b':') {
+                    return Some(p.i);
+                }
+                text = true;
+            }
+            b'"' => text = !text,
+            b'{' | b'[' if !text => depth += 1,
+            b'}' | b']' if !text => depth -= 1,
+            _ => {}
+        }
+        i += 1;
+    }
+    None
+}
+
+/// The chunk's own `error.message`, or `error` when it is a string; never one nested in it (the
+/// gateway's metadata lists each provider it tried, with the errors of those that failed).
+fn error(b: &[u8]) -> Option<String> {
+    let mut p = Parser { s: b, i: member(b, "error")? };
+    p.ws();
+    match b.get(p.i)? {
+        b'{' => Parser { s: b, i: p.i + member(&b[p.i..], "message")? }.string(),
+        _ => p.string(),
+    }
+}
+
+/// `s`, digits only (at most 9), as a number; `None` for anything else.
+fn whole(s: &str) -> Option<u32> {
+    let ok = !s.is_empty() && s.len() <= 9 && s.bytes().all(|b| b.is_ascii_digit());
+    ok.then(|| s.bytes().fold(0, |n, b| n * 10 + u32::from(b - b'0')))
 }

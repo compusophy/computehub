@@ -1,5 +1,5 @@
-//! Context menus: which one a secondary press opens, what their items do, and the dock's
-//! favorites they change.
+//! Context menus: which one a secondary press opens, what their items do (the dock's favorites
+//! they change: `home::dock::Dock::keep`).
 
 use gfx::DrawList;
 use home::menu::{Item, Menu};
@@ -7,7 +7,7 @@ use ui::Theme;
 use wm::{Cmd, State, WinId};
 
 use crate::desktop::Target;
-use crate::{Effect, Response, Shell};
+use crate::{Response, Shell};
 
 /// What a menu item does to the menu's app: open a new window of it, show it (its window, else a
 /// new one), add it to the dock (or remove it), close its windows; or show the Assistant, show a
@@ -49,15 +49,16 @@ impl Shell {
         out.redraw |= self.menu.is_some();
     }
 
-    /// The menu for `hit` at `at` (the desktop's, the AI button's, an app's for an icon or a
-    /// dock tile, or a window's), with its app and window.
+    /// The menu for `hit` at `at` (the desktop's, the Assistant's tile's, an app's for an icon or
+    /// a dock tile, or a window's), with its app and window. The Assistant is no dock's: its
+    /// icon's menu only opens it.
     fn menu_for(&mut self, hit: Target, at: (f32, f32), touch: bool) -> Option<Open> {
         let menu = |s: &mut Shell, items: &[Item<Act>]| {
             Menu::new(items, at, s.size, touch, &mut s.host.text)
         };
         let (name, running) = match hit {
             Target::Desktop => return Some((menu(self, &DESKTOP), String::new(), None)),
-            Target::Ai => {
+            Target::Assistant => {
                 let ask = [("Ask the Assistant", "Alt+Space", Some(Act::Ask))];
                 return Some((menu(self, &ask), String::new(), None));
             }
@@ -74,10 +75,10 @@ impl Shell {
                 return Some((menu(self, items), String::new(), Some(w)));
             }
             Target::Icon(i) => (self.grid.icons.get(i)?.name.clone(), false),
-            Target::Dock(i) => self.dock.get(i).map(|d| (d.0.clone(), !d.2.is_empty()))?,
+            Target::Dock(i) => self.tiles.get(i).map(|d| (d.0.clone(), !d.2.is_empty()))?,
             _ => return None,
         };
-        let kept = self.favs.contains(&name);
+        let kept = self.dock.favs.contains(&name);
         let items = [
             match running {
                 true => ("New window", "", Some(Act::Open)),
@@ -89,7 +90,8 @@ impl Shell {
             },
             ("Close", "", Some(Act::Close)),
         ];
-        Some((menu(self, &items[..2 + usize::from(running)]), name, None))
+        let n = if name == host::ASSISTANT { 1 } else { 2 + usize::from(running) };
+        Some((menu(self, &items[..n]), name, None))
     }
 
     /// Does what item `i` of the open menu says, closing it.
@@ -99,7 +101,7 @@ impl Shell {
         match act {
             Act::Open => self.host.open(&name, None, out),
             Act::Show => self.host.show(&name, out),
-            Act::Keep(keep) => self.keep(&name, keep),
+            Act::Keep(keep) => self.dock.keep(&name, keep, &mut self.pending),
             Act::Close => {
                 for w in self.host.windows_of(&name) {
                     self.host.apply(Cmd::Close(w));
@@ -113,14 +115,6 @@ impl Shell {
                     self.host.apply([Cmd::Minimize, Cmd::ToggleMaximize, Cmd::Close][i](w));
                 }
             }
-        }
-    }
-
-    /// Adds `name` to the dock or removes it, saving the favorites if they changed.
-    pub(crate) fn keep(&mut self, name: &str, keep: bool) {
-        if home::dock::pin(&mut self.favs, name, keep) {
-            let value = home::joined(&self.favs);
-            self.pending.push(Effect::Pref { key: home::dock::PREF.to_string(), value });
         }
     }
 
