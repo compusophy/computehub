@@ -96,11 +96,18 @@ fn the_strip_centers_the_ai_button_between_the_docks_wings() {
     let alone = Strip::new(0, 0, (1280.0, 800.0));
     assert_eq!((alone.button, alone.wings[0].w, alone.wings[1].w), (s.button, 0.0, 0.0));
     assert_eq!((alone.at(560.0, 750.0), alone.at(720.0, 750.0)), (None, None));
-    // A phone shrinks the tiles until the fuller wing fits beside the button (not below 21).
+    // A phone shrinks the tiles until the fuller wing fits beside the button, to a finger's 32 px;
+    // a fuller dock slides the button aside, and only one too long even so shrinks further:
+    // every tile stays on the screen.
     let phone = Strip::new(1, 3, (390.0, 844.0));
     let right = phone.wings[1];
     assert_eq!((phone.tile, phone.button.x, right.x + right.w), (39.0, 167.0, 385.0));
-    assert_eq!(Strip::new(0, 9, (390.0, 844.0)).tile, 21.0);
+    for (favs, others, tile, x) in [(4, 0, 32.0, 186.0), (8, 0, 29.0, 322.0), (0, 9, 25.0, 11.0)] {
+        let s = Strip::new(favs, others, (390.0, 844.0));
+        assert_eq!((s.tile, s.button.x, s.xs.len()), (tile, x, favs + others));
+        assert!(s.xs.iter().all(|&x| x >= 13.0 && x + s.tile <= 377.0), "{favs} {others}");
+    }
+    assert_eq!(Strip::new(4, 4, (390.0, 844.0)).button.x, 167.0);
     // Drawn: the wings and tiles, the focused app's dot in the accent, the others' dim; the
     // button's glass, washed while held.
     let (mut list, mut text, t) = (DrawList::new(), text(), &THEMES[0]);

@@ -562,15 +562,16 @@ fn menus_open_where_pressed_follow_the_keys_and_act() {
 }
 
 #[test]
-fn a_finger_held_still_long_presses_and_its_press_does_nothing_more() {
+fn a_finger_held_still_long_presses_and_only_a_menu_ends_its_press() {
     let (mut s, log) = desk();
     let c = content_rect(rectf(s.rect(1).unwrap()));
-    // On a button in a window: frames come while it waits (and only then); at 500 ms its
-    // press is over, so lifting it presses and clicks nothing, a gesture's lift.
+    // On a button in a window: frames come while it waits (and only then); at 500 ms nothing
+    // opens (content has no menu), so its press goes on: lifted there, it taps it.
     s.set_now(2000.0);
     assert!(s.push((c.x + 10.0, c.y + 10.0), 0, true).animating);
     assert!(s.at(2100.0) && s.at(2499.0) && !s.at(2500.0));
-    assert!(s.up((c.x + 10.0, c.y + 10.0)).gesture && log.take().is_empty());
+    assert!(!s.up((c.x + 10.0, c.y + 10.0)).gesture);
+    assert!(matches!(log.take()[..], [(_, E::PointerDown { .. }), (_, E::Click(W(1)))]));
     // On the desktop: its menu, where the finger is, with touch-high items; lifting keeps it.
     s.set_now(3000.0);
     s.push((600.0, 640.0), 0, true);
@@ -618,6 +619,20 @@ fn a_finger_held_still_long_presses_and_its_press_does_nothing_more() {
     s.push((600.0, 640.0), 0, true);
     s.to((400.0, 500.0));
     assert!(s.lasso.is_none() && s.up((400.0, 500.0)).gesture);
+    // A finger that drifted 9 px while it waited drags only 8 px past where it picked one up.
+    s.set_now(13_000.0);
+    s.push(STUDIO, 0, true);
+    s.to((STUDIO.0 + 9.0, STUDIO.1));
+    s.at(13_600.0);
+    s.to((STUDIO.0 + 16.0, STUDIO.1));
+    s.up((STUDIO.0 + 16.0, STUDIO.1));
+    assert_eq!(s.labels(), ["Open", "Add to dock"]);
+    // Held on the AI button: its menu, which is then what the finger is on (no tooltip).
+    s.k(Escape, "");
+    s.set_now(14_000.0);
+    s.push(AI, 0, true);
+    s.at(14_600.0);
+    assert!(s.labels() == ["Ask the Assistant"] && s.hover != Some(Target::Ai));
 }
 
 #[test]
@@ -732,10 +747,13 @@ fn icons_move_by_drag_and_the_person_keeps_the_order() {
     assert_eq!(r.effects, [Effect::Pref { key: "home.order".into(), value: order.into() }]);
     assert!(s.names() == ["welcome"] && log.take().iter().all(|e| !matches!(e.1, E::Click(_))));
     // Escape, or the pointer leaving, puts a carried icon back; dropped where it was, no change.
-    for cancel in [Input::Key { key: Escape, mods: Mods::default() }, Input::PointerLeave] {
+    s.rest(1000.0);
+    for cancel in [Input::PointerLeave, Input::Key { key: Escape, mods: Mods::default() }] {
         s.down(cell(0));
         s.to(cell(6));
         assert!(s.input(cancel).redraw && s.carry.is_none());
+        let r = s.motion.cell(0, s.host.now_ms).unwrap();
+        assert_eq!((r.x + r.w / 2.0, r.y + 30.0), cell(6), "it slides back from where it showed");
         assert!(s.up(cell(6)).effects.is_empty() && s.names() == ["welcome"]);
     }
     s.drag(cell(1), (cell(1).0 + 9.0, cell(1).1));
@@ -750,7 +768,7 @@ fn icons_move_by_drag_and_the_person_keeps_the_order() {
 
 #[test]
 fn a_box_selects_icons_which_open_and_move_together() {
-    let (mut s, _) = desk();
+    let (mut s, log) = desk();
     // From the bare desktop a mouse draws a box; the icons it touches are selected.
     s.to((5.0, 50.0));
     s.down((5.0, 50.0));
@@ -775,6 +793,16 @@ fn a_box_selects_icons_which_open_and_move_together() {
     let order =
         ["Terminal", "Files", "Settings", "Feedback", "About", "Studio", "Assistant", "Welcome"];
     assert_eq!(s.labels_home(), order);
+    // An app that takes the focus ends it (a selected icon clicked, a binding): Enter is the app's.
+    s.drag((5.0, 50.0), (95.0, 260.0));
+    s.click(cell(0));
+    log.take();
+    s.k(Enter, "");
+    let enter = E::Key { key: Enter, mods: Mods::default() };
+    assert!(s.selected.is_empty() && log.take() == [("terminal", enter)]);
+    s.drag((5.0, 50.0), (95.0, 260.0));
+    s.k(Space, "a");
+    assert!(s.selected.is_empty() && s.names().ends_with(&["terminal", "assistant"]));
 }
 
 #[test]
@@ -938,5 +966,32 @@ fn a_finger_taps_into_a_window_it_just_opened() {
         s.up(at);
         let got = log.take();
         assert!(got.iter().any(|e| e == &("settings", E::Click(W(1)))), "{frames:?}: {got:?}");
+    }
+}
+
+#[test]
+fn a_finger_taps_an_apps_widget_however_late_its_lift_is_heard() {
+    // The phone bug: a Terminal open (it wants text), then Settings over it. A busy page heard
+    // each tap's lift after a frame that saw 500 ms pass: that long press opened nothing, yet it
+    // ended the press, so the app never heard the tap. Only a menu ends a press now.
+    let (mut s, log) = desk_with(390.0, 844.0, Prefs { seen: true, ..Prefs::default() });
+    s.rest(1000.0);
+    let tap = |s: &mut Shell, (x, y): (f32, f32), t: f64, late: f64| {
+        s.set_now(t);
+        s.push((x, y), 0, true);
+        s.at(t + late);
+        s.set_now(t + late + 10.0);
+        s.up((x, y))
+    };
+    let term = home::icons::cell(2, rectf(s.wm().area()), true);
+    let r = tap(&mut s, (term.x + term.w / 2.0, term.y + 30.0), 2000.0, 100.0);
+    assert_eq!((s.names(), r.text_input), (vec!["terminal"], Some(true)));
+    assert_eq!(tap(&mut s, (390.0 - 22.0, BAR_H / 2.0), 3000.0, 100.0).text_input, Some(false));
+    s.rest(1000.0);
+    let c = content_rect(rectf(s.rect(2).unwrap()));
+    log.take();
+    for (t, late) in [(6000.0, 100.0), (7000.0, 600.0), (8000.0, 1500.0)] {
+        assert!(!tap(&mut s, (c.x + 10.0, c.y + 10.0), t, late).gesture);
+        assert!(matches!(log.take()[..], [(_, E::PointerDown { .. }), (_, E::Click(W(1)))]));
     }
 }

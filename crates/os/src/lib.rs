@@ -171,7 +171,8 @@ impl Desktop {
         }
         // A tap on the focused window while typing asks for text input again,
         // inside its user activation: that brings back a dismissed keyboard. A
-        // finger's scroll, wander or long press does not.
+        // finger's scroll, wander or long press does not; a long press on
+        // content that opened no menu is a tap.
         let tap = release.filter(|_| !r.gesture);
         if tap.is_some_and(|(x, y)| !asked && self.typing && self.over_focus(x, y)) {
             ctl.set_text_input(true);

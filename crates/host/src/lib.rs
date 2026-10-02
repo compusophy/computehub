@@ -120,7 +120,8 @@ pub enum Cursor {
 }
 
 /// After an input: draw, `preventDefault`, text input and cursor (if changed), effects, animate,
-/// and whether a finger lifted from a gesture (a scroll, a wander or a long press), not a tap.
+/// and whether a finger lifted from a gesture (a scroll, a wander or a long press), not a tap; a
+/// long press on a window's content that opened no menu is still a tap.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Response {
     pub redraw: bool,

@@ -158,16 +158,21 @@ one. Forked crates keep their Apache-2.0 license and note their origin.
   wide screen, in rows of four on a phone; there is no other list. A
   `.app` file's icon is its sigil, sacred geometry made from its name. A
   click opens; a mouse dragged 4 px carries an icon, and the others slide
-  aside; a finger held 500 ms picks one up: moved 8 px it drags, lifted
-  unmoved it opens the icon's menu. A mouse dragged on the bare desktop
-  draws a box that selects the icons it touches; Enter opens them, dragging
-  one carries them all. The order is kept (`home.order`).
+  aside; a finger held 500 ms picks one up: moved 8 px from there it drags,
+  lifted unmoved it opens the icon's menu. A finger held anywhere else opens
+  the menu there, if there is one; where there is none (an app's widget) it
+  is still a tap when it lifts. A mouse dragged on the bare desktop draws a
+  box that selects the icons it touches; Enter opens them, dragging one
+  carries them all, and an app that takes the focus ends the selection. The
+  order is kept (`home.order`).
 - **AI button**: bottom center, where the early iPad's home button was, a
-  round of glass with the ring and dot. It shows the Assistant (Alt+Space
+  round of glass with the ring and dot (a phone's full dock slides it aside
+  just enough to keep every tile on the screen). It shows the Assistant (Alt+Space
   too); its menu asks the Assistant. Later it listens.
 - **Dock**: two glass wings beside the AI button: the favorites to its left
   (none at first; "Add to dock" from any app's menu), the other running
   apps to its right, a dot under each running one and a tooltip on hover.
+  Tiles shrink to fit beside the button down to 32 px, a finger's.
   A click opens, focuses or minimizes; windows minimize into their tile.
   The strip's place never changes, so neither does the work area.
 - **Keys** (`mod` is Alt or Meta, without Ctrl):

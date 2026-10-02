@@ -44,22 +44,26 @@ impl Shell {
         }
     }
 
-    /// A finger held still long enough picks up the icon under it (its menu waits for it to
-    /// lift unmoved), else is a secondary press where it went down: its press into content is
-    /// over, and if that opens a menu, so is the button it holds.
+    /// A finger held still long enough picks up the icon under it where the finger is now (its
+    /// drag starts from there; its menu waits for it to lift unmoved), else is a secondary press
+    /// where it went down. Only a menu that opens ends what the finger holds (a button, a window,
+    /// a press into content), and the menu is then what is under it; a long press that opens
+    /// nothing, such as one on an app's widget, is still a tap when it lifts there. So a late
+    /// lift (a busy page handles it after the frame that saw 500 ms pass) loses no tap.
     pub(crate) fn hold(&mut self, out: &mut Response) {
         let now = self.host.now_ms;
         let Some((finger, _)) = &mut self.touch else { return };
         if finger.held(now) {
-            let (at, menu) = (finger.at, self.menu.is_some());
-            (self.app_press, self.down, self.grab) = (None, None, None);
+            let (at, menu, here) = (finger.at, self.menu.is_some(), self.pointer);
             if let (Some(Target::Icon(i)), false) = (self.hit(at.0, at.1), menu) {
-                (self.carry, self.armed, out.redraw) = (self.pick(i, at, true), None, true);
+                let carry = self.pick(i, here.unwrap_or(at), true);
+                (self.carry, self.armed, out.redraw) = (carry, None, true);
                 return;
             }
             self.secondary(at, true, out);
             if !menu && self.menu.is_some() {
-                self.armed = None;
+                (self.armed, self.app_press, self.down, self.grab) = (None, None, None, None);
+                self.hover = here.and_then(|(x, y)| self.hit(x, y));
             }
         }
     }

@@ -12,7 +12,8 @@
 //! [`Input::Resize`] that makes it so, and the shell sets the `seen` preference.
 //!
 //! The pointer: button 0 presses, button 2 (or a finger held still for 500 ms) opens a context
-//! menu; a finger that travels over a window's content scrolls it as the wheel does, and flings
+//! menu (where there is none, the finger's press goes on: lifted there, it taps, as on an app's
+//! widget); a finger that travels over a window's content scrolls it as the wheel does, and flings
 //! it on when it lifts moving. Icons move: a mouse drags one past 4 px; a finger held on one for
 //! 500 ms picks it up, then moving it 8 px drags it, and lifting it unmoved opens its menu
 //! instead. A mouse dragged on the bare desktop draws a box that selects the icons it touches;
@@ -102,8 +103,10 @@ pub struct Shell {
     down: Option<(WinId, AppEvent)>,
     grab: Option<Grab>,
     last_title: Option<(WinId, f64)>,
-    /// The focus and its want of text input, and the cursor, as last told.
+    /// The focus and its want of text input, and the cursor, as last told; the focus as last
+    /// settled.
     ime: Option<(Option<WinId>, bool)>,
+    focus: Option<WinId>,
     cursor: Cursor,
     clock: Option<LocalTime>,
     /// The dock: the favorites, the apps it shows (favorites first), the strip they sit on.
@@ -145,7 +148,7 @@ impl Shell {
         let order = home::names(prefs.home.as_deref().unwrap_or(""));
         let mut shell = Shell { host, pending: Vec::new(), size, pointer: None, hover: None,
             armed: None, app_hover: None, app_press: None, down: None, grab: None, last_title: None,
-            ime: None, cursor: Cursor::Default, clock: None, favs, dock: Vec::new(),
+            ime: None, focus: None, cursor: Cursor::Default, clock: None, favs, dock: Vec::new(),
             strip: Default::default(), icons: Vec::new(), order, listed: None,
             selected: Vec::new(), carry: None, lasso: None, reduced: false, menu: None,
             touch: None, fling: None, motion: Default::default(), instant: false,
@@ -265,6 +268,11 @@ impl Shell {
     pub fn input(&mut self, input: Input) -> Response {
         let (mut out, before) = (Response::default(), self.visuals());
         self.instant = false;
+        if matches!(input, Input::PointerLeave) {
+            // Carried icons slide back from where they show, which needs the pointer.
+            (self.touch, self.lasso) = (None, None);
+            self.drop_icons(false);
+        }
         self.pointer = match input {
             Input::PointerMove { x, y }
             | Input::PointerDown { x, y, .. }
@@ -296,11 +304,7 @@ impl Shell {
                 self.secondary(self.pointer.unwrap_or_default(), touch, &mut out)
             }
             Input::PointerUp { button, .. } => self.release(button == 0, &mut out),
-            Input::PointerDown { .. } => {}
-            Input::PointerLeave => {
-                (self.touch, self.lasso) = (None, None);
-                self.drop_icons(false);
-            }
+            Input::PointerDown { .. } | Input::PointerLeave => {}
             Input::Wheel { x, y, dy } => self.wheel(coord(x), coord(y), dy, &mut out),
             Input::Resize { w, h } => {
                 self.resize((coord(w).max(0.0), coord(h).max(0.0)));
@@ -400,9 +404,14 @@ impl Shell {
         self.animating()
     }
 
-    /// Brings the apps up to date with the wm, then the shell with the apps and the files.
+    /// Brings the apps up to date with the wm, then the shell with the apps and the files. An app
+    /// that takes the focus ends the home screen's selection: Enter and Escape are then its own.
     fn settle(&mut self, out: &mut Response) {
         self.host.settle(out);
+        let focus = self.host.focused_app();
+        if mem::replace(&mut self.focus, focus) != focus && focus.is_some() {
+            self.selected.clear();
+        }
         let h = &self.host;
         (self.app_hover, self.app_press) =
             (self.app_hover.filter(|w| h.live(w.0)), self.app_press.filter(|w| h.live(w.0)));

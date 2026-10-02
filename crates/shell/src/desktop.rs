@@ -242,7 +242,8 @@ impl Shell {
         let ((x, y), now) = (self.pointer.unwrap_or_default(), self.host.now_ms);
         if let Some((finger, scroll)) = self.touch.take() {
             self.fling = finger.lift(now).map(|f| (scroll, f));
-            out.gesture = finger.done;
+            // A press into content that outlived a long press is a tap.
+            out.gesture = finger.done && self.down.is_none();
         }
         let held = self.carry.as_ref().filter(|c| c.touch && c.lifted && !c.moved).map(|c| c.from);
         self.drop_icons(held.is_none());

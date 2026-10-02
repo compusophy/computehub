@@ -1,7 +1,8 @@
-//! The bottom strip: the AI button at its center, where the early iPad's home button was, and the
-//! dock in two wings beside it, glass shelves of tiles: the person's favorites (kept as the
-//! [`PREF`] preference, none at first) to its left, the other running apps to its right, a dot
-//! under each running app. The strip's place never changes, so neither does the work area.
+//! The bottom strip: the AI button at its center, where the early iPad's home button was (aside
+//! only as far as a phone's full dock needs), and the dock in two wings beside it, glass shelves of
+//! tiles: the person's favorites (kept as the [`PREF`] preference, none at first) to its left, the
+//! other running apps to its right, a dot under each running app. The strip's height and place on
+//! the screen's bottom never change, so neither does the work area.
 
 use gfx::{DrawList, RectF};
 use host::paint::{faded, px, sheen};
@@ -16,11 +17,12 @@ pub const H: f32 = 64.0;
 pub const BOTTOM: f32 = 13.0;
 pub const GAP: f32 = 8.0;
 pub const BUTTON: f32 = 56.0;
-/// A tile's side, and the least it shrinks to on a narrow screen; a wing's padding around its
-/// tiles (below them, 12 for the dots); the space between tiles; the air between the button and
-/// a wing, and between a wing and the screen's edge; a wing's corner radius; the running dot.
+/// A tile's side, and the least it shrinks to beside a centered button (a finger's); a wing's
+/// padding around its tiles (below them, 12 for the dots); the space between tiles; the air
+/// between the button and a wing, and between a wing and the screen's edge; a wing's corner
+/// radius; the running dot.
 pub const TILE: f32 = 44.0;
-const MIN_TILE: f32 = 21.0;
+const MIN_TILE: f32 = 32.0;
 const PAD: f32 = 8.0;
 const SPACE: f32 = 8.0;
 const AIR: f32 = 13.0;
@@ -76,21 +78,30 @@ pub struct Strip {
 impl Strip {
     /// The strip on a `w` x `h` screen, for `favs` favorites and `others` other running apps:
     /// the button centered, each wing growing out from it; tiles shrink until the fuller wing
-    /// fits beside the button.
+    /// fits beside the button. Past 32 px (a phone's full dock) the button slides off center as
+    /// far as the wings need to stay on the screen, and only a dock too long for the screen even
+    /// so shrinks its tiles further: every tile stays in reach.
     pub fn new(favs: usize, others: usize, (w, h): (f32, f32)) -> Strip {
         let (y, cx) = (h - BOTTOM - H, (w / 2.0).round());
-        let button = RectF::new(cx - BUTTON / 2.0, y + (H - BUTTON) / 2.0, BUTTON, BUTTON);
-        let n = favs.max(others).max(1) as f32;
-        let room = cx - BUTTON / 2.0 - AIR - EDGE - 2.0 * PAD - (n - 1.0) * SPACE;
-        let tile = (room / n).clamp(MIN_TILE, TILE).floor();
-        let wh = tile + PAD + 12.0;
-        let wide = |k: usize| match k {
+        let wide = |k: usize, tile: f32| match k {
             0 => 0.0,
             k => 2.0 * PAD + k as f32 * tile + (k - 1) as f32 * SPACE,
         };
+        let n = favs.max(others).max(1);
+        let beside = (cx - BUTTON / 2.0 - AIR - EDGE - wide(n, 0.0)) / n as f32;
+        let side = |k: usize, tile: f32| if k > 0 { AIR + wide(k, tile) } else { 0.0 };
+        let across = w - 2.0 * EDGE - BUTTON - side(favs, 0.0) - side(others, 0.0);
+        let all = across / (favs + others).max(1) as f32;
+        let tile = if beside >= MIN_TILE { beside.min(TILE) } else { all.clamp(1.0, MIN_TILE) };
+        let tile = tile.floor();
+        // Not clamp: its panic path links in float formatting.
+        let (lo, hi) = (EDGE + side(favs, tile), w - EDGE - BUTTON - side(others, tile));
+        let bx = (cx - BUTTON / 2.0).min(hi).max(lo);
+        let button = RectF::new(bx, y + (H - BUTTON) / 2.0, BUTTON, BUTTON);
+        let wh = tile + PAD + 12.0;
         let wy = y + ((H - wh) / 2.0).round();
-        let left = RectF::new(button.x - AIR - wide(favs), wy, wide(favs), wh);
-        let right = RectF::new(button.x + BUTTON + AIR, wy, wide(others), wh);
+        let left = RectF::new(button.x - AIR - wide(favs, tile), wy, wide(favs, tile), wh);
+        let right = RectF::new(button.x + BUTTON + AIR, wy, wide(others, tile), wh);
         let mut xs = Vec::new();
         for (wing, k) in [(left, favs), (right, others)] {
             for i in 0..k {
