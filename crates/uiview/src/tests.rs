@@ -572,7 +572,7 @@ fn grids_draw_theme_squares_and_points_find_them() {
     let square = |c: f32, r: f32| RectF::new(x + 96.0 * c, PAD + 96.0 * r, 95.0, 95.0);
     assert!(d.filled(square(0.0, 0.0), t.surface_lo) && d.filled(square(1.0, 0.0), t.ansi[1]));
     assert!(d.filled(square(0.0, 1.0), t.ansi[8]) && d.filled(square(1.0, 1.0), t.ansi[2]));
-    assert_eq!((d.hit(7).rect, d.hit(7).sense), (rect, Sense::Click));
+    assert_eq!((d.hit(7).rect, d.hit(7).sense), (rect, Sense::Pad));
     // The empty ones outlined, as a text field is, so the board shows on any surface.
     let edge = |c, r| at(&d, Kind::Border, square(c, r), t.border);
     assert_eq!([edge(0.0, 0.0), edge(0.0, 2.0), edge(1.0, 0.0)], [1, 1, 0]);

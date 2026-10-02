@@ -20,8 +20,8 @@ type Log = Rc<RefCell<Vec<(&'static str, E)>>>;
 
 /// A scripted app: its name and log. It logs every event, runs the
 /// `;`-separated commands of its text, and draws a Click hit (1) over its
-/// content's top-left 60 x 20 and a Text hit (2) below that. A terminal
-/// and the Assistant want text input; a program starts its process.
+/// content's top-left 60 x 20, a Text hit (2) below that and a Pad (3) below
+/// it. A terminal and the Assistant want text input; a program starts its process.
 struct Probe(&'static str, Log);
 
 impl App for Probe {
@@ -33,6 +33,7 @@ impl App for Probe {
         let r = ui.rect();
         ui.hit(W(1), RectF::new(r.x, r.y, 60.0, 20.0), Sense::Click);
         ui.hit(W(2), RectF::new(r.x, r.y + 20.0, r.w, 40.0), Sense::Text);
+        ui.hit(W(3), RectF::new(r.x, r.y + 60.0, r.w, 40.0), Sense::Pad);
     }
 
     fn event(&mut self, ev: E, cx: &mut Cx<'_>) -> bool {
@@ -677,12 +678,8 @@ fn fingers_scroll_what_they_hold_and_fling_it_on() {
     let (mut s, log) = desk();
     let c = content_rect(rectf(s.rect(1).unwrap()));
     let at = (c.x + 10.0, c.y + 10.0);
-    let wheels = |log: &Log| -> Vec<f32> {
-        log.take()
-            .iter()
-            .filter_map(|e| if let E::Wheel { dy, .. } = e.1 { Some(dy) } else { None })
-            .collect()
-    };
+    let wheel = |e: &(_, E)| if let E::Wheel { dy, .. } = e.1 { Some(dy) } else { None };
+    let wheels = |log: &Log| -> Vec<f32> { log.take().iter().filter_map(wheel).collect() };
     // A tap presses into the content as it lifts, then clicks.
     s.push(at, 0, true);
     assert!(log.take().is_empty() && !s.up(at).gesture);
@@ -899,6 +896,12 @@ fn the_focused_app_gets_keys_text_and_the_pointer() {
     // A mouse held down on content and moved: the app hears where to (a grid draws by it).
     s.drag((c.x + 10.0, c.y + 10.0), (c.x + 30.0, c.y + 12.0));
     assert_eq!(log.take()[1], ("welcome", E::Drag { x: 30.0, y: 12.0 }));
+    // A finger on a pad presses it at once and drags it, never scrolling it; no click either.
+    s.push((c.x + 10.0, c.y + 70.0), 0, true);
+    assert_eq!(log.take(), [("welcome", E::PointerDown { x: 10.0, y: 70.0, id: Some(W(3)) })]);
+    s.to((c.x + 40.0, c.y + 30.0));
+    assert!(s.up((c.x + 40.0, c.y + 30.0)).gesture && s.fling.is_none());
+    assert_eq!(log.take(), [("welcome", E::Drag { x: 40.0, y: 30.0 })]);
 }
 
 #[test]
@@ -965,10 +968,8 @@ fn a_finger_taps_however_late_its_lift_is_heard() {
     };
     let term = home::icons::cell(2, rectf(s.wm().area()), true);
     let r = tap(&mut s, (term.x + term.w / 2.0, term.y + 30.0), 2000.0, 600.0);
-    assert_eq!(
-        (s.names(), r.text_input, s.grid.carry.is_none()),
-        (vec!["terminal"], Some(true), true)
-    );
+    let want = (vec!["terminal"], Some(true), true);
+    assert_eq!((s.names(), r.text_input, s.grid.carry.is_none()), want);
     assert_eq!(tap(&mut s, (390.0 - 22.0, BAR_H / 2.0), 3000.0, 100.0).text_input, Some(false));
     // The first tap lands while Settings still opens (one frame, mid-motion): it finds it too.
     let c = content_rect(rectf(s.rect(2).unwrap()));

@@ -349,8 +349,9 @@ impl Host {
                 break;
             }
             let hits = self.win(p.win).map_or(&[][..], |x| &x.hits);
-            let hit =
-                |h: &ui::Hit| scene::Hit { id: h.id.0, sense: h.sense as u8, rect: px(h.rect) };
+            // A pad reads as a click's: the scene's senses are click, text and scroll.
+            let sense = |h: &ui::Hit| [0, 1, 2, 0][h.sense as usize];
+            let hit = |h: &ui::Hit| scene::Hit { id: h.id.0, sense: sense(h), rect: px(h.rect) };
             let fit = |_: &&ui::Hit| take(&mut room, 13);
             w.hits = hits.iter().take(HITS).take_while(fit).map(hit).collect();
             let mark = |m: gfx::Mark| {

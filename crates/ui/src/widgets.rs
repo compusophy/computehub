@@ -40,6 +40,9 @@ pub enum Sense {
     Text,
     /// It scrolls under the wheel.
     Scroll,
+    /// A pad (a board a game is played on): a finger presses it at once and drags across it, so
+    /// it never scrolls the window nor long-presses; it has no Click.
+    Pad,
 }
 
 /// A region that answers the pointer: the visible part of a widget's rect.

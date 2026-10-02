@@ -43,7 +43,8 @@ impl App for Probe {
             ui.mark(W(2), sem::GRID, 0, &"1".repeat(20_000));
         }
         if self.1 != "page" {
-            return ui.hit(ui::WidgetId(1), ui.rect(), ui::Sense::Click);
+            let sense = if self.1 == "board" { ui::Sense::Pad } else { ui::Sense::Click };
+            return ui.hit(ui::WidgetId(1), ui.rect(), sense);
         }
         // A heading, a switch that is on, a field, and more text than the window shows.
         ui.heading("Privacy");
@@ -576,6 +577,7 @@ fn the_scene_holds_each_window_its_hits_its_marks_and_the_text_that_shows() {
     let lens: Vec<_> =
         s.wins[0].marks.iter().map(|m| (m.value.len(), m.value.ends_with('…'))).collect();
     assert_eq!(lens, [(4100, false), (12 << 10, true)]);
+    assert_eq!(s.wins[0].hits[0].sense, 0, "a pad reads as a click");
     // However much the windows say, the scene stays within 64 KiB as sent (the top windows
     // first), a mark's value within 512 bytes, cut ones saying so.
     h.open("long", None, &mut Response::default());

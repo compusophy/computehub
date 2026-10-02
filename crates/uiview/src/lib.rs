@@ -655,8 +655,9 @@ impl Lay<'_> {
 
 /// A Grid's squares centered across `r` in their colors ([`color`]), a text in each that has one
 /// and room (made to fit); the empty ones outlined, as text fields are, and the whole where no
-/// gap parts them, so a board shows on any surface. With an id, a click hit over the squares
-/// and, for the AI, a mark of its size, a row of colors a line, then each text by its square.
+/// gap parts them, so a board shows on any surface. With an id, a pad hit over the squares (a
+/// finger plays it at once) and, for the AI, a mark of its size, a row of colors a line, then
+/// each text by its square.
 /// Where the squares are.
 fn grid(
     ui: &mut Ui<'_>,
@@ -687,7 +688,7 @@ fn grid(
         ui.border(at, 0.0, edge, t.border);
     }
     if id != 0 {
-        ui.hit(WidgetId(id), at, Sense::Click);
+        ui.hit(WidgetId(id), at, Sense::Pad);
         if ui.list().sem().is_some() {
             let mut v = String::new();
             for (num, k) in [(n, " columns, "), (cells.len().div_ceil(n), " rows")] {
