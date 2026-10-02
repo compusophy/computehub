@@ -17,3 +17,4 @@ compusophy-icons.workspace = true
 compusophy-gfx.workspace = true
 compusophy-vfs.workspace = true
 compusophy-kernel.workspace = true
+compusophy-uiwire.workspace = true

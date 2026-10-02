@@ -328,6 +328,28 @@ fn cards_hold_their_content() {
 }
 
 #[test]
+fn a_recording_frame_keeps_text_once_and_the_marks() {
+    let mut t = ts();
+    let (mut list, mut hits) = (DrawList::recording(), Vec::new());
+    let r = RectF::new(0.0, 0.0, 400.0, 300.0);
+    let mut ui = Ui::new(&mut list, &mut t, r, &mut hits, state(None, None, true), MIDNIGHT);
+    // A card's measuring run records nothing; a field marks itself a textbox with its value.
+    ui.card(|ui| _ = ui.button(WidgetId(4), "Apply"));
+    ui.text_field(WidgetId(5), "", true, "Name");
+    ui.text_field(WidgetId(6), "Ada", false, "Name");
+    ui.mark(WidgetId(4), sem::TAB, sem::SELECTED, "");
+    drop(ui);
+    let sem = list.take_sem().unwrap();
+    let runs: Vec<&str> = sem.runs.iter().map(|r| r.text.as_str()).collect();
+    assert_eq!((runs, hits.len()), (vec!["Apply", "Name", "Ada"], 3));
+    let marks: Vec<_> = sem.marks.iter().map(|m| (m.id, m.role, m.flags, &*m.value)).collect();
+    assert_eq!(marks, [(5, sem::TEXTBOX, sem::FOCUSED, ""), (6, 5, 0, "Ada"), (4, 2, 1, "")]);
+    // Elsewhere a mark is nothing.
+    let (_, list, _) = frame(&mut t, MIDNIGHT, r, REST, |ui| ui.mark(WidgetId(1), 1, 1, "x"));
+    assert!(list.sem().is_none() && list.is_empty());
+}
+
+#[test]
 fn everything_lands_on_device_pixels() {
     let mut t = ts();
     t.set_dpr(1.5);

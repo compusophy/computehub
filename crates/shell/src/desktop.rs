@@ -5,7 +5,7 @@ use gfx::RectF;
 use host::frame::{
     CTL_STEP, TOUCH_STEP, Zone, controls, edge, edge_cursor, hit_box, resized, zone,
 };
-use host::{Cursor, TITLEBAR_H, content_rect, rectf};
+use host::{Cursor, OVERLAY, TITLEBAR_H, content_rect, rectf};
 use ui::{AppEvent, Sense};
 use wm::{Cmd, Placement, Rect, State, WinId};
 
@@ -84,6 +84,9 @@ impl Shell {
         if let Some(t) = self.dock_hit(x, y) {
             return Some(t);
         }
+        if self.overlay.open && self.overlay_rects().0.contains(x, y) {
+            return Some(Target::Body(OVERLAY));
+        }
         let step = self.ctl_step();
         for p in self.host.wm().layout().iter().rev() {
             let r = rectf(p.rect);
@@ -123,7 +126,11 @@ impl Shell {
         ui::hit_test(&self.host.win(win).filter(|_| inside)?.hits, x, y)
     }
 
+    /// Where window `win` is (the overlay's as if it were one).
     pub(crate) fn placement(&self, win: WinId) -> Option<Placement> {
+        if win == OVERLAY {
+            return self.overlay_placement();
+        }
         self.host.wm().layout().into_iter().find(|p| p.win == win)
     }
 
@@ -153,6 +160,13 @@ impl Shell {
         if hit == Some(Target::Off) {
             self.menu = None;
             return;
+        }
+        let overlay = matches!(hit, Some(Target::Body(OVERLAY)));
+        self.takeover(!overlay && hit != Some(Target::Ai), out);
+        match hit {
+            Some(Target::Desktop) => self.overlay = Default::default(),
+            Some(Target::Ai) => {}
+            _ => self.overlay.focus = overlay,
         }
         self.armed = hit.filter(|h| h.is_button());
         let scroll = match hit {
@@ -282,7 +296,7 @@ impl Shell {
             Target::Feedback => self.host.show("feedback", out),
             Target::Settings => self.host.show("settings", out),
             Target::Dock(i) => self.host.toggle(&name(self, i), out),
-            Target::Ai => self.host.show("assistant", out),
+            Target::Ai => self.toggle_overlay(false),
             Target::Ctl(w, i) => {
                 self.host.apply([Cmd::Minimize, Cmd::ToggleMaximize, Cmd::Close][i](w))
             }
@@ -297,7 +311,9 @@ impl Shell {
 
     /// The wheel goes to the app under it.
     pub(crate) fn wheel(&mut self, x: f32, y: f32, dy: f32, out: &mut Response) {
-        let Some(Target::Body(win)) = self.hit(x, y) else { return };
+        let hit = self.hit(x, y);
+        self.takeover(hit != Some(Target::Body(OVERLAY)), out);
+        let Some(Target::Body(win)) = hit else { return };
         let scroll = Scroll::Win(win, (x, y));
         out.consumed |= dy.is_finite() && self.scroll(scroll, dy, out);
     }

@@ -167,8 +167,12 @@ one. Forked crates keep their Apache-2.0 license and note their origin.
   order is kept (`home.order`).
 - **AI button**: bottom center, where the early iPad's home button was, a
   round of glass with the ring and dot (a phone's full dock slides it aside
-  just enough to keep every tile on the screen). It shows the Assistant (Alt+Space
-  too); its menu asks the Assistant. Later it listens.
+  just enough to keep every tile on the screen). It opens and hides the
+  Assistant (Alt+Space too; its menu asks it), which is never a window: the
+  overlay, a card above the button (a sheet on a phone) that uses the
+  desktop for the person. While it works it is a pill, one line of what it
+  does and Stop, and a dot runs round the button; each act flashes what it
+  touched, and the person's own press, key or wheel stops it. Later it listens.
 - **Dock**: two glass wings beside the AI button: the favorites to its left
   (none at first; "Add to dock" from any app's menu), the other running
   apps to its right, a dot under each running one and a tooltip on hover.
@@ -179,7 +183,7 @@ one. Forked crates keep their Apache-2.0 license and note their origin.
 
   | keys | action |
   |---|---|
-  | mod+Space, mod+A | show the Assistant |
+  | mod+Space, mod+A | show or hide the Assistant |
   | mod+Enter | open a terminal |
   | mod+Q | close the focused window |
   | mod+Up | maximize or restore |
@@ -261,9 +265,13 @@ only the theme persists. OPFS persistence comes with the kernel.
   GPU is the draw protocol: processes send display lists, never pixels,
   and the one instanced renderer draws them, so a program can draw from
   another device just as well.
-- **R3, AI.** An agent app whose tools are the OS's capabilities (open,
-  read and write files, run programs, press widgets) and whose eyes are the
-  UI tree (windows, titles, widget hits and labels). Cloud AI is free for
+- **R3, AI.** An agent whose tools are the OS's capabilities (open apps,
+  press widgets, type, keys, windows; then files and programs) and whose eyes
+  are the UI tree (windows, titles, widget hits, labels and marks). Its first
+  phase is built: the Assistant is the overlay; the host draws each window
+  again into a recording list to read it (`host::agent`), the model sees it as
+  text with refs (`assistant::look`) and calls tools, and each call is an act
+  done the way a person's pointer and keys go (uiwire `Act`, `Acted`). Cloud AI is free for
   every visitor: `api/ai.mjs`, a thin same-origin function, forwards
   chat-completions to the Vercel AI Gateway (GLM 5.3) with the project's
   own OIDC identity, so no key ever reaches the browser; bring-your-own-key

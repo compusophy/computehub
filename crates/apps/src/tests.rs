@@ -417,9 +417,18 @@ fn settings_privacy_switches_reports_and_leads_to_feedback() {
     assert_eq!(ids(&hits), [1, 2, 3, 30, 31]);
     assert_eq!(track(&list), MIDNIGHT.accent, "on until said otherwise");
     assert!(inks(&list).len() > 300, "what a report holds");
+    // As the AI reads it: the page's tab selected, the switch on, the line a link.
+    let mut marks = |s: &mut Sim<Settings>| {
+        let (mut rec, st) = (DrawList::recording(), UiState::default());
+        s.app.draw(&mut Ui::new(&mut rec, &mut ts, r, &mut Vec::new(), st, MIDNIGHT));
+        let sem = rec.take_sem().unwrap();
+        assert!(sem.runs.iter().any(|r| r.text == "Send error reports automatically"));
+        sem.marks.iter().map(|m| (m.id, m.role, m.flags)).collect::<Vec<_>>()
+    };
+    assert_eq!(marks(&mut s), [(1, 2, 0), (2, 2, 0), (3, 2, 1), (30, 3, 2), (31, 9, 0)]);
     // The switch sets the preference and shows it at once.
     assert_eq!(s.click(30), "pref reports=off");
-    assert!(s.app.reports_off && s.ai.reports_off);
+    assert!(s.app.reports_off && s.ai.reports_off && marks(&mut s)[3] == (30, 3, 0));
     assert_eq!(track(&draw(&mut s.app, &mut ts, r, MIDNIGHT).0), MIDNIGHT.surface_lo);
     // The host hears it only from the page, later: until its word changes, ours stands.
     s.ai.reports_off = false;

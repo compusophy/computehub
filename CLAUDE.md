@@ -64,10 +64,10 @@ crates/
   apps/      Settings, Terminal
   system/    About, Feedback, Files, Welcome (one wasip1 program)
   studio/    Studio (wasip1 GUI program): make apps by describing them
-  assistant/ the Assistant (wasip1 GUI program): chat; AI code Studio shares
+  assistant/ the Assistant (wasip1): the overlay AI using the desktop
   uiwire/    remote UI protocol: GUI programs send widget trees, get events
   uiview/    draws them with ui; holds edited text
-  host/      wm + one app per window (placement); motion, frame geometry
+  host/      wm + one app per window; agent (scene, acts); motion, frames
   home/      the home grid (every app), AI button + dock strip, menus, touch
   shell/     the desktop: top bar, window chrome, keys; wires host + home (no web deps)
   platform/  the browser boundary: canvas, WebGL2, input, textarea, fetch,

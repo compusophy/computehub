@@ -9,7 +9,9 @@
 //! as [`Event::Ask`], held until it starts. Edited text is owned as uiwire says ([`Texts`]), one
 //! [`Event::Change`] out at a time: the next waits for a frame, or goes before any other event.
 //! The wheel scrolls the Code under it, else the Scroll, else what does not fit
-//! ([`uiview::wheel`]); a revealed mark asks for frames while it comes in.
+//! ([`uiview::wheel`]); a revealed mark asks for frames while it comes in. The overlay's acts and
+//! status go to the host ([`Cx::agent`]), which answers through [`AppEvent::Agent`]; the window
+//! is busy while its program starts, and from a click or submit it was sent until it draws.
 
 use std::mem;
 
@@ -104,9 +106,11 @@ pub struct Remote {
     log: String,
     frame: Option<Frame>,
     texts: Texts,
-    /// Edited ids whose Change waits, and whether one is out unanswered.
+    /// Edited ids whose Change waits, whether one is out unanswered, and whether a click or
+    /// submit is (busy).
     dirty: Vec<u32>,
     waiting: bool,
+    asked: bool,
     /// The size last told, whether Close was sent, the last key.
     told: Option<(u16, u16)>,
     closed: bool,
@@ -138,6 +142,7 @@ impl Remote {
     }
 
     fn post(&mut self, ev: Event, cx: &mut Cx<'_>) {
+        self.asked |= matches!(ev, Event::Click { .. } | Event::Submit { .. });
         if let Some(pid) = self.pid {
             cx.kernel.post_event(pid, &ev.encode());
         }
@@ -241,6 +246,8 @@ impl Remote {
             cx.close_self();
             return false;
         }
+        // Failed: whatever it was doing for the person is over (the overlay's status says so).
+        cx.agent(Request::Status { working: false });
         self.note = [&self.argv[0], " stopped with status "].concat();
         ui::push_num(&mut self.note, status as u32 as usize);
         self.frame = None;
@@ -259,10 +266,11 @@ impl Remote {
                 Request::Focus { id } if self.texts.has(id) => self.texts.focus = id,
                 Request::Focus { .. } => {}
                 Request::Feedback { kind, text, context } => cx.feedback(&kind, &text, context),
+                r @ (Request::Act { .. } | Request::Status { .. }) => cx.agent(r),
                 r => self.ai.ask(self.pid.unwrap_or_default(), r),
             }
         }
-        (self.frame, self.waiting) = (Some(frame), false);
+        (self.frame, self.waiting, self.asked) = (Some(frame), false, false);
         self.flush(cx);
     }
 }
@@ -290,6 +298,10 @@ impl App for Remote {
 
     fn animating(&self, now_ms: f64) -> bool {
         self.view.animating(now_ms)
+    }
+
+    fn busy(&self) -> bool {
+        self.pid.is_some() && (self.frame.is_none() || self.asked)
     }
 
     fn event(&mut self, ev: AppEvent, cx: &mut Cx<'_>) -> bool {
@@ -336,6 +348,7 @@ impl App for Remote {
                 self.send(Event::Focus { on }, cx);
                 true
             }
+            AppEvent::Agent(ev) => self.send(ev, cx),
             _ => false,
         }
     }

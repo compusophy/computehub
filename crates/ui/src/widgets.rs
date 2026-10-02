@@ -355,6 +355,7 @@ impl<'a> Ui<'a> {
         }
         self.list.pop_clip();
         self.hit(id, r, Sense::Text);
+        self.mark(id, crate::sem::TEXTBOX, if focus { crate::sem::FOCUSED } else { 0 }, value);
         r
     }
 
@@ -465,6 +466,12 @@ impl<'a> Ui<'a> {
         if rect.w > 0.0 && rect.h > 0.0 {
             self.hits.push(Hit { id, rect, sense });
         }
+    }
+
+    /// Says what widget `id` is beyond its text (a [`crate::sem`] role, flags and value), for
+    /// the AI reading a recording list; nothing otherwise.
+    pub fn mark(&mut self, id: WidgetId, role: u8, flags: u8, value: &str) {
+        self.list.mark(id.0, role, flags, value);
     }
 
     /// Whether `id` is under the pointer, and whether it is also held.

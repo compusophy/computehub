@@ -1,24 +1,21 @@
-//! The Assistant: talk with a model, and have it build applang apps. A wasm32-wasip1 GUI program
-//! (`dist/bin/assistant.wasm`) on the [`uiwire`] protocol. It writes OpenAI-compatible chat
-//! requests ([`Request::Ai`]) for the model the desktop names ([`Event::Config`]); the desktop
-//! sends them to compusophy's free AI, which needs no key, and streams the body back as
-//! [`Event::AiData`] until [`Event::AiEnd`].
+//! The Assistant: the AI that uses the computer. A wasm32-wasip1 GUI program
+//! (`dist/bin/assistant.wasm`) on the [`uiwire`] protocol, which the desktop runs as its overlay
+//! over the windows ([`agent`]): it reads the screen ([`look`]), asks the model the desktop names
+//! ([`Event::Config`]) through compusophy's free AI, which needs no key ([`Request::Ai`], the body
+//! streamed back as [`Event::AiData`] until [`Event::AiEnd`] and read by [`calls`]), and does what
+//! the model calls for as a person would ([`Request::Act`]).
 //!
-//! A reply holding a fenced block whose info string is `app` is compiled with [`applang`]: a
-//! program that compiles is saved to `~/apps/<slug>.app` (or the first free `<slug>-<n>.app`: it
-//! never replaces a file), opened in Studio, and appended to the fine-tuning corpus
-//! ([`ai::CORPUS`]); one that does not compile or faults when it first renders goes back to the
-//! model with its problem (its line, a caret, the rule broken), and one cut off where the reply ran
-//! out of room asks for the same app shorter, at most [`RETRIES`] times (then the problem, or
-//! E0907). Files go through a [`Disk`]: [`Fs`] in the program.
-//! A prompt from the desktop's everything bar ([`Event::Ask`]) is sent as if typed (the draft
-//! stays), after the request in flight if there is one. A request carries the newest history
-//! that fits in [`ai::MAX_BODY`]. [`ai`] and [`json`] are what Studio shares with it.
+//! [`Assistant`] is the chat window the program was before, with its one-shot app builder; the
+//! program no longer runs it (the agent opens Studio, as a person would, to make an app). [`ai`]
+//! and [`json`] are what Studio shares with it; its files go through a [`Disk`] ([`Fs`]).
 
 #![forbid(unsafe_code)]
 
+pub mod agent;
 pub mod ai;
+pub mod calls;
 pub mod json;
+pub mod look;
 #[cfg(test)]
 mod tests;
 

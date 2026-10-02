@@ -46,8 +46,13 @@ name = "compusophy-assistant"
 version = "0.1.0"
 dependencies = [
  "compusophy-applang",
+ "compusophy-apps",
+ "compusophy-host",
  "compusophy-lang",
+ "compusophy-ui",
  "compusophy-uiwire",
+ "compusophy-vfs",
+ "compusophy-wm",
 ]
 
 [[package]]
@@ -206,6 +211,7 @@ dependencies = [
  "compusophy-icons",
  "compusophy-kernel",
  "compusophy-text",
+ "compusophy-uiwire",
  "compusophy-vfs",
 ]
 

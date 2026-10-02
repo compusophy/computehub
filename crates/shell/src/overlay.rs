@@ -1,0 +1,135 @@
+//! The overlay: the Assistant over the desktop (see `host::agent`), a layer above the windows,
+//! never one of them. A glass card above the AI button (a sheet on a phone), a pill while it
+//! works; its content routes as a window's does. The AI button opens and hides it, as does
+//! Alt+Space; Escape (or a press on the bare desktop) hides it, or while it works stops the task,
+//! as the person's own press, key or wheel outside it does. A press in it gives it the keys; one
+//! on a window takes them back, the overlay staying. What the agent touches flashes; while it
+//! works, a ring runs round the AI button.
+
+use gfx::{DrawList, RectF};
+use host::agent::FLASH_MS;
+use host::paint::{faded, px, sheen};
+use host::{OVERLAY, TITLEBAR_H};
+use ui::{Theme, UiState};
+use wm::{Placement, Rect, State, WinId};
+
+use crate::{BAR_H, Response, Shell};
+
+/// Whether the overlay shows, and whether it has the keys.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Overlay {
+    pub open: bool,
+    pub focus: bool,
+}
+
+impl Shell {
+    /// The overlay as drawn, and the rect its content lays out in: a pill's grows above and
+    /// below, so the content's padding centers its one line of buttons.
+    pub(crate) fn overlay_rects(&self) -> (RectF, RectF) {
+        let pill = self.host.agent.working;
+        let r = self.strip.overlay(self.size, BAR_H, pill);
+        let grow = if pill { ui::PAD - (r.h - ui::BUTTON_H) / 2.0 } else { 0.0 };
+        (r, RectF::new(r.x, r.y - grow, r.w, r.h + 2.0 * grow))
+    }
+
+    /// The overlay as if it were a window: its frame around its content (whole px), so presses,
+    /// the wheel and fingers reach it as they reach a window's content.
+    pub(crate) fn overlay_placement(&self) -> Option<Placement> {
+        let l = self.overlay_rects().1;
+        let t = TITLEBAR_H as i32;
+        let rect = Rect::new(l.x as i32 - 1, l.y as i32 - t, l.w as i32 + 2, l.h as i32 + t + 1);
+        let focused = self.overlay.focus;
+        let placed = Placement { win: OVERLAY, rect, state: State::Normal, snap: None, focused };
+        self.overlay.open.then_some(placed)
+    }
+
+    /// What takes the keys: the overlay while it has them, else the focused window.
+    pub(crate) fn key_target(&self) -> Option<WinId> {
+        let overlay = self.overlay.open && self.overlay.focus;
+        if overlay { Some(OVERLAY) } else { self.host.focused_app() }
+    }
+
+    /// Whether a tap at `(x, y)` lands on what takes the keys (it may bring the keyboard back).
+    pub fn types_at(&self, x: f32, y: f32) -> bool {
+        let target = self.hit(x, y).and_then(crate::desktop::Target::win);
+        target.is_some() && target == self.key_target()
+    }
+
+    /// Shows the overlay with the keys (starting its app if it does not run).
+    pub(crate) fn show_overlay(&mut self) {
+        self.overlay.open = self.host.open_overlay();
+        self.overlay.focus = self.overlay.open;
+    }
+
+    /// Hides the overlay if it shows (and, by `keys`, has them), else shows it.
+    pub(crate) fn toggle_overlay(&mut self, keys: bool) {
+        match self.overlay.open && (!keys || self.overlay.focus) {
+            true => self.overlay = Overlay::default(),
+            false => self.show_overlay(),
+        }
+    }
+
+    /// Brings the overlay up to date: one asked for opens; its app gone, it goes; the host
+    /// knows where it shows, the screen and the home screen's apps.
+    pub(crate) fn place_overlay(&mut self, out: &mut Response) {
+        if std::mem::take(&mut self.host.agent.summon) {
+            self.show_overlay();
+        }
+        if self.host.win(OVERLAY).is_none() {
+            self.overlay = Overlay::default();
+        }
+        let layout = self.overlay.open.then(|| self.overlay_rects().1);
+        self.host.agent.screen = self.size;
+        self.host.place_overlay(layout, out);
+    }
+
+    /// The person's own press, key or wheel `outside` the overlay stops its task.
+    pub(crate) fn takeover(&mut self, outside: bool, out: &mut Response) {
+        if outside && self.host.agent.working {
+            self.host.halt(out);
+        }
+    }
+
+    /// The card or pill and its content.
+    pub(crate) fn draw_overlay(&mut self, list: &mut DrawList, theme: &Theme) {
+        if !self.overlay.open {
+            return;
+        }
+        let ((r, layout), line) = (self.overlay_rects(), px(&self.host.text, 1.0));
+        let radius = if self.host.agent.working { r.h / 2.0 } else { 18.0 };
+        list.shadow_offset(r, radius, 40.0, 14.0, theme.shadow);
+        list.fill(r, radius, theme.base);
+        list.fill(r, radius, theme.surface);
+        list.border(r, radius, line, theme.border);
+        sheen(list, r, radius, line, theme.highlight);
+        let pick = |w: Option<crate::Widget>| w.filter(|w| w.0 == OVERLAY).map(|w| w.1);
+        let (hover, pressed, focused) =
+            (pick(self.app_hover), pick(self.app_press), self.overlay.focus);
+        let state = UiState { hover, pressed, focused, now_ms: self.host.now_ms };
+        self.host.draw_content(list, OVERLAY, [layout, r], theme, state);
+    }
+
+    /// The ring of the last act, fading out; while the overlay works, a dot running round the
+    /// AI button.
+    pub(crate) fn draw_agent(&mut self, list: &mut DrawList, theme: &Theme, now: f64) {
+        if let Some((r, k)) = self.host.agent.flash.map(|(r, t)| (r, 1.0 - (now - t) / FLASH_MS)) {
+            if (0.0..=1.0).contains(&k) {
+                list.border(r.inset(-3.0), 11.0, 2.0, faded(theme.accent, k as f32));
+            }
+        }
+        if self.host.agent.working {
+            let b = self.strip.button;
+            list.border(b.inset(-3.0), b.w / 2.0 + 3.0, 1.5, theme.accent.with_alpha(90));
+            let a = ((now / 1200.0).fract() as f32) * std::f32::consts::TAU;
+            let (cx, cy, rr) = (b.x + b.w / 2.0, b.y + b.h / 2.0, b.w / 2.0 + 3.0);
+            let dot = RectF::new(cx + rr * a.cos() - 3.0, cy + rr * a.sin() - 3.0, 6.0, 6.0);
+            list.fill(dot, 3.0, theme.accent);
+        }
+    }
+
+    /// Whether the agent's marks move: a flash fading, or the ring running.
+    pub(crate) fn agent_moves(&self, now: f64) -> bool {
+        let flash = self.host.agent.flash.is_some_and(|(_, t)| (t..t + FLASH_MS).contains(&now));
+        flash || self.host.agent.working
+    }
+}

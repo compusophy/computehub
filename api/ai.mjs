@@ -1,6 +1,7 @@
 // POST /api/ai: the free AI. Takes an OpenAI-style chat-completions body and sends the Vercel AI
-// Gateway a new one built from it (an allowed model, its text messages, bounded output,
-// bounded reasoning (see below), a temperature; nothing else it sent goes on), with this project's own
+// Gateway a new one built from it (an allowed model, its messages, the tools the overlay's agent
+// may call, bounded output, bounded reasoning (see below), a temperature; each checked and
+// rebuilt field by field, nothing else it sent goes on), with this project's own
 // credentials (its OIDC token, or AI_GATEWAY_API_KEY when set), and streams the answer back, so
 // no visitor needs a key and the browser never holds one.
 //
@@ -16,11 +17,18 @@ const GATEWAY = 'https://ai-gateway.vercel.sh/v1/chat/completions';
 // The models allowed, the first the default, with their list prices in dollars per million
 // tokens in and out.
 const MODELS = { 'zai/glm-5.3': [1.4, 4.4], 'zai/glm-5.3-flash': [0.15, 0.5] };
-const ROLES = ['system', 'user', 'assistant'];
+const ROLES = ['system', 'user', 'assistant', 'tool'];
+// Tools (the agent that uses the desktop): how many, their JSON, the calls a reply may make, a
+// call's arguments, the output a request with tools may ask for; names and call ids.
+const MAX_MESSAGES = 64, MAX_TOOLS = 16, MAX_TOOLS_JSON = 16 << 10;
+const MAX_CALLS = 8, MAX_ARGS = 8 << 10, TOOL_OUT = 2048;
+const NAME = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/, CALL_ID = /^[\w.-]{1,64}$/;
 const MAX_BODY = 96 << 10;
 const MAX_TOKENS = 8192;
 const WINDOW_MS = 3600e3;
-const PER_CLIENT = 20;
+// An agent's task makes a request a step: 120 an hour, and 30 a minute stops a runaway loop.
+const PER_CLIENT = 120;
+const PER_MINUTE = 30;
 const PER_INSTANCE = 400;
 // An instance's spend a day (the month's $40 over 30 days), and the part of it one client gets.
 const DAY_MS = 24 * WINDOW_MS;
@@ -30,12 +38,12 @@ const hits = new Map();
 // This instance's requests in the last day, oldest first: { t, who, usd }.
 const ledger = [];
 
-// Whether `key` may make one more request this window (counting it if so).
-function allow(key, limit, now) {
+// Whether `key` may make one more request in a window of `ms` (counting it if so).
+function allow(key, limit, now, ms = WINDOW_MS) {
   if (hits.size > 10000) {
     for (const [k, ts] of hits) if (now - ts[ts.length - 1] > WINDOW_MS) hits.delete(k);
   }
-  const recent = (hits.get(key) || []).filter((t) => now - t < WINDOW_MS);
+  const recent = (hits.get(key) || []).filter((t) => now - t < ms);
   hits.set(key, recent);
   if (recent.length >= limit) return false;
   recent.push(now);
@@ -65,6 +73,51 @@ function client(req) {
   return `${prefix.map((g) => (parseInt(g, 16) || 0).toString(16)).join(':')}::/64`;
 }
 
+const text = (v, max) => typeof v === 'string' && v.length <= max;
+const object = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
+// A string that `re` matches (test() would take undefined for "undefined").
+const is = (re, v) => typeof v === 'string' && re.test(v);
+
+// A message rebuilt from `m`, or null if it is not one: system and user text; tool text
+// answering a call id; assistant text, or null or '' with 1 to MAX_CALLS tool calls.
+function message(m) {
+  if (!object(m) || !ROLES.includes(m.role)) return null;
+  const { role, content } = m;
+  if (role === 'tool') {
+    return text(content, Infinity) && is(CALL_ID, m.tool_call_id)
+      ? { role, tool_call_id: m.tool_call_id, content } : null;
+  }
+  const calls = role === 'assistant' && Array.isArray(m.tool_calls) ? m.tool_calls : [];
+  if (calls.length > MAX_CALLS || (role !== 'assistant' && m.tool_calls !== undefined)) return null;
+  const tool_calls = [];
+  for (const c of calls) {
+    const f = object(c) && object(c.function) ? c.function : {};
+    const ok = object(c) && is(CALL_ID, c.id) && c.type === 'function' && is(NAME, f.name);
+    if (!ok || !text(f.arguments, MAX_ARGS)) return null;
+    tool_calls.push({ id: c.id, type: 'function', function: { name: f.name, arguments: f.arguments } });
+  }
+  if (tool_calls.length) {
+    return content === null || text(content, Infinity) ? { role, content: content || null, tool_calls } : null;
+  }
+  return text(content, Infinity) ? { role, content } : null;
+}
+
+// The tools rebuilt from `tools`, or null if they are not: each a function with a name, a short
+// description and a plain object of parameters.
+function toolsOf(tools) {
+  if (!Array.isArray(tools) || tools.length > MAX_TOOLS) return null;
+  if (JSON.stringify(tools).length > MAX_TOOLS_JSON) return null;
+  const out = [];
+  for (const t of tools) {
+    const f = object(t) && object(t.function) ? t.function : {};
+    if (!object(t) || t.type !== 'function' || !is(NAME, f.name) || !text(f.description, 1024) || !object(f.parameters)) {
+      return null;
+    }
+    out.push({ type: 'function', function: { name: f.name, description: f.description, parameters: f.parameters } });
+  }
+  return out;
+}
+
 function fail(res, status, error) {
   res.statusCode = status;
   res.setHeader('content-type', 'application/json');
@@ -91,7 +144,8 @@ export default async function handler(req, res) {
   }
   const now = Date.now();
   const who = client(req);
-  if (!allow(who, PER_CLIENT, now) || !allow('*', PER_INSTANCE, now)) {
+  const ok = allow(who, PER_CLIENT, now) && allow(`${who} m`, PER_MINUTE, now, 60e3);
+  if (!ok || !allow('*', PER_INSTANCE, now)) {
     return fail(res, 429, 'rate limited');
   }
   const token = process.env.AI_GATEWAY_API_KEY || req.headers['x-vercel-oidc-token'];
@@ -104,14 +158,17 @@ export default async function handler(req, res) {
   } catch {
     return fail(res, 400, 'bad json');
   }
-  const messages = [];
-  for (const m of Array.isArray(body && body.messages) ? body.messages : []) {
-    if (!m || !ROLES.includes(m.role) || typeof m.content !== 'string') {
-      return fail(res, 400, 'each message must be a system, user or assistant text');
-    }
-    messages.push({ role: m.role, content: m.content });
+  const given = Array.isArray(body && body.messages) ? body.messages : [];
+  const messages = given.map(message);
+  if (messages.includes(null) || messages.length > MAX_MESSAGES) {
+    return fail(res, 400, 'each message must be a system, user, assistant or tool message');
   }
   if (!messages.length) return fail(res, 400, 'no messages');
+  const tools = body.tools === undefined ? [] : toolsOf(body.tools);
+  const choice = body.tool_choice === undefined ? 'auto' : body.tool_choice;
+  if (!tools || !['auto', 'none'].includes(choice)) {
+    return fail(res, 400, "tools must be functions, and tool_choice 'auto' or 'none'");
+  }
   const model = Object.hasOwn(MODELS, body.model) ? body.model : Object.keys(MODELS)[0];
   const asked = Math.floor(Number(body.max_tokens));
   // Thinking costs time and tokens. GLM 5.3 thinks at length even when told off (unseen, up to
@@ -133,12 +190,15 @@ export default async function handler(req, res) {
     max_tokens: asked >= 1 ? Math.min(asked, MAX_TOKENS) : 4096,
     reasoning,
   };
+  if (tools.length) {
+    Object.assign(out, { tools, tool_choice: choice, max_tokens: Math.min(out.max_tokens, TOOL_OUT) });
+  }
   const t = body.temperature;
   if (typeof t === 'number' && t >= 0 && t <= 2) out.temperature = t;
   // What it could cost (a token per 3 chars in, every output token used), held until the usage
   // says what it did cost.
   const [priceIn, priceOut] = MODELS[model];
-  const chars = messages.reduce((n, m) => n + m.content.length, 0);
+  const chars = JSON.stringify(messages).length + (tools.length ? JSON.stringify(tools).length : 0);
   const entry = { t: now, who, usd: ((chars / 3) * priceIn + out.max_tokens * priceOut) / 1e6 };
   const over = (usd, cap) => usd + entry.usd > cap;
   if (over(spent(now), DAY_BUDGET) || over(spent(now, who), DAY_BUDGET * CLIENT_SHARE)) {

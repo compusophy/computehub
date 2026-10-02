@@ -208,10 +208,8 @@ fn the_theme_comes_from_storage_and_goes_back_when_it_changes() {
     let store = Fx::Store { key: THEME_KEY.into(), value: "Mono".into() };
     assert!(desk.shell.as_mut().expect("created").set_theme("mono"));
     let fx = send(&mut desk, Event::PointerMove { x: 9.0, y: 300.0 }).1;
-    assert_eq!(
-        (shell(&desk).theme_name(), fx.iter().filter(|f| **f == store).count()),
-        ("Mono", 1)
-    );
+    let stores = fx.iter().filter(|f| **f == store).count();
+    assert_eq!((shell(&desk).theme_name(), stores), ("Mono", 1));
     for fx in [frame(&mut desk), send(&mut desk, Event::PointerMove { x: 9.0, y: 200.0 }).1] {
         assert!(fx.iter().all(|f| !matches!(f, Fx::Store { .. })), "{fx:?}");
     }
@@ -326,7 +324,7 @@ fn desktop_routes_events_through_the_shell() {
     send(&mut desk, Event::PointerMove { x: at.0, y: at.1 + 40.0 });
     assert_eq!(up(&mut desk, (at.0, at.1 + 40.0), 0), []);
     let bare = (4.0, 796.0);
-    let r = |p: &wm::Placement| RectF::from_i32(p.rect.x, p.rect.y, p.rect.w, p.rect.h);
+    let r = |p: &wm::Placement| gfx::RectF::from_i32(p.rect.x, p.rect.y, p.rect.w, p.rect.h);
     assert!(shell(&desk).wm().layout().iter().all(|p| !r(p).contains(bare.0, bare.1)));
     down(&mut desk, bare);
     assert_eq!(up(&mut desk, bare, 0), []);

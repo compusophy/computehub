@@ -43,11 +43,22 @@ impl Shell {
             out.consumed = true;
             return;
         }
-        if self.home_key(key, m, out) || chord && self.binding(key, m.shift, out) {
+        // The overlay with the keys: Escape hides it, or stops its task.
+        let overlay = self.key_target() == Some(host::OVERLAY);
+        if overlay && key == Key::Escape {
+            match self.host.agent.working {
+                true => self.host.halt(out),
+                false => self.overlay = Default::default(),
+            }
             out.consumed = true;
             return;
         }
-        let Some(win) = self.host.focused_app().filter(|_| !is_paste(key, m)) else {
+        self.takeover(!overlay, out);
+        if !overlay && self.home_key(key, m, out) || chord && self.binding(key, m.shift, out) {
+            out.consumed = true;
+            return;
+        }
+        let Some(win) = self.key_target().filter(|_| !is_paste(key, m)) else {
             return;
         };
         let wants = self.host.win(win).is_some_and(|w| w.app.wants_text_input());
@@ -63,7 +74,7 @@ impl Shell {
         let snap = |snap| focused.map(|win| Cmd::SnapTo { win, snap });
         let cmd = match (key, shift) {
             (Key::Space | Key::Char('a'), false) => {
-                self.host.show("assistant", out);
+                self.toggle_overlay(true);
                 None
             }
             (Key::Enter, false) => {

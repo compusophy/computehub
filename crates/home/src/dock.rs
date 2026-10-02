@@ -29,6 +29,12 @@ const AIR: f32 = 13.0;
 const EDGE: f32 = 5.0;
 const RADIUS: f32 = 18.0;
 const DOT: f32 = 4.0;
+/// The overlay: a card's widest, a pill's widest and height, the gutters it keeps from the
+/// screen's sides ([`Strip::overlay`]).
+pub const CARD_W: f32 = 560.0;
+pub const PILL_W: f32 = 420.0;
+pub const PILL_H: f32 = 52.0;
+const GUTTER: f32 = 16.0;
 
 /// The favorites a stored preference names (each once); none if none is stored.
 pub fn favorites(stored: Option<&str>) -> Vec<String> {
@@ -109,6 +115,26 @@ impl Strip {
             }
         }
         Strip { button, wings: [left, right], tile, xs }
+    }
+
+    /// Where the overlay (the Assistant over the desktop) shows on a `w` x `h` screen whose top
+    /// `top` px are the bar's: above the AI button, a card [`CARD_W`] wide at most and 60% of the
+    /// screen tall at most, centered on the button (a phone's: a sheet across but its 16 px
+    /// gutters, half the screen tall at most); while it works (`pill`), [`PILL_H`] tall and
+    /// [`PILL_W`] wide at most. On whole px.
+    pub fn overlay(&self, (w, h): (f32, f32), top: f32, pill: bool) -> RectF {
+        let (b, narrow) = (self.button, crate::narrow(w));
+        let bottom = b.y - GAP;
+        let ow = (w - 2.0 * GUTTER).min(match (pill, narrow) {
+            (true, _) => PILL_W,
+            (false, true) => w,
+            (false, false) => CARD_W,
+        });
+        let oh = if pill { PILL_H } else { h * if narrow { 0.5 } else { 0.6 } };
+        let oh = oh.min(bottom - top - GAP).max(0.0);
+        // Not clamp: its panic path links in float formatting.
+        let x = (b.x + (b.w - ow) / 2.0).min(w - GUTTER - ow).max(GUTTER);
+        RectF::new(x.round(), (bottom - oh).round(), ow.round(), oh.round())
     }
 
     /// Tile `i`'s rect.

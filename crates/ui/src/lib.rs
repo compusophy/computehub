@@ -7,6 +7,10 @@
 //! atlas was cleared midway). Input comes back as [`AppEvent`]s routed by last frame's hits
 //! ([`hit_test`]); [`App::event`] returns whether to redraw, and an app asks for anything outside
 //! itself through its [`Cx`]. [`Code`] is the code editor widget; [`icon`] draws vector icons.
+//!
+//! The AI that uses the computer reads a window by drawing it into a recording list: the text it
+//! shows, its hits, and the marks widgets leave with [`Ui::mark`] for what text cannot say (a tab
+//! is selected, a switch is on: the codes of [`sem`]).
 
 #![forbid(unsafe_code)]
 
@@ -20,6 +24,7 @@ pub use gfx::Rgba;
 pub use kernel;
 pub use text::{ATLAS_SIZE, Editor, FontId, MAX_FALLBACKS, TextStyle, TextSystem};
 pub use theme::{Glow, IconStyle, THEMES, Theme, theme};
+pub use uiwire;
 pub use widgets::{BUTTON_H, CARD_PAD, FIELD_H, PAD, RADIUS_LG, RADIUS_SM};
 pub use widgets::{Hit, Sense, Ui, UiState, WidgetId, button_width, hit_test};
 pub use widgets::{SPACING, SPACING_LG, SPACING_MD};
@@ -65,6 +70,30 @@ pub trait App {
     fn closing(&mut self, cx: &mut Cx<'_>) {
         let _ = cx;
     }
+    /// Whether it is still working on what it was last told (a program starting, or not yet
+    /// drawn since an event): the AI's acts wait for the screen to settle.
+    fn busy(&self) -> bool {
+        false
+    }
+}
+
+/// The marks of [`Ui::mark`]: a widget's role (0: as its hit's sense says) and state flags.
+pub mod sem {
+    pub const BUTTON: u8 = 1;
+    pub const TAB: u8 = 2;
+    pub const SWITCH: u8 = 3;
+    pub const OPTION: u8 = 4;
+    pub const TEXTBOX: u8 = 5;
+    pub const ITEM: u8 = 6;
+    pub const CODE: u8 = 7;
+    pub const TERMINAL: u8 = 8;
+    pub const LINK: u8 = 9;
+    pub const SELECTED: u8 = 1;
+    pub const CHECKED: u8 = 2;
+    pub const FOCUSED: u8 = 4;
+    pub const DISABLED: u8 = 8;
+    /// The content scrolls past the view.
+    pub const MORE: u8 = 16;
 }
 
 /// An app's icon: a vector glyph on a tile tinted by `hue` as the theme
@@ -107,6 +136,9 @@ pub enum AppEvent {
     Io,
     /// A prompt for the Assistant, as if typed and sent.
     Ask(String),
+    /// For the overlay: an act settled, or the person took over ([`uiwire::Event::Acted`],
+    /// [`uiwire::Event::Halt`]).
+    Agent(uiwire::Event),
 }
 
 /// A key by its physical position (`KeyboardEvent.code`); text comes
@@ -179,6 +211,9 @@ pub enum Request {
     /// Send feedback the person typed: `kind` ("bug", "idea" or "love") and their `text`, with
     /// the desktop's context (build, device, windows, recent events) if `context`.
     Feedback { kind: String, text: String, context: bool },
+    /// The overlay acts, or says it works ([`uiwire::Request::Act`], [`uiwire::Request::Status`]);
+    /// from any other app, refused.
+    Agent(uiwire::Request),
 }
 
 /// The preference naming the model the AI answers with ([`AiStatus::model`]).
@@ -255,6 +290,11 @@ impl<'a> Cx<'a> {
     pub fn feedback(&mut self, kind: &str, text: &str, context: bool) {
         let (kind, text) = (kind.to_string(), text.to_string());
         self.requests.push(Request::Feedback { kind, text, context });
+    }
+
+    /// Acts on the desktop as a person would, or says it works ([`Request::Agent`]).
+    pub fn agent(&mut self, req: uiwire::Request) {
+        self.requests.push(Request::Agent(req));
     }
 
     /// Resizes the asking app's window to a `w` x `h` content area.

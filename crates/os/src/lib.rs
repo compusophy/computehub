@@ -20,7 +20,7 @@ pub mod ai;
 pub mod remote;
 pub mod report;
 
-use gfx::{DrawList, RectF, Rgba};
+use gfx::{DrawList, Rgba};
 use platform::{App, Ctl, Event, Handled, Renderer};
 use shell::{Effect, Input, KernelIn, Key, LocalTime, Mods, Registry, Response, Shell};
 use ui::kernel::{self, Effect as K};
@@ -67,9 +67,11 @@ struct Desktop {
     typing: bool,
     /// Which [`DEFERRED`] fonts are on their way; `None` before the first frame.
     deferred: Option<[bool; 2]>,
-    /// The theme's name as storage has it, and the AI state the program windows share.
+    /// The theme's name as storage has it, the AI state the program windows share, and when
+    /// the one-shot timer fires (page clock ms; past: unarmed).
     saved: &'static str,
     ai: ai::Ai,
+    wake: f64,
     /// Notes, feedback and error reports, and the outbox.
     report: report::Reports,
     list: DrawList,
@@ -161,7 +163,7 @@ impl Desktop {
         };
         let Some(r) = r else { return Handled::default() };
         let asked = r.text_input.is_some();
-        apply(r.effects, ctl, &self.ai, &mut self.report);
+        apply(r.effects, ctl, (&self.ai, &mut self.wake), &mut self.report);
         if let Some(on) = r.text_input {
             self.typing = on;
             ctl.set_text_input(on);
@@ -194,7 +196,7 @@ impl Desktop {
             if self.report.retell() | told {
                 shell.set_ai(self.report.status(self.ai.status()));
             }
-            apply(shell.take_effects(), ctl, &self.ai, &mut self.report);
+            apply(shell.take_effects(), ctl, (&self.ai, &mut self.wake), &mut self.report);
         }
         self.report.pump(ctl, || context(shell));
         let theme = shell.theme_name();
@@ -251,11 +253,9 @@ impl Desktop {
         Handled { redraw, prevent_default: false }
     }
 
-    /// Whether the focused window is the topmost one at `(x, y)`.
+    /// Whether what takes the keys (the focused window, or the overlay) is at `(x, y)`.
     fn over_focus(&self, x: f32, y: f32) -> bool {
-        let layout = self.shell.as_ref().map(|s| s.wm().layout()).unwrap_or_default();
-        let r = |p: &&wm::Placement| RectF::from_i32(p.rect.x, p.rect.y, p.rect.w, p.rect.h);
-        layout.iter().rev().find(|p| r(p).contains(x, y)).is_some_and(|p| p.focused)
+        self.shell.as_ref().is_some_and(|s| s.types_at(x, y))
     }
 }
 
@@ -285,12 +285,25 @@ fn text_of<'a>(shell: &'a mut Option<Shell>, parts: &'a mut Parts) -> Option<&'a
     }
 }
 
-/// Applies `fx` in order, telemetry seeing feedback and preferences first.
-fn apply(fx: Vec<Effect>, ctl: &mut Ctl, ai: &ai::Ai, report: &mut report::Reports) {
+/// Applies `fx` in order, telemetry seeing feedback and preferences first; of two timers asked
+/// for, the sooner stands.
+fn apply(
+    fx: Vec<Effect>,
+    ctl: &mut Ctl,
+    (ai, wake): (&ai::Ai, &mut f64),
+    report: &mut report::Reports,
+) {
     for fx in fx {
         match &fx {
             Effect::Feedback { kind, text, context } => report.feedback(kind, text, *context),
             Effect::Pref { key, value } => report.pref(ctl, key, value),
+            Effect::Kernel(K::Wake { ms }) => {
+                let (now, at) = (ctl.monotonic_ms(), ctl.monotonic_ms() + f64::from(*ms));
+                if *wake > now && *wake <= at {
+                    continue;
+                }
+                *wake = at;
+            }
             _ => {}
         }
         effect(fx, ctl, ai);

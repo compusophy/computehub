@@ -131,6 +131,25 @@ fn the_strip_centers_the_ai_button_between_the_docks_wings() {
 }
 
 #[test]
+fn the_overlay_sits_above_the_ai_button_a_card_a_sheet_or_a_pill() {
+    // Wide: a card 560 px wide at most, 60% of the screen tall at most, centered on the button;
+    // working, a pill 52 px tall, 420 px wide at most.
+    let s = Strip::new(2, 1, (1280.0, 800.0));
+    assert_eq!(s.overlay((1280.0, 800.0), 44.0, false), RectF::new(360.0, 239.0, 560.0, 480.0));
+    assert_eq!(s.overlay((1280.0, 800.0), 44.0, true), RectF::new(430.0, 667.0, 420.0, 52.0));
+    // A short screen keeps it under the bar; a narrow one inside its gutters.
+    assert_eq!(Strip::new(2, 1, (1280.0, 300.0)).overlay((1280.0, 300.0), 44.0, false).y, 52.0);
+    let phone = Strip::new(1, 3, (390.0, 844.0));
+    let sheet = phone.overlay((390.0, 844.0), 44.0, false);
+    assert_eq!(sheet, RectF::new(16.0, 341.0, 358.0, 422.0));
+    assert_eq!(phone.overlay((390.0, 844.0), 44.0, true), RectF::new(16.0, 711.0, 358.0, 52.0));
+    // A button slid aside: the sheet stays on the screen.
+    let aside = Strip::new(0, 9, (390.0, 844.0));
+    let r = aside.overlay((390.0, 844.0), 44.0, true);
+    assert!(r.x >= 16.0 && r.x + r.w <= 374.0 && r.y + r.h < aside.button.y);
+}
+
+#[test]
 fn menus_open_on_screen_and_follow_the_keys() {
     let mut text = text();
     let items: Vec<Item<u8>> =
