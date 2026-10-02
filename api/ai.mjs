@@ -203,7 +203,10 @@ export default async function handler(req, res) {
   const t = body.temperature;
   if (typeof t === 'number' && t >= 0 && t <= 2) out.temperature = t;
   // What it could cost (a token per 3 chars in, every output token used), held until the usage
-  // says what it did cost.
+  // says what it did cost: its own `cost` (the gateway's price, cached tokens at theirs), else its
+  // tokens at list price. A request the client stopped (Studio stops one once its program is in)
+  // never gets the usage: it costs the input and a token per event streamed (each event carries
+  // about one), never more than was held.
   const [priceIn, priceOut] = MODELS[model];
   const chars = JSON.stringify(messages).length + (tools.length ? JSON.stringify(tools).length : 0);
   const entry = { t: now, who, usd: ((chars / 3) * priceIn + out.max_tokens * priceOut) / 1e6 };
@@ -214,7 +217,7 @@ export default async function handler(req, res) {
   ledger.push(entry);
   const abort = new AbortController();
   res.on('close', () => res.writableFinished || abort.abort());
-  let [up, tail] = [null, ''];
+  let [up, tail, events] = [null, '', 0];
   try {
     up = await fetch(GATEWAY, {
       method: 'POST',
@@ -229,7 +232,9 @@ export default async function handler(req, res) {
     res.setHeader('cache-control', 'no-store');
     for await (const part of up.body) {
       res.write(part);
-      tail = (tail + Buffer.from(part).toString('latin1')).slice(-4096);
+      const text = Buffer.from(part).toString('latin1');
+      events += text.split('data:').length - 1;
+      tail = (tail + text).slice(-4096);
     }
     res.end();
   } catch {
@@ -240,7 +245,9 @@ export default async function handler(req, res) {
     res.end('\n\ndata: {"error":{"message":"the answer was cut off"}}\n\n');
   }
   const usage = tail.slice(tail.lastIndexOf('"usage"'));
-  const tokens = (k) => Number((new RegExp(`"${k}":\\s*(\\d+)`).exec(usage) || [])[1]);
-  const [i, o] = [tokens('prompt_tokens'), tokens('completion_tokens')];
-  if (i >= 0 && o >= 0) entry.usd = (i * priceIn + o * priceOut) / 1e6;
+  const num = (k) => Number((new RegExp(`"${k}":\\s*([\\d.]+)`).exec(usage) || [])[1]);
+  const [i, o, cost] = [num('prompt_tokens'), num('completion_tokens'), num('cost')];
+  if (cost >= 0) entry.usd = cost;
+  else if (i >= 0 && o >= 0) entry.usd = (i * priceIn + o * priceOut) / 1e6;
+  else if (up && up.ok) entry.usd = Math.min(entry.usd, ((chars / 3) * priceIn + events * priceOut) / 1e6);
 }
