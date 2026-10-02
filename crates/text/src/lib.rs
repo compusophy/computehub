@@ -414,6 +414,20 @@ impl TextSystem {
         self.shape(list, r, key, &|o| outline(seed, o), color);
     }
 
+    /// Draws the shape `outline` makes (as [`TextSystem::draw_vector`] draws one), cached under
+    /// `hash`, apart from ids and seeds: one hash must always name one shape.
+    pub fn draw_hashed(
+        &mut self,
+        list: &mut DrawList,
+        r: RectF,
+        hash: u32,
+        outline: &dyn Fn(&mut Vec<Vec<Point>>),
+        color: Rgba,
+    ) {
+        let key = ((VECTOR - 2) << 48) | (u64::from(hash) << 16);
+        self.shape(list, r, key, outline, color);
+    }
+
     /// A vector shape cached under `key` and its side in device pixels.
     fn shape(
         &mut self,

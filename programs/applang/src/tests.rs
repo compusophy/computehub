@@ -472,6 +472,12 @@ fn the_shots_and_a_model_written_tetris_smoke_clean() {
         assert!(report.most.0 < Limits::default().fuel / 2, "{ask}: {:?}", report.most);
         assert!(src.starts_with("// "), "{ask}: its first comment says what it is");
     }
+    // A shot's second line is its icon, which the desktop reads whole (`icons::made`).
+    for (ask, src) in SHOTS {
+        let icon = icons::made::header(src.as_bytes()).map(icons::Made::parse);
+        let second = src.lines().nth(1).unwrap_or_default();
+        assert!(second.starts_with("// icon: ") && matches!(icon, Some(Ok(_))), "{ask}: {icon:?}");
+    }
     // The smoke test finds a fault a click away, and says what led to it.
     let src = "state xs = [0; 0]; button \"Go\" { push(xs, 1); } every 50 { xs[1] = 2; }";
     let report = smoke(compile(src).unwrap(), 1);

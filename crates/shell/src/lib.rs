@@ -50,6 +50,7 @@ use std::mem;
 use desktop::Target;
 use gfx::{DrawList, RectF, Rgba};
 use host::{Host, rectf};
+use ui::icon::Mark;
 use ui::{AppEvent, TextSystem, WidgetId};
 use vfs::Vfs;
 use wm::{Rect, WinId, Wm};
@@ -121,9 +122,11 @@ pub struct Shell {
     cursor: Cursor,
     clock: Option<LocalTime>,
     /// The dock (its favorites, the row's layout, a tile carried) and the apps it shows, as
-    /// they show (favorites first).
+    /// they show (favorites first), with the marks of those that are `.app` files (read as the
+    /// tiles are, never per frame).
     dock: home::dock::Dock,
     tiles: Vec<dock::Item>,
+    marks: Vec<Option<Mark>>,
     /// The home screen's icons.
     grid: home::grid::Grid,
     /// Whether the page asks for reduced motion (the grain stays still).
@@ -156,7 +159,7 @@ impl Shell {
         let mut shell = Shell { host, pending: Vec::new(), size, pointer: None, hover: None,
             armed: None, app_hover: None, app_press: None, down: None, grab: None, last_title: None,
             ime: None, focus: None, cursor: Cursor::Default, clock: None, dock, tiles: Vec::new(),
-            grid, reduced: false, menu: None, touch: None, fling: None,
+            marks: Vec::new(), grid, reduced: false, menu: None, touch: None, fling: None,
             finger: false, motion: Default::default(), instant: false, startup: !prefs.seen,
             scratch: DrawList::new(), overlay: Default::default() };
         shell.place();
@@ -419,6 +422,7 @@ impl Shell {
         if let Some((from, to)) = self.dock.moving() {
             home::dock::shift(&mut self.tiles, from, to);
         }
+        self.marks = self.tiles.iter().map(|d| self.host.mark(&d.0)).collect();
         self.place_overlay(out);
         let focus = self.key_target();
         if mem::replace(&mut self.focus, focus) != focus && focus.is_some() {

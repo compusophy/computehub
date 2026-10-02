@@ -15,3 +15,6 @@ name = "applang"
 compusophy-applang-syntax.workspace = true
 compusophy-lang.workspace = true
 compusophy-fuel.workspace = true
+
+[dev-dependencies]
+compusophy-icons.workspace = true

@@ -80,7 +80,8 @@ fn desk_with(w: f32, h: f32, prefs: Prefs) -> (Shell, Log) {
     let (log, text) = (Log::default(), TextSystem::new(SANS.to_vec()).unwrap());
     let l = log.clone();
     let reg: Registry = Box::new(move |name| {
-        let k = KNOWN.split(' ').find(|k| *k == name)?;
+        let k =
+            KNOWN.split(' ').find(|k| *k == name).or(name.ends_with(".app").then_some("app"))?;
         Some(Box::new(Probe(k, l.clone())) as Box<dyn App>)
     });
     (Shell::new(w, h, text, Vfs::new(), reg, prefs), log)
@@ -742,7 +743,23 @@ fn the_home_screen_shows_every_app_and_the_top_bar_its_buttons() {
     let kept = "@2,studio::,assistant::,terminal::,files::,settings::,feedback::,about::,welcome::";
     let order = [kept, ",", &mine, "/clock.app::"].concat();
     assert_eq!(r.effects, [Effect::Pref { key: "home.order".into(), value: order }]);
-    assert!(r.redraw && s.labels_home()[8] == "Clock" && s.grid.icons[8].sigil.is_some());
+    assert!(r.redraw && s.labels_home()[8] == "Clock" && s.grid.icons[8].mark.is_some());
+    // Its own icon once its file draws one: in the grid, and on the dock as it settles.
+    let (clock, x) = ([&mine, "/clock.app"].concat(), ui::icon::Made::parse(b"ring 12 12 8"));
+    let made = b"// A clock.
+// icon: ring 12 12 8
+label 1;
+";
+    s.host.vfs.write(&clock, made).unwrap();
+    s.input(Input::PointerLeave);
+    assert_eq!(s.grid.icons[8].mark, x.ok().map(Mark::Made));
+    let prefs = Prefs { dock: Some(clock.clone()), seen: true, ..Prefs::default() };
+    let (mut d, _) = desk_with(1280.0, 800.0, prefs);
+    assert_eq!(d.marks, [host::sigil(&clock).map(Mark::Sigil)]);
+    d.host.vfs.mkdir_all(&mine).unwrap();
+    d.host.vfs.write(&clock, made).unwrap();
+    d.input(Input::PointerLeave);
+    assert_eq!((&*d.tiles[0].0, &d.marks[..]), (&*clock, &[x.ok().map(Mark::Made)][..]));
     // The mark shows Welcome; the right buttons Feedback (a bug) and Settings.
     s.click((27.0, 22.0));
     assert_eq!(s.wm().focused(), Some(WinId(1)));

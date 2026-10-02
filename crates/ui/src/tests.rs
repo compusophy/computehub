@@ -466,6 +466,18 @@ fn icon_tiles_are_readable_and_crisp() {
         (kinds(&list), [x, y, w, h], mono.text)
     );
     assert!(a.instances()[2].uv != b.instances()[2].uv && a.instances()[2].uv != i[2].uv);
+    // Its mark: a sigil's tile as sigil_tile draws it; a made icon's, the same plate, its glyph.
+    let mark = |t: &mut TextSystem, m: icon::Mark| {
+        let mut list = DrawList::new();
+        icon::mark_tile(&mut list, t, RectF::new(10.2, 20.1, 50.0, 44.0), &m, hue, mono);
+        list
+    };
+    let x = icon::Made::parse(b"line 5 5 19 19 line 5 19 19 5").unwrap();
+    let (s, m) = (mark(&mut t, icon::Mark::Sigil(1)), mark(&mut t, icon::Mark::Made(x)));
+    assert_eq!(s.instances(), a.instances());
+    assert_eq!((kinds(&m), m.instances()[..2].to_vec()), (kinds(&a), a.instances()[..2].to_vec()));
+    let made = m.instances()[2];
+    assert!(made.color == mono.text && made.uv != a.instances()[2].uv && made.uv != i[2].uv);
 }
 
 #[test]
