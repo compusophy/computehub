@@ -67,6 +67,8 @@ pub struct Make {
     asked: String,
     first: String,
     body: usize,
+    /// The `max_tokens` of the request in flight.
+    room: u32,
     stream: Stream,
     reply: String,
     phase: Phase,
@@ -110,6 +112,7 @@ impl Make {
             asked: String::new(),
             first: first.clone(),
             body: 0,
+            room: 0,
             stream: Stream::default(),
             reply: String::new(),
             phase: Phase::Over,
@@ -147,7 +150,11 @@ impl Make {
         let thought = self.stream.thought as u64 * 10 / 34;
         self.early = match () {
             _ if fenced(&self.reply).is_some_and(|(_, closed)| closed) => Early::No,
-            _ if self.reply.trim().is_empty() && thought >= u64::from(self.k.runaway) => {
+            // The guard is for a request of `write_tokens`; a smaller one's is as much smaller.
+            _ if self.reply.trim().is_empty()
+                && thought * u64::from(self.k.write_tokens)
+                    >= u64::from(self.k.runaway) * u64::from(self.room) =>
+            {
                 Early::Runaway
             }
             _ if now.saturating_sub(self.t0) >= self.k.ms => Early::Late,
@@ -301,7 +308,7 @@ impl Make {
     /// Whether a reply cut off by the token limit spent its room thinking.
     fn thinking(&self) -> bool {
         let reasoning = self.stream.usage.map_or(0, |u| u.reasoning);
-        self.stream.thought > self.reply.len() || reasoning > self.k.write_tokens / 2
+        self.stream.thought > self.reply.len() || reasoning > self.room / 2
     }
 
     /// Sends `msg` as the next request of kind `turn`, unless a budget is spent or it is too big.
@@ -348,7 +355,8 @@ impl Make {
             Turn::Change => "changing".into(),
             _ => "writing".into(),
         };
-        (self.turn, self.asked, self.body, self.sent) = (turn, msg, body.len(), now);
+        (self.turn, self.asked, self.body, self.sent, self.room) =
+            (turn, msg, body.len(), now, tokens);
         (self.stream, self.reply) = (Stream::default(), String::new());
         (self.phase, self.early, self.logged) = (Phase::Streaming, Early::No, false);
         Out::Ask(body)

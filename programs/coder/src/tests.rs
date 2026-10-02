@@ -498,6 +498,13 @@ fn budgets_failures_stops_and_runaways_end_with_the_best_so_far() {
             assert_eq!((done.code, done.said().as_str()), (909, "couldn't \u{b7} E0909"));
         }
     }
+    // A fix has less room, so less thinking is a runaway: here 20 tokens, half a write's 40.
+    let k = Knobs { runaway: 40, ..k };
+    let (mut m, _) = Make::start(task("x", ""), Knobs { fix_tokens: k.write_tokens / 2, ..k }, 0);
+    m.data(&sse(&app(BROKEN), "stop"), 1).unwrap();
+    assert!(matches!(m.check(2), Some(Out::Ask(_))));
+    assert!(m.data(delta("reasoning", &"x".repeat(60)).as_bytes(), 3).is_none());
+    assert!(matches!(m.data(delta("reasoning", &"x".repeat(10)).as_bytes(), 4), Some(Out::Cancel)));
 }
 
 #[test]
