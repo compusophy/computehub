@@ -176,8 +176,12 @@ one. Forked crates keep their Apache-2.0 license and note their origin.
   Assistant, Terminal, Files, Editor, Settings, Feedback, About, Welcome,
   then each `~/apps/*.app`), each in a cell of a grid: down the columns from the top
   left on a wide screen, in rows of four on a phone; there is no other
-  list. A `.app` file's icon is its sigil, sacred geometry made from its
-  name. A click opens; a mouse dragged 4 px carries an icon; a finger held
+  list. A `.app` file's icon is the one its header draws (`// icon:` under
+  its first comment: line, loop, fill, ring, dot and arc on a 24 x 24 grid,
+  which Studio's AI writes for every app it makes, drawn in the glyphs'
+  weight and the theme's ink by `icons::made`, whole or not at all), else
+  its sigil, sacred geometry made from its name; on its name's hue either
+  way. A click opens; a mouse dragged 4 px carries an icon; a finger held
   500 ms picks one up: moved 8 px from there it drags, lifted unmoved it
   opens the icon's menu. A carried icon lands in any cell, as on a phone:
   on an empty one nothing else moves (the cell it left stays empty); over
@@ -266,7 +270,8 @@ one. Forked crates keep their Apache-2.0 license and note their origin.
 - **Studio** makes and edits applang apps: the `coder` loop asks the free
   AI, checks each reply and fixes it by edits, showing what moves (thinking,
   writing 48 lines, fixing line 43, testing); `studio::AppHost` runs a `.app`
-  in its own window. **Editor** writes plain text, a new note in `~/notes`;
+  in its own window. Its prompt asks every app for its icon line (one card,
+  and one in each example), which a change keeps. **Editor** writes plain text, a new note in `~/notes`;
   Files and the Terminal's `edit` open files in it (a `.app` in Studio).
   **Welcome** (a program, its mark revealed by the desktop's clock)
   is the first screen; **Settings** picks the theme and
@@ -371,7 +376,7 @@ and the theme are kept there too.
   Alt+Q, Alt+arrows and Alt+Backquote before a terminal sees them
   (readline's Alt+F still arrives). A way through for apps that want them
   waits on the Super key question.
-- **The boot budget** (224 KB since 2026-10-02, about 35 KB of headroom)
+- **The boot budget** (224 KB since 2026-10-02, about 26 KB of headroom)
   pays for what must draw the first frame. Everything else should be a
   program, fetched when it first runs (Studio and applang already are;
   Settings and the Terminal could be).

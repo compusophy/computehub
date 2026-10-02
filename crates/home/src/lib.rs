@@ -26,6 +26,7 @@ pub mod place;
 pub mod touch;
 
 use gfx::{DrawList, RectF};
+use ui::icon::Mark;
 use ui::{AppIcon, TextSystem, Theme};
 
 /// What the work area leaves free at the bottom: the bottom row ([`dock::ROW`]).
@@ -59,17 +60,17 @@ pub fn joined(names: &[String]) -> String {
     out
 }
 
-/// An app's tile in the square `r`: its glyph's ([`ui::icon::tile`]), or its sigil's if a `.app`
-/// file's.
+/// An app's tile in the square `r`: its glyph's ([`ui::icon::tile`]), or its mark's if a `.app`
+/// file's (its own icon, or its sigil: [`ui::icon::mark_tile`]).
 pub fn tile(
     list: &mut DrawList,
     text: &mut TextSystem,
     r: RectF,
-    (icon, sigil): (AppIcon, Option<u32>),
+    (icon, mark): (AppIcon, Option<&Mark>),
     theme: &Theme,
 ) {
-    match sigil {
-        Some(seed) => ui::icon::sigil_tile(list, text, r, seed, icon.hue, theme),
+    match mark {
+        Some(m) => ui::icon::mark_tile(list, text, r, m, icon.hue, theme),
         None => ui::icon::tile(list, text, r, icon.glyph, icon.hue, theme),
     }
 }

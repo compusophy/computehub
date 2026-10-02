@@ -11,6 +11,7 @@
 use gfx::{DrawList, RectF};
 use host::paint::{faded, px};
 use host::{ASSISTANT, Effect};
+use ui::icon::Mark;
 use ui::{AppIcon, TextSystem, Theme};
 
 use crate::grid::Carry;
@@ -63,13 +64,13 @@ pub fn pin(favs: &mut Vec<String>, name: &str, keep: bool) -> bool {
     true
 }
 
-/// A tile as drawn: its icon (a `.app` file's sigil, if one), where it shows (sliding to its
+/// A tile as drawn: its icon (a `.app` file's mark, if one), where it shows (sliding to its
 /// place), how lifted it is (0 to 1, while hovered), its dot's opacity (0: none; a working
 /// Assistant's beats) and whether the dot is the focus's.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Look {
     pub icon: AppIcon,
-    pub sigil: Option<u32>,
+    pub mark: Option<Mark>,
     pub r: RectF,
     pub lift: f32,
     pub dot: f32,
@@ -79,7 +80,7 @@ pub struct Look {
 impl Look {
     /// The tile, raised as it lifts, over its dot: the accent's if focused, else dim.
     pub fn draw(&self, list: &mut DrawList, text: &mut TextSystem, theme: &Theme) {
-        let (r, icon) = (self.r, (self.icon, self.sigil));
+        let (r, icon) = (self.r, (self.icon, self.mark.as_ref()));
         crate::tile(list, text, RectF { y: r.y - 2.0 * self.lift, ..r }, icon, theme);
         if self.dot > 0.0 {
             let (x, y) = (text.snap(r.x + (r.w - DOT) / 2.0), text.snap(r.y + r.h + 3.0));
@@ -92,7 +93,7 @@ impl Look {
     pub fn draw_carried(&self, list: &mut DrawList, text: &mut TextSystem, theme: &Theme) {
         let r = self.r.inset(-self.r.w * LIFT / 2.0);
         list.shadow_offset(r, r.w / 6.0, 21.0, 8.0, theme.shadow);
-        crate::tile(list, text, r, (self.icon, self.sigil), theme);
+        crate::tile(list, text, r, (self.icon, self.mark.as_ref()), theme);
     }
 }
 

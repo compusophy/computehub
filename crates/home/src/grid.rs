@@ -327,7 +327,7 @@ impl Grid {
             let r = slid.unwrap_or_else(|| icons::cell(cell, self.area, self.narrow));
             let hover = hover.filter(|h| h.0 == i).map(|h| h.1);
             let state = State { hover, selected: self.selected.contains(&e.name), lift: 0.0 };
-            icons::draw(list, text, theme, r, (e.icon, e.sigil, &e.label), state);
+            icons::draw(list, text, theme, r, (e.icon, e.mark.as_ref(), &e.label), state);
         }
         if let (Some(from), Some(at)) = (self.lasso, at) {
             icons::draw_box(list, text, theme, from, at);
@@ -347,7 +347,7 @@ impl Grid {
             let e = &self.icons[i];
             let label = if k == 0 { e.label.as_str() } else { "" };
             let state = State { lift: 1.0, ..State::default() };
-            icons::draw(list, text, theme, r, (e.icon, e.sigil, label), state);
+            icons::draw(list, text, theme, r, (e.icon, e.mark.as_ref(), label), state);
         }
     }
 

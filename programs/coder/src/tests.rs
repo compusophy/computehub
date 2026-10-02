@@ -204,6 +204,7 @@ fn names_blocks_numbers_and_problems() {
     assert_eq!(path, Some(format!("{HOME}/apps/todo-3.app")));
     assert_eq!(ai::state_path("/apps/x.app"), format!("{HOME}/.appdata/x.state"));
     assert_eq!(ai::about("/* A: b */ // c\nlabel 1;"), "A: b c");
+    assert_eq!(ai::about("// A\n// icon: dot 12 12 3\n// B\nlabel 1;"), "A B");
 }
 
 #[test]
@@ -229,7 +230,7 @@ fn faults_are_accounted_for_a_fix() {
         .replace("label tasks[i];", "label tasks[i] + due[i];");
     assert!(fault(&due, "", 3).is_none() && fault(todo, kept, 3).is_none());
     let f = fault(&due, kept, 3).unwrap();
-    let from = "faults when it runs from its saved states: E0215 at line 34";
+    let from = "faults when it runs from its saved states: E0215 at line 35";
     let when = "It came while the first render, started from the states it keeps between runs.\n\
                 Saved states come back as they were kept";
     assert!(f.account.contains(from) && f.account.contains(when), "{}", f.account);
@@ -333,7 +334,8 @@ fn edits_apply_atomically_where_they_match_one_place() {
 #[test]
 fn the_system_prompt_is_stable_and_whole() {
     let s = system();
-    for part in [applang::REFERENCE, applang::SHOTS[0].1, applang::SHOTS[1].1, ai::HONEST] {
+    let shots = [applang::SHOTS[0].1, applang::SHOTS[1].1];
+    for part in [applang::REFERENCE, shots[0], shots[1], ai::HONEST, ai::ICON] {
         assert!(s.contains(part));
     }
     assert!(s.contains("<<<<<<< SEARCH\nlines copied exactly") && !s.contains(DEFAULT_MODEL));
@@ -352,7 +354,7 @@ fn the_system_prompt_is_stable_and_whole() {
 }
 
 /// The system prompt's hash (see the test above).
-const FNV: u64 = 0xd602_7fc2_a7ab_ebdf;
+const FNV: u64 = 0x452b_feb3_7f4c_f82d;
 
 #[test]
 fn a_clean_write_is_one_request() {

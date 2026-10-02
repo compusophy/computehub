@@ -54,7 +54,7 @@ crates/      the OS (boot, kernel, worker); speaks to programs by WASI, uiwire
   font/      TrueType reader + glyph rasterizer (no font engine ships)
   gfx/       instanced-quad draw list, glyph atlas, the WebGL2 shaders
   text/      TextSystem: font slots, fallbacks, glyphs on the atlas
-  icons/     the mark and desktop glyphs as vector outlines (`ui::icon`)
+  icons/     the mark, glyphs and made icons as vector outlines (`ui::icon`)
   ui/        immediate-mode widgets, themes (Midnight, Dawn, Mono), the App
              trait, Cx, the Code editor (re-exports text)
   vt/        VT/xterm escape parser        term/  terminal screen model

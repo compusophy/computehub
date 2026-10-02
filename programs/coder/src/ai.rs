@@ -18,12 +18,24 @@ pub const MAX_REPLY: usize = 64 * 1024;
 /// The most bytes a request's body takes: the free AI (`api/ai.mjs`) takes 96 KiB at most, so
 /// this leaves room.
 pub const MAX_BODY: usize = 80 * 1024;
-/// What a prompt that makes apps asks of the program, before its examples
-/// ([`applang::SHOTS`]): to say what it is, and what of the ask applang could not do.
+/// What a prompt that makes apps asks of the program first: to say what it is, and what of the
+/// ask applang could not do.
 pub const HONEST: &str = "Begin the program with a // comment of one or two short lines: what the \
                           app does and how to use it. If applang cannot do part of what was asked, \
                           make the closest app it can, and end that comment with \"Without:\" and \
-                          what it leaves out. For example, for ";
+                          what it leaves out. ";
+/// Then, before its examples ([`applang::SHOTS`], each with one): its icon, the line the desktop
+/// draws its tile from (`icons::made`: six words on a 24 x 24 grid; the OS sets the weight, ink
+/// and plate).
+pub const ICON: &str = "Under that comment, its icon on one line: // icon: then shapes on a 24 x 24 \
+                        grid (x right, y down, whole numbers 2 to 22): line x y x y .. (a stroke \
+                        through 2 to 12 points), loop x y .. (closed), fill x y .. (solid), ring \
+                        x y r, dot x y r, arc x y r from to (degrees clockwise from the top). It \
+                        shows at 19 px: draw the one thing the app is, large and centered, in at \
+                        most 6 shapes, no part under 4 across; never a whole board or screen, \
+                        whose parts would be specks (tic-tac-toe is an X and an O: line 2 7 10 \
+                        15 line 10 7 2 15 ring 17 11 4). A change keeps it unless the app becomes \
+                        another. For example, for ";
 /// What a make asks for after a reply that ran out of room before its program ended.
 pub const SHORTER: &str = "Your reply ran out of room before the program ended. Write the same \
                            app, shorter: under 100 lines, extras left out (named after \
@@ -137,12 +149,14 @@ pub fn slug(src: &str) -> String {
     if out.is_empty() { "app".into() } else { out.into() }
 }
 
-/// What `src` says it is: its leading comments, markers and spaces trimmed, joined, at most 400
-/// bytes (the "Without:" a long one ends with may be cut); "" if none.
+/// What `src` says it is: its leading comments but its icon's ([`ICON`]), markers and spaces
+/// trimmed, joined, at most 400 bytes (the "Without:" a long one ends with may be cut); "" if
+/// none.
 pub fn about(src: &str) -> String {
     let lead = applang::highlight(src).into_iter().take_while(|(_, c)| *c == Class::Comment);
     let trim: &[char] = &['/', '*', ' ', '\t', '\r', '\n'];
-    let text: Vec<&str> = lead.map(|(s, _)| src[s.start..s.end].trim_matches(trim)).collect();
+    let text = lead.map(|(s, _)| src[s.start..s.end].trim_matches(trim));
+    let text: Vec<&str> = text.filter(|t| !t.starts_with("icon:")).collect();
     clip(&text.join(" "), 400)
 }
 

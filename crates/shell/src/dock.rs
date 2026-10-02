@@ -4,7 +4,7 @@
 use gfx::{DrawList, RectF};
 use home::dock::{Look, Spot};
 use host::paint::{cap_baseline, faded, px};
-use host::{ASSISTANT, app_label, sigil};
+use host::{ASSISTANT, app_label};
 use ui::icon::sin;
 use ui::{AppIcon, FontId, TextStyle, Theme};
 use wm::WinId;
@@ -53,10 +53,11 @@ impl Shell {
         let r = self.dock_tile(i);
         let (lift, x) = self.motion.tile(name, now).unwrap_or((0.0, r.x));
         let r = RectF { x, ..r };
-        let (sigil, dot) = (sigil(name), if wins.is_empty() { 0.0 } else { 1.0 });
+        let (mark, dot) =
+            (self.marks.get(i).copied().flatten(), if wins.is_empty() { 0.0 } else { 1.0 });
         Look {
             icon: *icon,
-            sigil,
+            mark,
             r,
             lift,
             dot,
@@ -81,7 +82,7 @@ impl Shell {
         let dot = if working { beat } else { f32::from(u8::from(o.open)) };
         let (icon, r) = (self.host.icon(ASSISTANT).unwrap_or_default(), self.dock.strip.assistant);
         let (lift, focused) = (self.motion.ai.value(now), working || o.open && o.focus);
-        looks.push(Look { icon, sigil: None, r, lift, dot, focused });
+        looks.push(Look { icon, mark: None, r, lift, dot, focused });
         self.dock.strip.draw(list, &mut self.host.text, theme, &looks);
     }
 

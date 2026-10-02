@@ -10,15 +10,18 @@
 //!   every hole clockwise, so holes punch through and overlapping solids merge.
 //! - Arcs are quadratic segments of at most π / 8, within 0.02% of round.
 //!
-//! A `.app` file has no glyph of its own: [`sigil`] draws one from a hash of its name.
+//! A `.app` file draws its own icon if its header has one ([`made`]: a line of shapes Studio's AI
+//! writes for the app), else its [`sigil`], drawn from a hash of its name.
 
 #![forbid(unsafe_code)]
 
 use core::f32::consts::{FRAC_PI_2, FRAC_PI_4, PI, TAU};
 
 pub use font::Point;
+pub use made::Made;
 pub use trig::{cos, sin};
 
+pub mod made;
 mod trig;
 
 /// The golden ratio, φ.
