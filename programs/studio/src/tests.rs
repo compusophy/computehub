@@ -2,7 +2,7 @@ use super::*;
 use crate::edit::{CHECK, CHIP, CODE, MAKE, NEW, OPEN, PROMPT, STOP, TOGGLE, spans};
 use crate::make::NO_BLOCK;
 use crate::run::{EDIT, TOO_BIG};
-use assistant::ai::{CORPUS, HOME, HONEST, MAX_BODY, ROOM, SHORTER};
+use assistant::ai::{CORPUS, HOME, HONEST, MAX_BODY, ROOM, SHORTER, THOUGHT};
 use assistant::json::{Json, quote};
 use std::collections::BTreeMap;
 use uiwire::{Class, Key, Request, Variant, mods};
@@ -415,31 +415,78 @@ fn a_program_that_faults_when_it_first_renders_goes_back_and_is_never_saved() {
 }
 
 #[test]
-fn a_reply_out_of_room_asks_for_the_same_app_shorter_and_ends_in_e0907() {
-    // What GLM 5.3 did with "make a tetris game" when asked to think: all 8,192 tokens of
-    // reasoning and no program; then a program cut off mid-line.
-    let mut w = Win::new(&[], Mem::new());
+fn a_program_must_run_from_the_states_its_app_kept() {
+    // A change adding a saved list beside kept ones runs afresh, but faults from them: it goes
+    // back saying so (and what they hold), never saved.
+    let todo = applang::SHOTS[1].1;
+    let (path, state) =
+        ([HOME, "/apps/todo.app"].concat(), [HOME, "/.appdata/todo.state"].concat());
+    let kept = "tasks = [\"milk\", \"eggs\"];\ndone = [false, true];\n";
+    let mut w = Win::new(&["edit", &path], with(&[(&path, todo), (&state, kept)]));
     let f = w.last(&[WIDE]);
-    let (_, mut id, _) = w.make(&f, "make a tetris game");
-    let cut = "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"length\"}]}\n\n";
-    for attempt in 1..=4 {
-        let mut evs = vec![think(id, "Rows of ten, so ten states each\u{2026}")];
-        evs.extend((attempt > 1).then(|| content(id, b"```app\nstate a = 0;\nlabel \"Tet")));
-        evs.push(Event::AiData { id, data: cut.into() });
-        evs.push(Event::AiEnd { id, status: 200, error: String::new() });
-        let f = w.frames(&evs).pop().unwrap();
-        if attempt == 4 {
-            assert!(has(&f, ROOM) && f.requests.is_empty() && has(&f, "Make"), "{:?}", words(&f));
-            break;
+    let (_, id, _) = w.make(&f, "give each task a due date");
+    let due = todo
+        .replace("done = [false; 0];", "done = [false; 0];\nsaved state due = [\"\"; 0];")
+        .replace("push(done, false);", "push(done, false); push(due, \" today\");")
+        .replace("label tasks[i];", "label tasks[i] + due[i];");
+    let f = w.answer(id, &app(&due)).pop().unwrap();
+    let fix = message(&ai(&f).1, 1).1.to_string();
+    let from = "faults when it runs from its saved states: E0215 at line 34, col 22: index 0 is \
+                outside `due`, which has 0 items\n";
+    let when = "\nIt came while the first render, started from the states it keeps between runs: \
+                `tasks` has 2 items, `done` has 2 items, `due` has 0 items.\n";
+    assert!(fix.contains(from) && fix.contains(when), "{fix}");
+    assert!(w.disk[&path] == todo && has(&f, "milk") && has(&f, "Retrying (1 of 3)"));
+    // Checked as typed, it is saved saying it faults, and runs afresh, keeping nothing over them;
+    // as in its own window, which offers Studio.
+    let code_id = code(&w.last(&[click(STOP), click(TOGGLE)])).0;
+    let f = w.last(&[change(code_id, 2, &due), click(CHECK)]);
+    assert!(has(&f, "It faults as it starts \u{2014} saved ~/apps/todo.app"));
+    assert_eq!(w.disk[&path], due);
+    let note = "outside `due`, which has 0 items, from the states kept in ~/.appdata/todo.state: \
+                it started afresh, and keeps nothing until it runs from them";
+    let f = w.last(&[click(TOGGLE), change(INPUT + 3, 1, "tea"), click(APP)]);
+    assert!(has(&f, "tea") && has(&f, note) && !has(&f, "milk") && w.disk[&state] == kept);
+    let f = Win::new(&["run", &path], w.disk.clone()).last(&[WIDE]);
+    assert!(has(&f, note) && words(&f).last() == Some(&"Edit in Studio"), "{:?}", words(&f));
+}
+
+#[test]
+fn a_reply_out_of_room_asks_for_the_same_app_shorter_or_again_and_ends_in_e0907() {
+    // What GLM 5.3 did with "make a tetris game" when asked to think: all 8,192 tokens of
+    // reasoning and no program (the same again: thinking took the room); then programs cut off
+    // mid-line (shorter). Or a provider thinking on past its budget, by the usage, each time.
+    for overthinks in [false, true] {
+        let mut w = Win::new(&[], Mem::new());
+        let f = w.last(&[WIDE]);
+        let (_, mut id, body) = w.make(&f, "make a tetris game");
+        let first = message(&body, 1).1.to_string();
+        let usage = ",\"usage\":{\"completion_tokens_details\":{\"reasoning_tokens\":7333}}";
+        let cut =
+            ["data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"length\"}]", usage, "}\n"];
+        let cut = cut.map(|s| if overthinks || s != usage { s } else { "" }).concat();
+        for attempt in 1..=4 {
+            let mut evs = vec![think(id, "Rows of ten, so ten states each\u{2026}")];
+            let program = b"```app\nstate a = 0;\nlabel \"Tetris, falling\";\nlabel \"Tet";
+            evs.extend((overthinks || attempt > 1).then(|| content(id, program)));
+            evs.push(Event::AiData { id, data: cut.clone().into() });
+            evs.push(Event::AiEnd { id, status: 200, error: String::new() });
+            let f = w.frames(&evs).pop().unwrap();
+            if attempt == 4 {
+                let end = if overthinks { THOUGHT } else { ROOM };
+                assert!(has(&f, end) && f.requests.is_empty(), "{:?}", words(&f));
+                break;
+            }
+            // The same ask, shorter or not, alone: no empty or cut-off reply goes back.
+            let body;
+            (id, body) = ai(&f);
+            let shorter = ["make a tetris game\n\n", SHORTER].concat();
+            let want = if overthinks || attempt == 1 { &first } else { &shorter };
+            assert_eq!((messages(&body), message(&body, 1).1), (2, want.as_str()));
+            assert!(has(&f, &format!("Retrying ({attempt} of 3)")), "{:?}", words(&f));
         }
-        // The same ask, shorter, alone: no empty or cut-off reply goes back.
-        let body;
-        (id, body) = ai(&f);
-        let shorter = ["make a tetris game\n\n", SHORTER].concat();
-        assert_eq!((messages(&body), message(&body, 1).1), (2, shorter.as_str()));
-        assert!(has(&f, &format!("Retrying ({attempt} of 3)")), "{:?}", words(&f));
+        assert!(w.disk.is_empty() && ROOM.starts_with("E0907 ") && THOUGHT.starts_with("E0907 "));
     }
-    assert!(w.disk.is_empty() && ROOM.starts_with("E0907 "));
 }
 
 /// Answers request `id` with `reply`, then ends it as cut off by the token limit (`cut`) or not.
@@ -506,10 +553,12 @@ fn what_the_first_comment_says_is_said_instead_of_ready() {
     let said = "Tetris, simplified: applang has no clock, so Drop moves the piece. Without: \
                 rotation. \u{2014} saved ~/apps/tetris.app";
     assert!(has(&f, said) && !has(&f, "Ready"), "{:?}", words(&f));
-    // A block comment says it too; a comment after code is not the program's first.
+    // A block comment says it too (a game taking keys gets the keyboard); one after code is not.
     let (_, id, _) = w.make(&f, "count");
-    let f = w.answer(id, &app("/* Count: a number */ state n = 0; label n;\n")).pop().unwrap();
+    let count = "/* Count: a number */ state n = 0; on key \"up\" { n += 1; } label n;\n";
+    let f = w.answer(id, &app(count)).pop().unwrap();
     assert!(has(&f, "Count: a number \u{2014} saved ~/apps/tetris.app"));
+    assert!(f.requests.ends_with(&[Request::Focus { id: 0 }, Request::Keys { on: true }]));
     let (_, id, _) = w.make(&f, "plain");
     let f = w.answer(id, &app("state n = 0; // the count\nlabel n;\n")).pop().unwrap();
     assert!(has(&f, "Ready \u{2713} \u{2014} saved ~/apps/tetris.app") && !has(&f, "the count"));
@@ -524,12 +573,14 @@ fn what_the_first_comment_says_is_said_instead_of_ready() {
 fn edits_and_prompts_made_while_the_ai_writes_are_kept() {
     let mut w = Win::new(&["edit", "/apps/counter.app"], with(&[("/apps/counter.app", COUNTER)]));
     let f = w.last(&[WIDE]);
-    let titled = [COUNTER, "label \"Title\";\n"].concat();
-    // A prompt typed meanwhile stays, in the same Input.
+    let titled = [COUNTER, "label \"Title\"; on key \"up\" { count += 1; }\n"].concat();
+    // A prompt typed meanwhile stays, in the same Input, with the keyboard (the game made then
+    // takes keys).
     let (f, id, _) = w.make(&f, "add a title");
     w.send(&[change(input(&f).0, 2, "bigger buttons")]);
     let f = w.answer(id, &app(&titled)).pop().unwrap();
     assert!(has(&f, "A counter: two") && w.disk["/apps/counter.app"] == titled);
+    assert_eq!(f.requests, [Request::Keys { on: true }]);
     assert_eq!(input(&f), (PROMPT, "bigger buttons", "Describe a change\u{2026}"));
     // Code edited meanwhile, here checked and saved, wins over the reply, on screen and on disk.
     let (_, id, _) = w.make(&f, "add a footer");
@@ -798,7 +849,7 @@ fn host_clicks_and_inputs_reach_the_app_and_serve_frames_until_close() {
 fn games_tick_take_keys_and_taps_and_keep_their_saved_state() {
     let src = "saved state best = 0; state x = 0; state cells = [0; 4];
         every 100 { x += 1; best = max(best, x); }
-        on key \"left\" { x -= 10; }
+        on key \"left\" { x -= 10; } on key \"escape\" { x = 0; }
         label \"x \" + x;
         grid 2, cells { cells[cell] = 1; }";
     let (path, state) = ("/apps/game.app", [HOME, "/.appdata/game.state"].concat());
@@ -815,18 +866,45 @@ fn games_tick_take_keys_and_taps_and_keep_their_saved_state() {
     // Every tick answers; one that makes the every due runs it.
     assert!(has(&w.last(&[Event::Tick { ms: 100 }]), "x 1"));
     assert!(has(&w.last(&[Event::Tick { ms: 50 }]), "x 1"));
-    // A plain key is the app's, a chord the window's; a tap is its grid's.
-    let key = |mods| Event::Key { id: 0, key: Key::Left, mods, ch: '\0' };
-    assert!(has(&w.last(&[key(0)]), "x -9") && w.send(&[key(mods::CTRL)]).is_none());
-    assert_eq!(grid(&w.last(&[Event::Tap { id: APP, cell: 3 }])).1, [0, 0, 0, 1]);
+    // A plain key is the app's, a chord the window's; a tap is its grid's, and gives the app the
+    // keyboard.
+    let key = |id, key, mods| Event::Key { id, key, mods, ch: '\0' };
+    assert!(has(&w.last(&[key(0, Key::Left, 0)]), "x -9"));
+    assert!(w.send(&[key(0, Key::Left, mods::CTRL)]).is_none());
+    let f = w.last(&[Event::Tap { id: APP, cell: 3 }]);
+    assert!(grid(&f).1 == [0, 0, 0, 1] && f.requests == [Request::Focus { id: 0 }]);
     // The saved best came back (7), and is kept once it passes it.
     assert_eq!(w.disk[&state], "best = 7;\n");
     w.frames(&vec![Event::Tick { ms: 100 }; 20]);
     assert_eq!(w.disk[&state], "best = 11;\n");
-    // In Studio the preview ticks; showing the code stops its timer.
+    // In Studio the preview ticks; Escape leaving the prompt is not the app's; showing the code
+    // stops its timer.
     let mut s = Win::new(&["edit", path], w.disk.clone());
     assert!(s.last(&[WIDE]).requests.contains(&Request::Timer { ms: 100 }));
+    assert!(s.send(&[key(PROMPT, Key::Escape, 0)]).is_none());
     assert!(s.last(&[click(TOGGLE)]).requests.contains(&Request::Timer { ms: 0 }));
+}
+
+#[test]
+fn runs_of_one_app_keep_each_others_saved_states() {
+    // Its window and Studio's preview: what one wrote comes back before the other's next event
+    // but a tick, whose write keeps what it did not change (and another version's states).
+    let src = "saved state n = 0; saved state t = 0; every 100 { t += 1; }\n\
+               button \"+\" { n += 1; } label \"n \" + n + \" t \" + t;";
+    let (path, state) = ("/apps/two.app", [HOME, "/.appdata/two.state"].concat());
+    let mut a = Win::new(&["run", path], with(&[(path, src), (&state, "old = [1];\n")]));
+    let mut b = Win::new(&["edit", path], a.disk.clone());
+    b.send(&[WIDE]);
+    a.send(&[WIDE, click(APP), click(APP)]);
+    b.disk.clone_from(&a.disk);
+    assert!(has(&b.last(&[Event::Tick { ms: 100 }]), "n 2 t 1"));
+    assert_eq!(b.disk[&state], "n = 2;\nt = 1;\nold = [1];\n");
+    a.disk.clone_from(&b.disk);
+    assert!(has(&a.last(&[click(APP)]), "n 3 t 1"));
+    b.disk.clone_from(&a.disk);
+    assert!(has(&b.last(&[click(APP)]), "n 4 t 1"));
+    a.disk.clone_from(&b.disk);
+    assert!(has(&a.last(&[Event::Focus { on: true }]), "n 4 t 1"));
 }
 
 #[test]

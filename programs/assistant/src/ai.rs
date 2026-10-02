@@ -2,7 +2,7 @@
 //! prompt and request body, coded failures, the program in a reply and what is wrong with it (as
 //! the person reads it and as the model fixing it does), file names and the corpus line.
 
-use applang::Class;
+use applang::{App, Class, Event, Limits, Node, Value};
 use uiwire::Style;
 
 use crate::json::quote;
@@ -31,8 +31,16 @@ pub const HONEST: &str = "Begin the program with a // comment of one or two shor
 pub const SHORTER: &str = "Your reply ran out of room before the program ended. Write the same app, \
                            shorter: under 100 lines, extras left out (named after \"Without:\" in \
                            its first comment). Reply with the complete program in one app block.";
-/// How a make ends that kept running out of room.
+/// How a make ends that kept running out of room with its program.
 pub const ROOM: &str = "E0907 the AI ran out of room before its reply ended; ask for less";
+/// How one ends whose room went to thinking, before the program (a provider may think on past
+/// the free AI's budget): asking for less would not help.
+pub const THOUGHT: &str =
+    "E0907 the AI ran out of room thinking, before it wrote the program; try again";
+/// What a fix is told of a program that faults only from the states it keeps.
+const KEPT: &str = "Saved states come back as they were kept, also after the program changes: a \
+                    list keeps its length, and a saved state the program adds starts as \
+                    declared. The program must run from them too.";
 
 /// A system prompt: `intro`, applang's card, `rules`, then [`HONEST`] and the example replies
 /// ([`applang::SHOTS`], each tested to compile and pass the smoke test).
@@ -118,33 +126,51 @@ pub fn slug(src: &str) -> String {
 }
 
 /// Where a made app named `slug` goes: the first of `~/apps/<slug>.app`, `<slug>-2.app`, ... (to
-/// `-999`) that nothing is at, by `exists`, so a made app never replaces a file.
+/// `-999`) that nothing is at, by `exists`, so a made app never replaces a file nor starts from
+/// the saved states another app of that name left ([`state_path`]).
 pub fn free_path(slug: &str, mut exists: impl FnMut(&str) -> bool) -> Option<String> {
     let name = |n: u32| match n {
         1 => format!("{HOME}/apps/{slug}.app"),
         n => format!("{HOME}/apps/{slug}-{n}.app"),
     };
-    (1..1000).map(name).find(|p| !exists(p))
+    (1..1000).map(name).find(|p| !exists(p) && !exists(&state_path(p)))
 }
 
-/// What is wrong with `src`, if anything: that it does not compile, or faults when it runs
-/// ([`applang::smoke`]: rendered, clicked, ticked, keyed, tapped and typed into), as [what it did,
-/// what it still does after fixes], the problem as a person reads it ([`problem`]) and the
-/// account a model fixing it gets: the problem with its line and a caret under it, the rule its
-/// code says was broken, what was being done when it came and what came before, and that every
-/// occurrence wants fixing.
-pub fn fault(src: &str) -> Option<([&'static str; 2], String, String)> {
+/// The file the saved states of the app at `path` go to: `~/.appdata/<name>.state`, by its
+/// file's name ("" for none).
+pub fn state_path(path: &str) -> String {
+    let name = path.rsplit('/').next().unwrap_or(path);
+    let stem = name.strip_suffix(".app").unwrap_or(name);
+    if stem.is_empty() { String::new() } else { [HOME, "/.appdata/", stem, ".state"].concat() }
+}
+
+/// What is wrong with `src`, if anything: that it does not compile, faults when it runs
+/// ([`applang::smoke`]: rendered, clicked, ticked, keyed, tapped and typed into), or faults as it
+/// will really start, from `saved` (what its saved states' file holds: rendered, then each button
+/// clicked once); as [what it did, what it still does after fixes], the problem as a person reads
+/// it ([`problem`]) and the account a model fixing it gets: the problem with its line and a caret
+/// under it, the rule its code says was broken, what was being done when it came and what came
+/// before (or the states it started from), and that every occurrence wants fixing.
+pub fn fault(src: &str, saved: &str) -> Option<([&'static str; 2], String, String)> {
     let (what, d, when) = match applang::compile(src) {
         Err(d) => (["did not compile", "not compiling"], d, String::new()),
-        Ok(p) => {
-            let f = applang::smoke(p, 1).fault?;
-            let before = match f.before.is_empty() {
-                true => String::new(),
-                false => [", after ", &f.before.join(", ")].concat(),
-            };
-            let when = ["\nIt came while ", &f.during, &before, "."].concat();
-            (["faults when it runs", "faulting"], f.diag, when)
-        }
+        Ok(p) => match applang::smoke(p, 1).fault {
+            Some(f) => {
+                let before = match f.before.is_empty() {
+                    true => String::new(),
+                    false => [", after ", &f.before.join(", ")].concat(),
+                };
+                let when = ["\nIt came while ", &f.during, &before, "."].concat();
+                (["faults when it runs", "faulting"], f.diag, when)
+            }
+            None => {
+                let (d, during, kept) = resumed(src, saved)?;
+                let from = ", started from the states it keeps between runs: ";
+                let when = ["\nIt came while ", &during, from, &kept, ".\n", KEPT].concat();
+                let still = "faulting from its saved states";
+                (["faults when it runs from its saved states", still], d, when)
+            }
+        },
     };
     // "line 3, col 5", then the line and its carets.
     let snip = d.span.and_then(|s| lang::diag::render_snippet(src, s)).unwrap_or_default();
@@ -162,6 +188,56 @@ pub fn fault(src: &str) -> Option<([&'static str; 2], String, String)> {
         clip(&when, 1024)
     );
     Some((what, problem(&d, src), account))
+}
+
+/// The first fault of `src` (which compiles) started as it really will be, from `saved` (what its
+/// saved states' file holds; none if that is "" or it saves none): its first render, then each
+/// button that shows clicked once (as it shows by then), re-rendering after each. With what was
+/// being done, and the saved lists it started from (`tasks` has 2 items, ...): no values, which
+/// are the person's.
+fn resumed(src: &str, saved: &str) -> Option<(applang::Diag, String, String)> {
+    let mut app = App::new(applang::compile(src).ok()?, Limits::default(), 1);
+    if saved.trim().is_empty() || app.saved().is_empty() {
+        return None;
+    }
+    app.restore(saved);
+    let mut kept = String::new();
+    for (s, (name, v)) in app.program().states().iter().zip(app.state()) {
+        if let (true, Value::List(items)) = (s.saved, v) {
+            let sep = if kept.is_empty() { "`" } else { ", `" };
+            kept = kept + sep + name + "` has " + &items.len().to_string() + " items";
+        }
+    }
+    let fail = |d, what: &str| Some((d, what.to_string(), kept.clone()));
+    let mut shown = match app.render() {
+        Ok(nodes) => nodes,
+        Err(d) => return fail(d, "the first render"),
+    };
+    for (_, text) in buttons(&shown) {
+        let Some(&(id, _)) = buttons(&shown).iter().find(|b| b.1 == text) else { continue };
+        let what = ["clicking \"", &text, "\""].concat();
+        if let Err(d) = app.handle(&Event::Click { id }) {
+            return fail(d, &what);
+        }
+        match app.render() {
+            Ok(nodes) => shown = nodes,
+            Err(d) => return fail(d, &["the render after ", &what].concat()),
+        }
+    }
+    None
+}
+
+/// Every (id, text) of `nodes`' buttons, in order.
+fn buttons(nodes: &[Node]) -> Vec<(u32, String)> {
+    let mut out = Vec::new();
+    for n in nodes {
+        match n {
+            Node::Button { text, id } => out.push((*id, text.clone())),
+            Node::Row { children } | Node::Col { children } => out.extend(buttons(children)),
+            _ => {}
+        }
+    }
+    out
 }
 
 /// A diagnostic as `E0101 3:5 message`: line and column (in chars) from 1.

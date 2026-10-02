@@ -142,7 +142,8 @@ impl Studio {
         }
     }
 
-    /// Runs the code as edited if it compiles, saving it; else marks its problem.
+    /// Runs the code as edited if it compiles, saving it (saying so if it faults as it starts);
+    /// else marks its problem.
     fn check(&mut self, disk: &mut dyn Disk) {
         if let Some(why) = self.locked() {
             self.status = (Style::Error, ["Not checked: ", why].concat());
@@ -150,8 +151,17 @@ impl Studio {
             (self.mark, self.status) = (d.span, (Style::Error, problem(&d, &self.text)));
         } else {
             self.mark = None;
-            self.live = Some(Live::new(&self.text, &self.path, disk));
-            self.status = self.save(disk, "Checked \u{2713} \u{2014} saved ");
+            let live = Live::new(&self.text, &self.path, disk);
+            let faults = live.faults();
+            self.live = Some(live);
+            let done = match faults {
+                true => "It faults as it starts \u{2014} saved ",
+                false => "Checked \u{2713} \u{2014} saved ",
+            };
+            self.status = self.save(disk, done);
+            if faults {
+                self.status.0 = Style::Error;
+            }
         }
     }
 
