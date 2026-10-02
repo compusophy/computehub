@@ -96,3 +96,15 @@ fn sigils_are_one_shape_per_name_and_differ_between_names() {
     }
     assert!(seen.len() >= 28, "{} shapes", seen.len());
 }
+
+#[test]
+fn sin_and_cos_are_the_platform_s_to_an_ulp() {
+    // On wasm32 they are bit for bit f32::sin and cos (musl's) for every |x| < 2^28 π/2; here,
+    // against the host's libm, within an ulp: a glyph's point moves under 1e-4 of a box unit.
+    let near = |x: f32| (sin(x) - x.sin()).abs() <= 1.2e-7 && (cos(x) - x.cos()).abs() <= 1.2e-7;
+    assert!((0..=400_000).map(|i| -40.0 + i as f32 * 0.000_2).all(near));
+    assert!([1e3, -5e4, 1e6, 4e8].into_iter().all(near));
+    // Below 2^-12, x and 1 exactly (the sign of zero kept); past 2^28 π/2, and for NaN, NaN.
+    assert!(sin(-0.0).to_bits() == (-0.0f32).to_bits() && sin(2e-4) == 2e-4 && cos(-2e-4) == 1.0);
+    assert!([5e8, f32::INFINITY, f32::NAN].iter().all(|&x| sin(x).is_nan() && cos(-x).is_nan()));
+}

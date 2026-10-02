@@ -21,7 +21,7 @@ use std::mem;
 pub use area::Area;
 use gfx::RectF;
 pub use texts::Texts;
-use ui::icon::{Glyph, MARK_HOLE, rings};
+use ui::icon::{Glyph, MARK_HOLE, cos, rings, sin};
 use ui::{AppIcon, BUTTON_H, CARD_PAD, FIELD_H, FontId, PAD, RADIUS_SM, Rgba, SPACING, Sense};
 use ui::{TextStyle, TextSystem, Theme, Ui, WidgetId};
 use uiwire::{Event, Node, REVEAL, Request, SIGIL, Style, Variant};
@@ -779,7 +779,7 @@ fn mark(ui: &mut Ui<'_>, r: RectF, ms: f64) {
     for (i, (n, at, size)) in rings().enumerate() {
         for j in 0..n {
             let a = core::f32::consts::FRAC_PI_2 - core::f32::consts::TAU * j as f32 / n as f32;
-            dot(ui, (cx + at * k * a.cos(), cy - at * k * a.sin()), size, ink(i + 1));
+            dot(ui, (cx + at * k * cos(a), cy - at * k * sin(a)), size, ink(i + 1));
         }
     }
 }

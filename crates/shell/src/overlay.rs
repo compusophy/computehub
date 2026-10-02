@@ -12,6 +12,7 @@ use gfx::{DrawList, RectF};
 use host::agent::FLASH_MS;
 use host::paint::{faded, px, sheen};
 use host::{OVERLAY, TITLEBAR_H};
+use ui::icon::{cos, sin};
 use ui::{Theme, UiState};
 use wm::{Placement, Rect, State, WinId};
 
@@ -128,7 +129,7 @@ impl Shell {
             list.border(b.inset(-3.0), b.w / 2.0 + 3.0, 1.5, theme.accent.with_alpha(90));
             let a = ((now / 1200.0).fract() as f32) * std::f32::consts::TAU;
             let (cx, cy, rr) = (b.x + b.w / 2.0, b.y + b.h / 2.0, b.w / 2.0 + 3.0);
-            let dot = RectF::new(cx + rr * a.cos() - 3.0, cy + rr * a.sin() - 3.0, 6.0, 6.0);
+            let dot = RectF::new(cx + rr * cos(a) - 3.0, cy + rr * sin(a) - 3.0, 6.0, 6.0);
             list.fill(dot, 3.0, theme.accent);
         }
     }
