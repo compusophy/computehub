@@ -65,8 +65,8 @@ const fn icon(glyph: Glyph, hue: u32) -> AppIcon {
     AppIcon { glyph, hue: Rgba::hex(hue) }
 }
 
-/// The app for a window name: About, Feedback, Files or Welcome ([`SYSTEM`]; `"files:<dir>"` is
-/// Files at that folder), the Assistant for `"assistant"`, Studio with nothing open for
+/// The app for a window name: About, Feedback, Files, Welcome or Activity ([`SYSTEM`];
+/// `"files:<dir>"` is Files at that folder), the Assistant for `"assistant"`, Studio with nothing open for
 /// `"studio"` or on `<path>` for `"studio:<path>"`, or running a `.app` path (relative: in
 /// `/apps`).
 pub fn open(name: &str, ai: &Ai) -> Option<Box<dyn App>> {

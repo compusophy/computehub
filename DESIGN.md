@@ -264,10 +264,13 @@ one. Forked crates keep their Apache-2.0 license and note their origin.
   Drawing and why, Resting while only the grain draws, Still), then what runs
   (the desktop, each program by its command line, never a title it set) with
   its share of a core and its memory, /home against the browser's ~5 MB, and
-  the AI since the tab opened (requests, failures, tokens from each stream's
-  `usage`). Its window alone may send `Request::Watch` and `Request::End`
-  (it runs `bin/system.wasm` whatever `/bin/activity` says; the overlay may
-  only read and scroll it). The desktop answers with `Event::Stats`
+  the AI since the tab opened (requests, failures, tokens and cost from the
+  receipt `api/ai.mjs` ends each stream with, `: receipt in= out= microusd=`;
+  an answer with none is counted, never guessed). Its window alone may send
+  `Request::Watch` and `Request::End` (it runs `bin/system.wasm` whatever
+  `/bin/activity` says; the Assistant presses in it only after the person's
+  yes, as in Feedback). On a phone it watches only while it has the focus.
+  The desktop answers with `Event::Stats`
   (`uiwire::stat`): the kernel's table (deterministic) and the page's meters
   (frames by cause, its own time and memory, each worker's busy ms and memory
   from SAB words 10 to 13, read with no message), posted only when something

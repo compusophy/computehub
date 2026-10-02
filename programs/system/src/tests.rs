@@ -4,7 +4,7 @@ use uiwire::{Event, Frame, Key, Node, REVEAL, Request, SIGIL, Style, Variant, mo
 use vfs::Vfs;
 
 use super::*;
-use crate::activity::{BACK, DESKTOP, END, FILES, ROW, bytes, percent, tokens};
+use crate::activity::{BACK, DESKTOP, END, FILES, ROW, bytes, dollars, percent, tokens};
 use crate::feedback::{AREA, BOX, GO, KIND, MAX, NEAR, THANKS};
 use crate::files::{CRUMB, ENTRY, LIST, MAX_ROWS, UP, size};
 
@@ -471,7 +471,8 @@ fn activity_watches_from_its_first_size_and_draws_only_what_changes() {
         ("Activity", vec![Request::Watch { on: true }])
     );
     assert_eq!(word(&f), ["Measuring", "Asking the desktop."]);
-    assert!(w.send(&[resize(400), Event::Focus { on: false }]).is_empty());
+    // On a desktop it watches whatever has the focus: a monitor beside a busy window.
+    assert!(w.send(&[resize(600), Event::Focus { on: false }]).is_empty());
     // The first sample lists what runs; rates come with the second, a second later.
     let still = |at| sample(at, &[], &[], 0);
     let f = w.last(&[still(1000)]);
@@ -481,6 +482,33 @@ fn activity_watches_from_its_first_size_and_draws_only_what_changes() {
     // The same again: nothing it shows changed, so no frame.
     assert!(w.send(&[still(3000), still(4000)]).is_empty());
     assert!(w.send(&[Event::Stats { data: vec![9] }]).is_empty(), "a sample that does not decode");
+}
+
+#[test]
+fn on_a_phone_focus_pauses_and_resumes_the_watch() {
+    use uiwire::stat::RUNS;
+    // Narrower than on a desktop, it fills a phone's screen: shown exactly while focused.
+    let mut w = Win::new("activity");
+    assert_eq!(w.last(&[resize(409)]).requests, [Request::Watch { on: true }]);
+    let spin = |busy| -> Row { (7, 2, RUNS, "spin", 0, Some((busy, 64))) };
+    let f = w.last(&[sample(1000, &[], &[spin(0)], 0), sample(2000, &[], &[spin(990)], 0)]);
+    assert_eq!(word(&f)[0], "Busy");
+    let paused = w.last(&[Event::Focus { on: false }]);
+    assert_eq!((paused.requests, paused.nodes), (vec![Request::Watch { on: false }], f.nodes));
+    assert!(w.send(&[Event::Focus { on: false }]).is_empty());
+    // Back: watching again; no rate spans the pause, so the first look only lists (here what it
+    // listed: no frame).
+    let back = w.last(&[Event::Focus { on: true }]);
+    assert_eq!(
+        (&back.requests[..], word(&back)[0]),
+        (&[Request::Watch { on: true }][..], "Measuring")
+    );
+    assert!(w.send(&[sample(60_000, &[], &[spin(1990)], 0)]).is_empty());
+    let f = w.last(&[sample(61_000, &[], &[spin(2980)], 0)]);
+    assert_eq!(word(&f), ["Busy", "spin is using 99% of a core."]);
+    // Made wide (a phone turned), it watches whatever has the focus.
+    w.send(&[Event::Focus { on: false }, resize(600)]);
+    assert!(w.send(&[Event::Focus { on: false }, Event::Focus { on: true }]).is_empty());
 }
 
 #[test]
@@ -569,7 +597,7 @@ fn end_comes_only_from_a_program_page() {
     let (mut w, _) = activity(&[sample(1000, &[], &rows, 0)]);
     let f = w.click(ROW + 7).pop().unwrap();
     let said = texts(&f.nodes);
-    assert_eq!(said[..4], ["\u{2039} Activity", "spin", "spin 9", "Working in a Terminal."]);
+    assert_eq!(said[..4], ["\u{2039} Running", "spin", "spin 9", "Running in a Terminal."]);
     assert!(
         said.contains(&"End spin")
             && said.contains(&"It stops at once, as Ctrl+C would. What it had not saved is lost.")
@@ -599,12 +627,12 @@ fn end_comes_only_from_a_program_page() {
         w.send(&[sample(2000, &[], &rows, 0)]).iter().all(|f| !ids(&f.nodes).contains(&(ROW + 7)))
     );
     w.send(&[sample(3000, &[], &rows[..1], 0)]);
-    assert!(w.click(ROW + 7).iter().all(|f| texts(&f.nodes)[0] != "\u{2039} Activity"));
+    assert!(w.click(ROW + 7).iter().all(|f| texts(&f.nodes)[0] != "\u{2039} Running"));
 }
 
 #[test]
 fn files_ai_and_numbers_read_as_people_say_them() {
-    use uiwire::stat::{ASKED, FAILED, HOME, TOKENS_IN, TOKENS_OUT, UNCOUNTED, UNKEPT};
+    use uiwire::stat::{ASKED, FAILED, HOME, MICROUSD, TOKENS_IN, TOKENS_OUT, UNKEPT, UNMETERED};
     assert_eq!(
         [740, 212_000, 999_999, 1_300_000, 18_400_000].map(bytes),
         ["740 B", "212 KB", "1.0 MB", "1.3 MB", "18 MB"]
@@ -631,16 +659,22 @@ fn files_ai_and_numbers_read_as_people_say_them() {
     assert_eq!(squares(&f).map(|s| (s[20], s[21])), Some((3, 0)));
     let (_, f) = activity(&[sample(1000, &[(HOME, 9), (UNKEPT, 1)], &[], 0)]);
     assert_eq!(squares(&f).map(|s| s[0]), Some(1));
-    assert!(
-        texts(&f.nodes).iter().any(|t| t.starts_with("This browser is not keeping your files"))
-    );
-    // The AI: requests and tokens, what failed, what had no count.
-    let ai = [(ASKED, 14), (TOKENS_IN, 12_400), (TOKENS_OUT, 940), (FAILED, 2), (UNCOUNTED, 1)];
+    assert!(texts(&f.nodes).contains(
+        &"This browser refused to keep your files. Changes since then are lost at reload."
+    ));
+    // The AI by its receipts: requests, tokens, cost; what failed, what had no receipt.
+    #[rustfmt::skip]
+    let ai = [(ASKED, 14), (TOKENS_IN, 11_460), (TOKENS_OUT, 940), (MICROUSD, 19_400), (FAILED, 2),
+        (UNMETERED, 1)];
     let said = texts(&activity(&[sample(1000, &ai, &[], 0)]).1.nodes).join("|");
-    assert!(
-        said.contains("14 requests \u{b7} 12.4k tokens in, 940 out|2 failed|1 had no token count."),
-        "{said}"
+    let line =
+        "14 requests \u{b7} 12.4k tokens \u{b7} about $0.02|2 failed|1 answer had no receipt";
+    assert!(said.contains(line), "{said}");
+    let one = [(ASKED, 1), (UNMETERED, 3)];
+    let said = texts(&activity(&[sample(1000, &one, &[], 0)]).1.nodes).join("|");
+    assert!(said.contains("|1 request|3 answers had no receipt|"), "{said}");
+    assert_eq!(
+        [1, 4_999, 5_000, 19_400, 1_254_999].map(dollars),
+        ["under $0.01", "under $0.01", "about $0.01", "about $0.02", "about $1.25"]
     );
-    let said = texts(&activity(&[sample(1000, &[(ASKED, 1)], &[], 0)]).1.nodes).join("|");
-    assert!(said.contains("|1 request|"), "{said}");
 }

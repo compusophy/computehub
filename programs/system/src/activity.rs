@@ -1,5 +1,7 @@
 //! Activity: what the desktop is doing now, in one honest word, and what each program uses.
 
+use std::mem;
+
 use icons::Glyph;
 use uiwire::stat::{self, Proc, Stats};
 use uiwire::{Event, Frame, Key, Node, Request, SIGIL, Style, Variant};
@@ -20,6 +22,9 @@ const SQUARES: u64 = 24;
 /// The longest gap between two samples that rates are taken over, in ms: a busy page's timer may
 /// fire late on the second between looks; a rate never averages over a long silence.
 const RATE_MS: u32 = 3000;
+/// Activity's width on a desktop: narrower, its window fills a phone's screen (the desktop
+/// maximizes every window there), so it shows exactly while it has the focus.
+const WIDE: u16 = 440;
 /// The system apps and Studio's and the Assistant's tiles by name, as the desktop draws them.
 #[rustfmt::skip]
 const TILES: [(&str, &str, Glyph, u32); 7] = [
@@ -43,8 +48,10 @@ const DOT: &str = " \u{b7} ";
 /// the tab opened. A row opens its page, which can End the process (two deliberate taps; Back
 /// or Escape returns). It watches the desktop's meters from its first size
 /// ([`Request::Watch`]): the desktop sends a sample only when something changed, at most once a
-/// second, so a still desktop wakes nothing here; and it draws only what changed. Rates come
-/// from the last two samples, when they are at most 3 s apart; what it cannot know reads `—`.
+/// second, so a still desktop wakes nothing here; and it draws only what changed. On a phone
+/// (narrower than [`WIDE`]) it watches only while it has the focus: another app covers it then.
+/// Rates come from the last two samples, when they are at most 3 s apart; what it cannot know
+/// reads `—`.
 #[derive(Debug, Default)]
 pub struct Activity {
     /// The last two samples, the newer last.
@@ -54,10 +61,14 @@ pub struct Activity {
     pub(crate) page: Option<u32>,
     /// Processes ended from here, left out until the desktop no longer lists them.
     ended: Vec<u32>,
-    /// The nodes last framed, the requests since, whether a frame went yet.
+    /// The nodes last framed, the requests since, whether a frame went yet; whether the window
+    /// fills a phone's screen, whether it watches, and whether the next sample starts anew.
     shown: Vec<Node>,
     requests: Vec<Request>,
     framed: bool,
+    phone: bool,
+    watching: bool,
+    anew: bool,
 }
 
 /// A process as a row says it: its name, tile, where it runs, its share of a core, its memory.
@@ -73,11 +84,19 @@ struct Row<'a> {
 impl View for Activity {
     fn event(&mut self, ev: &Event, _: &mut dyn Disk) -> bool {
         match ev {
-            Event::Resize { .. } if !self.framed => self.requests.push(Request::Watch { on: true }),
+            // From the first size; and again once wide, if a phone's focus had paused it.
+            Event::Resize { w, .. } => {
+                self.phone = *w < WIDE;
+                if !self.framed || !self.phone {
+                    self.watch(true);
+                }
+            }
+            Event::Focus { on } if self.phone => self.watch(*on),
             Event::Stats { data } => {
                 if let Some(s) = Stats::decode(data) {
                     self.ended.retain(|&pid| s.procs.iter().any(|p| p.pid == pid));
-                    self.prev = self.cur.replace(s);
+                    let anew = mem::take(&mut self.anew);
+                    self.prev = self.cur.replace(s).filter(|_| !anew);
                 }
             }
             Event::Click { id: BACK } | Event::Key { key: Key::Escape, .. } => self.page = None,
@@ -108,12 +127,22 @@ impl View for Activity {
 
     fn frame(&mut self) -> Frame {
         self.framed = true;
-        let requests = std::mem::take(&mut self.requests);
+        let requests = mem::take(&mut self.requests);
         Frame { seq: 0, title: "Activity".into(), requests, nodes: self.shown.clone() }
     }
 }
 
 impl Activity {
+    /// Starts or stops watching the meters; paused, it keeps what it showed. Back from a pause it
+    /// measures anew: no rate spans the pause.
+    fn watch(&mut self, on: bool) {
+        if on != self.watching {
+            (self.watching, self.anew) = (on, on);
+            self.requests.push(Request::Watch { on });
+            self.prev = self.prev.take().filter(|_| !on);
+        }
+    }
+
     /// The ms between the last two samples, if rates may be taken over them.
     fn dt(&self) -> Option<u32> {
         let (prev, cur) = (self.prev.as_ref()?, self.cur.as_ref()?);
@@ -242,7 +271,7 @@ impl Activity {
     }
 
     /// What `r` is doing, as its row says it (`short`: `in Terminal · working · 1 MB`) or its
-    /// page (`Working in a Terminal, using 99% of a core.`).
+    /// page (`Running in a Terminal, using 99% of a core.`).
     fn state(&self, r: &Row<'_>, short: bool) -> String {
         let draws = self.dt().map(|dt| (self.draws(r.p) * 1000 + dt / 2) / dt).filter(|&n| n > 0);
         let (row, page) = match (r.p.state, draws, r.cpu) {
@@ -252,7 +281,7 @@ impl Activity {
             }
             (stat::IDLE, ..) => ("idle".into(), "Idle, waiting for you".into()),
             (_, _, Some(0)) => ("waiting".into(), "Waiting".into()),
-            _ => ("working".into(), "Working".into()),
+            _ => ("working".into(), "Running".into()),
         };
         if short {
             let place = if r.terminal { ["in Terminal", DOT].concat() } else { String::new() };
@@ -362,13 +391,14 @@ fn storage(cur: &Stats) -> Vec<Node> {
     cells.resize(SQUARES as usize, 0);
     nodes.extend([space(6), Node::Grid { id: 0, cols: SQUARES as u16, cells, texts: Vec::new() }]);
     if unkept {
-        let why = "This browser is not keeping your files now: what changes is lost at reload.";
+        let why = "This browser refused to keep your files. Changes since then are lost at reload.";
         nodes.extend([space(6), text(Style::Error, why)]);
     }
     nodes
 }
 
-/// The AI's requests, tokens, failures and those with no token count, as people say them.
+/// The AI's requests, tokens and cost by their receipts, the failed, and the answers with no
+/// receipt (never guessed), as people say them.
 fn ai(cur: &Stats) -> Vec<Node> {
     let n = |i: usize| cur.loud.get(i).copied();
     let Some(asked) = n(stat::ASKED) else { return vec![text(Style::Dim, "\u{2014}")] };
@@ -376,19 +406,31 @@ fn ai(cur: &Stats) -> Vec<Node> {
         return vec![text(Style::Body, "No requests yet.")];
     }
     let mut line = count(asked as usize, "request", "requests");
-    if let (Some(i), Some(o)) = (n(stat::TOKENS_IN), n(stat::TOKENS_OUT)) {
-        if i > 0 || o > 0 {
-            line += &[DOT, &tokens(i), " tokens in, ", &tokens(o), " out"].concat();
-        }
+    let used = n(stat::TOKENS_IN).zip(n(stat::TOKENS_OUT)).map(|(i, o)| i.saturating_add(o));
+    if let Some(t) = used.filter(|&t| t > 0) {
+        line += &[DOT, &tokens(t), " tokens"].concat();
+    }
+    if let Some(usd) = n(stat::MICROUSD).filter(|&u| u > 0) {
+        line += &[DOT, &dollars(usd)].concat();
     }
     let mut nodes = vec![text(Style::Body, &line)];
     if let Some(f) = n(stat::FAILED).filter(|&f| f > 0) {
         nodes.push(text(Style::Error, &[&f.to_string(), " failed"].concat()));
     }
-    if let Some(u) = n(stat::UNCOUNTED).filter(|&u| u > 0) {
-        nodes.push(text(Style::Dim, &[&u.to_string(), " had no token count."].concat()));
+    if let Some(u) = n(stat::UNMETERED).filter(|&u| u > 0) {
+        let had = count(u as usize, "answer", "answers") + " had no receipt";
+        nodes.push(text(Style::Dim, &had));
     }
     nodes
+}
+
+/// µ$ as people say a small cost: `about $0.02`, `under $0.01`, `about $1.25`.
+pub(crate) fn dollars(usd: u32) -> String {
+    let cents = usd.saturating_add(5_000) / 10_000;
+    match cents {
+        0 => "under $0.01".into(),
+        _ => format!("about ${}.{:02}", cents / 100, cents % 100),
+    }
 }
 
 /// A list row: `[name, line]` (the line small under the name), `detail` at the right, a chevron
@@ -404,7 +446,7 @@ fn entry(
 }
 
 fn back() -> Node {
-    Node::Button { id: BACK, variant: Variant::Quiet, label: "\u{2039} Activity".into() }
+    Node::Button { id: BACK, variant: Variant::Quiet, label: "\u{2039} Running".into() }
 }
 
 /// How much a wrapping count grew from `a` to `b` (none if it seems to have gone back).

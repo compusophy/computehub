@@ -263,7 +263,8 @@ impl Desktop {
             let mut v = vec![16, 0, 0, 0, 0, stat::VERSION];
             v.extend_from_slice(&(now as u32).to_le_bytes());
             let (kept, unkept) = (home.kept_len() as u32, home.unkept.into());
-            let loud = [f[0], f[1], f[2], grain.into(), kept, unkept, h[0], h[1], h[2], h[3], h[4]];
+            let mut loud = [f[0], f[1], f[2], grain.into(), kept, unkept, 0, 0, 0, 0, 0, 0];
+            loud[stat::ASKED..].copy_from_slice(&h);
             words(&mut v, &loud);
             k.table(watcher, &mut v);
             // The other workers' meters (whether one runs: hot); the watcher's are quiet.

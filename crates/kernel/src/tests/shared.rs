@@ -146,12 +146,7 @@ fn paths_must_be_normalized_and_under_a_root() {
 #[test]
 fn programs_read_bin_and_never_write_it() {
     // The desktop writes its markers into the Vfs itself; a program, even under `/`, only reads.
-    let (mut s, marker) = (
-        Sys::new(&["/"]),
-        b"#!wasm bin/assistant.wasm
-"
-        .to_vec(),
-    );
+    let (mut s, marker) = (Sys::new(&["/"]), b"#!wasm bin/assistant.wasm\n".to_vec());
     s.fs.mkdir_all("/bin").and(s.fs.write("/bin/assistant", &marker)).unwrap();
     let (creat, trunc, path) = (wire::O_CREAT, wire::O_TRUNC, "/bin/assistant");
     let (open, rm) =
@@ -159,10 +154,17 @@ fn programs_read_bin_and_never_write_it() {
     #[rustfmt::skip]
     let refused = [open(creat, "/bin/x"), open(trunc, path), open(creat | trunc, "/bin"),
         Msg::Write { off: 0, path, data: b"#!wasm /tmp/x" }, Msg::Mkdir { path: "/bin/d" },
-        rm(1, path), rm(2, "/bin"), Msg::Rename { from: path, to: "/tmp/a" },
+        Msg::Mkdir { path: "/bin" }, rm(1, path), rm(2, "/bin"),
+        Msg::Rename { from: path, to: "/tmp/a" }, Msg::Rename { from: "/bin", to: "/tmp/b" },
         Msg::Rename { from: "/tmp", to: "/bin/t" }, Msg::SetLen { len: 0, path }];
     for m in refused {
         assert_eq!(s.ask(m), (wire::EROFS, vec![]), "{m:?}");
+    }
+    // A path that only resolves to /bin is no path here (the worker resolves it first): EINVAL.
+    let tricks = ["/bin/../bin/assistant", "//bin/assistant", "/bin//assistant", "/bin/./x"];
+    for p in tricks.into_iter().chain(["/tmp/../bin/x", "/bin/", "/./bin/x"]) {
+        let write = Msg::Write { off: 0, path: p, data: b"x" };
+        assert_eq!([s.ask(open(creat | trunc, p)).0, s.ask(write).0], [wire::EINVAL; 2], "{p}");
     }
     let read = Msg::Read { off: 0, max: 64, path };
     assert_eq!([s.ask(open(0, path)).0, s.ask(read).0, s.ask(open(creat, "/binx")).0], [0; 3]);

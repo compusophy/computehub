@@ -349,16 +349,16 @@ fn ai_requests_stream_back_to_the_program_that_asked() {
     assert_eq!(ask(&mut s, vec![ai(5)]), (vec![stream(3)], vec![]));
     s.cx(|r, cx| r.closing(cx));
     assert_eq!(ask(&mut s, vec![]), (vec![Fx::Abort(3)], vec![Event::Close]));
-    // Counted: 3 asked (not the busy one), 1 failed, 2 with no tokens (cancelled, closed); then
-    // the tokens of a stream whose usage a chunk boundary split.
-    assert_eq!(s.r.ai.0.borrow().counts, [3, 1, 2, 0, 0]);
-    let usage = br#"{"usage":{"prompt_tokens":1200,"completion_tokens":30}}"#;
+    // Counted: 3 asked (not the busy one), 1 failed, 2 with no receipt (cancelled, closed); then
+    // a receipt a chunk boundary split, after more than the tail keeps.
+    assert_eq!(s.r.ai.0.borrow().counts, [3, 1, 2, 0, 0, 0]);
+    let all = [vec![b'x'; 99], b"\n: receipt in=1200 out=30 microusd=1812\n\n".to_vec()].concat();
     let mut s = Sys::new(true);
     ask(&mut s, vec![ai(1)]);
     let chunk = |d: &[u8]| platform::Event::Chunk { id: 1, data: d.to_vec() };
     let done = platform::Event::StreamEnd { id: 1, status: 200, error: "".into() };
-    for e in [chunk(&usage[..30]), chunk(&usage[30..]), done] {
+    for e in [chunk(&all[..120]), chunk(&all[120..]), done] {
         s.r.ai.heard(&mut s.k, e);
     }
-    assert_eq!(s.r.ai.0.borrow().counts, [1, 0, 0, 1200, 30]);
+    assert_eq!(s.r.ai.0.borrow().counts, [1, 0, 0, 1200, 30, 1812]);
 }

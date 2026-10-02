@@ -492,7 +492,7 @@ fn stats_round_trip_and_decode_strictly() {
     assert_eq!((s.meters_of(6), s.meters_of(5)), (&[u32::MAX, 1024][..], &[][..]));
     // The layout: version, at, the loud counts, the table's rows.
     let b = s.encode();
-    assert_eq!(b[..9], [VERSION, 0x70, 0x11, 1, 0, 11, 0, 0, 0]);
+    assert_eq!(b[..9], [VERSION, 0x70, 0x11, 1, 0, LOUD as u8, 0, 0, 0]);
     let table = 5 + 2 + 4 * LOUD;
     assert_eq!(b[table..table + 6], [2, 0, 4, 0, 0, 0]);
     // Another version, a state past ENDED, a word not UTF-8, more words than it has, fewer rows
@@ -554,4 +554,25 @@ fn pace_follows_a_hot_process_and_a_new_watcher_at_once() {
     assert!(p.due(4001) && p.took(4001, 8, false) && p.wait(4001) == Some(1000));
     assert_ne!(stat::hash(b"a"), stat::hash(b"b"));
     assert_eq!(stat::hash(b""), 0xcbf2_9ce4_8422_2325);
+}
+
+#[test]
+fn a_receipt_is_read_whole_from_the_end_of_a_stream() {
+    use stat::receipt;
+    let end = b"data: [DONE]\n\n\n: receipt in=1200 out=30 microusd=1812\n\n";
+    assert_eq!(receipt(end), Some([1200, 30, 1812]));
+    // The last one counts, of up to 9 digits each. Cut short, garbled, out of order, with more
+    // words, or only quoted inside data: none.
+    let two = [&b"\n: receipt in=1 out=1 microusd=1\n"[..], &end[..]].concat();
+    assert_eq!(receipt(&two), Some([1200, 30, 1812]));
+    let big = b"\n: receipt in=999999999 out=0 microusd=0";
+    assert_eq!(receipt(big), Some([999_999_999, 0, 0]));
+    #[rustfmt::skip]
+    let bad: [&[u8]; 8] = [&end[..end.len() - 12], b"\n: receipt in=1 out=2 microusd=3 x",
+        b"\n: receipt in=1", b"\n: receipt in=1000000000 out=0 microusd=0",
+        b"\n: receipt in= out=1 microusd=1", b"\n: receipt out=1 in=1 microusd=1",
+        b"\n: receipt in=-1 out=1 microusd=1", b"data: {\"x\":\": receipt in=1 out=1 microusd=1\"}"];
+    for b in bad {
+        assert_eq!(receipt(b), None, "{:?}", String::from_utf8_lossy(b));
+    }
 }

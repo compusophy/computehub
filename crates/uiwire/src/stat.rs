@@ -27,8 +27,8 @@ use crate::{Out, Reader};
 pub const VERSION: u8 = 1;
 /// Loud counts: frames drawn for the person's input, for something moving and for programs (their
 /// frames and timers); 1 while the living grain lives; the bytes of /home as kept, and 1 while
-/// files go unkept; AI requests, those that failed, those that ended with no token count, and
-/// the tokens counted in and out.
+/// files go unkept; AI requests, those that failed, those that ended with no [`receipt`], and
+/// what the receipts said: tokens in and out, and µ$ (millionths of a dollar) spent.
 pub const INPUT: usize = 0;
 pub const MOTION: usize = 1;
 pub const PROGRAMS: usize = 2;
@@ -37,11 +37,12 @@ pub const HOME: usize = 4;
 pub const UNKEPT: usize = 5;
 pub const ASKED: usize = 6;
 pub const FAILED: usize = 7;
-pub const UNCOUNTED: usize = 8;
+pub const UNMETERED: usize = 8;
 pub const TOKENS_IN: usize = 9;
 pub const TOKENS_OUT: usize = 10;
+pub const MICROUSD: usize = 11;
 /// How many loud counts this version writes.
-pub const LOUD: usize = 11;
+pub const LOUD: usize = 12;
 /// Quiet counts: frames drawn for the watcher's own frames, by a timer (the living grain's, an
 /// app's, whose program's frames count as programs), for anything else (the clock, fonts); µs the
 /// desktop spent handling events and drawing; KB of its memory.
@@ -139,6 +140,23 @@ fn counts(r: &mut Reader<'_>) -> Option<Vec<u32>> {
 
 fn list<'a>(o: &'a mut Out, v: &[u32]) -> &'a mut Out {
     v.iter().fold(o.u16(v.len() as u16), |o, &n| o.u32(n))
+}
+
+/// The tokens in and out and the µ$ of the last AI receipt in `tail` (the end of a stream from
+/// /api/ai, whose last line is `: receipt in=<n> out=<n> microusd=<n>`), if it holds one whole:
+/// each number 1 to 9 digits.
+pub fn receipt(tail: &[u8]) -> Option<[u32; 3]> {
+    const LINE: &[u8] = b"\n: receipt ";
+    let at = tail.windows(LINE.len()).rposition(|w| w == LINE)? + LINE.len();
+    let line = tail[at..].split(|&c| c == b'\n').next()?;
+    let mut words = line.split(|&c| c == b' ');
+    let mut n = |key: &[u8]| {
+        let digits = words.next()?.strip_prefix(key)?;
+        let ok = !digits.is_empty() && digits.len() <= 9 && digits.iter().all(u8::is_ascii_digit);
+        ok.then(|| digits.iter().fold(0, |n, d| n * 10 + u32::from(d - b'0')))
+    };
+    let r = [n(b"in=")?, n(b"out=")?, n(b"microusd=")?];
+    words.next().is_none().then_some(r)
 }
 
 /// The FNV-1a 64 hash of `b`: what tells two samples' loud parts apart.

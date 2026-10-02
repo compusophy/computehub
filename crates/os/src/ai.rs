@@ -6,8 +6,10 @@
 //!
 //! The hub also keeps what Activity reads ([`uiwire::stat`]): the process watching (the newest
 //! [`Request::Watch`]), and since the tab opened the requests, the failed (an HTTP status not
-//! 2xx, or none), those that ended with no token count (cut off, cancelled) and the tokens the
-//! last `"usage"` in each stream's last [`TAIL`] bytes counted in and out.
+//! 2xx, or none), those that ended with no receipt (cut off, cancelled) and what the receipts
+//! said: the server ends a stream with one, `: receipt in=<n> out=<n> microusd=<n>` (an SSE
+//! comment, which readers skip), its tokens in and out and its cost, read from the stream's last
+//! [`TAIL`] bytes (whole, wherever chunks split it).
 
 use std::cell::RefCell;
 use std::mem;
@@ -26,8 +28,8 @@ pub const MODEL: &str = "compusophy.ai.model";
 pub const MODELS: [&str; 2] = ["zai/glm-5.3", "zai/glm-5.3-flash"];
 pub const DEFAULT_MODEL: &str = MODELS[0];
 pub const CHUNK: usize = 32 << 10;
-/// The bytes of a stream kept for its usage, as the server keeps them.
-pub const TAIL: usize = 4096;
+/// The bytes of a stream kept for its receipt, its last line.
+pub const TAIL: usize = 64;
 
 /// The page's AI state, shared (clones are one) by the desktop and its program windows.
 #[derive(Clone, Default)]
@@ -46,7 +48,7 @@ pub(crate) struct Hub {
     retell: bool,
     pub(crate) watch: Option<u32>,
     pub(crate) fresh: bool,
-    pub(crate) counts: [u32; 5],
+    pub(crate) counts: [u32; 6],
 }
 
 impl Hub {
@@ -118,9 +120,9 @@ impl Ai {
         let (pid, id) = (h.live[i].1, h.live[i].2);
         if let Heard::StreamEnd { status, error, .. } = ev {
             let (tail, c) = (h.live.remove(i).3, &mut h.counts);
-            match usage(&tail) {
+            match uiwire::stat::receipt(&tail) {
                 _ if status / 100 != 2 => c[1] = c[1].wrapping_add(1),
-                Some((i, o)) => (c[3], c[4]) = (c[3].wrapping_add(i), c[4].wrapping_add(o)),
+                Some(r) => (3..6).for_each(|i| c[i] = c[i].wrapping_add(r[i - 3])),
                 None => c[2] = c[2].wrapping_add(1),
             }
             end(k, pid, id, status, &error);
@@ -174,20 +176,6 @@ impl Ai {
         config.iter().for_each(|c| h.told.iter().for_each(|&pid| k.post_event(pid, c)));
         config.is_some()
     }
-}
-
-/// The tokens in and out that the last `"usage"` in `tail` counted, if it holds both.
-pub(crate) fn usage(tail: &[u8]) -> Option<(u32, u32)> {
-    Some((number(tail, b"\"prompt_tokens\":")?, number(tail, b"\"completion_tokens\":")?))
-}
-
-/// The digits right after the last `key` in `b`, if there are any.
-fn number(b: &[u8], key: &[u8]) -> Option<u32> {
-    let at = b.windows(key.len()).rposition(|w| w == key)? + key.len();
-    let digits = b.get(at..)?.iter().take_while(|c| c.is_ascii_digit());
-    digits.fold(None, |n, d| {
-        Some(n.unwrap_or(0u32).wrapping_mul(10).wrapping_add(u32::from(d - b'0')))
-    })
 }
 
 fn end(k: &mut Kernel, pid: u32, id: u32, status: u16, error: &str) {
