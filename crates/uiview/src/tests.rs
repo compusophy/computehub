@@ -1,5 +1,6 @@
 use gfx::{DrawList, Instance, Kind};
 use ui::{Code, Hit, Key, THEMES, UiState};
+use uiwire::{Draw, Shape};
 
 use super::*;
 
@@ -568,7 +569,7 @@ fn grids_draw_theme_squares_and_points_find_them() {
     // Two columns across the width: 96 px squares (the most), centered, 3 rows, a pixel apart.
     let x = PAD + (600.0 - 2.0 * PAD - 192.0) / 2.0;
     let rect = RectF::new(x, PAD, 192.0, 288.0);
-    assert_eq!(view.grids, [Board { id: 7, nth: 0, rect, cols: 2, n: 5 }]);
+    assert_eq!(view.grids, [Board { id: 7, nth: 0, rect, cols: 2, n: 5, fine: false }]);
     let square = |c: f32, r: f32| RectF::new(x + 96.0 * c, PAD + 96.0 * r, 95.0, 95.0);
     assert!(d.filled(square(0.0, 0.0), t.surface_lo) && d.filled(square(1.0, 0.0), t.ansi[1]));
     assert!(d.filled(square(0.0, 1.0), t.ansi[8]) && d.filled(square(1.0, 1.0), t.ansi[2]));
@@ -687,7 +688,7 @@ fn play_ticks_while_shown_once_answered_and_taps_new_squares() {
     assert_eq!(tick(&mut p, 5117.0), Some(Event::Tick { ms: 101 }));
     assert!(p.ask(&Request::Timer { ms: 0 }) && tick(&mut p, 9000.0).is_none());
     // A press taps its square; a drag taps each new square of the grid pressed, none other.
-    let board = |id, nth, rect| Board { id, nth, rect, cols: 2, n: 4 };
+    let board = |id, nth, rect| Board { id, nth, rect, cols: 2, n: 4, fine: false };
     let (tap, none) = (|cells: &[u32]| (7, cells.to_vec()), (0, vec![]));
     let mut view =
         View { grids: vec![board(7, 0, RectF::new(10.0, 10.0, 64.0, 64.0))], ..View::default() };
@@ -726,4 +727,148 @@ fn play_ticks_while_shown_once_answered_and_taps_new_squares() {
     assert_eq!(p.tap(&view, None, 11.0, 51.0), (9, vec![0]));
     view.grids.clear();
     assert_eq!(p.tap(&view, Some(7), 50.0, 50.0), none);
+}
+
+/// `nodes` drawn `w` x `h` at `dpr` device px a px in theme `t`, and what a recording draw of
+/// them notes: what it drew, the view after, and the notes.
+fn boards(size: (f32, f32), dpr: f32, t: &Theme, nodes: &[Node]) -> (Drawn, View, gfx::Sem) {
+    let mut out = Vec::new();
+    for mut list in [DrawList::new(), DrawList::recording()] {
+        let mut ts = TextSystem::new(SANS.to_vec()).unwrap();
+        ts.set_dpr(dpr);
+        let (mut hits, mut view) = (Vec::new(), View::default());
+        let r = RectF::new(0.0, 0.0, size.0, size.1);
+        let ui = Ui::new(&mut list, &mut ts, r, &mut hits, UiState::default(), t);
+        super::draw(&mut { ui }, nodes, &mut Texts::default(), &mut view);
+        out.push((Drawn { list, hits }, view));
+    }
+    let (mut noted, drawn) = (out.pop().unwrap().0, out.pop().unwrap());
+    (drawn.0, drawn.1, noted.list.take_sem().unwrap())
+}
+
+/// A draw of `shape` in `color` at `at`, with `text`.
+fn shape(shape: Shape, color: u8, at: [i16; 5], text: &str) -> Draw {
+    Draw { shape, color, at, text: text.into() }
+}
+
+#[test]
+fn canvases_fit_a_phone_and_land_on_device_pixels() {
+    let t = &THEMES[0];
+    let draws = vec![
+        shape(Shape::Rect, 1, [100, 0, 100, 300, 0], ""),
+        shape(Shape::Line, 8, [100, 8, 100, 291, 3], ""),
+        shape(Shape::Line, 2, [22, 22, 78, 78, 8], ""),
+    ];
+    let tic = Node::Canvas { id: 9, w: 300, h: 300, draws };
+    let new = Node::Button { id: 1, variant: Variant::Normal, label: "New game".into() };
+    let game = [text(Style::Body, "X to play"), tic, new];
+    for dpr in [1.0, 2.0, 3.5] {
+        // A phone's maximized window: 369 px across inside, the board as wide, a tic-tac-toe
+        // square 123 px; a pad.
+        let (d, view, _) = boards((409.0, 552.0), dpr, t, &game);
+        let b = view.grids[0];
+        assert_eq!((b.id, b.nth, b.cols, b.n, b.fine), (9, 0, 300, 90_000, true));
+        let near = |a: f32, b: f32| (a - b).abs() < 0.01;
+        assert!(near(b.rect.x, PAD) && near(b.rect.w, 369.0) && near(b.rect.h, 369.0), "{b:?}");
+        assert_eq!(d.hit(9).sense, Sense::Pad);
+        // The well, the rect and the line along an axis: each edge on a device pixel.
+        let on = |v: f32| (v * dpr - (v * dpr).round()).abs() < 1e-3;
+        let fill = |c: Rgba| *d.of(Kind::Fill).into_iter().find(|f| f.color == c).unwrap();
+        for c in [t.surface_lo, t.ansi[1], t.ansi[8]] {
+            assert!(fill(c).rect.iter().all(|v| on(*v)), "{dpr} {:?}", fill(c));
+        }
+        let (rect, line) = (fill(t.ansi[1]).rect, fill(t.ansi[8]));
+        assert!((rect[0] - PAD - 123.0).abs() < 1.0 && (rect[2] - 123.0).abs() < 1.0, "{rect:?}");
+        assert_eq!(line.radius, line.rect[2] / 2.0, "round ends");
+        // The diagonal is a line, falling left to right.
+        assert_eq!(d.of(Kind::Line).iter().map(|l| l.p1).collect::<Vec<_>>(), [0.0]);
+    }
+    // Short of room (here 600 x 400), it takes the height left, a third at least, its units
+    // square, centered across.
+    let tall = Node::Canvas { id: 0, w: 100, h: 200, draws: Vec::new() };
+    let (d, view, _) = boards((600.0, 400.0), 1.0, t, &[tall]);
+    assert!(view.grids.is_empty() && d.hits.is_empty(), "no id: nothing to tap");
+    assert_eq!(d.of(Kind::Fill)[0].rect, [PAD + 190.0, PAD, 180.0, 360.0]);
+}
+
+#[test]
+fn canvas_colors_come_from_the_theme() {
+    for t in &THEMES {
+        let draws = (0..12).map(|c| shape(Shape::Rect, c, [c.into(), 0, 1, 1, 0], "")).collect();
+        let canvas = Node::Canvas { id: 0, w: 12, h: 1, draws };
+        let (d, ..) = boards((600.0, 400.0), 1.0, t, &[canvas]);
+        let silver = if t.dark { t.ansi[7] } else { t.text_faint };
+        let mut want = vec![t.surface_lo];
+        want.extend(t.ansi[1..7].iter().copied().chain([silver, t.ansi[8]]));
+        want.extend([t.text, t.text_dim, t.accent]);
+        let got: Vec<Rgba> = d.of(Kind::Fill).iter().skip(1).map(|f| f.color).collect();
+        assert_eq!(got, want, "{}", t.name);
+        assert!((0..12).all(|c| canvas::ink(t, c) == want[usize::from(c)]));
+    }
+}
+
+#[test]
+fn canvas_shapes_rings_texts_and_sprites_draw_scaled() {
+    let t = &THEMES[1];
+    let draws = vec![
+        shape(Shape::Ring, 4, [50, 25, 10, 2, 0], ""),
+        shape(Shape::Circle, 3, [50, 25, 4, 0, 0], ""),
+        shape(Shape::Text, 11, [50, 40, 3, 0, 0], "Score 7"),
+        shape(Shape::Sprite, 0, [0, 40, 2, 0, 0], "11.2\n.33"),
+        // Nothing of no size; a ring of no width.
+        shape(Shape::Rect, 5, [0, 0, 0, 5, 0], ""),
+        shape(Shape::Circle, 5, [1, 1, 0, 0, 0], ""),
+        shape(Shape::Ring, 5, [1, 1, 4, 0, 0], ""),
+        shape(Shape::Text, 5, [1, 1, 0, 0, 0], "x"),
+    ];
+    // 100 x 50 units in 560 x 360: 5.6 px a unit.
+    let canvas = Node::Canvas { id: 2, w: 100, h: 50, draws };
+    let (d, _, sem) = boards((600.0, 400.0), 1.0, t, &[canvas]);
+    let (cx, cy) = (PAD + 50.5 * 5.6, PAD + 25.5 * 5.6);
+    let ring = d.of(Kind::Border).into_iter().find(|b| b.color == t.ansi[4]).unwrap();
+    assert_eq!((ring.radius, ring.p0), (56.0, 11.2));
+    assert_eq!(ring.rect, [cx - 56.0, cy - 56.0, 112.0, 112.0]);
+    let disc = d.of(Kind::Fill).into_iter().find(|f| f.color == t.ansi[3]).unwrap();
+    assert_eq!((disc.radius, disc.rect[2]), (4.0 * 5.6, 8.0 * 5.6));
+    assert!(d.list.instances().iter().all(|i| i.color != t.ansi[5]));
+    // 3 units of 5.6 px is 16.8 px: set at 16, in the boot's font, read where it shows.
+    assert!(d.of(Kind::Glyph).iter().filter(|g| g.color == t.accent).count() >= 6);
+    let run = sem.runs.iter().find(|r| r.text == "Score 7").unwrap();
+    assert_eq!(run.rect.h, 1.25 * 16.0);
+    // A sprite's squares, two units a side: a run of one color a fill.
+    let low = |f: &&Instance| f.rect[1] >= PAD + 220.0;
+    let sprite: Vec<_> = d.of(Kind::Fill).into_iter().filter(low).collect();
+    let colors: Vec<Rgba> = sprite.iter().map(|f| f.color).collect();
+    assert_eq!(colors, [t.ansi[1], t.ansi[2], t.ansi[3]]);
+    assert_eq!(sprite[0].rect, [PAD, PAD + 224.0, 22.0, 11.0]);
+    assert_eq!((sprite[2].rect[0], sprite[2].rect[1]), (PAD + 11.0, PAD + 235.0));
+}
+
+#[test]
+fn canvas_taps_points_and_its_mark_lists_its_shapes() {
+    // A press taps the unit under it (y * w + x); a drag the unit under it alone, once.
+    let rect = RectF::new(0.0, 0.0, 100.0, 50.0);
+    let b = Board { id: 3, nth: 0, rect, cols: 10, n: 50, fine: true };
+    let (view, mut p) = (View { grids: vec![b], ..View::default() }, Play::default());
+    assert_eq!(p.tap(&view, Some(3), 25.0, 15.0), (3, vec![12]));
+    assert_eq!(p.tap(&view, None, 95.0, 45.0), (3, vec![49]));
+    assert_eq!(p.tap(&view, None, 96.0, 46.0), (3, vec![]));
+    // For the AI: its size in units, then each shape, its text, numbers and color.
+    let draws = vec![
+        shape(Shape::Line, 9, [10, 5, 30, 5, 2], ""),
+        shape(Shape::Ring, 4, [50, 25, 10, 2, 0], ""),
+        shape(Shape::Text, 11, [1, 2, 3, 0, 0], "hi"),
+        shape(Shape::Sprite, 0, [0, -1, 2, 0, 0], "1"),
+    ];
+    let one = Node::Canvas { id: 5, w: 100, h: 50, draws };
+    let rects = (0..70).map(|i| shape(Shape::Rect, 1, [i, 0, 1, 1, 0], "")).collect();
+    let many = Node::Canvas { id: 6, w: 70, h: 1, draws: rects };
+    let (_, view, sem) = boards((600.0, 400.0), 1.0, &THEMES[0], &[one, many]);
+    let want = "100 x 50 units\nline 10 5 30 5 2 9\nring 50 25 10 2 4\ntext \"hi\" 1 2 3 11\n\
+        sprite 0 -1 2";
+    assert_eq!((sem.marks[0].role, &*sem.marks[0].value), (ui::sem::CANVAS, want));
+    let lines: Vec<&str> = sem.marks[1].value.lines().collect();
+    assert_eq!((lines.len(), lines[64], lines[65]), (66, "rect 63 0 1 1 1", "and 6 more"));
+    let ids: Vec<_> = view.grids.iter().map(|b| (b.id, b.nth)).collect();
+    assert_eq!(ids, [(5, 0), (6, 1)]);
 }

@@ -8,10 +8,13 @@
 //! know is empty space; a revealed mark comes in ring by ring by the window's own clock (the page
 //! clock at its first draw), frames asked for only meanwhile ([`View::animating`]). In a window
 //! narrower than [`NARROW`] (a phone's) chips and quiet buttons are touch targets, [`TOUCH`] tall.
+//! Grids and Canvases are boards: they take the room the other widgets leave ([`SQUARE`]), and
+//! with an id they are pads ([`Sense::Pad`]) a press or a drag taps ([`Play::tap`]).
 
 #![forbid(unsafe_code)]
 
 mod area;
+pub mod canvas;
 #[cfg(test)]
 mod tests;
 mod texts;
@@ -48,8 +51,8 @@ pub const REVEAL_MS: f64 = 7.0 * STEP + FADE;
 
 /// How a window is scrolled: pixels down, and the content's and the view's height as last drawn;
 /// whether a view at the bottom stays there as the content grows (the Assistant's transcript);
-/// each Scroll as last drawn; the page clock when a revealed glyph first drew; each Grid with an
-/// id as last drawn.
+/// each Scroll as last drawn; the page clock when a revealed glyph first drew; each board (a Grid
+/// or a Canvas) with an id as last drawn.
 #[derive(Debug, Default)]
 pub struct View {
     pub scroll: f32,
@@ -60,8 +63,10 @@ pub struct View {
     pub grids: Vec<Board>,
 }
 
-/// A Grid with an id as last drawn: its id, its place among the frame's Grids (the same grid in
-/// a later frame, whatever its id there), its squares' rect, its columns and squares.
+/// A board (a Grid or a Canvas) with an id as last drawn: its id, its place among the frame's
+/// boards (the same board in a later frame, whatever its id there), its squares' rect (a
+/// Canvas's units are its squares), its columns and squares, and whether it is fine (a Canvas's:
+/// a drag taps the unit under the pointer alone, never those it passed between samples).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Board {
     pub id: u32,
@@ -69,6 +74,7 @@ pub struct Board {
     pub rect: RectF,
     pub cols: u16,
     pub n: u32,
+    pub fine: bool,
 }
 
 impl Board {
@@ -160,13 +166,13 @@ impl Play {
         })
     }
 
-    /// The pointer went down on hit `id` (`None`: dragged while down) at `(x, y)`: the Grid to
-    /// tap (its id now) and its squares newly under it. A drag stays on the Grid pressed (found
+    /// The pointer went down on hit `id` (`None`: dragged while down) at `(x, y)`: the board to
+    /// tap (its id now) and its squares newly under it. A drag stays on the board pressed (found
     /// by its place in the frame, as its id may change) and taps each square on the line from
-    /// the last one, as the pointer moves past squares between samples; off the squares and
-    /// back, it goes on from where it came back. It waits while what was sent is unanswered,
-    /// and until the answer draws (which may give the Grids other ids), so it never taps by a
-    /// stale id.
+    /// the last one, as the pointer moves past squares between samples (on a fine board, the
+    /// one under it alone); off the squares and back, it goes on from where it came back. It
+    /// waits while what was sent is unanswered, and until the answer draws (which may give the
+    /// boards other ids), so it never taps by a stale id.
     pub fn tap(&mut self, view: &View, id: Option<u32>, x: f32, y: f32) -> (u32, Vec<u32>) {
         let mut taps = (0, Vec::new());
         if id.is_some() {
@@ -189,6 +195,7 @@ impl Play {
             let (c0, r0) = from.unwrap_or((c, r));
             // The square alone for a press or a return; none for the same square.
             let n = c.abs_diff(c0).max(r.abs_diff(r0)).max(u32::from(from.is_none()));
+            let n = if b.fine { n.min(1) } else { n };
             // `i` of `n` steps from `p` to `q`, rounded.
             let step = |p: u32, q: u32, i: u32| (p * (n - i) + q * i + n / 2) / n;
             for i in 1..=n {
@@ -201,7 +208,7 @@ impl Play {
         taps
     }
 
-    /// Whether the pointer's last press was on a Grid: its tap went, so its Click is none.
+    /// Whether the pointer's last press was on a board: its tap went, so its Click is none.
     pub fn pressed(&self) -> bool {
         self.grid.is_some()
     }
@@ -490,6 +497,11 @@ impl Lay<'_> {
                 (w, h + grow.unwrap_or(0.0))
             }
             Node::Separator => (w, 1.0),
+            // Its units square, as wide as it can be, as all of it fits.
+            Node::Canvas { w: cw, h: ch, .. } => {
+                let most = w / f32::from((*cw).max(1)) * f32::from(*ch);
+                self.board(w, most * self.fit, most)
+            }
             Node::Grid { cols, cells, .. } => {
                 let (rows, cols) =
                     (cells.len().div_ceil(usize::from(*cols).max(1)), (*cols).max(1));
@@ -526,8 +538,8 @@ impl Lay<'_> {
     /// all, but for an editor, which keeps where it was drawn.
     fn draw(&mut self, ui: &mut Ui<'_>, n: &Node, x: f32, y: f32) {
         let ((w, h), t) = (self.next(true), self.t);
-        // Grids count in the frame's order, drawn or not.
-        self.nth += u32::from(matches!(n, Node::Grid { .. }));
+        // Boards count in the frame's order, drawn or not.
+        self.nth += u32::from(matches!(n, Node::Grid { .. } | Node::Canvas { .. }));
         let r = ui.snapped(RectF::new(x, y, w, h));
         let clip = ui.list().clip();
         let editor = matches!(n, Node::Code { .. } | Node::Area { .. });
@@ -647,7 +659,12 @@ impl Lay<'_> {
                 let side = h / cells.len().div_ceil(usize::from(cols)).max(1) as f32;
                 let rect = grid(ui, (r, side), *id, cols, (cells, texts));
                 let (id, nth, n) = (*id, self.nth - 1, cells.len() as u32);
-                self.grids.extend((id != 0).then_some(Board { id, nth, rect, cols, n }));
+                let fine = false;
+                self.grids.extend((id != 0).then_some(Board { id, nth, rect, cols, n, fine }));
+            }
+            Node::Canvas { id, w: cw, h: ch, draws } => {
+                let b = canvas::draw(ui, RectF::new(x, y, w, h), *id, (*cw, *ch), draws);
+                self.grids.extend((*id != 0).then_some(Board { nth: self.nth - 1, ..b }));
             }
         }
     }

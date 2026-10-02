@@ -41,6 +41,14 @@ impl App for Probe {
         if self.1 == "board" {
             ui.mark(W(1), sem::GRID, 0, &"0".repeat(4100));
             ui.mark(W(2), sem::GRID, 0, &"1".repeat(20_000));
+            ui.mark(
+                W(3),
+                sem::CANVAS,
+                0,
+                &"line 1 2 3 4 5 6
+"
+                .repeat(100),
+            );
         }
         if self.1 != "page" {
             let sense = if self.1 == "board" { ui::Sense::Pad } else { ui::Sense::Click };
@@ -573,12 +581,13 @@ fn the_scene_holds_each_window_its_hits_its_marks_and_the_text_that_shows() {
     assert!(s.wins[2].hits.is_empty() && s.wins[2].runs.is_empty());
     // Reading the screen drew nothing on the atlas.
     assert!(h.text.atlas_mut().take_dirty().is_none());
-    // A grid's mark keeps every square of a big board; past 12 KiB it is cut, and says so.
+    // A grid's mark keeps every square of a big board, a canvas's mark its shapes; past 12 KiB
+    // it is cut, and says so.
     h.open("board", None, &mut Response::default());
     let s = h.scene();
     let lens: Vec<_> =
         s.wins[0].marks.iter().map(|m| (m.value.len(), m.value.ends_with('…'))).collect();
-    assert_eq!(lens, [(4100, false), (12 << 10, true)]);
+    assert_eq!(lens, [(4100, false), (12 << 10, true), (1700, false)]);
     assert_eq!(s.wins[0].hits[0].sense, 0, "a pad reads as a click");
     // However much the windows say, the scene stays within 64 KiB as sent (the top windows
     // first), a mark's value within 512 bytes, cut ones saying so.
