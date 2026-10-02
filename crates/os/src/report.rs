@@ -15,6 +15,7 @@
 //!   A 400 or 413 drops it (it will never go); anything else (503 when the inbox is not set up,
 //!   429, no network) keeps it. While reports are off, only feedback waits there.
 
+use logon::own;
 use platform::{Ctl, Device};
 use std::cell::RefCell;
 
@@ -260,11 +261,11 @@ impl Reports {
     /// waits; then builds and sends what was asked, with the context `ctx` gives.
     pub fn pump(&mut self, ctl: &mut Ctl, ctx: impl FnOnce() -> Context) {
         if !std::mem::replace(&mut self.loaded, true) {
-            let stored = ctl.storage_get(OUTBOX).unwrap_or_default();
+            let stored = ctl.storage_get(&own(OUTBOX)).unwrap_or_default();
             for r in split(&stored, b'\n').into_iter().filter(|l| !l.is_empty()) {
                 self.outbox.push(r.to_string());
             }
-            self.off = ctl.storage_get(REPORTS).as_deref() == Some("off");
+            self.off = ctl.storage_get(&own(REPORTS)).as_deref() == Some("off");
             self.held = !self.outbox.is_empty();
             if self.off {
                 self.drop_automatic(ctl);
@@ -355,7 +356,7 @@ impl Reports {
         note(&["pref ", key, " ", &said].concat());
         if key == ui::REPORTS {
             self.off = value == "off";
-            ctl.storage_set(REPORTS, value);
+            ctl.storage_set(&own(REPORTS), value);
             if self.off {
                 self.drop_automatic(ctl);
             }
@@ -426,7 +427,7 @@ impl Reports {
         for r in &self.outbox {
             all = all + r + "\n";
         }
-        ctl.storage_set(OUTBOX, all.trim_end_matches('\n'));
+        ctl.storage_set(&own(OUTBOX), all.trim_end_matches('\n'));
     }
 
     /// Sends every report in the outbox not already on its way.
@@ -458,7 +459,8 @@ pub fn install() {
         let said = said.or_else(|| p.downcast_ref::<&str>().copied()).unwrap_or("panic");
         let text = [said, "\nat ", &at].concat();
         note(&["panic ", &text].concat());
-        if Ctl::default().storage_get(REPORTS).as_deref() == Some("off") {
+        // The signed-in profile's consent; before a sign-in, every listed profile's.
+        if logon::quiet(&|k| Ctl::default().storage_get(k)) {
             return;
         }
         let ctx = Context { device: platform::device(), ..Context::default() };

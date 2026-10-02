@@ -64,7 +64,7 @@ crates/      the OS (boot, kernel, worker); speaks to programs by WASI, uiwire
   uiview/    draws them with ui; holds edited text
   host/      wm + one app per window; agent; grabs, squeeze; motion, frames
   home/      top bar, home grid (every app), dock + Assistant row, menus, touch
-  logon/     the welcome: the mark, a record of the real boot, sign-in
+  logon/     the welcome: mark, real boot record, profiles
   shell/     the desktop: window chrome, keys, overlay; wires host + home
   platform/  the browser boundary: canvas, WebGL2, input, textarea, fetch,
              frames on demand, localStorage, workers, beacon

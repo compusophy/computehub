@@ -177,10 +177,10 @@ fn the_welcome_then_the_desktop_start_at_the_first_usable_sizes() {
     // A new tab says hello at any size; Start (Enter) signs in: no Welcome window opens.
     assert_eq!(send(&mut desk, resize(800.0, short)), ((true, false), vec![]));
     send(&mut desk, resize(1280.0, 800.0));
-    let seen = Fx::Store { key: logon::SEEN.into(), value: "1".into() };
-    let session = Fx::Session { key: logon::SESSION.into(), value: Some("0".into()) };
-    let want = ((true, true), vec![seen, session, Fx::TextInput(false)]);
-    assert_eq!(send(&mut desk, key("Enter/Enter", true)), want);
+    let store = |k: &str, v: &str| Fx::Store { key: k.into(), value: v.into() };
+    let s = Fx::Session { key: logon::SESSION.into(), value: Some("0".into()) };
+    let fx = [store(logon::SEEN, "1"), store("compusophy.last", "0"), s, Fx::TextInput(false)];
+    assert_eq!(send(&mut desk, key("Enter/Enter", true)), ((true, true), fx.to_vec()));
     assert!(desk.logon.as_ref().is_some_and(Logon::leaving));
     let got = shell(&desk);
     assert!(got.wm().layout().is_empty() && desk.parts.is_none());

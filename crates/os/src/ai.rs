@@ -15,6 +15,7 @@ use std::cell::RefCell;
 use std::mem;
 use std::rc::Rc;
 
+use logon::own;
 use platform::{Ctl, Event as Heard};
 use ui::AiStatus;
 use ui::kernel::{Kernel, wire::KILLED};
@@ -79,7 +80,7 @@ impl Ai {
     /// A new desktop: the model from storage (told at the next [`Ai::pump`]), nothing in flight.
     pub fn load(&self, ctl: &Ctl) {
         let mut h = Hub::default();
-        h.set(&ctl.storage_get(MODEL).unwrap_or_default());
+        h.set(&ctl.storage_get(&own(MODEL)).unwrap_or_default());
         *self.0.borrow_mut() = h;
     }
 
@@ -97,7 +98,7 @@ impl Ai {
     pub fn set_model(&self, ctl: &mut Ctl, model: &str) {
         let mut h = self.0.borrow_mut();
         h.set(model);
-        ctl.storage_set(MODEL, MODELS[h.model]);
+        ctl.storage_set(&own(MODEL), MODELS[h.model]);
     }
 
     /// The settings for process `pid`, which hears them again on every change.

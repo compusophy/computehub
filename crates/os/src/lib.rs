@@ -8,7 +8,8 @@
 //! base. The welcome marks the device `seen` as it signs in, so the shell opens no Welcome.
 //! The theme is kept in `localStorage` ([`THEME_KEY`]), as are the preferences of [`PREFS`]
 //! (`compusophy.<key>`), which apps and the shell set ([`shell::Effect::Pref`]) and the shell
-//! reads when it is made ([`shell::Prefs`]).
+//! reads when it is made ([`shell::Prefs`]): each under the signed-in profile's key
+//! ([`logon::own`]; these are the first profile's). Sign out keeps /home and reloads.
 //!
 //! Fonts: boot (Inter Regular, in the wasm); deferred (Inter SemiBold and JetBrains Mono, fetched
 //! after the first frame under the top two fetch ids, which the shell never reaches; a failure
@@ -135,7 +136,8 @@ impl Desktop {
     fn input(&mut self, input: Input, ctl: &mut Ctl) -> Option<Response> {
         self.missed_tick |= matches!(input, Input::Tick { .. });
         if let Some(l) = self.logon.as_mut().filter(|l| !l.leaving()) {
-            let (r, outs) = l.input(&input, ctl.monotonic_ms());
+            ctl.random(&mut l.fresh);
+            let (r, outs) = l.input(&input, ctl.monotonic_ms(), &|k| ctl.storage_get(k));
             return Some(self.outs(outs, r, ctl));
         }
         if let Some(shell) = &mut self.shell {
@@ -146,8 +148,9 @@ impl Desktop {
             let get = |k: &str| ctl.storage_get(k);
             self.signed = logon::session(ctl.session_get(logon::SESSION).as_deref(), &get);
             if self.signed.is_none() {
-                self.logon = Some(Logon::new((w, h), &get));
-                return Some(Response { redraw: true, ..Response::default() });
+                let (l, outs) = Logon::new((w, h), &get);
+                self.logon = Some(l);
+                return Some(self.outs(outs, Response { redraw: true, ..Default::default() }, ctl));
             }
         }
         self.desk(ctl)
@@ -160,6 +163,7 @@ impl Desktop {
         if self.signed.is_none() || w < 1.0 || h < shell::BAR_H + shell::DOCK_CLEAR + 1.0 {
             return None;
         }
+        logon::sign(self.signed?);
         let ((text, mut vfs), t) = (self.parts.take()?, ctl.monotonic_ms());
         self.home.restore(&mut vfs, ctl, &mut self.report);
         report::note(&record::home_note(self.home.kept_len(), ctl.monotonic_ms() - t));
@@ -181,7 +185,11 @@ impl Desktop {
         for out in outs {
             match out {
                 Out::Set(key, value) => ctl.storage_set(&key, &value),
+                Out::Remove(key) => ctl.storage_remove(&key),
                 Out::Session(id) => ctl.session_set(logon::SESSION, Some(&id)),
+                Out::Failed(message, note) => self.report.failed("error", message, note),
+                Out::SignOut => self.sign_out(ctl, true),
+                Out::Close => self.logon = None,
                 Out::SignIn(id) => {
                     self.signed = Some(id);
                     if let Some(d) = self.desk(ctl) {
@@ -191,6 +199,21 @@ impl Desktop {
             }
         }
         r
+    }
+
+    /// Signs out: /home kept at once, then the tab forgets its profile and reloads (to the
+    /// welcome). Files that could not be kept get a card over the desktop first, unless
+    /// `anyway`.
+    fn sign_out(&mut self, ctl: &mut Ctl, anyway: bool) {
+        let Some(shell) = &self.shell else { return };
+        self.home.keep(shell.vfs(), ctl, &mut self.report, true);
+        if self.home.unkept && !anyway {
+            let (w, h, _) = self.report.screen;
+            self.logon = Some(Logon::unkept((w, h), shell.theme_name()));
+            return;
+        }
+        ctl.session_set(logon::SESSION, None);
+        ctl.reload();
     }
 
     /// One event, but for what the shell queued outside its response.
@@ -241,8 +264,11 @@ impl Desktop {
             ev => input_of(ev).and_then(|input| self.input(input, ctl)),
         };
         let Some(r) = r else { return Handled::default() };
-        let asked = r.text_input.is_some();
+        let (asked, out) = (r.text_input.is_some(), r.effects.contains(&Effect::SignOut));
         apply(r.effects, ctl, (&self.ai, &mut self.wake), &mut self.report);
+        if out {
+            self.sign_out(ctl, false);
+        }
         if let Some(on) = r.text_input {
             self.typing = on;
             ctl.set_text_input(on);
@@ -288,7 +314,7 @@ impl Desktop {
         let theme = shell.theme_name();
         if theme != self.saved {
             self.saved = theme;
-            ctl.storage_set(THEME_KEY, theme);
+            ctl.storage_set(&logon::own(THEME_KEY), theme);
         }
     }
 
@@ -528,7 +554,8 @@ fn effect(fx: Effect, ctl: &mut Ctl, ai: &ai::Ai) {
         Effect::Kernel(K::Wake { ms }) => ctl.wake_in(ms),
         Effect::Pref { key, value } => pref(&key, &value, ctl, ai),
         // Telemetry took it ([`apply`]): it goes at the next flush, which can say what is open.
-        Effect::Feedback { .. } => {}
+        // Signing out is the desktop's own, after the effects before it.
+        Effect::Feedback { .. } | Effect::SignOut => {}
         // The host hands frames to the apps; none reach here.
         Effect::Kernel(K::Draw { .. }) => {}
     }
@@ -539,7 +566,7 @@ fn effect(fx: Effect, ctl: &mut Ctl, ai: &ai::Ai) {
 fn pref(key: &str, value: &str, ctl: &mut Ctl, ai: &ai::Ai) {
     match key {
         ui::AI_MODEL => ai.set_model(ctl, value),
-        key if PREFS.contains(&key) => ctl.storage_set(&["compusophy.", key].concat(), value),
+        key if PREFS.contains(&key) => ctl.storage_set(&logon::own(key), value),
         _ => {}
     }
 }
@@ -547,8 +574,8 @@ fn pref(key: &str, value: &str, ctl: &mut Ctl, ai: &ai::Ai) {
 /// What the shell starts from: the stored theme, favorites, home screen order, first-visit
 /// mark and grain; whether programs can run (before the first-visit Welcome, one, opens).
 fn prefs(ctl: &Ctl) -> shell::Prefs {
-    let get = |key: &str| ctl.storage_get(&["compusophy.", key].concat());
-    let (theme, seen) = (ctl.storage_get(THEME_KEY).unwrap_or_default(), get("seen").is_some());
+    let get = |key: &str| ctl.storage_get(&logon::own(key));
+    let (theme, seen) = (get("theme").unwrap_or_default(), ctl.storage_get(logon::SEEN).is_some());
     let (grain_off, isolated) = (get(ui::GRAIN).as_deref() == Some("off"), ctl.isolated());
     shell::Prefs { theme, dock: get("dock"), home: get("home.order"), seen, grain_off, isolated }
 }

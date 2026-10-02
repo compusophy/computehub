@@ -9,9 +9,12 @@
 //! - The stored one does not read back (damaged, from a newer OS, or refused by the filesystem):
 //!   it is set aside under [`BAD`], and the desktop starts with a fresh /home, kept over it at
 //!   once. One that cannot be set aside stays, and nothing is kept over it (unkept).
-//! - Another tab kept its own /home since this one read or kept it ([`MARK`] moved): nothing is
-//!   kept over it (unkept), and a reload shows that tab's files.
+//! - Another tab kept its own /home since this one read or kept it ([`MARK`] moved), or removed
+//!   this profile: nothing is kept over it (unkept), and a reload shows that tab's files.
+//!
+//! The keys are the signed-in profile's ([`logon::own`]); these are the first profile's.
 
+use logon::own;
 use platform::Ctl;
 use ui::kernel::snap::{self, SnapError};
 use vfs::Vfs;
@@ -47,14 +50,14 @@ pub struct Home {
 impl Home {
     /// Puts the stored snapshot back into `vfs` (a fresh one, at start).
     pub fn restore(&mut self, vfs: &mut Vfs, ctl: &mut Ctl, report: &mut Reports) {
-        self.mark = ctl.storage_get(MARK);
-        let Some(stored) = ctl.storage_get(KEY) else { return };
+        self.mark = ctl.storage_get(&own(MARK));
+        let Some(stored) = ctl.storage_get(&own(KEY)) else { return };
         let bytes: Option<Vec<u8>> = stored.chars().map(|c| u8::try_from(c).ok()).collect();
         match bytes.ok_or(SnapError::Damaged).and_then(|b| snap::give(vfs, &b).map(|s| (b, s))) {
             Ok((b, seq)) => (self.kept, self.seq) = (b, seq),
             Err(e) => {
                 // Set aside, the fresh /home goes over it; one that cannot be stays.
-                let aside = ctl.storage_put(BAD, &stored);
+                let aside = ctl.storage_put(&own(BAD), &stored);
                 (self.waits, self.held, self.unkept) = (aside, !aside, !aside);
                 let why = match e {
                     SnapError::Newer => "a newer OS's",
@@ -87,7 +90,8 @@ impl Home {
             return (self.waits && !self.held).then(|| (self.next - now) as u32 + 1);
         }
         (self.waits, self.next) = (false, now + GAP_MS);
-        self.held = ctl.storage_get(MARK).is_some_and(|m| self.mark.as_ref() != Some(&m));
+        let moved = ctl.storage_get(&own(MARK)).is_some_and(|m| self.mark.as_ref() != Some(&m));
+        self.held = moved || !logon::listed(ctl.storage_get(logon::profiles::LIST).as_deref());
         if self.held {
             report::note("home kept by another tab");
             self.unkept = true;
@@ -98,10 +102,10 @@ impl Home {
             self.unkept = false; // as stored
             return None;
         }
-        let kept = ctl.storage_put(KEY, &chars(&bytes));
+        let kept = ctl.storage_put(&own(KEY), &chars(&bytes));
         if kept {
             let mark = chars(&bytes[bytes.len() - 8..]);
-            if ctl.storage_put(MARK, &mark) {
+            if ctl.storage_put(&own(MARK), &mark) {
                 self.mark = Some(mark);
             }
             (self.kept, self.seq) = (bytes, self.seq + 1);

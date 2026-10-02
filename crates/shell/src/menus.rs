@@ -11,8 +11,8 @@ use crate::{Response, Shell};
 
 /// What a menu item does to the menu's app: open a new window of it, show it (its window, else a
 /// new one), add it to the dock (or remove it), close its windows; or show the Assistant, show a
-/// built-in app, open a terminal, or command the menu's window (minimize, toggle maximize,
-/// close).
+/// built-in app, open a terminal, command the menu's window (minimize, toggle maximize,
+/// close), or sign out.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum Act {
     Open,
@@ -23,16 +23,19 @@ pub(crate) enum Act {
     Go(&'static str),
     Terminal,
     Wm(usize),
+    SignOut,
 }
 
 /// The desktop's menu.
-const DESKTOP: [Item<Act>; 6] = [
+const DESKTOP: [Item<Act>; 8] = [
     ("Open Terminal", "Alt+\u{23ce}", Some(Act::Terminal)),
     ("Ask the Assistant", "", Some(Act::Ask)),
     ("", "", None),
     ("Settings", "", Some(Act::Go("settings"))),
     ("Send feedback", "", Some(Act::Go("feedback"))),
     ("About compusophy", "", Some(Act::Go("about"))),
+    ("", "", None),
+    ("Sign out", "", Some(Act::SignOut)),
 ];
 
 /// An open menu, the app it is about (`""` if none) and its window, if a window's.
@@ -110,6 +113,7 @@ impl Shell {
             Act::Ask => self.host.show("assistant", out),
             Act::Go(app) => self.host.show(app, out),
             Act::Terminal => self.host.open("terminal", None, out),
+            Act::SignOut => out.effects.push(crate::Effect::SignOut),
             Act::Wm(i) => {
                 if let Some(w) = win {
                     self.host.apply([Cmd::Minimize, Cmd::ToggleMaximize, Cmd::Close][i](w));

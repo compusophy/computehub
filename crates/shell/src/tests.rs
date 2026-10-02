@@ -298,8 +298,7 @@ fn windows_open_placed_for_the_screen_and_stay_full_on_a_phone() {
 fn titlebars_and_edges_hold_windows_with_their_cursors() {
     // Windows held by the pointer (`host::grab`), wired: a titlebar shows a hand, grabbing while
     // it moves the window (exactly, under 4 px not at all; no animation).
-    let (mut s, log) = desk();
-    let title = (400.0, 168.0);
+    let ((mut s, log), title) = (desk(), (400.0, 168.0));
     assert_eq!(s.to(title).cursor, Some(Cursor::Grab));
     assert_eq!(s.down(title).cursor, Some(Cursor::Grabbing));
     assert!(!s.to((402.0, 169.0)).redraw);
@@ -549,12 +548,14 @@ fn the_assistant_opens_the_overlay_which_halts_when_the_person_takes_over() {
 #[test]
 fn menus_open_where_pressed_follow_the_keys_and_act() {
     let (mut s, log) = desk();
-    // The bare desktop's menu, at the pointer (kept on screen).
+    // The bare desktop's menu, at the pointer (kept on screen); Sign out only asks the page.
     s.right((600.0, 640.0));
     let desktop =
-        ["Open Terminal", "Ask the Assistant", "", "Settings", "Send feedback", "About compusophy"];
-    assert_eq!(s.labels(), desktop);
-    assert_eq!(s.menu.as_ref().map(|m| (m.0.rect.x, m.0.rect.y)), Some((600.0, 447.0)));
+        "Open Terminal|Ask the Assistant||Settings|Send feedback|About compusophy||Sign out";
+    assert_eq!(s.labels().join("|"), desktop);
+    assert_eq!(s.menu.as_ref().map(|m| (m.0.rect.x, m.0.rect.y)), Some((600.0, 400.0)));
+    assert_eq!(s.click(s.item("Sign out")).effects, [crate::Effect::SignOut]);
+    s.right((600.0, 640.0));
     // Escape closes it; a press outside closes it and does nothing else.
     s.k(Escape, "");
     assert!(s.menu.is_none());
@@ -617,7 +618,7 @@ fn a_finger_held_still_long_presses_and_only_a_menu_ends_its_press() {
     s.held(3600.0);
     s.up((600.0, 640.0));
     let m = &s.menu.as_ref().expect("a menu").0;
-    assert_eq!((m.row, m.items.len()), (44.0, 6));
+    assert_eq!((m.row, m.items.len()), (44.0, 8));
     // A finger that wanders, or lifts early, is no long press; only the early one a tap.
     s.k(Escape, "");
     s.push((600.0, 640.0), 0, true);
