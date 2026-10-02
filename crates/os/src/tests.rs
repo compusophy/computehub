@@ -1,8 +1,6 @@
 use super::*;
 use platform::Effect as Fx;
 
-/// Outcomes as (redraw, prevent_default).
-const NOTHING: (bool, bool) = (false, false);
 const SEMI: &[u8] = include_bytes!("../../../assets/fonts/deferred/Inter-SemiBold.ttf");
 const MONO: &[u8] = include_bytes!("../../../assets/fonts/deferred/JetBrainsMono-Regular.ttf");
 
@@ -40,13 +38,19 @@ fn fresh() -> Desktop {
 }
 
 /// A desktop at 1280 x 800, with a terminal open in front when `terminal`.
-fn desktop(terminal: bool) -> Desktop {
+pub(crate) fn desktop(terminal: bool) -> Desktop {
     let mut desk = fresh();
     send(&mut desk, resize(1280.0, 800.0));
     if terminal {
         send(&mut desk, key("Enter/Enter/a", true));
     }
     desk
+}
+
+/// What `desk` asks of the page as the window in front (a terminal) runs `line`.
+pub(crate) fn run(desk: &mut Desktop, line: &str) -> Vec<Fx> {
+    send(desk, Event::Text(line.into()));
+    send(desk, key("Enter/Enter", true)).1
 }
 
 /// A frame as [`App::frame`] draws it, without a renderer, and what it asked.
@@ -168,7 +172,7 @@ fn shell_starts_at_the_first_usable_size() {
     let early = [key("Enter/Enter/a", true), Event::PointerLeave, Event::Tick { time }];
     let small = [(0.0, 0.0), (800.0, short), (0.5, 600.0), (f32::NAN, 600.0)];
     for ev in early.into_iter().chain(small.map(|(w, h)| resize(w, h))) {
-        assert_eq!(send(&mut desk, ev.clone()), (NOTHING, vec![]), "{ev:?}");
+        assert_eq!(send(&mut desk, ev.clone()), ((false, false), vec![]), "{ev:?}");
         assert!(desk.shell.is_none(), "{ev:?}");
     }
     assert!(desk.missed_tick);
@@ -180,11 +184,10 @@ fn shell_starts_at_the_first_usable_size() {
     assert_eq!(send(&mut desk, resize(1280.0, 800.0)), want);
     // The startup window sits as it would at that size from the start.
     let (text, fs) = fresh().parts.expect("unused");
-    let reg = registry(ai::Ai::default());
-    let fresh = Shell::new(1280.0, 800.0, text, fs, reg, shell::Prefs::default());
+    let new = Shell::new(1280.0, 800.0, text, fs, registry(Default::default()), Default::default());
     let got = shell(&desk);
     let wm = |s: &Shell| (s.wm().state_hash(), s.wm().layout());
-    assert_eq!(wm(got), wm(&fresh));
+    assert_eq!(wm(got), wm(&new));
     assert_eq!(got.wm().layout().len(), 1);
     assert_eq!(got.vfs().read(remote::STUDIO), Ok(&b"#!wasm bin/studio.wasm\n"[..]));
     let started = (got.theme_name(), desk.saved, desk.parts.is_none());
@@ -223,7 +226,7 @@ fn fonts_load_in_groups_and_frames_come_only_while_something_moves() {
     let mut desk = fresh();
     assert!(!has(&mut desk, FontId::SansBold) && !has(&mut desk, FontId::Mono));
     // Before the deferred fonts are asked for, their ids are nobody's.
-    assert_eq!(send(&mut desk, fetched(mono, Ok(MONO.to_vec()))), (NOTHING, vec![]));
+    assert_eq!(send(&mut desk, fetched(mono, Ok(MONO.to_vec()))), ((false, false), vec![]));
     assert!(!has(&mut desk, FontId::Mono));
     // The first frame asks for both, even before the shell exists (asking
     // for no next frame: nothing moves yet); later frames ask for nothing.
@@ -235,8 +238,7 @@ fn fonts_load_in_groups_and_frames_come_only_while_something_moves() {
     assert_eq!(send(&mut desk, fetched(mono, Ok(MONO.to_vec()))), ((true, false), vec![]));
     send(&mut desk, resize(1280.0, 800.0));
     assert!(has(&mut desk, FontId::Mono) && !has(&mut desk, FontId::SansBold));
-    // A failed fetch leaves the slot empty, quietly; after that its id
-    // goes to the shell, which knows no such fetch.
+    // A failed fetch leaves the slot empty, quietly; then its id is the shell's, which knows none.
     for got in [Err("HTTP 404".into()), Ok(SEMI.to_vec())] {
         assert_eq!(send(&mut desk, fetched(bold, got)).1, vec![]);
     }
@@ -257,7 +259,7 @@ fn fonts_load_in_groups_and_frames_come_only_while_something_moves() {
     }
     // The lazy fonts: the first terminal asks for them, under other ids.
     let mut desk = fresh();
-    assert_eq!(send(&mut desk, fetched(1, Ok(vec![]))), (NOTHING, vec![]));
+    assert_eq!(send(&mut desk, fetched(1, Ok(vec![]))), ((false, false), vec![]));
     send(&mut desk, resize(1280.0, 800.0));
     let (_, fx) = send(&mut desk, key("Enter/Enter/a", true));
     let [Fx::Fetch { id: a, url: ref ua }, Fx::Fetch { id: b, url: ref ub }, ..] = fx[..] else {
@@ -306,14 +308,13 @@ fn desktop_routes_events_through_the_shell() {
     assert_eq!(count(&desk), 2);
     // Key-ups never reach the shell: releasing Alt+Q closes nothing. AltGr+Up
     // and AltGr+Backquote are no bindings: AltGr is not Alt.
-    assert_eq!(send(&mut desk, key("KeyQ/q/a", false)).0, NOTHING);
+    assert_eq!(send(&mut desk, key("KeyQ/q/a", false)).0, (false, false));
     assert_eq!(state(&desk), opened);
     for ev in ["ArrowUp/ArrowUp/cag", "Backquote/`/cag"] {
         send(&mut desk, key(ev, true));
         assert_eq!(state(&desk), opened, "{ev}");
     }
-    // With the terminal typing: on the focused window, button 0 only; never
-    // off it (on the bare desktop).
+    // With the terminal typing: on the focused window, button 0 only; never off it (bare desktop).
     let at = focused_middle(&desk);
     let (h, fx) = down(&mut desk, at);
     assert_eq!((h.1, fx), (true, vec![Fx::Cursor("text")]));
@@ -328,8 +329,7 @@ fn desktop_routes_events_through_the_shell() {
     assert!(shell(&desk).wm().layout().iter().all(|p| !r(p).contains(bare.0, bare.1)));
     down(&mut desk, bare);
     assert_eq!(up(&mut desk, bare, 0), []);
-    // Alt+Backquote moves the focus to the other window, Alt+Shift+Backquote
-    // back; Alt+Up maximizes.
+    // Alt+Backquote moves focus to the other window, Alt+Shift+Backquote back; Alt+Up maximizes.
     let focus = |d: &Desktop| shell(d).wm().focused();
     let terminal = focus(&desk);
     assert!(prevented(&mut desk, "Backquote/`/a"));
@@ -357,7 +357,7 @@ fn programs_reach_the_kernel_and_its_effects_the_page() {
     assert_eq!(vfs.read("/bin/selftest").unwrap(), b"#!wasm bin/toolbox.wasm\n");
     assert_eq!(vfs.read("/bin/assistant").unwrap(), b"#!wasm bin/assistant.wasm\n");
     assert_eq!(vfs.read("/bin/files").unwrap(), b"#!wasm bin/system.wasm\n");
-    assert_eq!(send(&mut desk, Event::Hidden), (NOTHING, vec![]));
+    assert_eq!(send(&mut desk, Event::Hidden), ((false, false), vec![]));
     // Each kernel effect is its platform call.
     let mut ctl = Ctl::default();
     #[rustfmt::skip]
@@ -392,15 +392,28 @@ fn programs_reach_the_kernel_and_its_effects_the_page() {
         effect(pref(k, v), &mut ctl, &desk.ai);
     }
     let store = |k: &str, v: &str| Fx::Store { key: k.into(), value: v.into() };
-    let stored = [
-        store(ai::MODEL, "zai/glm-5.3-flash"),
-        store("compusophy.dock", "studio,files"),
-        store("compusophy.seen", "1"),
-        store("compusophy.reports", "off"),
-    ];
+    #[rustfmt::skip]
+    let stored = [store(ai::MODEL, "zai/glm-5.3-flash"), store("compusophy.dock", "studio,files"),
+        store("compusophy.seen", "1"), store("compusophy.reports", "off")];
     assert_eq!((ctl.effects(), desk.ai.status().model.as_str()), (&stored[..], ai::MODELS[1]));
     let end = Event::StreamEnd { id: 1, status: 0, error: "".into() };
     for ev in [Event::Chunk { id: 1, data: vec![1] }, end] {
-        assert_eq!((send(&mut desk, ev.clone()), input_of(ev)), ((NOTHING, vec![]), None));
+        assert_eq!((send(&mut desk, ev.clone()), input_of(ev)), (((false, false), vec![]), None));
     }
+}
+
+#[test]
+fn home_is_kept_at_once_then_by_the_timer_and_never_over_another_tabs() {
+    // At once, then by the one-shot timer, armed again if it fires early (here every wake does:
+    // the page clock reads 0); hiding keeps it at once. Once another tab kept its own: never.
+    let mut desk = desktop(true);
+    let changes = [run(&mut desk, "touch a"), run(&mut desk, "touch b")];
+    assert_eq!(changes, [vec![], vec![Fx::Wake(1001)]]);
+    assert_eq!(send(&mut desk, Event::Wake).1, [Fx::Wake(1001)]);
+    assert_eq!([send(&mut desk, Event::Hidden).1, send(&mut desk, Event::Wake).1], [[], []]);
+    let mut ctl = Ctl::default();
+    ctl.storage_set(home::MARK, "another tab's");
+    run(&mut desk, "touch c");
+    desk.event(Event::Hidden, &mut ctl);
+    assert!(desk.home.unkept && run(&mut desk, "touch d").is_empty());
 }

@@ -173,7 +173,8 @@ fn remove_and_its_errors() {
     assert_eq!((fs.exists("/tmp/d"), fs.total_bytes()), (false, 0));
     assert_eq!((fs.mkdir("/tmp/empty"), fs.write("/tmp/file", b"")), (Ok(()), Ok(())));
     assert_eq!((fs.remove("/tmp/empty", false), fs.remove("/tmp/file", true)), (Ok(()), Ok(())));
-    assert_eq!(fs, Vfs { generation: fs.generation, ..Vfs::new() }, "counts are back");
+    let back = Vfs { generation: fs.generation, tops: fs.tops.clone(), ..Vfs::new() };
+    assert_eq!(fs, back, "counts are back");
 }
 
 #[test]
@@ -201,7 +202,7 @@ fn rename_moves_and_replaces() {
     assert!(!fs.exists(&home("/e")) && fs.is_file(&home("/d/g")));
     let a = [fs.remove(&home("/d"), true), fs.remove("/tmp", true), fs.mkdir("/tmp")];
     assert_eq!(a, [Ok(()); 3]);
-    assert_eq!(fs, Vfs { generation: fs.generation, ..Vfs::new() });
+    assert_eq!(fs, Vfs { generation: fs.generation, tops: fs.tops.clone(), ..Vfs::new() });
 }
 
 #[test]
@@ -330,4 +331,9 @@ fn same_operations_build_the_same_tree() {
     assert_eq!((&a, format!("{a:?}"), a.generation()), (&b, format!("{b:?}"), 6));
     b.remove("/apps/z", false).unwrap();
     assert!(a != b && a.exists("/apps/z"));
+    // Each top-level directory knows its last change: a rename stamps both ends, a failure none.
+    let of = |fs: &Vfs| ["/apps", Vfs::HOME, "/tmp/m", "/bin"].map(|at| fs.generation_of(at));
+    assert_eq!((of(&Vfs::new()), of(&a), of(&b)), ([0; 4], [4, 6, 4, 0], [7, 6, 4, 0]));
+    b.write_at("/tmp/m", 0, b"n").unwrap();
+    assert_eq!((b.mkdir("/bin/x"), of(&b)), (Err(NotFound), [7, 6, 8, 0]));
 }

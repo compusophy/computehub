@@ -1,7 +1,8 @@
 use super::*;
-use crate::{Desktop, apply};
+use crate::apply;
+use crate::tests::{desktop, run};
 use platform::{App as _, Effect as Fx, Event};
-use shell::{Input, Key, Mods};
+use shell::Effect;
 
 /// A context as a phone would give it.
 fn phone() -> Context {
@@ -12,10 +13,9 @@ fn phone() -> Context {
 
 /// The reports `ctl` streamed, as (id, body).
 fn streamed(ctl: &Ctl) -> Vec<(u32, String)> {
+    let text = |body: &[u8]| String::from_utf8_lossy(body).into_owned();
     let posts = ctl.effects().iter().filter_map(|e| match e {
-        Fx::Stream { id, url, body, .. } if url == URL => {
-            Some((*id, String::from_utf8_lossy(body).into()))
-        }
+        Fx::Stream { id, url, body, .. } if url == URL => Some((*id, text(body))),
         _ => None,
     });
     posts.collect()
@@ -28,9 +28,7 @@ fn sig_of(json: &str) -> &str {
 
 #[test]
 fn a_report_is_json_with_a_context_block_and_nothing_else() {
-    note("ai 503 network");
-    note("tab\there and a line\nbreak");
-    note(&"x".repeat(500));
+    ["ai 503 network", "tab\there and a line\nbreak", &"x".repeat(500)].into_iter().for_each(note);
     let all = notes(NOTES);
     let all: Vec<&str> = all.lines().collect();
     assert_eq!(all[all.len() - 2], "tab here and a line break", "control chars are spaces");
@@ -59,10 +57,8 @@ fn a_report_is_json_with_a_context_block_and_nothing_else() {
     assert_eq!(notes(1), "pref dock studio,app,files\n");
     // JSON: quotes, backslashes, newlines and control chars escaped; the rest as is.
     let json = report("feedback", "Bug: \"it\" \\ broke", "a\nb\u{1}\u{2014}", "");
-    assert_eq!(
-        json,
-        r#"{"kind":"feedback","title":"Bug: \"it\" \\ broke","body":"a\nb\u0001—","sig":""}"#
-    );
+    let raw = r#"{"kind":"feedback","title":"Bug: \"it\" \\ broke","body":"a\nb\u0001—","sig":""}"#;
+    assert_eq!(json, raw);
     // Titles: the first line with text, at most 80 chars; signatures: 8 hex digits, stable.
     assert_eq!(title("\n  \n  First line  \nsecond"), "First line");
     let long = title(&"word ".repeat(30));
@@ -115,8 +111,7 @@ fn reports_wait_in_the_outbox_until_the_inbox_takes_them() {
     r.pump(&mut ctl, || unreachable!("nothing new to build"));
     assert_eq!(streamed(&ctl).len(), 25, "all of them, once");
     assert!(r.status(Default::default()).held, "until one gets through");
-    r.feedback("love", "Beautiful", false);
-    r.feedback("love", "Beautiful", false);
+    (0..2).for_each(|_| r.feedback("love", "Beautiful", false));
     r.pump(&mut ctl, phone);
     assert_eq!(r.outbox().len(), KEEP);
     assert!(r.outbox()[0].contains(r#""title":"7""#) && r.outbox()[19].contains("Love: Beautiful"));
@@ -129,8 +124,7 @@ fn errors_are_reported_once_a_session_unless_reports_are_off() {
     let (mut r, mut ctl) = (Reports::default(), Ctl::default());
     r.pump(&mut ctl, phone);
     // A program that fails twice is one report; AI: 429 only noted, 503 and no answer reported.
-    r.proc_failed(7, "/bin/hello");
-    r.proc_failed(9, "/bin/hello");
+    [7, 9].into_iter().for_each(|pid| r.proc_failed(pid, "/bin/hello"));
     for (status, error) in [(200, ""), (429, ""), (503, ""), (0, "network"), (0, "network")] {
         r.ai_ended(status, error);
     }
@@ -175,21 +169,16 @@ fn errors_are_reported_once_a_session_unless_reports_are_off() {
 
 #[test]
 fn the_desktop_sends_feedback_and_reports_failures_and_tells_apps() {
-    let mut desk = Desktop::new().expect("the boot font loads");
-    desk.event(Event::Resize { w: 1280.0, h: 800.0, dpr: 2.0 }, &mut Ctl::default());
     // A terminal opens a file in Studio.
-    let sh = desk.shell.as_mut().expect("made");
-    sh.input(Input::Key { key: Key::Enter, mods: Mods { alt: true, ..Mods::default() } });
-    sh.input(Input::Text("edit diary-2026.txt".into()));
-    sh.input(Input::Key { key: Key::Enter, mods: Mods::default() });
+    let mut desk = desktop(true);
+    run(&mut desk, "edit diary-2026.txt");
     // Feedback an app asked for leaves at the flush after it, with what is open: apps, no files.
     let mut ctl = Ctl::default();
-    let fx =
-        shell::Effect::Feedback { kind: "bug".into(), text: "Dock flickers".into(), context: true };
+    let fx = Effect::Feedback { kind: "bug".into(), text: "Dock flickers".into(), context: true };
     apply(vec![fx], &mut ctl, (&desk.ai.clone(), &mut 0.0), &mut desk.report);
     // Of two timers asked for, the sooner stands (the page clock reads 0 here).
     let (mut timer, ai) = (Ctl::default(), desk.ai.clone());
-    let wake = |ms| shell::Effect::Kernel(ui::kernel::Effect::Wake { ms });
+    let wake = |ms| Effect::Kernel(ui::kernel::Effect::Wake { ms });
     apply([1500, 2000, 100].map(wake).into(), &mut timer, (&ai, &mut 0.0), &mut desk.report);
     assert_eq!(timer.effects(), [Fx::Wake(1500), Fx::Wake(100)]);
     desk.flush(&mut ctl, false);
@@ -211,12 +200,10 @@ fn the_desktop_sends_feedback_and_reports_failures_and_tells_apps() {
     desk.ai.ask(5, uiwire::Request::Ai { id: 1, body: "{}".into() });
     let mut ctl = Ctl::default();
     desk.flush(&mut ctl, false);
-    let ai = ctl.effects().iter().find_map(|e| match e {
-        Fx::Stream { id, url, .. } if url == crate::ai::URL => Some(*id),
-        _ => None,
-    });
+    let asked = |e: &Fx| matches!(e, Fx::Stream { id: 1, url, .. } if url == crate::ai::URL);
+    assert!(ctl.effects().iter().any(asked), "the AI's first stream");
     let end = |id, status| Event::StreamEnd { id, status, error: String::new() };
-    desk.event(end(ai.expect("asked"), 429), &mut Ctl::default());
+    desk.event(end(1, 429), &mut Ctl::default());
     desk.event(end(77, 500), &mut Ctl::default());
     assert_eq!(notes(1), "ai 429\n");
 }

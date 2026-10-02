@@ -242,8 +242,8 @@ pub struct AiStatus {
     /// A report is waiting to be sent: the last one did not get through (offline, or the
     /// inbox is not set up yet).
     pub held: bool,
-    /// The person's files (/home) could not be kept in the page's storage (full, or blocked):
-    /// changes since are lost at a reload.
+    /// The person's files (/home) could not be kept in the page's storage (full, or blocked, or
+    /// another tab kept its own since): changes since are lost at a reload.
     pub unkept: bool,
 }
 

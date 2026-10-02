@@ -3,8 +3,8 @@
 //! [`Vfs`] is plain data: no clocks, floats, hash-ordered collections or I/O. A directory is a
 //! vector of its entries sorted by name (byte order) and binary-searched, so listings are sorted
 //! and the same operations on a fresh [`Vfs::new`] always build the same tree (`Vfs` is `Eq`,
-//! change count included, so a replay can be checked). The kernel's homed saves /home when that
-//! count, [`Vfs::generation`], moves.
+//! change count included, so a replay can be checked). The desktop keeps /home (`os::home`) when
+//! its count, [`Vfs::generation_of`], moves.
 //!
 //! Paths: [`Vfs::normalize`] turns what a user types into an absolute path. Every other method
 //! takes an absolute path (a relative one is [`VfsError::InvalidPath`]) and resolves `.`, `..`
@@ -121,6 +121,8 @@ pub struct Vfs {
     /// Files and directories, the root not counted.
     entries: usize,
     generation: u64,
+    /// The generation of the last change under each top-level name, sorted by name.
+    tops: Vec<(String, u64)>,
 }
 
 impl Default for Vfs {
@@ -144,10 +146,11 @@ impl Vfs {
 
     /// A filesystem holding the empty directories `/apps`, `/home`, [`Vfs::HOME`] and `/tmp`.
     pub fn new() -> Vfs {
-        let mut fs = Vfs { root: Node::Dir(Dir::default()), bytes: 0, entries: 0, generation: 0 };
+        let root = Node::Dir(Dir::default());
+        let mut fs = Vfs { root, bytes: 0, entries: 0, generation: 0, tops: Vec::new() };
         let made = ["/apps", Vfs::HOME, "/tmp"].map(|dir| fs.mkdir_all(dir));
         debug_assert!(made.iter().all(Result::is_ok));
-        Vfs { generation: 0, ..fs }
+        Vfs { generation: 0, tops: Vec::new(), ..fs }
     }
 
     /// Resolves `path` against the working directory `cwd` into an absolute path with no `.`,
@@ -219,7 +222,7 @@ impl Vfs {
             dir.insert(name, Node::Dir(Dir::default()));
             self.entries += 1;
         }
-        self.generation += 1;
+        self.moved(&[&names]);
         Ok(())
     }
 
@@ -267,7 +270,7 @@ impl Vfs {
         }
         let (bytes, entries, _) = usage(&dir.0.remove(i).1);
         (self.bytes, self.entries) = (self.bytes - bytes, self.entries - entries);
-        self.generation += 1;
+        self.moved(&[&names]);
         Ok(())
     }
 
@@ -301,7 +304,7 @@ impl Vfs {
         let node = src_dir.0.remove(src_dir.find(name).map_err(|_| VfsError::NotFound)?).1;
         walk_dir_mut(&mut self.root, to_up)?.insert(to_name, node);
         (self.bytes, self.entries) = (self.bytes - bytes, self.entries - entries);
-        self.generation += 1;
+        self.moved(&[&src, &dst]);
         Ok(())
     }
 
@@ -313,6 +316,15 @@ impl Vfs {
     /// Moved by every change (maybe by a no-op), never by a failure; 0 when new.
     pub fn generation(&self) -> u64 {
         self.generation
+    }
+
+    /// The [`Vfs::generation`] of the last change under (or to) the top-level directory that
+    /// holds `path`, such as /home for [`Vfs::HOME`]; 0 if none since [`Vfs::new`] (or for the
+    /// root or a bad path).
+    pub fn generation_of(&self, path: &str) -> u64 {
+        let top = names(path).ok().and_then(|names| names.first().copied()).unwrap_or_default();
+        let at = self.tops.binary_search_by(|(name, _)| name.as_str().cmp(top));
+        at.map_or(0, |i| self.tops[i].1)
     }
 
     /// Writes `data` into the existing file `path` at `off` (`u64::MAX` appends), in place,
@@ -342,11 +354,13 @@ impl Vfs {
         if len.saturating_sub(old) > Vfs::MAX_BYTES - self.bytes {
             return Err(VfsError::NoSpace);
         }
-        let (dir, name) = parent(&mut self.root, &names(path)?, VfsError::IsADir)?;
-        // `read` found the file: the else is never taken.
+        let names = names(path)?;
+        // `read` found the file: from here nothing fails (the else is never taken).
+        self.bytes = self.bytes - old + len;
+        self.moved(&[&names]);
+        let (dir, name) = parent(&mut self.root, &names, VfsError::IsADir)?;
         let Some(Node::File(file)) = dir.get_mut(name) else { return Err(VfsError::NotFound) };
         file.resize(len as usize, 0);
-        (self.bytes, self.generation) = (self.bytes - old + len, self.generation + 1);
         Ok(file)
     }
 
@@ -373,9 +387,21 @@ impl Vfs {
             Ok(Node::File(old)) if append => old.extend_from_slice(data),
             _ => dir.insert(name, Node::File(data.to_vec())),
         }
-        self.entries += usize::from(slot.is_err());
-        (self.bytes, self.generation) = (bytes, self.generation + 1);
+        (self.entries, self.bytes) = (self.entries + usize::from(slot.is_err()), bytes);
+        self.moved(&[&names]);
         Ok(())
+    }
+
+    /// Moves the generation for one change, stamping the top-level directory of each path (as
+    /// names) it changed.
+    fn moved(&mut self, paths: &[&[&str]]) {
+        self.generation += 1;
+        for top in paths.iter().filter_map(|names| names.first()) {
+            match self.tops.binary_search_by(|(name, _)| name.as_str().cmp(top)) {
+                Ok(i) => self.tops[i].1 = self.generation,
+                Err(i) => self.tops.insert(i, (top.to_string(), self.generation)),
+            }
+        }
     }
 }
 

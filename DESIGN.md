@@ -53,7 +53,8 @@ they can, in CI.
      at most 25,000 (tests 12,500) in all;
    - *coupling* is the boundary: a program depends only on `programs/` and
      the OS's pure shared libraries (`uiwire`, `icons`, `vfs`), and reaches
-     the OS only through uiwire.
+     the rest of the OS only through WASI preview 1 (files, the console) and
+     uiwire (its windows).
 
    So growth is new modules, never bigger ones: `programs/` has no total,
    and programs can live in repos of their own, a library anyone adds to.
@@ -278,12 +279,19 @@ one. Forked crates keep their Apache-2.0 license and note their origin.
 
 The VFS lives in memory. /home is kept across reloads (`os::home`): a
 `kernel::snap` snapshot of it (FNV-checked) in `localStorage`, put back at
-boot, written at once after a change, then at most once a second, and when
-the page hides. So made apps (`~/apps/*.app`) and their saved state stay. A
-write the browser refuses (full, blocked) is reported and said in Settings →
-Privacy; a snapshot that does not read back whole is set aside.
-`localStorage` holds about 5 MB; IndexedDB or OPFS replace it when homes
-grow past that. Preferences and the theme are kept there too.
+boot, written at once after a change under /home, then at most once a
+second, and when the page hides or goes away (`pagehide`). So made apps
+(`~/apps/*.app`) stay; what a running app holds does not. A write the
+browser refuses (full, blocked) is reported, said in Settings → Privacy and
+tried again as the page hides; a snapshot that does not read back whole is
+set aside and the desktop starts with a fresh /home. Tabs share the one
+snapshot: once a tab keeps its /home, another that read it earlier keeps
+nothing over it (Settings says its changes are not kept), and a reload shows
+the newer files. Putting /home back runs before the first frame, at about
+15 ms a MiB of /home in Chrome, so a home of a few MB spends the first-frame
+budget. `localStorage` holds about 5 MB; IndexedDB or OPFS replace it when
+homes grow past that, and take the restore off the first frame. Preferences
+and the theme are kept there too.
 
 ## What is next
 

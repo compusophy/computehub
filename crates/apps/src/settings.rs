@@ -28,9 +28,10 @@ compusophyOS itself crashes) a short report goes to compusophy: what failed, the
 browser and screen size, the theme, the apps open and the last 50 events, such as \u{201c}ai \
 503\u{201d}. Never your files, your prompts or anything you typed.";
 const TYPED: &str = "Feedback you write always sends: you choose what it says, and when.";
-const FILES: &str = "Your files stay in this browser, on this device: none are sent anywhere.";
+const FILES: &str = "Your files are kept only in this browser, on this device. The AI sees what \
+you ask it to work on: an app you have Studio change, or the screen the Assistant reads.";
 const UNKEPT: &str = "Your files could not be kept: this browser\u{2019}s storage is full or \
-blocked, so changes since are lost when the page reloads.";
+blocked, or another tab kept its own since. Changes made here are lost when the page reloads.";
 const GRAIN_LABEL: &str = "Living grain";
 const GRAIN_NOTE: &str =
     "The backdrop's grain shifts, slightly. It stays still when your device asks for less motion.";

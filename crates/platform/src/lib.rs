@@ -89,7 +89,8 @@ pub enum Event {
     ProcError { pid: u32 },
     /// The one-shot timer of [`Ctl::wake_in`] fired.
     Wake,
-    /// The page was hidden.
+    /// The page was hidden, or is going away (`pagehide`: a page already hidden, or one
+    /// whose engine sends no `visibilitychange` then, gets only that); keep what must be kept.
     Hidden,
 }
 
@@ -242,7 +243,7 @@ fn install(s: &Rc<Shared>) -> Result<(), JsValue> {
     let me = Rc::downgrade(s);
     let (win, doc): (&EventTarget, &EventTarget) = (&s.window, &s.document);
     let (canvas, sink): (&EventTarget, &EventTarget) = (&s.canvas, &s.sink);
-    let listeners: [(&EventTarget, &str, Handler); 16] = [
+    let listeners: [(&EventTarget, &str, Handler); 17] = [
         (win, "keydown", |s, _, e| on_key(s, e, true)),
         (win, "keyup", |s, _, e| on_key(s, e, false)),
         (win, "resize", |s, _, _| resize(s)),
@@ -272,6 +273,7 @@ fn install(s: &Rc<Shared>) -> Result<(), JsValue> {
                 tick(s, false);
             }
         }),
+        (win, "pagehide", |s, _, _| _ = dispatch(s, Event::Hidden)),
         (sink, "input", |s, _, e| io::on_input(s, e)),
         (sink, "compositionend", |s, _, e| io::on_composition_end(s, e)),
     ];

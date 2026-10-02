@@ -5,7 +5,8 @@
 # Each cap measures a real cost. Speed is bytes (scripts/budget.sh). Here:
 # understanding, a module (a crate, a program, a server function) small
 # enough to hold whole; the OS small enough to learn whole, since everything
-# stands on it; and coupling, programs reaching the OS only through uiwire.
+# stands on it; and coupling, programs linking only the OS's pure shared
+# libraries (they reach the rest by WASI preview 1 and uiwire).
 # Growth is new modules, never bigger ones, so programs/ has no total.
 set -uo pipefail
 cd "$(dirname "$0")/.."
@@ -78,7 +79,11 @@ printf '%-26s %6d LOC + %5d test (no total: each its own module)\n' "total: prog
   "$(T=0 lines "${program_dirs[@]}")" "$(T=1 lines "${program_dirs[@]}")"
 
 # Server functions (api/*.mjs) are modules too: each within a crate's cap,
-# and Node's own modules only (no npm).
+# and Node's own modules only (no npm: scripts/deploy.sh ships each file
+# alone). Every quoted specifier after `from`, `import` (a statement or
+# `import(`) or `require(` must be `node:...`, wherever it falls: the file is
+# read as one line, so a statement may span lines and share one. Whole-line
+# `//` comments are skipped, so prose there may say "require()".
 for f in api/*.mjs; do
   [ -f "$f" ] || continue
   n=$(wc -l < "$f")
@@ -87,24 +92,13 @@ for f in api/*.mjs; do
     echo "FAIL: $f exceeds a module's cap"
     fail=1
   fi
-  if grep -nE "^\s*import\b[^'\"]*['\"][^'\"]*['\"]|require\(" "$f" | grep -vE "['\"]node:" | grep -q .; then
-    echo "FAIL: $f imports something but Node's own modules (node:...)"
+  specs=$(grep -v '^[[:space:]]*//' "$f" | tr '\r\n' '  ' \
+    | grep -oE "(^|[^[:alnum:]_\$.])(from|import|require)[[:space:]]*\(?[[:space:]]*[\"'][^\"']*" \
+    | sed -E "s/^.*[\"']//" | grep -v '^node:')
+  if [ -n "$specs" ]; then
+    echo "FAIL: $f imports something but Node's own modules (node:...):" $specs
     fail=1
   fi
-done
-
-# A program's dependencies: programs/ crates and PROGRAM_OS_DEPS only.
-programs=" "
-for c in "${program_dirs[@]}"; do programs+="$(basename "$c") "; done
-for c in "${program_dirs[@]}"; do
-  deps=$(awk '/^\[/ { on = ($0 == "[dependencies]") ; next }
-    on && match($0, /^compusophy-[a-z0-9-]+/) { print substr($0, 12, RLENGTH - 11) }' "${c}Cargo.toml")
-  for d in $deps; do
-    case "$programs $PROGRAM_OS_DEPS " in
-      *" $d "*) ;;
-      *) echo "FAIL: ${c}Cargo.toml depends on the OS crate '$d' (a program may take only: $PROGRAM_OS_DEPS)"; fail=1 ;;
-    esac
-  done
 done
 
 # 2. CLAUDE.md stays a map, not a novel.
@@ -158,6 +152,33 @@ else
     }')
   if [ -n "$declared" ]; then
     echo "$declared"
+    fail=1
+  fi
+  # A program's dependencies, for any target, renamed or not (dev-dependencies
+  # are free: tests may drive a real desktop): programs/ crates and
+  # PROGRAM_OS_DEPS only. Each dependency's kind follows its "req"; if fewer
+  # kinds than dependencies read, fail rather than pass blind.
+  programs=""
+  for c in "${program_dirs[@]}"; do
+    programs+="$(awk -F'"' '/^name = "/ { print $2; exit }' "${c}Cargo.toml") "
+  done
+  kinds=$(printf '%s\n' "$meta" \
+    | grep -oE '\{"name":"[^"]*","version":"|\{"name":"[^"]*","source":("[^"]*"|null),"req":"[^"]*","kind":(null|"[^"]*")')
+  if [ "$(printf '%s\n' "$kinds" | grep -c '"kind":')" -ne "$(printf '%s\n' "$marks" | grep -c '"source":')" ]; then
+    echo "FAIL: could not read every dependency's kind from cargo metadata"
+    fail=1
+  fi
+  crossed=$(printf '%s\n' "$kinds" | awk -F'"' -v programs="$programs" -v os="$PROGRAM_OS_DEPS" '
+    BEGIN {
+      n = split(programs, a, " "); for (i = 1; i <= n; i++) { prog[a[i]] = 1; ok[a[i]] = 1 }
+      n = split(os, a, " "); for (i = 1; i <= n; i++) ok["compusophy-" a[i]] = 1
+    }
+    $6 == "version" { pkg = $4; next }
+    (pkg in prog) && !($4 in ok) && $0 !~ /"kind":"dev"$/ {
+      printf "FAIL: the program %s depends on \047%s\047 (a program may take only programs/ crates and: %s)\n", pkg, $4, os
+    }')
+  if [ -n "$crossed" ]; then
+    echo "$crossed"
     fail=1
   fi
   if [ ! -f Cargo.lock ]; then
