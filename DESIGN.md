@@ -334,6 +334,6 @@ and the theme are kept there too.
   Alt+Q, Alt+arrows and Alt+Backquote before a terminal sees them
   (readline's Alt+F still arrives). A way through for apps that want them
   waits on the Super key question.
-- **The boot budget** is nearly spent (about 6 KB of headroom). Studio
+- **The boot budget** is nearly spent (about 5.5 KB of headroom). Studio
   and applang are the largest optional part of the boot wasm; separately
   loaded modules (R4) are how the OS grows past it.
