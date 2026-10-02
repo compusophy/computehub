@@ -49,9 +49,9 @@ const DOT: &str = " \u{b7} ";
 /// or Escape returns). It watches the desktop's meters from its first size
 /// ([`Request::Watch`]): the desktop sends a sample only when something changed, at most once a
 /// second, so a still desktop wakes nothing here; and it draws only what changed. On a phone
-/// (narrower than [`WIDE`]) it watches only while it has the focus: another app covers it then.
-/// Rates come from the last two samples, when they are at most 3 s apart; what it cannot know
-/// reads `—`.
+/// (narrower than its 440 px on a desktop) it watches only while it has the focus: another app
+/// covers it then. Rates come from the last two samples, when they are at most 3 s apart; what it
+/// cannot know reads `—`.
 #[derive(Debug, Default)]
 pub struct Activity {
     /// The last two samples, the newer last.
@@ -301,7 +301,7 @@ impl Activity {
         let mem = [&kb(r.mem), " of memory", DOT, "process ", &r.p.pid.to_string()].concat();
         let mut nodes = vec![back(), space(8), text(Style::Title, &r.name)];
         let cmd = r.p.argv.join(" ");
-        if cmd != r.name {
+        if !cmd.eq_ignore_ascii_case(&r.name) {
             nodes.push(text(Style::Mono, &cmd));
         }
         nodes.extend([space(8), text(Style::Body, &self.state(r, false)), text(Style::Dim, &mem)]);

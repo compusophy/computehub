@@ -609,10 +609,10 @@ fn end_comes_only_from_a_program_page() {
     );
     assert!(w.click(ROW).is_empty() && w.click(0).is_empty());
     assert_eq!(w.click(FILES).pop().unwrap().requests, [Request::Open { name: "files".into() }]);
-    let page = w.click(ROW + 5).pop().unwrap();
-    assert!(
-        texts(&page.nodes).contains(&"Ends the Assistant now. It starts again when you call it.")
-    );
+    // A command line that only says the name is not repeated.
+    let page = texts(&w.click(ROW + 5).pop().unwrap().nodes).join("|");
+    assert!(page.starts_with("\u{2039} Running|Assistant|Idle"), "{page}");
+    assert!(page.contains("|Ends the Assistant now. It starts again when you call it."));
     assert_eq!(word(&w.click(BACK).pop().unwrap())[0], "Measuring");
     // The desktop's page has no End; End asks once and the row leaves until the desktop agrees.
     let desk = w.click(DESKTOP).pop().unwrap();
