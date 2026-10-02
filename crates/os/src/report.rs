@@ -46,9 +46,10 @@ thread_local! {
 }
 
 /// Adds `new` to the notes (if any; the oldest beyond [`NOTES`] goes), then gives the last `n`,
-/// oldest first, a line each. One function, so the ring's access is built once.
+/// oldest first, a line each. One function, so the ring's access is built once. None while the
+/// ring is busy (a panic in it) or gone (`try_with`: `with`'s panic formats its error).
 fn ring(new: Option<String>, n: usize) -> String {
-    RING.with(|r| {
+    let notes = RING.try_with(|r| {
         let Ok(mut r) = r.try_borrow_mut() else { return String::new() };
         if let Some(s) = new {
             if r.len() >= NOTES {
@@ -61,7 +62,8 @@ fn ring(new: Option<String>, n: usize) -> String {
             out = out + s + "\n";
         }
         out
-    })
+    });
+    notes.unwrap_or_default()
 }
 
 /// Notes `text`, control chars as spaces, cut to [`NOTE_MAX`] bytes.
