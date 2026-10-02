@@ -375,9 +375,7 @@ impl App for Remote {
             }
             AppEvent::Ask(text) => self.send(Event::Ask { text }, cx),
             // A Grid's press was its tap, whatever now has its id.
-            AppEvent::Click(WidgetId(id))
-                if id != 0 && !self.play.pressed() && self.squares(id).is_none() =>
-            {
+            AppEvent::Click(WidgetId(id)) if id != 0 && !self.play.pressed() => {
                 self.send(Event::Click { id }, cx)
             }
             AppEvent::PointerDown { x, y, id } => {
