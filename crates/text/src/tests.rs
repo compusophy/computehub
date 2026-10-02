@@ -246,6 +246,20 @@ fn vectors_are_cached_and_drawn_on_device_pixels() {
     }
     let w: Vec<f32> = glyphs(&list).iter().map(|g| g.rect[2] * 2.0).collect();
     assert_eq!((w, SEEDS.load(Ordering::Relaxed)), (vec![1.0, 1.0, 25.0, 1.0], 2));
+    // Hashed shapes (a made icon's) are cached by hash, apart from both: hash 7 is a third.
+    let (made, p) = (std::cell::Cell::new(0), |x, y| Point { x, y, on: true });
+    let half = |o: &mut Vec<Vec<Point>>| {
+        made.set(made.get() + 1);
+        o.push(vec![p(0.0, 0.0), p(500.0, 0.0), p(500.0, 500.0), p(0.0, 500.0)]);
+    };
+    list.clear();
+    for hash in [7, 7, 8, 7] {
+        t.draw_hashed(&mut list, r, hash, &half, WHITE);
+    }
+    let g = glyphs(&list);
+    let w: Vec<f32> = g.iter().map(|g| g.rect[2] * 2.0).collect();
+    assert_eq!((w, made.get()), (vec![25.0; 4], 2));
+    assert!(g.iter().all(|g| on_grid(g.rect[0], 2.0) && on_grid(g.rect[1], 2.0)));
 }
 
 #[test]

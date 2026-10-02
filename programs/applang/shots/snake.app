@@ -1,4 +1,5 @@
 // Snake: the arrows or the buttons steer; eat the food; the walls and your tail end it.
+// icon: line 4 20 4 13 11 13 11 20 19 20 19 9 dot 19 6 3 dot 7 5 2
 state cells = [0; 300];   // what the grid shows, 20 x 15: drawn anew from the states below
 state xs = [0; 0];        // the body, head last
 state ys = [0; 0];

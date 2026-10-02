@@ -13,7 +13,7 @@ use wm::{Snap, State};
 use super::*;
 
 const SANS: &[u8] = include_bytes!("../../../assets/fonts/Inter-Regular.ttf");
-const KNOWN: &str = "welcome terminal assistant studio settings about files feedback";
+const KNOWN: &str = "welcome terminal assistant studio settings about files feedback .app";
 /// The compact apps, each 680 x 480 as a window.
 const COMPACT: &str = "welcome settings about feedback";
 type Log = Rc<RefCell<Vec<(&'static str, E)>>>;
@@ -81,7 +81,7 @@ fn desk_with(w: f32, h: f32, prefs: Prefs) -> (Shell, Log) {
     let (log, text) = (Log::default(), TextSystem::new(SANS.to_vec()).unwrap());
     let l = log.clone();
     let reg: Registry = Box::new(move |name| {
-        let k = KNOWN.split(' ').find(|k| *k == name)?;
+        let k = KNOWN.split(' ').find(|k| name.ends_with(k))?;
         Some(Box::new(Probe(k, l.clone())) as Box<dyn App>)
     });
     (Shell::new(w, h, text, Vfs::new(), reg, prefs), log)
@@ -739,7 +739,11 @@ fn the_home_screen_shows_every_app_and_the_top_bar_its_buttons() {
     let kept = "@2,studio::,assistant::,terminal::,files::,settings::,feedback::,about::,welcome::";
     let order = [kept, ",", &mine, "/clock.app::"].concat();
     assert_eq!(r.effects, [Effect::Pref { key: "home.order".into(), value: order }]);
-    assert!(r.redraw && s.labels_home()[8] == "Clock" && s.grid.icons[8].sigil.is_some());
+    assert!(r.redraw && s.labels_home()[8] == "Clock" && s.grid.icons[8].mark.is_some());
+    let (c, m) = ([&mine, "/clock.app"].concat(), ui::icon::Made::parse(b"dot 9 9 3").ok());
+    (s.dock.favs, _) = (vec![c.clone()], s.host.vfs.write(&c, b"// icon: dot 9 9 3").unwrap());
+    let r = (s.input(Input::PointerLeave).redraw, s.grid.icons[8].mark, s.marks.clone());
+    assert_eq!(r, (true, m.map(Mark::Made), vec![m.map(Mark::Made), None]), "its icon, grid, dock");
     // The mark shows Welcome; the right buttons Feedback (a bug) and Settings.
     s.click((27.0, 22.0));
     assert_eq!(s.wm().focused(), Some(WinId(1)));
@@ -763,10 +767,8 @@ fn icons_move_and_open_by_the_pointer_and_the_keys() {
     let (mut s, log) = desk();
     s.to(cell(0));
     s.down(cell(0));
-    let r = s.to(cell(3));
-    assert!(
-        r.cursor == Some(Cursor::Grabbing) && s.hit(cell(3).0, cell(3).1) == Some(Target::Desktop)
-    );
+    let (r, c3) = (s.to(cell(3)), cell(3));
+    assert!(r.cursor == Some(Cursor::Grabbing) && s.hit(c3.0, c3.1) == Some(Target::Desktop));
     let kept = "@2,studio:0.3:,assistant:0.1:,terminal:0.2:,files:0.4:,settings:0.5:,feedback:1.0:";
     let order = [kept, ",about:1.1:,welcome:1.2:"].concat();
     assert_eq!(s.up(cell(3)).effects, [Effect::Pref { key: "home.order".into(), value: order }]);
@@ -899,8 +901,8 @@ fn the_focused_app_gets_keys_text_and_the_pointer() {
     // A finger on a pad presses it at once and drags it, never scrolling it; no click either.
     s.push((c.x + 10.0, c.y + 70.0), 0, true);
     assert_eq!(log.take(), [("welcome", E::PointerDown { x: 10.0, y: 70.0, id: Some(W(3)) })]);
-    s.to((c.x + 40.0, c.y + 30.0));
-    assert!(s.up((c.x + 40.0, c.y + 30.0)).gesture && s.fling.is_none());
+    let to = (c.x + 40.0, c.y + 30.0);
+    assert!(s.to(to).consumed && s.up(to).gesture && s.fling.is_none());
     assert_eq!(log.take(), [("welcome", E::Drag { x: 40.0, y: 30.0 })]);
 }
 

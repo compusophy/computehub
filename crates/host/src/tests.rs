@@ -256,7 +256,7 @@ fn the_home_screen_lists_every_app_and_the_persons_own_with_their_sigils() {
     }
     // The apps the registry knows, in the order asked, then ~/apps's (never ~'s or /apps's).
     let apps = h.home(&["files", "nope", "welcome", "about"]);
-    let got: Vec<_> = apps.iter().map(|e| (&*e.name, &*e.label, e.sigil.is_some())).collect();
+    let got: Vec<_> = apps.iter().map(|e| (&*e.name, &*e.label, e.mark.is_some())).collect();
     let notes = [&mine, "/notes.app"].concat();
     let want =
         [("files", "Files", false), ("welcome", "Welcome", false), ("about", "About", false)];
@@ -272,6 +272,36 @@ fn the_home_screen_lists_every_app_and_the_persons_own_with_their_sigils() {
     assert_eq!(
         (apps[3].icon.hue, h.icon("/apps/counter.app").map(|i| i.hue)),
         (hue, Some(ui::theme::app_tint(sigil("counter.app").unwrap())))
+    );
+    // Its mark: the icon its header draws, else (none, or one that does not read whole) its
+    // sigil; its hue the name's either way. Another app has none.
+    let x = ui::icon::Made::parse(b"line 5 5 19 19 line 5 19 19 5").ok().map(Mark::Made);
+    assert_eq!(apps[3].mark, seed.map(Mark::Sigil));
+    for (icon, want) in [("// icon: line 5 5 19 19 line 5 19 19 5", x), ("// icon: X", None)] {
+        h.vfs
+            .write(
+                &notes,
+                [
+                    "// Notes.
+",
+                    icon,
+                    "
+label 1;
+",
+                ]
+                .concat()
+                .as_bytes(),
+            )
+            .unwrap();
+        let mark = want.or(seed.map(Mark::Sigil));
+        assert_eq!(
+            (h.mark(&notes), h.home(&[])[0].mark, h.home(&[])[0].icon.hue),
+            (mark, mark, hue)
+        );
+    }
+    assert_eq!(
+        (h.mark("files"), h.mark(&[&mine, "/gone.app"].concat())),
+        (None, sigil("gone.app").map(Mark::Sigil))
     );
 }
 

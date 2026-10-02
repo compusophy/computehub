@@ -1,9 +1,10 @@
-//! Vector icons: the `icons` crate's [`Glyph`]s (and `.app` files' [`sigil`]s) drawn crisp at
-//! any size through [`TextSystem::draw_vector`], alone or on an app tile in a theme's colors
+//! Vector icons: the `icons` crate's [`Glyph`]s (and `.app` files' [`Mark`]s: the icon a file
+//! [`made`] for itself, else its [`sigil`]) drawn crisp at any size through
+//! [`TextSystem::draw_vector`], alone or on an app tile in a theme's colors
 //! ([`Theme::icon_colors`]).
 
 use gfx::{DrawList, RectF, Rgba};
-pub use icons::{Glyph, MARK_HOLE, PHI, Point, cos, outline, rings, sigil, sin};
+pub use icons::{Glyph, MARK_HOLE, Made, PHI, Point, cos, made, outline, rings, sigil, sin};
 use text::TextSystem;
 
 use crate::Theme;
@@ -46,6 +47,38 @@ pub fn sigil_tile(
     let t = square(text, r);
     let ink = plate(list, text, t, hue, theme);
     text.draw_seeded(list, t.inset(t.w * (1.0 - 1.0 / PHI) / 2.0), seed, sigil, ink);
+}
+
+/// What a `.app` file's tile shows: the sigil of a seed (a hash of its name), or the icon its
+/// header draws ([`made`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Mark {
+    Sigil(u32),
+    Made(Made),
+}
+
+/// A `.app` file's tile: [`sigil_tile`]'s plate, with its [`Mark`] in the same ink and box.
+pub fn mark_tile(
+    list: &mut DrawList,
+    text: &mut TextSystem,
+    r: RectF,
+    mark: &Mark,
+    hue: Rgba,
+    theme: &Theme,
+) {
+    let m = match mark {
+        Mark::Sigil(seed) => return sigil_tile(list, text, r, *seed, hue, theme),
+        Mark::Made(m) => m,
+    };
+    let t = square(text, r);
+    let ink = plate(list, text, t, hue, theme);
+    text.draw_hashed(
+        list,
+        t.inset(t.w * (1.0 - 1.0 / PHI) / 2.0),
+        m.hash(),
+        &|o| m.outline(o),
+        ink,
+    );
 }
 
 /// The square of side `min(r.w, r.h)` centered in `r`, on device pixels.

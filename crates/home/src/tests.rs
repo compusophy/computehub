@@ -1,5 +1,6 @@
 use gfx::{DrawList, Kind, RectF, Rgba};
 use host::{Effect, Entry};
+use ui::icon::Mark;
 use ui::{AppIcon, Key, Mods, THEMES, TextSystem};
 
 use super::dock::{Dock, Look, Spot, Strip, favorites, pin, shift};
@@ -112,7 +113,7 @@ fn the_row_holds_the_dock_at_the_left_and_the_assistant_alone_at_the_right() {
     // running app's dim, none for one that does not run); a tile carried, shadowed.
     let look = |i, dot, focused| Look {
         icon: AppIcon::default(),
-        sigil: None,
+        mark: None,
         r: s.tile(i),
         lift: 0.0,
         dot,
@@ -453,9 +454,9 @@ fn drops_land_in_any_cell_those_in_the_way_moving_along_to_the_first_gap() {
 }
 
 #[test]
-fn icons_draw_selected_lifted_and_as_sigils() {
+fn icons_draw_selected_lifted_and_as_marks() {
     // Drawn: selected, the accent's ring and wash; carried, larger and shadowed; a `.app` file's
-    // tile shows its sigil, not its glyph.
+    // tile shows its mark (its sigil, or the icon it made), not its glyph.
     let (mut list, mut text, t) = (DrawList::new(), text(), &THEMES[1]);
     let r = icons::cell(0, RectF::new(0.0, 44.0, 1280.0, 671.0), false);
     let state = icons::State { selected: true, ..Default::default() };
@@ -470,11 +471,17 @@ fn icons_draw_selected_lifted_and_as_sigils() {
     };
     let mut lifted = DrawList::new();
     let state = icons::State { lift: 1.0, ..Default::default() };
-    icons::draw(&mut lifted, &mut text, t, r, (AppIcon::default(), Some(7), "Clock"), state);
+    let sigil = Some(&Mark::Sigil(7));
+    icons::draw(&mut lifted, &mut text, t, r, (AppIcon::default(), sigil, "Clock"), state);
     let (tile, big) = (kind(&list, Kind::Gradient)[0].0, kind(&lifted, Kind::Gradient)[0].0);
     assert!(big > tile && kind(&lifted, Kind::Shadow).len() > kind(&list, Kind::Shadow).len());
     let glyph = |l: &DrawList| kind(l, Kind::Glyph).into_iter().find(|g| g.0 > 20.0).map(|g| g.1);
     assert_ne!(glyph(&lifted), glyph(&list));
+    let made = Mark::Made(ui::icon::Made::parse(b"ring 12 12 8").unwrap());
+    let mut own = DrawList::new();
+    icons::draw(&mut own, &mut text, t, r, (AppIcon::default(), Some(&made), "Clock"), state);
+    assert_eq!(kind(&own, Kind::Gradient), kind(&lifted, Kind::Gradient));
+    assert!(glyph(&own).is_some() && glyph(&own) != glyph(&lifted) && glyph(&own) != glyph(&list));
     icons::draw_box(&mut list, &text, t, (300.0, 200.0), (100.0, 400.0));
     assert_eq!(list.instances().last().map(|i| i.rect), Some([100.0, 200.0, 200.0, 200.0]));
 }
@@ -486,7 +493,7 @@ const AREA: RectF = RectF { x: 0.0, y: 44.0, w: 1280.0, h: 694.0 };
 fn entries(names: &[&str]) -> Vec<Entry> {
     let entry = |n: &&str| {
         let (name, label, icon) = (n.to_string(), host::app_label(n), AppIcon::default());
-        Entry { name, label, icon, sigil: None }
+        Entry { name, label, icon, mark: None }
     };
     names.iter().map(entry).collect()
 }

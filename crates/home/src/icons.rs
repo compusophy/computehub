@@ -6,6 +6,7 @@
 
 use gfx::{DrawList, RectF};
 use host::paint::{cap_baseline, faded, px};
+use ui::icon::Mark;
 use ui::{AppIcon, FontId, TextStyle, TextSystem, Theme};
 
 use crate::place::Dims;
@@ -71,7 +72,7 @@ pub struct State {
     pub lift: f32,
 }
 
-/// The icon (`icon`, or a `.app` file's sigil) of `label` in cell `r`: a wash while hovered, the
+/// The icon (`icon`, or a `.app` file's mark) of `label` in cell `r`: a wash while hovered, the
 /// accent's ring and wash while selected, the tile (larger and shadowed as it lifts), the label
 /// centered under it in two lines at most, the second cut with an ellipsis.
 pub fn draw(
@@ -79,7 +80,7 @@ pub fn draw(
     text: &mut TextSystem,
     theme: &Theme,
     r: RectF,
-    (icon, sigil, label): (AppIcon, Option<u32>, &str),
+    (icon, mark, label): (AppIcon, Option<&Mark>, &str),
     s: State,
 ) {
     let well = r.inset(2.0);
@@ -95,7 +96,7 @@ pub fn draw(
     if s.lift > 0.0 {
         list.shadow_offset(t, side / 6.0, 21.0, 8.0, faded(theme.shadow, s.lift));
     }
-    crate::tile(list, text, t, (icon, sigil), theme);
+    crate::tile(list, text, t, (icon, mark), theme);
     let (style, room) = (TextStyle::new(FontId::Sans, SIZE, theme.text), r.w - 10.0);
     let lines = text.wrap(label, style, room);
     let first = lines.first().copied().unwrap_or("");

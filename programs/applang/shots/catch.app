@@ -1,5 +1,5 @@
-// Catch: stars fall; drag the basket (or press left and right) to catch them. Three missed and
-// the game is over.
+// Catch: stars fall; drag the basket (or press left and right) to catch them; three missed end it.
+// icon: fill 12 2 14 7 19 7 15 10 17 15 12 12 7 15 9 10 5 7 10 7 fill 4 16 20 16 17 21 7 21
 state bx = 70;                               // the basket's left edge
 state sx = [20, 60, 100, 140, 80];           // the stars: x, and y (above the top: waiting)
 state sy = [-10, -40, -70, -100, -130];

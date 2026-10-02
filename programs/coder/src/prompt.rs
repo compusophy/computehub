@@ -1,7 +1,7 @@
 //! The words of a make: one system prompt that never changes (so the provider's prefix cache
 //! can hold it across turns and makes) and a fresh user message for each turn.
 
-use crate::ai::{HONEST, SHORTER, put_numbered};
+use crate::ai::{HONEST, ICON, SHORTER, put_numbered};
 
 /// Who the model writes for.
 const INTRO: &str = "You write apps for Studio, the app maker of compusophyOS, a desktop that runs \
@@ -31,10 +31,10 @@ const REPLIES: &str = "A new app: the complete program in one fenced block whose
                        asked, reply with only a // comment saying why.\n\n";
 
 /// The system prompt: who the model writes for, applang's card, how apps are made, what a reply
-/// holds, [`HONEST`] and the example replies ([`applang::SHOTS`], each tested to compile and pass
+/// holds, [`HONEST`], [`ICON`] and the example replies ([`applang::SHOTS`], each tested to compile and pass
 /// the smoke test). Nothing in it varies: no model, path or date.
 pub fn system() -> String {
-    let mut out = [INTRO, applang::REFERENCE, RULES, REPLIES, HONEST].concat();
+    let mut out = [INTRO, applang::REFERENCE, RULES, REPLIES, HONEST, ICON].concat();
     for (i, (ask, src)) in applang::SHOTS.iter().enumerate() {
         let and = if i == 0 { "" } else { "\nAnd for " };
         out += &[and, "\"", ask, "\":\n```app\n", src, "```\n"].concat();

@@ -29,6 +29,7 @@ pub use agent::{ASSISTANT, OVERLAY};
 use gfx::{DrawList, RectF};
 use kernel::Kernel;
 use motion::Themes;
+use ui::icon::Mark;
 use ui::{AiStatus, AppEvent, AppIcon, Cx, Key, Mods, Request, TextSystem, Theme, Ui, UiState};
 use vfs::Vfs;
 use wm::{Cmd, Outcome, Rect, Snap, State, WinId, Wm};
@@ -635,30 +636,38 @@ impl Host {
         for &name in apps {
             if let Some(icon) = self.icon(name) {
                 let (name, label) = (name.to_string(), app_label(name));
-                out.push(Entry { name, label, icon, sigil: None });
+                out.push(Entry { name, label, icon, mark: None });
             }
         }
         let dir = [Vfs::HOME, "/apps"].concat();
         for e in self.vfs.list(&dir).unwrap_or_default() {
             if !e.is_dir && e.name.ends_with(".app") {
                 let name = [&dir, "/", &e.name].concat();
-                let (seed, glyph) = (sigil(&name), ui::icon::Glyph::Window);
-                let icon = AppIcon { glyph, hue: ui::theme::app_tint(seed.unwrap_or(0)) };
-                out.push(Entry { label: app_label(&name), name, icon, sigil: seed });
+                let (seed, glyph) = (sigil(&name).unwrap_or(0), ui::icon::Glyph::Window);
+                let icon = AppIcon { glyph, hue: ui::theme::app_tint(seed) };
+                out.push(Entry { label: app_label(&name), mark: self.mark(&name), name, icon });
             }
         }
         out
     }
+
+    /// What a `.app` file's tile shows: the icon its header draws ([`ui::icon::made`]), else its
+    /// name's sigil; none for another app.
+    pub fn mark(&self, name: &str) -> Option<Mark> {
+        let seed = sigil(name)?;
+        let made = self.vfs.read(name).ok().and_then(ui::icon::made::read);
+        Some(made.map_or(Mark::Sigil(seed), Mark::Made))
+    }
 }
 
 /// An app on the home screen: its registry name or `.app` path, what it is called, its icon,
-/// and a `.app` file's sigil ([`sigil`]).
+/// and a `.app` file's mark (its own icon, or its [`sigil`]).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Entry {
     pub name: String,
     pub label: String,
     pub icon: AppIcon,
-    pub sigil: Option<u32>,
+    pub mark: Option<Mark>,
 }
 
 /// The seed of the sigil a `.app` file shows for a glyph (and of its hue): FNV-1a of its file
