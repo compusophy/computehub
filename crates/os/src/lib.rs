@@ -1,12 +1,15 @@
 //! compusophyOS's wasm entry: `start` runs a desktop on [`platform::run`] with the boot font, a
 //! [`Vfs`] holding the `/bin` markers and Studio's samples, and a [`Registry`] of [`apps::open`]
 //! then [`remote::open`] (the GUI programs: About, Feedback, Files, Welcome, Studio, the
-//! Assistant, `.app` files). The [`Shell`] is made at the first Resize that leaves a work area;
-//! until then input is dropped (a missed Tick is replayed) and frames clear to the default theme's
-//! base.
+//! Assistant, `.app` files). A new tab's first size shows the welcome ([`logon`]: the mark, the
+//! record of this start, sign-in); a reload of a signed-in tab goes straight on. The [`Shell`]
+//! (and /home put back) waits for a sign-in and a size that leaves a work area; until then
+//! input is the welcome's or dropped (a missed Tick is replayed) and frames clear to its theme's
+//! base. The welcome marks the device `seen` as it signs in, so the shell opens no Welcome.
 //! The theme is kept in `localStorage` ([`THEME_KEY`]), as are the preferences of [`PREFS`]
 //! (`compusophy.<key>`), which apps and the shell set ([`shell::Effect::Pref`]) and the shell
-//! reads when it is made ([`shell::Prefs`]).
+//! reads when it is made ([`shell::Prefs`]): each under the signed-in profile's key
+//! ([`logon::own`]; these are the first profile's). Sign out keeps /home and reloads.
 //!
 //! Fonts: boot (Inter Regular, in the wasm); deferred (Inter SemiBold and JetBrains Mono, fetched
 //! after the first frame under the top two fetch ids, which the shell never reaches; a failure
@@ -31,6 +34,8 @@ pub mod remote;
 pub mod report;
 
 use gfx::{DrawList, Rgba};
+use logon::record::{self, Record};
+use logon::{Logon, Out};
 use platform::{App, Ctl, Event, Handled, Renderer};
 use shell::{Effect, Input, KernelIn, Key, LocalTime, Mods, Registry, Response, Shell};
 use ui::kernel::{self, Effect as K};
@@ -72,6 +77,12 @@ struct Desktop {
     /// The text system and filesystem, until the shell takes them.
     parts: Parts,
     shell: Option<Shell>,
+    /// The welcome while it shows (and flies off the desktop), the start's record, the profile
+    /// signed in to, and when the welcome wants its next frame.
+    logon: Option<Logon>,
+    record: Record,
+    signed: Option<u32>,
+    wish: Option<u32>,
     /// Whether a Tick came before the shell did, and whether text input is on.
     missed_tick: bool,
     typing: bool,
@@ -120,30 +131,91 @@ impl Desktop {
         Ok(Desktop { parts: Some((text, vfs)), ..Desktop::default() })
     }
 
-    /// Hands `input` to the shell, first making it at the first usable size.
+    /// Hands `input` to the welcome while it shows, else to the shell; at the first usable size
+    /// makes the one (a new tab) or the other (a reload of a signed-in tab, [`logon::SESSION`]).
     fn input(&mut self, input: Input, ctl: &mut Ctl) -> Option<Response> {
+        self.missed_tick |= matches!(input, Input::Tick { .. });
+        if let Some(l) = self.logon.as_mut().filter(|l| !l.leaving()) {
+            ctl.random(&mut l.fresh);
+            let (r, outs) = l.input(&input, ctl.monotonic_ms(), &|k| ctl.storage_get(k));
+            return Some(self.outs(outs, r, ctl));
+        }
         if let Some(shell) = &mut self.shell {
             return Some(shell.input(input));
         }
-        self.missed_tick |= matches!(input, Input::Tick { .. });
-        match input {
-            Input::Resize { w, h } if w >= 1.0 && h >= shell::BAR_H + shell::DOCK_CLEAR + 1.0 => {
-                let (text, mut vfs) = self.parts.take()?;
-                self.home.restore(&mut vfs, ctl, &mut self.report);
-                let prefs = prefs(ctl);
-                let shell = Shell::new(w, h, text, vfs, registry(self.ai.clone()), prefs);
-                let shell = self.shell.insert(shell);
-                self.ai.load(ctl);
-                self.saved = shell.theme_name();
-                shell.set_now(ctl.monotonic_ms());
-                let mut r = shell.input(input);
-                if self.missed_tick {
-                    r = merge(r, shell.input(Input::Tick { time: local(ctl.local_time()) }));
-                }
-                Some(r)
+        let Input::Resize { w, h } = input else { return None };
+        if self.signed.is_none() && w >= 1.0 && h >= 1.0 {
+            let get = |k: &str| ctl.storage_get(k);
+            self.signed = logon::session(ctl.session_get(logon::SESSION).as_deref(), &get);
+            if self.signed.is_none() {
+                let (l, outs) = Logon::new((w, h), &get, ctl.secure());
+                self.logon = Some(l);
+                return Some(self.outs(outs, Response { redraw: true, ..Default::default() }, ctl));
             }
-            _ => None,
         }
+        self.desk(ctl)
+    }
+
+    /// Makes the signed-in profile's desktop once the screen leaves a work area: /home put back
+    /// (noted with its KB and ms), the preferences, the shell (told the time if a Tick came).
+    fn desk(&mut self, ctl: &mut Ctl) -> Option<Response> {
+        let (w, h, _) = self.report.screen;
+        if self.signed.is_none() || w < 1.0 || h < shell::BAR_H + shell::DOCK_CLEAR + 1.0 {
+            return None;
+        }
+        logon::sign(self.signed?);
+        let ((text, mut vfs), t) = (self.parts.take()?, ctl.monotonic_ms());
+        self.home.restore(&mut vfs, ctl, &mut self.report);
+        report::note(&record::home_note(self.home.kept_len(), ctl.monotonic_ms() - t));
+        let prefs = prefs(ctl);
+        let shell = Shell::new(w, h, text, vfs, registry(self.ai.clone()), prefs);
+        let shell = self.shell.insert(shell);
+        self.ai.load(ctl);
+        self.saved = shell.theme_name();
+        shell.set_now(ctl.monotonic_ms());
+        let mut r = shell.input(Input::Resize { w, h });
+        if self.missed_tick {
+            r = merge(r, shell.input(Input::Tick { time: local(ctl.local_time()) }));
+        }
+        Some(r)
+    }
+
+    /// Carries out what the welcome asked, `r` its answer; signing in makes the desktop.
+    fn outs(&mut self, outs: Vec<Out>, mut r: Response, ctl: &mut Ctl) -> Response {
+        for out in outs {
+            match out {
+                Out::Set(key, value) => ctl.storage_set(&key, &value),
+                Out::Remove(key) => ctl.storage_remove(&key),
+                Out::Session(id) => ctl.session_set(logon::SESSION, Some(&id)),
+                Out::Failed(message, note) => self.report.failed("error", message, note),
+                Out::SignOut => self.sign_out(ctl, true),
+                Out::Close => self.logon = None,
+                Out::Numeric(on) => ctl.input_mode(on),
+                Out::Derive { id, pin, salt, iterations } => ctl.derive(id, pin, salt, iterations),
+                Out::SignIn(id) => {
+                    self.signed = Some(id);
+                    if let Some(d) = self.desk(ctl) {
+                        r = merge(r, d);
+                    }
+                }
+            }
+        }
+        r
+    }
+
+    /// Signs out: /home kept at once, then the tab forgets its profile and reloads (to the
+    /// welcome). Files that could not be kept get a card over the desktop first, unless
+    /// `anyway`.
+    fn sign_out(&mut self, ctl: &mut Ctl, anyway: bool) {
+        let Some(shell) = &self.shell else { return };
+        self.home.keep(shell.vfs(), ctl, &mut self.report, true);
+        if self.home.unkept && !anyway {
+            let (w, h, _) = self.report.screen;
+            self.logon = Some(Logon::unkept((w, h), shell.theme_name()));
+            return;
+        }
+        ctl.session_set(logon::SESSION, None);
+        ctl.reload();
     }
 
     /// One event, but for what the shell queued outside its response.
@@ -160,7 +232,7 @@ impl Desktop {
         let r = match ev {
             Event::Key { down: false, ref code, .. } => return key_up(code),
             Event::Fetched { id, result } => match self.take_deferred(id) {
-                Some(slot) => return self.set_font(slot, result),
+                Some(slot) => return self.set_font(slot, result, ctl),
                 None => self.shell.as_mut().map(|s| s.fetched(id, result)),
             },
             ev @ (Event::Chunk { .. } | Event::StreamEnd { .. }) => {
@@ -191,11 +263,19 @@ impl Desktop {
                 self.kernel(KernelIn::Wake)
             }
             Event::Hidden => self.kernel(KernelIn::Hidden),
+            Event::Derived { id, result } => {
+                let (now, get) = (ctl.monotonic_ms(), |k: &str| ctl.storage_get(k));
+                let got = self.logon.as_mut().map(|l| l.derived(id, result, now, &get));
+                got.map(|(r, outs)| self.outs(outs, r, ctl))
+            }
             ev => input_of(ev).and_then(|input| self.input(input, ctl)),
         };
         let Some(r) = r else { return Handled::default() };
-        let asked = r.text_input.is_some();
+        let (asked, out) = (r.text_input.is_some(), r.effects.contains(&Effect::SignOut));
         apply(r.effects, ctl, (&self.ai, &mut self.wake), &mut self.report);
+        if out {
+            self.sign_out(ctl, false);
+        }
         if let Some(on) = r.text_input {
             self.typing = on;
             ctl.set_text_input(on);
@@ -241,7 +321,7 @@ impl Desktop {
         let theme = shell.theme_name();
         if theme != self.saved {
             self.saved = theme;
-            ctl.storage_set(THEME_KEY, theme);
+            ctl.storage_set(&logon::own(THEME_KEY), theme);
         }
     }
 
@@ -294,24 +374,42 @@ impl Desktop {
         }
     }
 
-    /// Draws into the draw list; the clear color.
+    /// Draws into the draw list (the desktop, then the welcome: over it while it leaves); the
+    /// clear color. The welcome goes once its flight is over.
     fn paint(&mut self, dpr: f32, ctl: &Ctl) -> Rgba {
-        let Some(shell) = &mut self.shell else {
-            self.list.clear();
-            return ui::theme("").base;
+        let (now, reduced, mut base) =
+            (ctl.monotonic_ms(), ctl.reduced_motion(), ui::theme("").base);
+        self.list.clear();
+        if let Some(shell) = &mut self.shell {
+            shell.set_now(now);
+            shell.set_dpr(dpr);
+            shell.set_reduced_motion(reduced);
+            shell.draw(&mut self.list);
+            base = shell.clear_color();
+        }
+        // Over a desktop the welcome is a layer: its flight, or the card files went unkept.
+        let (over, logon) = (self.shell.is_some(), &mut self.logon);
+        self.wish = match (logon, text_of(&mut self.shell, &mut self.parts)) {
+            (Some(l), Some(text)) if over => l.layer(&mut self.list, text, &self.record, now),
+            (Some(l), Some(text)) => {
+                text.set_dpr(dpr);
+                base = l.theme().base;
+                l.draw(&mut self.list, text, &self.record, (now, reduced))
+            }
+            _ => None,
         };
-        shell.set_now(ctl.monotonic_ms());
-        shell.set_dpr(dpr);
-        shell.set_reduced_motion(ctl.reduced_motion());
-        shell.draw(&mut self.list);
-        shell.clear_color()
+        if self.logon.as_ref().is_some_and(|l| l.gone(now)) {
+            self.logon = None;
+        }
+        base
     }
 
-    /// After a frame: the next when the shell wants it (at once while anything moves, else by
-    /// timer: the living grain's, an app's timer's), the deferred fonts after the first, what
-    /// the shell queued.
+    /// After a frame: the next when the shell or the welcome wants it (at once while anything
+    /// moves, else by timer: the living grain's, an app's timer's), the deferred fonts after the
+    /// first (when the start's record reads its timings), what the shell queued.
     fn drawn(&mut self, ctl: &mut Ctl) {
-        match self.shell.as_ref().and_then(Shell::frame_in) {
+        let shell = self.shell.as_ref().and_then(Shell::frame_in);
+        match [shell, self.wish].into_iter().flatten().min() {
             Some(0) => {
                 ctl.request_frame();
                 self.why |= MOTION;
@@ -324,6 +422,7 @@ impl Desktop {
         }
         if self.deferred.is_none() {
             self.deferred = Some([true; 2]);
+            self.record.first(ctl.monotonic_ms(), ctl.timings());
             for (id, _, url) in DEFERRED {
                 ctl.fetch(id, url);
             }
@@ -338,14 +437,17 @@ impl Desktop {
         std::mem::take(&mut waiting[i]).then_some(DEFERRED[i].1)
     }
 
-    /// Fills a deferred font's slot and redraws, or quietly leaves it empty.
-    fn set_font(&mut self, slot: FontId, got: Result<Vec<u8>, String>) -> Handled {
+    /// Fills a deferred font's slot and redraws, or quietly leaves it empty; the start's record
+    /// hears either (and, once both landed, notes how the start went).
+    fn set_font(&mut self, slot: FontId, got: Result<Vec<u8>, String>, ctl: &Ctl) -> Handled {
         let text = text_of(&mut self.shell, &mut self.parts);
-        let redraw = match (got, text) {
+        let ok = match (got, text) {
             (Ok(bytes), Some(text)) => text.set_font(slot, bytes).is_ok(),
             _ => false,
         };
-        Handled { redraw, prevent_default: false }
+        let (i, now) = (usize::from(slot == FontId::Mono), ctl.monotonic_ms());
+        self.record.font(i, ok, now, ctl.timings()).inspect(|n| report::note(n));
+        Handled { redraw: ok || self.logon.is_some(), prevent_default: false }
     }
 
     /// Whether what takes the keys (the focused window, or the overlay) is at `(x, y)`.
@@ -458,7 +560,8 @@ fn effect(fx: Effect, ctl: &mut Ctl, ai: &ai::Ai) {
         Effect::Kernel(K::Wake { ms }) => ctl.wake_in(ms),
         Effect::Pref { key, value } => pref(&key, &value, ctl, ai),
         // Telemetry took it ([`apply`]): it goes at the next flush, which can say what is open.
-        Effect::Feedback { .. } => {}
+        // Signing out is the desktop's own, after the effects before it.
+        Effect::Feedback { .. } | Effect::SignOut => {}
         // The host hands frames to the apps; none reach here.
         Effect::Kernel(K::Draw { .. }) => {}
     }
@@ -469,7 +572,7 @@ fn effect(fx: Effect, ctl: &mut Ctl, ai: &ai::Ai) {
 fn pref(key: &str, value: &str, ctl: &mut Ctl, ai: &ai::Ai) {
     match key {
         ui::AI_MODEL => ai.set_model(ctl, value),
-        key if PREFS.contains(&key) => ctl.storage_set(&["compusophy.", key].concat(), value),
+        key if PREFS.contains(&key) => ctl.storage_set(&logon::own(key), value),
         _ => {}
     }
 }
@@ -477,8 +580,8 @@ fn pref(key: &str, value: &str, ctl: &mut Ctl, ai: &ai::Ai) {
 /// What the shell starts from: the stored theme, favorites, home screen order, first-visit
 /// mark and grain; whether programs can run (before the first-visit Welcome, one, opens).
 fn prefs(ctl: &Ctl) -> shell::Prefs {
-    let get = |key: &str| ctl.storage_get(&["compusophy.", key].concat());
-    let (theme, seen) = (ctl.storage_get(THEME_KEY).unwrap_or_default(), get("seen").is_some());
+    let get = |key: &str| ctl.storage_get(&logon::own(key));
+    let (theme, seen) = (get("theme").unwrap_or_default(), ctl.storage_get(logon::SEEN).is_some());
     let (grain_off, isolated) = (get(ui::GRAIN).as_deref() == Some("off"), ctl.isolated());
     shell::Prefs { theme, dock: get("dock"), home: get("home.order"), seen, grain_off, isolated }
 }
@@ -540,6 +643,7 @@ fn input_of(ev: Event) -> Option<Input> {
         Event::Key { down: false, .. } | Event::Fetched { .. } => return None,
         Event::Chunk { .. } | Event::StreamEnd { .. } => return None,
         Event::Proc { .. } | Event::ProcError { .. } | Event::Wake | Event::Hidden => return None,
+        Event::Derived { .. } => return None,
         Event::Key { code, key, shift, ctrl, alt, meta, altgr, .. } => {
             let (ctrl, alt) = without_altgr(ctrl, alt, altgr);
             let mods = Mods { shift, ctrl, alt, meta };

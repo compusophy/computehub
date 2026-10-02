@@ -102,14 +102,16 @@ impl LocalTime {
 
 /// Something only the platform can do: fetch `url` (page-relative) for
 /// [`Host::fetched`] with `id`, what the kernel asked for (workers, timer),
-/// store a preference ([`ui::Request::Pref`]) in the page's storage, or send
-/// feedback ([`ui::Request::Feedback`]).
+/// store a preference ([`ui::Request::Pref`]) in the page's storage, send
+/// feedback ([`ui::Request::Feedback`]), or sign out (the person's own act, from
+/// the desktop's menu: no app, and not the Assistant, can ask for it).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Effect {
     Fetch { id: u32, url: String },
     Kernel(kernel::Effect),
     Pref { key: String, value: String },
     Feedback { kind: String, text: String, context: bool },
+    SignOut,
 }
 
 /// For the kernel: a worker's message or failure, the one-shot timer, the page hidden.

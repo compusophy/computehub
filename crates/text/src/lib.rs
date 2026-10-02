@@ -87,10 +87,13 @@ fn usable(size: f32) -> bool {
 
 /// Whether a line may break after `c`: a `+`, `/` or `-` between letters or
 /// digits, but not between two digits (`Alt+Shift`, `a/b`; not `1-4`, `--x`).
+/// Any char past ASCII counts as a letter: core's Unicode tables cost the boot
+/// a kilobyte and more.
 fn breaks_after(prev: Option<char>, c: char, next: Option<char>) -> bool {
     let (Some(p), Some(n)) = (prev, next) else { return false };
+    let word = |c: char| !c.is_ascii() || c.is_ascii_alphanumeric();
     let digits = p.is_ascii_digit() && n.is_ascii_digit();
-    matches!(c, '+' | '/' | '-') && p.is_alphanumeric() && n.is_alphanumeric() && !digits
+    matches!(c, '+' | '/' | '-') && word(p) && word(n) && !digits
 }
 
 fn scaled(units: i32, size: f32, upem: i32) -> f32 {

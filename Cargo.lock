@@ -134,12 +134,23 @@ name = "compusophy-lang"
 version = "0.1.0"
 
 [[package]]
+name = "compusophy-logon"
+version = "0.1.0"
+dependencies = [
+ "compusophy-gfx",
+ "compusophy-home",
+ "compusophy-host",
+ "compusophy-ui",
+]
+
+[[package]]
 name = "compusophy-os"
 version = "0.1.0"
 dependencies = [
  "compusophy-apps",
  "compusophy-gfx",
  "compusophy-guest",
+ "compusophy-logon",
  "compusophy-platform",
  "compusophy-shell",
  "compusophy-ui",

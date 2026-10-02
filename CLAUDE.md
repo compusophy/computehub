@@ -55,8 +55,8 @@ crates/      the OS (boot, kernel, worker); speaks to programs by WASI, uiwire
   gfx/       instanced-quad draw list, glyph atlas, the WebGL2 shaders
   text/      TextSystem: font slots, fallbacks, glyphs on the atlas
   icons/     the mark, glyphs and made icons as vector outlines (`ui::icon`)
-  ui/        immediate-mode widgets, themes (Midnight, Dawn, Mono), the App
-             trait, Cx, the Code editor (re-exports text)
+  ui/        immediate-mode widgets, themes, the App trait, Cx, the Code
+             editor (re-exports text)
   vt/        VT/xterm escape parser        term/  terminal screen model
   guest/     the guest shell the Terminal runs
   apps/      Settings, Terminal (built in)
@@ -64,7 +64,8 @@ crates/      the OS (boot, kernel, worker); speaks to programs by WASI, uiwire
   uiview/    draws them with ui; holds edited text
   host/      wm + one app per window; agent; grabs, squeeze; motion, frames
   home/      top bar, home grid (every app), dock + Assistant row, menus, touch
-  shell/     the desktop: window chrome, keys, overlay; wires host + home (no web deps)
+  logon/     the welcome: mark, real boot record, profiles, PIN
+  shell/     the desktop: window chrome, keys, overlay; wires host + home
   platform/  the browser boundary: canvas, WebGL2, input, textarea, fetch,
              frames on demand, localStorage, workers, beacon
   os/        wasm entry: fonts, VFS, registry, prefs, event glue, Remote (a
@@ -94,8 +95,8 @@ Forks: litelite 0.2.0, `4f5e056`. Packages are `compusophy-<x>`; each
 
 Event path: DOM → `platform::Event` → `os` → `shell::Input` → `host` →
 `ui::AppEvent` → app; back out as `ui::Request` → `host::Effect` → `os` →
-`platform::Ctl`. A frame: `shell::draw` fills one `gfx::DrawList`, drawn in
-one instanced call; while an animation runs `os` asks for the next.
+`platform::Ctl`. A frame: `shell::draw` (before sign-in `logon`) fills one
+`gfx::DrawList`, one instanced call.
 
 ## Commands
 

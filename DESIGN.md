@@ -159,6 +159,38 @@ one. Forked crates keep their Apache-2.0 license and note their origin.
 - Bottom to top: the wallpaper (the theme's base color, up to four soft
   glows and grain), the home screen's icons, the windows, the bottom row,
   the top bar, carried icons, menus, tooltips.
+- **Starting**: a new tab opens on the welcome, the boot's own first frame
+  (`logon`; no program, no worker): compusophy's mark comes in once from
+  the center out (618 ms, 365 round fills), the clock sits in the bar's
+  place, and the name follows when its font lands. The mark is art; the
+  record is truth: under them a hairline holds one segment per stage of
+  the real start as the browser timed it (the page, compusophyOS's
+  download, its start to the first frame, the deferred fonts), at its
+  measured times, gaps kept, with a caption (`Loading fonts…`, then
+  `Ready in 412 ms · 218 KB`); a tap opens a card of the stages, the
+  start's own 100 ms budget among them. Nothing is simulated, and waiting
+  draws no frames. A first visit says hello and starts with Start. A
+  return shows the profiles as circles (people are round, apps rounded
+  squares: a sigil on its hue, from a random seed, so a rename keeps the
+  face), the one that signed in last in focus, then Add; a tap, or the
+  arrows and Enter, signs in. Holding a circle 500 ms (or a right-click)
+  opens its menu: Rename, Set a PIN (or Change PIN, Remove PIN), Remove
+  profile (confirmed, with its files' size; never the last). Escape always
+  goes back a step. Signing in puts the profile's /home back and makes its
+  desktop as the mark flies to the bar's and the welcome fades off it
+  (220 ms). A reload of a signed-in tab (its `sessionStorage`) goes
+  straight to its desktop, never a PIN's. **A PIN** (optional, 4 to 8
+  digits, offered as a profile is added) is a curtain, not a lock, and the
+  words say so: files are not encrypted. It is typed on the phone's number
+  pad (one dot a digit; the last checks it), asked at every page load,
+  checked by the browser's own PBKDF2-HMAC-SHA-256 (WebCrypto, 100,000
+  iterations, a random salt), never sent or kept: the list keeps its
+  record. A wrong one swings the dots and clears them. It guards signing
+  in, renaming and changing it; removal never needs it, so a forgotten PIN
+  means removing the profile with its files. **Sign out** (the
+  desktop's menu) keeps /home at once, forgets the tab's profile and
+  reloads; if the files could not be kept, a card offers Stay or Sign out
+  anyway. Welcome no longer opens by itself.
 - **Top bar** (44 px): the mark at the left opens Welcome; the date and
   time sit in the middle; Feedback (a bug) and Settings at the right.
 - **Windows** float in a stack; focus is the top of it. A 40 px titlebar
@@ -244,9 +276,10 @@ one. Forked crates keep their Apache-2.0 license and note their origin.
   (200 ms); dock tiles lift (120 ms), icons and dock tiles slide aside
   (180 ms), themes crossfade (200 ms). Drags and resizes follow the pointer
   exactly.
-- **Themes**: Midnight (the default: near-black `#07080C` with violet, cyan
-  and magenta light), Dawn (warm paper with peach, lilac and sky light) and
-  Mono (black, white and grays, no light). A theme is plain data: backdrop,
+- **Themes**: Midnight (near-black `#07080C` with violet, cyan and magenta
+  light), Dawn (warm paper with peach, lilac and sky light) and Mono
+  (black, white and grays, no light; the default, which a first visit and
+  an unknown name get). A theme is plain data: backdrop,
   surfaces, glass, text ramp, one accent and the terminal's 16 colors;
   nothing draws from a color constant. The choice is kept in
   `localStorage` under `compusophy.theme`.
@@ -342,11 +375,29 @@ tried again as the page hides; a snapshot that does not read back whole is
 set aside and the desktop starts with a fresh /home. Tabs share the one
 snapshot: once a tab keeps its /home, another that read it earlier keeps
 nothing over it (Settings says its changes are not kept), and a reload shows
-the newer files. Putting /home back runs before the first frame, at about
-15 ms a MiB of /home in Chrome, so a home of a few MB spends the first-frame
-budget. `localStorage` holds about 5 MB; IndexedDB or OPFS replace it when
-homes grow past that, and take the restore off the first frame. Preferences
-and the theme are kept there too.
+the newer files. Putting /home back runs at sign-in, after the welcome's
+first frame, at about 15 ms a MiB of /home in Chrome (noted as `home <KB>
+<ms>`). `localStorage` holds about 5 MB; IndexedDB or OPFS replace it when
+homes grow past that. Preferences and the theme are kept there too.
+
+**Profiles** (`logon::profiles`) are separate homes in one browser, one in
+memory per page (programs see the root `/`, so two homes in one VFS would
+read each other). Each keeps its files, theme, dock, home order, grain, AI
+model, report consent and outbox under its own keys: profile 0's are the
+keys from before profiles (`compusophy.<k>`), so nothing was moved, and
+profile n's are `compusophy.<n>.<k>`. The device keeps the list
+(`compusophy.profiles`: `CSPR 1 <next id>`, then `<id> <seed> <pin or -> <name>`
+a line; absent, the implied `guest`, written at the first change), the
+profile that signed in last and whether a welcome said hello; the tab keeps
+its session. Changes start from the list as stored, never from a copy, so
+another tab's survive; ids are never reused, and a new profile skips any id
+whose keys are still there. Removing a profile removes its keys, then its
+line (never the last). A tab whose profile another tab removed keeps nothing
+more (as when another tab kept its /home). A damaged list is set aside
+(`.bad`) and reported, offering profile 0; a newer one is read-only. A
+panic is reported unless the signed-in profile turned reports off (before
+a sign-in, unless any listed profile did). The shell still runs as `guest`
+in its home; names in it, and roots per profile, wait for R2.
 
 ## What is next
 
@@ -389,7 +440,9 @@ and the theme are kept there too.
   Alt+Q, Alt+arrows and Alt+Backquote before a terminal sees them
   (readline's Alt+F still arrives). A way through for apps that want them
   waits on the Super key question.
-- **The boot budget** (224 KB since 2026-10-02, about 26 KB of headroom)
-  pays for what must draw the first frame. Everything else should be a
-  program, fetched when it first runs (Studio and applang already are;
-  Settings and the Terminal could be).
+- **The boot budget** (224 KB since 2026-10-02) pays for what must draw the
+  first frame. With the canvas, the welcome, profiles and the PIN it holds
+  229,048 of 229,376 bytes: about 0.3 KB of headroom. Everything else
+  should be a program, fetched when it first runs (Studio and applang
+  already are; Settings, est. 4.7 KB, and the Terminal's guest shell, est.
+  5 KB, could be, at the cost of needing an isolated page to open).

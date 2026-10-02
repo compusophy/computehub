@@ -37,10 +37,11 @@ fn fresh() -> Desktop {
     Desktop::new().expect("the boot font loads")
 }
 
-/// A desktop at 1280 x 800, with a terminal open in front when `terminal`.
+/// A desktop at 1280 x 800 (a signed-in tab's reload), a terminal in front if `terminal`.
 pub(crate) fn desktop(terminal: bool) -> Desktop {
-    let mut desk = fresh();
-    send(&mut desk, resize(1280.0, 800.0));
+    let (mut desk, mut ctl) = (fresh(), Ctl::default());
+    ctl.session_set(logon::SESSION, Some("0"));
+    desk.event(resize(1280.0, 800.0), &mut ctl);
     if terminal {
         send(&mut desk, key("Enter/Enter/a", true));
     }
@@ -162,31 +163,29 @@ fn typed_keys_are_left_to_the_textarea_and_key_ups_prevent_only_modifiers() {
 }
 
 #[test]
-fn shell_starts_at_the_first_usable_size() {
+fn the_welcome_then_the_desktop_start_at_the_first_usable_sizes() {
     let mut desk = fresh();
     let (time, short) = (platform::LocalTime::EPOCH, shell::BAR_H + shell::DOCK_CLEAR + 0.5);
     let early = [key("Enter/Enter/a", true), Event::PointerLeave, Event::Tick { time }];
-    let small = [(0.0, 0.0), (800.0, short), (0.5, 600.0), (f32::NAN, 600.0)];
+    let small = [(0.0, 0.0), (0.5, 600.0), (f32::NAN, 600.0)];
     for ev in early.into_iter().chain(small.map(|(w, h)| resize(w, h))) {
         assert_eq!(send(&mut desk, ev.clone()), ((false, false), vec![]), "{ev:?}");
-        assert!(desk.shell.is_none(), "{ev:?}");
+        assert!(desk.shell.is_none() && desk.logon.is_none(), "{ev:?}");
     }
     assert!(desk.missed_tick);
-    // A frame before the shell clears to the default theme's base.
     assert_eq!(desk.paint(1.0, &Ctl::default()), ui::theme("").base);
-    // On a first visit Welcome opens, focused, wanting no text input, and that is kept.
-    let seen = Fx::Store { key: "compusophy.seen".into(), value: "1".into() };
-    let want = ((true, false), vec![seen, Fx::TextInput(false)]);
-    assert_eq!(send(&mut desk, resize(1280.0, 800.0)), want);
-    // The startup window sits as it would at that size from the start.
-    let (text, fs) = fresh().parts.expect("unused");
-    let new = Shell::new(1280.0, 800.0, text, fs, registry(Default::default()), Default::default());
+    // A new tab says hello at any size; Start (Enter) signs in: no Welcome window opens.
+    assert_eq!(send(&mut desk, resize(800.0, short)), ((true, false), vec![]));
+    send(&mut desk, resize(1280.0, 800.0));
+    let store = |k: &str, v: &str| Fx::Store { key: k.into(), value: v.into() };
+    let s = Fx::Session { key: logon::SESSION.into(), value: Some("0".into()) };
+    let fx = [store(logon::SEEN, "1"), store("compusophy.last", "0"), s, Fx::TextInput(false)];
+    assert_eq!(send(&mut desk, key("Enter/Enter", true)), ((true, true), fx.to_vec()));
+    assert!(desk.logon.as_ref().is_some_and(Logon::leaving));
     let got = shell(&desk);
-    let wm = |s: &Shell| (s.wm().state_hash(), s.wm().layout());
-    assert!(wm(got) == wm(&new) && got.wm().layout().len() == 1);
+    assert!(got.wm().layout().is_empty() && desk.parts.is_none());
     assert_eq!(got.vfs().read(remote::STUDIO), Ok(&b"#!wasm bin/studio.wasm\n"[..]));
-    let started = (got.theme_name(), desk.saved, desk.parts.is_none());
-    assert_eq!(started, ("Mono", "Mono", true));
+    assert_eq!((got.theme_name(), desk.saved), ("Mono", "Mono"));
 }
 
 #[test]
@@ -194,6 +193,7 @@ fn the_theme_comes_from_storage_and_goes_back_when_it_changes() {
     let stored = |name: &str| {
         let (mut ctl, mut desk) = (Ctl::default(), fresh());
         ctl.storage_set(THEME_KEY, name);
+        ctl.session_set(logon::SESSION, Some("0"));
         desk.event(resize(1280.0, 800.0), &mut ctl);
         (desk, ctl.effects().iter().filter(|f| matches!(f, Fx::Store { .. })).count())
     };
@@ -254,9 +254,8 @@ fn fonts_load_in_groups_and_frames_come_only_while_something_moves() {
         assert_eq!((h.1, fx, has(&mut desk, FontId::SansBold)), (false, vec![], want));
     }
     // The lazy fonts: the first terminal asks for them, under other ids.
-    let mut desk = fresh();
-    assert_eq!(send(&mut desk, fetched(1, Ok(vec![]))), ((false, false), vec![]));
-    send(&mut desk, resize(1280.0, 800.0));
+    assert_eq!(send(&mut fresh(), fetched(1, Ok(vec![]))), ((false, false), vec![]));
+    let mut desk = desktop(false);
     let (_, fx) = send(&mut desk, key("Enter/Enter/a", true));
     let [Fx::Fetch { id: a, url: ref ua }, Fx::Fetch { id: b, url: ref ub }, ..] = fx[..] else {
         panic!("{fx:?}");
@@ -374,6 +373,7 @@ fn programs_reach_the_kernel_and_its_effects_the_page() {
     ctl.storage_set("compusophy.seen", "1");
     let want = shell::Prefs { dock: Some("terminal".into()), seen: true, ..Default::default() };
     assert_eq!(prefs(&ctl), want);
+    ctl.session_set(logon::SESSION, Some("0"));
     desk.event(resize(1280.0, 800.0), &mut ctl);
     assert_eq!(desk.ai.status().model, ai::DEFAULT_MODEL);
     assert!(shell(&desk).wm().layout().is_empty());
