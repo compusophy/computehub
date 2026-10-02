@@ -31,7 +31,7 @@ impl Studio {
             self.status = (Style::Error, ["not made: ", why].concat());
             return;
         }
-        let base = if self.text.trim().is_empty() { String::new() } else { self.text.clone() };
+        let base = if self.fresh() { String::new() } else { self.text.clone() };
         // What it will really start from: the states the app at this path keeps.
         let kept = match self.path.is_empty() {
             true => String::new(),
@@ -45,6 +45,13 @@ impl Studio {
             self.requests.push(Request::Focus { id: 0 });
         }
         self.out(out, disk);
+    }
+
+    /// Whether a make makes a new app: until a make names its file, or with no program. A draft
+    /// a first make left (nothing in it compiled, or it was stopped) shows, but is not the
+    /// program: Make again makes the app anew.
+    fn fresh(&self) -> bool {
+        self.path.is_empty() || self.text.trim().is_empty()
     }
 
     /// Does what the make wants next.
@@ -110,8 +117,7 @@ impl Studio {
         let mut said = done.said();
         let bad = !ready && done.outcome != Outcome::Stopped;
         let mut style = if bad { Style::Error } else { Style::Small };
-        let edited =
-            self.text != task.base && !(task.base.is_empty() && self.text.trim().is_empty());
+        let edited = self.text != task.base && !(task.base.is_empty() && self.fresh());
         let (mut version, src) = (0, std::mem::take(&mut done.draft));
         if edited {
             said = "your edits kept, not the AI's".into();

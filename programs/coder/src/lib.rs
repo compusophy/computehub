@@ -5,7 +5,8 @@
 //! the program numbered and the problem's coded account. The same problem twice gets one
 //! rewrite; edits that do not apply get one more try, then the rewrite. It keeps the best
 //! program so far (compiles, then runs clean, then newer), so a change never makes an app worse,
-//! and stops by budget ([`Knobs`]: requests, output tokens, dollars, milliseconds).
+//! and stops by budget ([`Knobs`]: requests, output tokens, dollars, milliseconds; a request
+//! holds its worst case against them before it is sent).
 //!
 //! It is sans-IO: requests go out as [`Out::Ask`] bodies, the response bytes and its end come in
 //! ([`Make::data`], [`Make::end`]), and time is an input (`now_ms`), so a make is a pure
@@ -45,7 +46,8 @@ pub struct Knobs {
     pub rewrites: u8,
     /// Output tokens in all, reasoning included (estimated for a cancelled reply).
     pub out_tokens: u32,
-    /// Dollars in all, in micro-dollars.
+    /// Dollars in all, in micro-dollars. A request is sent only when its whole room and its
+    /// input fit in what is left of both (its room shrinks to fit, to half its usual at least).
     pub usd_micros: u32,
     /// Milliseconds in all, checked at every chunk and turn.
     pub ms: u64,
@@ -111,7 +113,8 @@ pub enum Turn {
     Missed,
     /// The program again, simpler: the same problem twice.
     Rewrite,
-    /// The same app, shorter: the reply ran out of room.
+    /// Less, once: the reply ran out of room or a new app's first write thought past its budget
+    /// (a new app: the same app, shorter; a change: edit blocks only).
     Shorter,
     /// A program or edits at all: the reply held neither.
     Format,
@@ -158,10 +161,10 @@ pub struct Receipt {
 }
 
 /// A make's end: how, the program (to install, if `install`; else the last seen, or what a reply
-/// held of one, for the code view) and its problem's bytes in it, the code and line of the
-/// problem to show (0: none; a code of the make's own, E0906 to E0910, when there was no
-/// program), what the program's first comment says, whether it changed a program, and the
-/// receipt.
+/// held of one, for the code view; nothing when applang can make nothing close) and its
+/// problem's bytes in it, the code and line of the problem to show (0: none; a code of the make's
+/// own, E0906 to E0910 or E0919, when there was no program), what the program's first comment
+/// says, whether it changed a program, and the receipt.
 #[derive(Clone, Debug)]
 pub struct Done {
     pub outcome: Outcome,

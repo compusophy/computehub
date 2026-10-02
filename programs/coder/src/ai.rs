@@ -74,22 +74,24 @@ pub fn failure(status: u16, error: &str, said: &str) -> Option<(u16, String)> {
     Some((code, [&ecode(code), " ", what, &said].concat()))
 }
 
-/// The program in `reply`'s first fenced block whose info string is `app` (to the end of the
-/// reply if the block is not closed), and whether its block was closed: a reply cut off by the
-/// token limit (`finish_reason` length) inside an open block holds part of a program, never a
-/// program.
-pub fn fenced(reply: &str) -> Option<(&str, bool)> {
-    let (mut at, mut start) = (0, None);
+/// Each fenced block in `reply` whose info string is `app`, in order: its text and whether it
+/// was closed. Only the last may be open; it runs to the reply's end.
+pub fn blocks(reply: &str) -> Vec<(&str, bool)> {
+    let (mut at, mut start, mut out) = (0, None, Vec::new());
     for line in reply.split_inclusive('\n') {
         let fence = line.trim().strip_prefix("```");
         match start {
             None if fence.map(str::trim) == Some("app") => start = Some(at + line.len()),
-            Some(s) if fence.is_some() => return Some((&reply[s..at], true)),
+            Some(s) if fence.is_some() => {
+                out.push((&reply[s..at], true));
+                start = None;
+            }
             _ => {}
         }
         at += line.len();
     }
-    start.map(|s| (&reply[s..], false))
+    out.extend(start.map(|s| (&reply[s..], false)));
+    out
 }
 
 /// `src` with each line numbered as a fix sees it (`  7| label n;`), the first `first`.

@@ -10,15 +10,20 @@ pub const MAKES: &str = concat!("/home/", "guest", "/.ai/makes.jsonl");
 /// Past this many bytes, [`rotate`] keeps the newest half.
 pub const MAX_MAKES: usize = 256 * 1024;
 
-/// What `u` costs `model`, in micro-dollars: its list prices in nano-dollars a token, in and out,
-/// as `api/ai.mjs` has them (a test reads its `MODELS` line; a model it does not list costs as
-/// its first), cached tokens in at 0.186 of the price in (GLM 5.3: $0.26 a million against $1.40,
-/// as the gateway charged it, measured to the micro-dollar).
-pub fn price(model: &str, u: &crate::json::Usage) -> u32 {
-    let (pin, pout) = match model {
+/// `model`'s list prices in nano-dollars a token, in and out, as `api/ai.mjs` has them (a test
+/// reads its `MODELS` line; a model it does not list costs as its first).
+pub fn rates(model: &str) -> (u64, u64) {
+    match model {
         "zai/glm-5.3-flash" => (150, 500),
         _ => (1400, 4400),
-    };
+    }
+}
+
+/// What `u` costs `model`, in micro-dollars: its [`rates`], cached tokens in at 0.186 of the
+/// price in (GLM 5.3: $0.26 a million against $1.40, as the gateway charged it, measured to the
+/// micro-dollar).
+pub fn price(model: &str, u: &crate::json::Usage) -> u32 {
+    let (pin, pout) = rates(model);
     let cached = u64::from(u.cached.min(u.input));
     let nano = (u64::from(u.input) - cached) * pin
         + cached * pin * 186 / 1000

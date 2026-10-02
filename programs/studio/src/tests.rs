@@ -385,6 +385,64 @@ fn a_new_app_that_never_compiles_leaves_its_draft_marked() {
     assert!(status(&f).starts_with("saved ~/apps/tally.app") && has(&f, "Tally"));
 }
 
+/// A program that compiles but faults as it first renders (E0203 at line 4).
+const AVG: &str =
+    "// Avg: what you add, averaged.\nstate t = 0;\nstate c = 0;\nlabel \"avg \" + t / c;\n";
+
+#[test]
+fn make_again_after_nothing_compiled_makes_a_new_app() {
+    let mut w = Win::new(&[], Mem::new());
+    let f = w.last(&[WIDE]);
+    let (_, mut id, _) = w.make(&f, "an average");
+    for _ in 0..2 {
+        id = ai(w.answer(id, &app(BROKEN)).last().unwrap()).0;
+    }
+    assert_eq!(status(&w.answer(id, &app(BROKEN)).pop().unwrap()), "couldn't \u{b7} E0302 line 2");
+    // Make again with the words the prompt kept: a first write again, never a change of the draft
+    // showing, so what compiles but faults is installed as a first make's is.
+    let (mut id, body) = ai(&w.last(&[click(MAKE)]));
+    assert_eq!(user(&body), "Make: an average");
+    for _ in 0..2 {
+        id = ai(w.answer(id, &app(AVG)).last().unwrap()).0;
+    }
+    let f = w.answer(id, &app(AVG)).pop().unwrap();
+    assert_eq!(status(&f), "runs, but faults \u{b7} E0203 line 4");
+    assert_eq!(w.disk.get(&[HOME, "/apps/avg.app"].concat()).map(String::as_str), Some(AVG));
+    assert!(
+        w.disk[MAKES]
+            .lines()
+            .last()
+            .unwrap()
+            .contains("\"kind\":\"make\",\"outcome\":\"faulting\"")
+    );
+}
+
+#[test]
+fn edits_fenced_one_by_one_all_apply_and_cant_saves_nothing() {
+    // A change whose edits come each in its own app fence: all of them, not the first.
+    let mut w = Win::new(&["edit", "/apps/c.app"], with(&[("/apps/c.app", COUNTER)]));
+    let f = w.last(&[WIDE]);
+    let (_, id, _) = w.make(&f, "add x2 and x10");
+    let (reset, title) = ("button \"Reset\" { count = 0; }\n", "label \"Counter\";\n");
+    let x2 = [reset, "button \"x2\" { count = count * 2; }\n"].concat();
+    let x10 = [title, "button \"x10\" { count = count * 10; }\n"].concat();
+    let edit = |s: &str, r: &str| format!("<<<<<<< SEARCH\n{s}=======\n{r}>>>>>>> REPLACE\n");
+    let f = w.answer(id, &(app(&edit(reset, &x2)) + &app(&edit(title, &x10)))).pop().unwrap();
+    assert!(status(&f).starts_with("ready") && has(&f, "x2") && has(&f, "x10"));
+    assert_eq!(w.disk["/apps/c.app"], COUNTER.replace(reset, &x2).replace(title, &x10));
+    // A new app whose write faults, then only a comment: can't make that, nothing saved.
+    let mut w = Win::new(&[], Mem::new());
+    let f = w.last(&[WIDE]);
+    let (_, id, _) = w.make(&f, "an average");
+    let id = ai(w.answer(id, &app(AVG)).last().unwrap()).0;
+    let f = w.answer(id, "```app\n// applang has no floats, so no average.\n```\n").pop().unwrap();
+    assert_eq!(
+        (status(&f), w.disk.keys().any(|p| p.ends_with(".app"))),
+        ("can't make that", false)
+    );
+    assert!(w.disk[MAKES].contains("\"outcome\":\"cant\",\"version\":0"));
+}
+
 #[test]
 fn narrow_windows_show_the_make_with_the_keyboard_away() {
     let mut w = Win::new(&[], Mem::new());

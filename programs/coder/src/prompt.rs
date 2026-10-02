@@ -97,9 +97,24 @@ pub fn missed(asked: &str, why: &str) -> String {
     again(asked, &[lead, why, copy])
 }
 
-/// The message after a reply cut off before its program or edits ended.
+/// A new app's message after a reply cut off before its program ended, or one that thought
+/// past its budget.
 pub fn shorter(first: &str) -> String {
     again(first, &["\n\n", SHORTER])
+}
+
+/// A change's message after a reply cut off before it ended (`asked` again): edits, never the
+/// app cut down to fit.
+pub fn edits_only(asked: &str) -> String {
+    let only =
+        "\n\nYour reply ran out of room. Reply with edit blocks only, never the whole program.";
+    again(asked, &[only])
+}
+
+/// `asked` again after a reply that thought past its budget and wrote nothing.
+pub fn rush(asked: &str) -> String {
+    let rush = "\n\nYou thought past your room and wrote nothing. Decide quickly, then reply.";
+    again(asked, &[rush])
 }
 
 /// The message after a reply that held neither a program nor edits.

@@ -9,13 +9,16 @@
 //! >>>>>>> REPLACE
 //! ```
 //!
-//! A closed `app` block with no markers in it is a whole program and wins over edits; a fence
-//! around edit blocks is ignored. A SEARCH matches where its lines equal the program's, line
-//! numbers copied with them (`43| `) and trailing spaces aside; failing that, leading spaces
-//! aside too (applang ignores indentation, so the replacement keeps its own). It must match
-//! exactly one place.
+//! The program is the first closed `app` block without markers that is [`honest`]: a make stops
+//! reading there, so a reply reads the same however the network cut it into chunks, and an
+//! example before the program is not the program. It wins over edits. Else edit blocks, every
+//! one in the reply, whatever fences are around them; else the longest `app` block without
+//! markers. A SEARCH matches where its lines equal the program's, line numbers copied with them
+//! (`43| `) and trailing spaces aside; failing that, leading spaces aside too (applang ignores
+//! indentation, so the replacement keeps its own). It must match exactly one place.
 
-use crate::ai::{fenced, num, numbered};
+use crate::ai::{blocks, num, numbered};
+use applang::Class;
 
 /// One edit block: the lines to find and the lines to put there.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -44,13 +47,43 @@ pub fn marked(text: &str) -> bool {
     text.lines().any(|l| l.trim_start().starts_with("<<<<<<<"))
 }
 
-/// What `reply` holds; `cut` when it ran out of room (`finish_reason` length).
+/// Whether `src` begins as the prompts ask a program to: with a comment saying what the app is
+/// ([`crate::ai::HONEST`]). Not whether it compiles: one that does not is the program still (a
+/// fix comes next), and waiting for one that compiles reads on while the model drafts past its
+/// block (live, a Tetris whose block closed at 53 s was read on to its 6,144 tokens at 109 s).
+pub fn honest(src: &str) -> bool {
+    applang::highlight(src).first().is_some_and(|(_, c)| *c == Class::Comment)
+}
+
+/// The program in `reply` and whether its block was closed: its first closed `app` block without
+/// edit markers that is [`honest`]; else its longest `app` block without markers (the first of
+/// equals), to the reply's end if it is open.
+pub fn program(reply: &str) -> Option<(&str, bool)> {
+    let mut long: Option<(&str, bool)> = None;
+    for b in blocks(reply).into_iter().filter(|b| !marked(b.0)) {
+        if b.1 && honest(b.0) {
+            return Some(b);
+        }
+        if long.is_none_or(|l| b.0.len() > l.0.len()) {
+            long = Some(b);
+        }
+    }
+    long
+}
+
+/// How many lines of `src` are not blank.
+pub fn lines(src: &str) -> usize {
+    src.lines().filter(|l| !l.trim().is_empty()).count()
+}
+
+/// What `reply` holds; `cut` when it ran out of room (`finish_reason` length): a reply cut off
+/// inside an open block holds part of a program, never a program.
 pub fn read(reply: &str, cut: bool) -> Reply {
     let reply: String = reply.chars().filter(|&c| c != '\r').collect();
-    match fenced(&reply) {
-        Some((src, closed)) if !marked(src) => {
-            return if cut && !closed { Reply::Cut } else { Reply::Program(src.into()) };
-        }
+    match program(&reply) {
+        Some((src, true)) if honest(src) => return Reply::Program(src.into()),
+        Some((_, false)) if cut && !marked(&reply) => return Reply::Cut,
+        Some((src, _)) if !marked(&reply) => return Reply::Program(src.into()),
         _ => {}
     }
     let (mut edits, mut open): (Vec<Edit>, Option<Edit>) = (Vec::new(), None);

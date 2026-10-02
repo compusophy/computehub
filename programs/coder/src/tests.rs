@@ -1,6 +1,6 @@
 use super::*;
 use ai::{
-    DEFAULT_MODEL, HOME, MAX_BODY, MAX_REPLY, failure, fault, fenced, free_path, problem, slug,
+    DEFAULT_MODEL, HOME, MAX_BODY, MAX_REPLY, blocks, failure, fault, free_path, problem, slug,
 };
 use edits::{Edit, Reply, apply, read};
 use json::{Json, Stream, Usage, quote};
@@ -24,12 +24,18 @@ fn delta(key: &str, text: &str) -> String {
 /// A reply's body: some thinking, `content` in deltas of a few chars, how it finished (`length`:
 /// cut off; else stop) and its usage.
 fn sse(content: &str, finish: &str) -> Vec<u8> {
+    sse_out(content, finish, 1500)
+}
+
+/// The same, its usage `output` tokens out.
+fn sse_out(content: &str, finish: &str, output: u32) -> Vec<u8> {
     let mut out = delta("reasoning", "Hm, a grid\u{2026}");
     let chars: Vec<char> = content.chars().collect();
     out.extend(chars.chunks(5).map(|c| delta("content", &c.iter().collect::<String>())));
     out +=
         &format!("data: {{\"choices\":[{{\"delta\":{{}},\"finish_reason\":\"{finish}\"}}]}}\n\n");
-    [out.as_bytes(), USAGE.as_bytes(), b"data: [DONE]\n\n"].concat()
+    let usage = USAGE.replace(":1500,", &format!(":{output},"));
+    [out.as_bytes(), usage.as_bytes(), b"data: [DONE]\n\n"].concat()
 }
 
 fn app(src: &str) -> String {
@@ -48,6 +54,17 @@ fn task(ask: &str, base: &str) -> Task {
 /// finish reason) a second after the last, in chunks of 61 bytes: the bodies asked, the
 /// statuses seen, and its end.
 fn run(t: Task, k: Knobs, replies: &[(&str, &str)]) -> (Vec<String>, Vec<String>, Done) {
+    drive(t, k, replies, 61, |_| 1500)
+}
+
+/// The same in chunks of `size` bytes, each reply's usage the tokens `out` says for its body.
+fn drive(
+    t: Task,
+    k: Knobs,
+    replies: &[(&str, &str)],
+    size: usize,
+    out_of: impl Fn(&str) -> u32,
+) -> (Vec<String>, Vec<String>, Done) {
     let (mut m, mut out) = Make::start(t, k, 0);
     let (mut bodies, mut seen, mut replies, mut now) = (Vec::new(), Vec::new(), replies.iter(), 0);
     loop {
@@ -56,10 +73,11 @@ fn run(t: Task, k: Knobs, replies: &[(&str, &str)]) -> (Vec<String>, Vec<String>
             Out::Ask(body) => body,
             Out::Cancel => panic!("a cancel outside a reply"),
         };
+        let tokens = out_of(&body);
         bodies.push(body);
         let Some((content, finish)) = replies.next() else { return (bodies, seen, m.stop(now)) };
-        let (mut ended, data) = (None, sse(content, finish));
-        for chunk in data.chunks(61) {
+        let (mut ended, data) = (None, sse_out(content, finish, tokens));
+        for chunk in data.chunks(size) {
             now += 10;
             if let Some(o) = m.data(chunk, now) {
                 assert!(matches!(o, Out::Cancel) && m.complete());
@@ -173,9 +191,10 @@ fn names_blocks_numbers_and_problems() {
     assert_eq!(slug("state n = 0; // label \"no\"\nlabel \"My  Todo-List!\";"), "my-todo-list");
     assert_eq!(slug("state n = 0; button \"x\" { n = 1; }"), "app");
     assert_eq!(slug(&format!("label \"{}\";", "ab ".repeat(20))).len(), 32);
-    assert_eq!(fenced("```app \nlabel 1;"), Some(("label 1;", false)));
-    assert_eq!(fenced("a\n```app\nlabel 1;\n```\nb"), Some(("label 1;\n", true)));
-    assert_eq!(fenced("```rust\nfn x\n```\n"), None);
+    assert_eq!(blocks("```app \nlabel 1;"), [("label 1;", false)]);
+    let two = blocks("a\n```app\nlabel 1;\n```\nb\n```app\n```rust\nx");
+    assert_eq!(two, [("label 1;\n", true), ("", true)]);
+    assert_eq!(blocks("```rust\nfn x\n```\n"), []);
     assert_eq!(ai::numbered("a\n\nb", 9), "  9| a\n 10| \n 11| b\n");
     let d = applang::compile(BROKEN).unwrap_err();
     assert_eq!(problem(&d, BROKEN), "E0302 2:7 `nope` is not a declared state or local variable");
@@ -234,12 +253,33 @@ fn replies_hold_programs_or_edits() {
     assert_eq!(read(&app(CLEAN), false), Reply::Program(CLEAN.into()));
     assert_eq!(read("```app\nlabel 1;", false), Reply::Program("label 1;".into()));
     assert_eq!(read("```app\nlabel 1;", true), Reply::Cut);
-    // Edits anywhere, a fence around them ignored, CRLF read as LF; a closed program wins.
+    // Edits anywhere, every fence around them ignored (one around all, or one each), CRLF read
+    // as LF; a closed whole program wins, a snippet does not.
     let two = [edit("a\n", "b\n"), "text\n".into(), edit("c\n", "d\n")].concat();
     let want = Reply::Edits(vec![e("a", "b"), e("c", "d")]);
     assert_eq!(read(&two, false), want);
     assert_eq!(read(&["```app\n", &two, "```\n"].concat().replace('\n', "\r\n"), false), want);
+    let each = app(&edit("a\n", "b\n")) + &app(&edit("c\n", "d\n"));
+    assert_eq!(read(&each, false), want);
     assert_eq!(read(&[two.as_str(), &app(CLEAN)].concat(), false), Reply::Program(CLEAN.into()));
+    assert_eq!(read(&[app("label 1;\n"), two.clone()].concat(), false), want);
+    // The program is the first that begins as one does, with its comment, compiled or not (its
+    // fix comes next), never an example before it; with none, the longest block; one open at a
+    // cut is part of one.
+    let example = "A label shows text:\n```app\nlabel \"Count\";\n```\n";
+    for before in [example.into(), app(&CLEAN.replace("//", "/"))] {
+        let reply = [before.as_str(), &app(CLEAN), &app("// Two.\nlabel 2;\n")].concat();
+        assert_eq!(read(&reply, false), Reply::Program(CLEAN.into()), "{before}");
+    }
+    let broken = ["```app\n// No.\nlabel nope;\n```\n", &app(CLEAN)].concat();
+    assert_eq!(read(&broken, false), Reply::Program("// No.\nlabel nope;\n".into()));
+    let (long, short) = (app("state a = 0;\nlabel nope;\n"), app("label 1;\n"));
+    let want = Reply::Program("state a = 0;\nlabel nope;\n".into());
+    assert_eq!(read(&[short.as_str(), &long, &short].concat(), false), want);
+    assert_eq!(
+        read(&[short.as_str(), "```app\nstate a = 0;\nlabel 2;\n"].concat(), true),
+        Reply::Cut
+    );
     let open = "<<<<<<< SEARCH\na\n=======\nb\n";
     assert_eq!((read(open, false), read(open, true)), (Reply::Unclosed(1), Reply::Cut));
     let nested = [&edit("a\n", "b\n"), "<<<<<<< SEARCH\nx\n", open].concat();
@@ -331,14 +371,26 @@ fn a_clean_write_is_one_request() {
         ("Count: + adds one.", "ready \u{b7} 1 s")
     );
     // Its status, as the reply streamed: thinking, then the lines it wrote; its block's end stopped
-    // the request, whose usage is then estimated.
+    // the request, whose usage is then estimated, the system prompt's part of it cached.
     assert_eq!(seen[0], "thinking \u{b7} 0 s");
     assert!(
         seen.contains(&"writing \u{b7} 1 line".into())
             && seen.contains(&"writing \u{b7} 4 lines".into())
     );
-    let r = &done.receipt;
+    let (r, sys) = (&done.receipt, quote(&system()).len() as u32 / 3);
     assert!(r.est && r.turns.len() == 1 && r.turns[0].input == bodies[0].len() as u32 / 3);
+    assert!(r.turns[0].cached == sys && sys > 2000, "{sys}");
+    // After a usage that found it uncached, none.
+    let (mut m, _) = Make::start(task("count", ""), Knobs::default(), 0);
+    let cold = String::from_utf8(sse(&app(BROKEN), "stop")).unwrap().replace(":1900}", ":0}");
+    assert!(m.data(cold.as_bytes(), 1).is_none() && m.end(200, "", 2).is_none());
+    assert!(matches!(m.check(3), Some(Out::Ask(_))));
+    assert!(matches!(m.data(delta("content", &app(CLEAN)).as_bytes(), 4), Some(Out::Cancel)));
+    let Some(Out::Done(done)) = m.check(5) else { panic!() };
+    assert_eq!(
+        (done.outcome, done.receipt.turns[0].cached, done.receipt.turns[1].cached),
+        (Outcome::Ready, 0, 0)
+    );
 }
 
 #[test]
@@ -358,13 +410,13 @@ fn problems_get_fixes_by_edits_and_the_best_so_far_stays() {
             && seen.contains(&"fixing line 2 \u{b7} 1 edit".into())
     );
     assert_eq!((done.outcome, done.draft.as_str()), (Outcome::Ready, "state n = 0;\nlabel n;\n"));
-    // The write's request stopped at its block's end, so its usage is estimated; the fix's came.
+    // A write that does not compile is not the program a make stops at, so its usage came too.
     let r = &done.receipt;
     assert_eq!(
         (r.turns.len(), r.est, r.turns[1].usd_micros, r.turns[0].code),
-        (2, true, 8634, 302)
+        (2, false, 8634, 302)
     );
-    assert_eq!(r.usd_micros, r.turns[0].usd_micros + 8634);
+    assert_eq!(r.usd_micros, 2 * 8634);
     // The same problem twice is rewritten once; a third time ends with the best so far: a new
     // app's that compiles, installed faulting.
     let replies = [(app(FAULTS), "stop"), (app(FAULTS), "stop"), (app(FAULTS), "stop")];
@@ -448,6 +500,40 @@ fn cut_formatless_and_honest_replies() {
         );
         assert_eq!(done.plan, "applang has no network: a chat needs one.");
     }
+    // So after a write that compiles but faults: nothing installed, nothing shown or marked.
+    let (cant, faults) =
+        ("```app\n// applang has no floats: averages need them.\n```\n", app(FAULTS));
+    let replies = [(faults.as_str(), "stop"), (cant, "stop")];
+    let (_, _, done) = run(task("an average", ""), Knobs::default(), &replies);
+    assert_eq!(
+        (done.outcome, done.install, done.draft.as_str(), done.mark, done.code),
+        (Outcome::Cant, false, "", None, 0)
+    );
+    assert_eq!(done.said(), "can't make that");
+}
+
+#[test]
+fn a_change_cut_off_asks_for_edits_never_the_app_cut_down() {
+    // A 25-line app to change and a whole program back, cut off by its length (not a runaway):
+    // asked for edit blocks, never for the app shorter, its extras left out.
+    let buttons: String = (0..20).map(|i| format!("button \"+{i}\" {{ n += {i}; }}\n")).collect();
+    let base = [CLEAN, &buttons].concat();
+    let cut = ["```app\n", &base].concat();
+    let small = app("// Count.\nstate n = 0;\nlabel n;\n");
+    let fix = edit("label n;\n", "label n;\nlabel \"Big\";\n");
+    let replies = [(cut.as_str(), "length"), (&small, "stop"), (&fix, "stop")];
+    let (bodies, _, done) = run(task("make it bigger", &base), Knobs::default(), &replies);
+    let asked = user(&bodies[1]);
+    assert!(asked.starts_with(&user(&bodies[0])) && !asked.contains("100 lines"), "{asked}");
+    assert!(asked.ends_with("Reply with edit blocks only, never the whole program."));
+    // The app cut down that came back anyway was not taken; the edits that came next were.
+    assert!(user(&bodies[2]).contains("dropped over a quarter of the program's lines"));
+    assert_eq!(
+        (done.outcome, done.draft),
+        (Outcome::Ready, base.replace("label n;\n", "label n;\nlabel \"Big\";\n"))
+    );
+    let turns: Vec<Turn> = done.receipt.turns.iter().map(|t| t.turn).collect();
+    assert_eq!(turns, [Turn::Change, Turn::Shorter, Turn::Missed]);
 }
 
 #[test]
@@ -461,16 +547,15 @@ fn budgets_failures_stops_and_runaways_end_with_the_best_so_far() {
     let k = Knobs::default();
     for (k, n, said) in [
         (k, 5, "runs, but faults \u{b7} E0203 line 3"),
-        (Knobs { out_tokens: 30, ..k }, 2, "runs, but faults \u{b7} E0203 line 3"),
-        (Knobs { usd_micros: 5000, ..k }, 2, "runs, but faults \u{b7} E0203 line 3"),
-        (Knobs { ms: 1150, ..k }, 2, "couldn't \u{b7} E0302 line 2"),
+        (Knobs { out_tokens: 6000, ..k }, 3, "runs, but faults \u{b7} E0203 line 3"),
+        (Knobs { ms: 1250, ..k }, 2, "couldn't \u{b7} E0302 line 2"),
     ] {
         let (bodies, _, done) = run(task("x", ""), k, &six);
         assert_eq!((bodies.len(), done.said().as_str()), (n, said), "{k:?}");
     }
     // The AI failing mid-make ends it with what it had; so does Stop.
     let (mut m, _) = Make::start(task("x", ""), k, 0);
-    m.data(&sse(&app(FAULTS), "stop"), 10).unwrap();
+    assert!(m.data(&sse(&app(FAULTS), "stop"), 10).is_none() && m.end(200, "", 15).is_none());
     assert!(matches!(m.check(20), Some(Out::Ask(_))));
     let Some(Out::Done(done)) = m.end(402, "", 30) else { panic!() };
     assert_eq!(
@@ -478,13 +563,16 @@ fn budgets_failures_stops_and_runaways_end_with_the_best_so_far() {
         (Outcome::Failed, true, "out of AI for today")
     );
     let (mut m, _) = Make::start(task("x", ""), k, 0);
-    m.data(&sse(&app(FAULTS), "stop"), 10).unwrap();
+    m.data(&sse(&app(FAULTS), "stop"), 10);
+    m.end(200, "", 15);
     m.check(20);
     m.data(delta("reasoning", "so").as_bytes(), 30);
     let done = m.stop(40);
     assert_eq!((done.outcome, done.install, done.draft.as_str()), (Outcome::Stopped, true, FAULTS));
     assert!(done.receipt.est && done.receipt.turns.len() == 2);
-    // Thinking past its budget with nothing written: asked once more, then E0909.
+    // Thinking past its budget with nothing written: asked once more, for less and never with the
+    // same body (the gateway sends a body it has seen to the provider that answered it), then
+    // E0909.
     let (mut m, _) = Make::start(task("x", ""), Knobs { runaway: 10, ..k }, 0);
     for round in 0..2 {
         assert!(m.data(delta("reasoning", &"x".repeat(20)).as_bytes(), 5).is_none());
@@ -492,19 +580,98 @@ fn budgets_failures_stops_and_runaways_end_with_the_best_so_far() {
             m.data(delta("reasoning", &"x".repeat(20)).as_bytes(), 6),
             Some(Out::Cancel)
         ));
-        let out = m.check(7).unwrap();
-        assert_eq!(matches!(out, Out::Ask(_)), round == 0);
-        if let Out::Done(done) = out {
-            assert_eq!((done.code, done.said().as_str()), (909, "couldn't \u{b7} E0909"));
+        match m.check(7).unwrap() {
+            Out::Ask(body) => assert!(user(&body).starts_with("Make: x\n\nYour reply ran out")),
+            Out::Done(done) => {
+                assert_eq!((round, done.said().as_str()), (1, "couldn't \u{b7} E0909"))
+            }
+            Out::Cancel => panic!(),
         }
     }
-    // A fix has less room, so less thinking is a runaway: here 20 tokens, half a write's 40.
+    // A fix has less room, so less thinking is a runaway: here 20 tokens, half a write's 40; it is
+    // asked again told so.
     let k = Knobs { runaway: 40, ..k };
     let (mut m, _) = Make::start(task("x", ""), Knobs { fix_tokens: k.write_tokens / 2, ..k }, 0);
-    m.data(&sse(&app(BROKEN), "stop"), 1).unwrap();
-    assert!(matches!(m.check(2), Some(Out::Ask(_))));
+    m.data(&sse(&app(BROKEN), "stop"), 1);
+    let Some(Out::Ask(fix)) = m.end(200, "", 2).or_else(|| m.check(2)) else { panic!() };
     assert!(m.data(delta("reasoning", &"x".repeat(60)).as_bytes(), 3).is_none());
     assert!(matches!(m.data(delta("reasoning", &"x".repeat(10)).as_bytes(), 4), Some(Out::Cancel)));
+    let Some(Out::Ask(again)) = m.check(5) else { panic!() };
+    let rush = "\n\nYou thought past your room and wrote nothing. Decide quickly, then reply.";
+    assert_eq!(user(&again), user(&fix) + rush);
+}
+
+#[test]
+fn budgets_hold_with_every_reply_at_its_whole_room() {
+    // Each reply uses all the room its request had (as runaways on providers that ignore the
+    // thinking budget do): a request goes out only while its whole room and its input fit what is
+    // left, so neither the dollars (GLM 5.3) nor the output tokens (Flash) are ever overrun.
+    let room = |b: &str| Json::parse(b).and_then(|b| b.get("max_tokens")?.text()?.parse().ok());
+    let room = |b: &str| room(b).unwrap();
+    let nope = |n: u32| format!("label nope{n};\n");
+    let write = ["```app\n// x\nstate n = 0;\n", &nope(1)].concat();
+    let fixes: Vec<String> = (1..6).map(|n| edit(&nope(n), &nope(n + 1))).collect();
+    let mut replies = vec![(write.as_str(), "stop")];
+    replies.extend(fixes.iter().map(|f| (f.as_str(), "stop")));
+    let k = Knobs::default();
+    for (model, n) in [(DEFAULT_MODEL, 3), ("zai/glm-5.3-flash", 4)] {
+        let t = Task { model: model.into(), ..task("x", "") };
+        let (bodies, _, done) = drive(t, k, &replies, 61, room);
+        let out: u32 = done.receipt.turns.iter().map(|t| t.output).sum();
+        let r = &done.receipt;
+        assert!(r.usd_micros <= k.usd_micros && out <= k.out_tokens, "{model}: {r:?}");
+        assert_eq!((bodies.len(), done.outcome), (n, Outcome::Broken), "{model}");
+    }
+    // A request's room shrinks to what is left, down to half its usual.
+    let k = Knobs { out_tokens: 6144 + 3000, ..k };
+    let (bodies, _, _) = drive(task("x", ""), k, &replies, 61, room);
+    let rooms: Vec<u32> = bodies.iter().map(|b| room(b)).collect();
+    assert_eq!(rooms, [6144, 3000]);
+}
+
+#[test]
+fn a_reply_reads_the_same_however_it_is_fenced_or_chunked() {
+    // A change's edits, each in its own app fence (as models used to Aider fence them), and a
+    // write with an example before its program: the whole reply is read, in one chunk or many.
+    let reset = "button \"+\" { n += 1; }\nbutton \"Reset\" { n = 0; }\n";
+    let minus = "label n;\nbutton \"-\" { n -= 1; }\n";
+    let each = app(&edit("button \"+\" { n += 1; }\n", reset)) + &app(&edit("label n;\n", minus));
+    let both = CLEAN.replace("button \"+\" { n += 1; }\n", reset).replace("label n;\n", minus);
+    let example =
+        ["A label shows text:\n```app\nlabel \"Count\";\n```\nSo:\n", &app(CLEAN)].concat();
+    for size in [1 << 20, 61, 7] {
+        let t = task("add Reset and minus buttons", CLEAN);
+        let (_, _, done) = drive(t, Knobs::default(), &[(&each, "stop")], size, |_| 1500);
+        assert_eq!((done.outcome, done.draft.as_str()), (Outcome::Ready, both.as_str()), "{size}");
+        let t = task("a counter", "");
+        let (_, _, done) = drive(t, Knobs::default(), &[(&example, "stop")], size, |_| 1500);
+        assert_eq!((done.outcome, done.draft.as_str()), (Outcome::Ready, CLEAN), "{size}");
+    }
+}
+
+#[test]
+fn every_end_shows_its_fault_or_a_code_of_the_makes_own() {
+    // Edits that never close, for a new app: no program, so the make's own code (gave up), never
+    // applang's (E0001 is an unexpected character).
+    let open = "<<<<<<< SEARCH\nlabel n;\n=======\nlabel m;\n";
+    let (_, _, done) = run(task("x", ""), Knobs::default(), &[(open, "stop"), (open, "stop")]);
+    assert_eq!((done.outcome, done.said().as_str()), (Outcome::Broken, "couldn't \u{b7} E0919"));
+    let (broken, faults, cut) = (app(BROKEN), app(FAULTS), "```app\nstate a = 0;\nlabel \"T");
+    let ends: [&[(&str, &str)]; 7] = [
+        &[(open, "stop"), (open, "stop")],
+        &[("Sorry.", "stop"), ("Hm.", "stop")],
+        &[(cut, "length"), (cut, "length")],
+        &[(&broken, "stop"), (&broken, "stop"), (&broken, "stop")],
+        &[(&faults, "stop"), (&faults, "stop"), (&faults, "stop")],
+        &[("// applang has no network.", "stop")],
+        &[(&broken, "stop")],
+    ];
+    for replies in ends {
+        let (_, _, d) = run(task("x", ""), Knobs::default(), replies);
+        let shown = fault(&d.draft, "", 3).and_then(|f| f.diag.code).filter(|_| d.mark.is_some());
+        let own = matches!(d.code, 0 | 901..=910 | 919);
+        assert!(own || shown == Some(d.code), "{replies:?}: {} {}", d.code, d.said());
+    }
 }
 
 #[test]
