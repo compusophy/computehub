@@ -1,10 +1,11 @@
-//! About, Feedback and Files: compusophyOS's system apps as one wasm32-wasip1 GUI program
-//! (`dist/bin/system.wasm`) on the [`uiwire`] protocol, fetched when one first opens and never
-//! with the boot download. It runs the app its name says, as the /bin markers `about`,
-//! `feedback` and `files` run it ([`view`]): [`About`], [`Feedback`] or [`Files`] (at a folder,
-//! if one follows). [`serve`] runs one until its window closes. Files reads folders through a
-//! [`Disk`]: [`Fs`] in the program (`std::fs`, which WASI serves from the desktop's VFS), a VFS
-//! in tests.
+//! About, Feedback, Files and Welcome: compusophyOS's system apps as one wasm32-wasip1 GUI
+//! program (`dist/bin/system.wasm`) on the [`uiwire`] protocol, fetched when one first opens and
+//! never with the boot download. It runs the app its name says, as the /bin markers `about`,
+//! `feedback`, `files` and `welcome` run it ([`view`]): [`About`], [`Feedback`], [`Files`] (at a
+//! folder, if one follows) or [`Welcome`]. [`serve`] runs one until its window closes; run in a
+//! terminal, which has no window for it, it says how to open one ([`hint`]). Files reads folders
+//! through a [`Disk`]: [`Fs`] in the program (`std::fs`, which WASI serves from the desktop's
+//! VFS), a VFS in tests.
 
 #![forbid(unsafe_code)]
 
@@ -13,6 +14,7 @@ mod feedback;
 mod files;
 #[cfg(test)]
 mod tests;
+mod welcome;
 
 use std::io::{self, ErrorKind, Read, Write};
 
@@ -22,6 +24,7 @@ pub use files::Files;
 use uiwire::client::Client;
 use uiwire::{Event, Frame, Node, Style};
 pub use vfs::Entry;
+pub use welcome::Welcome;
 
 /// A window's app: events in, frames out.
 pub trait View {
@@ -58,8 +61,9 @@ impl Disk for Fs {
 }
 
 /// The app `argv` names by its first word's file name (less a `.wasm`; `system <app> ...` names
-/// it next): About, Feedback, or Files at home or at the folder after it. `None` for any other.
-pub fn view(argv: &[String]) -> Option<Box<dyn View>> {
+/// it next), and the app: About, Feedback, Files at home or at the folder after it, or Welcome.
+/// `None` for any other.
+pub fn view(argv: &[String]) -> Option<(&'static str, Box<dyn View>)> {
     let base = |s: &str| {
         let name = s.rsplit('/').next().unwrap_or(s);
         name.strip_suffix(".wasm").unwrap_or(name).to_string()
@@ -70,12 +74,18 @@ pub fn view(argv: &[String]) -> Option<Box<dyn View>> {
     };
     let (app, args) = argv.split_first()?;
     Some(match (base(app).as_str(), args) {
-        ("about", []) => Box::new(About::default()),
-        ("feedback", []) => Box::new(Feedback::default()),
-        ("files", []) => Box::new(Files::new("~")),
-        ("files", [dir]) => Box::new(Files::new(dir)),
+        ("about", []) => ("about", Box::new(About::default())),
+        ("feedback", []) => ("feedback", Box::new(Feedback::default())),
+        ("files", []) => ("files", Box::new(Files::new("~"))),
+        ("files", [dir]) => ("files", Box::new(Files::new(dir))),
+        ("welcome", []) => ("welcome", Box::new(Welcome::default())),
         _ => return None,
     })
+}
+
+/// What the app `name` says run in a terminal: it has a window, and how to open it.
+pub fn hint(name: &str) -> String {
+    [name, ": an app with a window; open it with: open ", name].concat()
 }
 
 /// Runs `view` on `ui`, a frame per event that changes it, until Close or the end of the events;
@@ -115,4 +125,17 @@ pub(crate) fn space(px: u16) -> Node {
 pub(crate) fn center(n: Node) -> Node {
     let room = || Node::Col { id: 0, gap: 0, children: Vec::new() };
     Node::Row { id: 0, gap: 0, children: vec![room(), n, room()] }
+}
+
+/// `n` as people write it, its thousands set apart by commas: `8,000`.
+pub(crate) fn group(n: usize) -> String {
+    let digits = n.to_string();
+    let mut out = String::new();
+    for (i, c) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i) % 3 == 0 {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    out
 }

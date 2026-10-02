@@ -49,6 +49,8 @@ fn sample() -> Frame {
         Node::Toggle { id: 12, on: true, label: "Include what\u{2019}s open".into() },
         Node::Area { id: 13, value: "a\nb".into(), placeholder: "What happened?".into() },
         Node::Center { id: 14, gap: 5, children: vec![text(Style::Accent, "compusophy")] },
+        Node::Scroll { id: 15, children: vec![Node::Glyph { glyph: REVEAL, size: 144 }] },
+        Node::Strip { id: 0, gap: 2, children: vec![text(Style::Display, "~")] },
     ];
     let requests = vec![Request::Open { name: "/apps/clock.app".into() }, Request::Close];
     let ai = vec![
@@ -101,7 +103,7 @@ fn strict<T: PartialEq + Debug>(v: &T, encode: fn(&T) -> Vec<u8>, decode: fn(&[u
 #[test]
 fn every_kind_round_trips_and_nothing_else_decodes() {
     let frame = sample();
-    assert_eq!(frame.nodes[0].count(), 19);
+    assert_eq!(frame.nodes[0].count(), 23);
     [frame.clone(), Frame::default()].iter().for_each(|f| strict(f, Frame::encode, Frame::decode));
     let nodes = frame.nodes.iter().chain(frame.nodes[0].children());
     nodes.for_each(|n| strict(n, Node::encode, Node::decode));
@@ -119,7 +121,7 @@ fn codes_and_layout_are_as_documented() {
     let variant = n(&|n| Variant::from_u8(n).map(|v| v as u8));
     let (class, key) =
         (n(&|n| Class::from_u8(n).map(|v| v as u8)), n(&|n| Key::from_u8(n).map(|v| v as u8)));
-    assert_eq!(([style, variant, class, key], Key::from_u8(0)), ([10, 6, 8, 8], None));
+    assert_eq!(([style, variant, class, key], Key::from_u8(0)), ([11, 6, 8, 8], None));
     // Little-endian, in field order.
     let (requests, button) = (vec![Request::Size { w: 0x0506, h: 7 }], "ok".into());
     let nodes = vec![Node::Button { id: 9, variant: Variant::Primary, label: button }];
@@ -158,6 +160,43 @@ fn caps_hold() {
     assert!(Event::decode(&change.encode()).is_none());
 }
 
+#[test]
+fn a_checked_encoding_is_exactly_one_that_decodes() {
+    // Programs check their frames without the decoder: it must agree with it, and the bytes
+    // are the encoding.
+    let frame = |nodes| Frame { nodes, ..Frame::default() };
+    let mut deep = Node::Separator;
+    for _ in 0..MAX_DEPTH {
+        deep = col(vec![deep]);
+    }
+    let base = frame(vec![]).encode().len() + text(Style::Body, "").encode().len();
+    let spans: [&[(u32, u32)]; 7] = [
+        &[(0, 1), (1, 2), (3, 0)],
+        &[(0, 4)],
+        &[(2, 1)],
+        &[(1, 2), (0, 1)],
+        &[(0, 3), (1, 2)],
+        &[(u32::MAX, 2)],
+        &[],
+    ];
+    let mut frames = vec![sample(), Frame::default(), frame(vec![deep.children()[0].clone()])];
+    frames.extend([frame(vec![deep]), frame(vec![Node::Separator; MAX_NODES + 1])]);
+    frames.extend(
+        [MAX_FRAME - base, MAX_FRAME - base + 1]
+            .map(|n| frame(vec![text(Style::Body, &"x".repeat(n))])),
+    );
+    frames.extend(spans.map(|s| frame(vec![col(vec![code("aé", s)])])));
+    let many = |n| Frame { requests: vec![Request::Close; n], ..Frame::default() };
+    frames.extend([many(usize::from(u16::MAX)), many(usize::from(u16::MAX) + 1)]);
+    let mut decoded = 0;
+    for f in &frames {
+        let checked = f.encode_checked();
+        assert_eq!(checked.is_some(), Frame::decode(&f.encode()).is_some(), "{:?}", f.nodes.len());
+        decoded += usize::from(checked.is_some_and(|b| b == f.encode()));
+    }
+    assert_eq!(decoded, 7);
+}
+
 /// `bytes` with byte `at` set to `to`.
 fn set(mut bytes: Vec<u8>, at: usize, to: u8) -> Vec<u8> {
     bytes[at] = to;
@@ -171,8 +210,8 @@ fn malformations_fail() {
     let feedback = 1 + (4 + 4) + (4 + 18) + 1;
     let at = 1 + 4 + 4 + "Studio é".len() + 2 + (1 + 4 + 15) + 1 + (1 + 4) + (9 + 15) + 5 + 5;
     let at = at + feedback;
-    assert_eq!(ok[at..at + 4], [20, 0, 0, 0]);
-    for (i, to) in [(0, 2), (13, 0xFF), (at, 19), (at, 21)] {
+    assert_eq!(ok[at..at + 4], [24, 0, 0, 0]);
+    for (i, to) in [(0, 2), (13, 0xFF), (at, 23), (at, 25)] {
         assert!(Frame::decode(&set(ok.clone(), i, to)).is_none(), "{i}");
     }
     // A leaf with a child; an id on a Separator, Spacer or Glyph; unknown kinds.
@@ -186,9 +225,9 @@ fn malformations_fail() {
         Node::decode(&[13, 0, 0, 0, 0, 0, 0, 6, 89, 0]),
         Some(Node::Glyph { glyph: 6, size: 89 })
     );
-    assert!([0, 18, 255].iter().all(|&kind| Node::decode(&[kind, 0, 0, 0, 0, 0, 0]).is_none()));
+    assert!([0, 20, 255].iter().all(|&kind| Node::decode(&[kind, 0, 0, 0, 0, 0, 0]).is_none()));
     // Codes: style, variant, selected, line-number and on flags, span class.
-    assert!(Node::decode(&[3, 0, 0, 0, 0, 0, 0, 10, 0, 0, 0, 0]).is_none());
+    assert!(Node::decode(&[3, 0, 0, 0, 0, 0, 0, 11, 0, 0, 0, 0]).is_none());
     assert!(Node::decode(&[4, 0, 0, 0, 0, 0, 0, 6, 0, 0, 0, 0]).is_none());
     assert!(Node::decode(&[15, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0]).is_none());
     assert!(Node::decode(&[10, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2]).is_none());

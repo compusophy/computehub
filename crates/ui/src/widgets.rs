@@ -400,6 +400,27 @@ impl<'a> Ui<'a> {
         crate::icon::tile(self.list, self.text, r, icon.glyph, icon.hue, self.theme);
     }
 
+    /// A `.app` file's tile in the square `r`: the sigil of `seed` (a hash of its name) on that
+    /// seed's tint ([`crate::icon::sigil_tile`], [`crate::theme::app_tint`]).
+    pub fn sigil(&mut self, r: RectF, seed: u32) {
+        let hue = crate::theme::app_tint(seed);
+        crate::icon::sigil_tile(self.list, self.text, r, seed, hue, self.theme);
+    }
+
+    /// While `content` px overflow the view `r`, scrolled `down` px, a thumb 6 px in from its
+    /// right edge: 3 px wide in the faint ink, as long as the share shown (34 px at least) and
+    /// as far down as the view.
+    pub fn thumb(&mut self, r: RectF, down: f32, content: f32) {
+        let max = content - r.h;
+        if max < 1.0 || r.h <= 0.0 {
+            return;
+        }
+        let h = (r.h * r.h / content).max(34.0).min(r.h);
+        let y = r.y + (r.h - h) * (down / max).min(1.0);
+        let at = self.snapped(RectF::new(r.x + r.w - 6.0, y, 3.0, h));
+        self.fill(at, 1.5, self.theme.text_faint);
+    }
+
     /// The vector glyph `g` in `color`, fitted to the square centered in `r`.
     pub fn glyph(&mut self, r: RectF, g: crate::icon::Glyph, color: Rgba) {
         crate::icon::draw(self.list, self.text, r, g, color);

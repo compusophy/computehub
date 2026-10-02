@@ -1,6 +1,6 @@
 [package]
 name = "compusophy-apps"
-description = "compusophyOS built-in apps: Terminal, Welcome and Settings."
+description = "compusophyOS built-in apps: Terminal and Settings."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

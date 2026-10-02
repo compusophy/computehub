@@ -6,17 +6,18 @@
 //! honored (Size in the first only; Focus when the frame holds that Input, Code or Area; Feedback
 //! goes to the page); a clean exit closes the window, and closing it sends [`Event::Close`]. The
 //! window's focus goes to the program as [`Event::Focus`], and a prompt from the everything bar
-//! as [`Event::Ask`], held until it starts. Edited text is owned as uiwire says, one
+//! as [`Event::Ask`], held until it starts. Edited text is owned as uiwire says ([`Texts`]), one
 //! [`Event::Change`] out at a time: the next waits for a frame, or goes before any other event.
-//! The wheel scrolls the Code under it, else what does not fit.
+//! The wheel scrolls the Code under it, else the Scroll, else what does not fit
+//! ([`uiview::wheel`]); a revealed mark asks for frames while it comes in.
 
 use std::mem;
 
 use ui::icon::Glyph;
 use ui::kernel::{Spawn, wire::Stdout};
-use ui::{App, AppEvent, AppIcon, Code, Cx, Key, Mods, Rgba, Ui, WidgetId};
-use uiview::{Area, Texts, View};
-use uiwire::{Event, Frame, Node, Request};
+use ui::{App, AppEvent, AppIcon, Cx, Key, Mods, Rgba, Ui, WidgetId};
+use uiview::{Texts, View};
+use uiwire::{Event, Frame, Request};
 use vfs::Vfs;
 
 use crate::ai::Ai;
@@ -30,12 +31,14 @@ pub const APP_ICON: AppIcon = AppIcon { glyph: Glyph::Window, hue: Rgba::hex(0xf
 pub const ASSISTANT_ICON: AppIcon = AppIcon { glyph: Glyph::Assistant, hue: Rgba::hex(0xa78bfa) };
 /// A system app as (name, title, icon, size, whether compact).
 pub type SystemApp = (&'static str, &'static str, AppIcon, (f32, f32), bool);
-/// About, Feedback and Files: one program, bin/system.wasm, run as the name of its /bin marker.
+/// About, Feedback, Files and Welcome: one program, bin/system.wasm, run as the name of its /bin
+/// marker.
 #[rustfmt::skip]
-pub const SYSTEM: [SystemApp; 3] = [
+pub const SYSTEM: [SystemApp; 4] = [
     ("about", "About", icon(Glyph::About, 0xfbbf24), (560.0, 640.0), true),
     ("feedback", "Feedback", icon(Glyph::Feedback, 0x34d399), (520.0, 420.0), true),
     ("files", "Files", icon(Glyph::Folder, 0x60a5fa), (640.0, 480.0), false),
+    ("welcome", "Welcome", icon(Glyph::Mark, 0xf472b6), (520.0, 768.0), true),
 ];
 /// Studio's size: room for the app beside its prompt.
 const STUDIO_SIZE: Option<(f32, f32)> = Some((880.0, 560.0));
@@ -46,9 +49,10 @@ const fn icon(glyph: Glyph, hue: u32) -> AppIcon {
     AppIcon { glyph, hue: Rgba::hex(hue) }
 }
 
-/// The app for a window name: About, Feedback or Files ([`SYSTEM`]; `"files:<dir>"` is Files at
-/// that folder), the Assistant for `"assistant"`, Studio with nothing open for `"studio"` or on
-/// `<path>` for `"studio:<path>"`, or running a `.app` path (relative: in `/apps`).
+/// The app for a window name: About, Feedback, Files or Welcome ([`SYSTEM`]; `"files:<dir>"` is
+/// Files at that folder), the Assistant for `"assistant"`, Studio with nothing open for
+/// `"studio"` or on `<path>` for `"studio:<path>"`, or running a `.app` path (relative: in
+/// `/apps`).
 pub fn open(name: &str, ai: &Ai) -> Option<Box<dyn App>> {
     let (head, dir) = name.strip_prefix("files:").map_or((name, None), |d| ("files", Some(d)));
     if let Some(&(prog, title, icon, size, compact)) = SYSTEM.iter().find(|s| s.0 == head) {
@@ -224,32 +228,6 @@ impl Remote {
         edited && self.changed(id, cx)
     }
 
-    /// A press focuses the Input, Code or Area under it (a Code or Area takes the caret there),
-    /// or none.
-    fn press(&mut self, x: f32, y: f32, id: Option<WidgetId>) -> bool {
-        let (t, id) = (&mut self.texts, id.map_or(0, |w| w.0));
-        let (x, y) = (x + self.origin.0, y + self.origin.1);
-        if let Some(c) = t.codes.iter_mut().find(|c| c.0 == id && id != 0) {
-            c.1.click(x, y);
-        }
-        if let Some(a) = t.areas.iter_mut().find(|a| a.0 == id && id != 0) {
-            a.1.click(x, y);
-        }
-        let focus = if id != 0 && t.has(id) { id } else { 0 };
-        mem::replace(&mut t.focus, focus) != focus || focus != 0
-    }
-
-    /// The wheel scrolls the Code under it, else the window.
-    fn wheel(&mut self, x: f32, y: f32, dy: f32) -> bool {
-        let (x, y) = (x + self.origin.0, y + self.origin.1);
-        if let Some(c) = self.texts.codes.iter_mut().find(|c| c.1.contains(x, y)) {
-            return c.1.wheel(dy);
-        }
-        let v = &mut self.view;
-        let s = (v.scroll + dy).min(v.heights.0 - v.heights.1).max(0.0);
-        dy.is_finite() && mem::replace(&mut v.scroll, s) != s
-    }
-
     /// Output (the last kept for a failure) and the exit: clean closes, failed says why.
     fn io(&mut self, cx: &mut Cx<'_>) -> bool {
         let Some(pid) = self.pid else { return false };
@@ -271,41 +249,7 @@ impl Remote {
 
     /// Takes `frame` as the window's tree, keeping the text the user edits.
     fn take(&mut self, mut frame: Frame, cx: &mut Cx<'_>) {
-        let mut old = mem::take(&mut self.texts);
-        each(&frame.nodes, &mut |n| match n {
-            Node::Input { id, value, .. } if *id != 0 => {
-                let i = old.inputs.iter().position(|i| i.0 == *id).map(|i| old.inputs.remove(i));
-                let mut i = i.unwrap_or((*id, String::new(), 0));
-                if old.focus != *id {
-                    i.1.clone_from(value);
-                }
-                self.texts.inputs.push(i);
-            }
-            Node::Code { id, version, text, spans, .. } if *id != 0 => {
-                let c = old.codes.iter().position(|c| c.0 == *id).map(|c| old.codes.remove(c).1);
-                let mut c = c.unwrap_or_else(|| Code::new(text, *version));
-                if *version > c.version {
-                    c.set_text(text, *version);
-                }
-                if *version == c.version {
-                    let s: Vec<_> = spans.iter().map(|s| (s.start, s.len, s.class as u8)).collect();
-                    c.set_spans(&s);
-                }
-                self.texts.codes.push((*id, c));
-            }
-            Node::Area { id, value, .. } if *id != 0 => {
-                let a = old.areas.iter().position(|a| a.0 == *id).map(|a| old.areas.remove(a));
-                let mut a = a.unwrap_or_else(|| (*id, Area::new(value)));
-                if old.focus != *id {
-                    a.1.set(value);
-                }
-                self.texts.areas.push(a);
-            }
-            _ => {}
-        });
-        if self.texts.has(old.focus) {
-            self.texts.focus = old.focus;
-        }
+        self.texts.adopt(&frame.nodes, &self.dirty);
         for r in mem::take(&mut frame.requests) {
             match r {
                 Request::Open { name } => cx.open(&name),
@@ -320,14 +264,6 @@ impl Remote {
         }
         (self.frame, self.waiting) = (Some(frame), false);
         self.flush(cx);
-    }
-}
-
-/// `f` for every node of `nodes` and their children, in pre-order.
-fn each(nodes: &[Node], f: &mut dyn FnMut(&Node)) {
-    for n in nodes {
-        f(n);
-        each(n.children(), f);
     }
 }
 
@@ -350,6 +286,10 @@ impl App for Remote {
 
     fn compact(&self) -> bool {
         self.compact
+    }
+
+    fn animating(&self, now_ms: f64) -> bool {
+        self.view.animating(now_ms)
     }
 
     fn event(&mut self, ev: AppEvent, cx: &mut Cx<'_>) -> bool {
@@ -381,10 +321,16 @@ impl App for Remote {
             }
             AppEvent::Ask(text) => self.send(Event::Ask { text }, cx),
             AppEvent::Click(WidgetId(id)) if id != 0 => self.send(Event::Click { id }, cx),
-            AppEvent::PointerDown { x, y, id } => self.press(x, y, id),
+            AppEvent::PointerDown { x, y, id } => {
+                let (x, y) = (x + self.origin.0, y + self.origin.1);
+                self.texts.press(id.map_or(0, |w| w.0), x, y)
+            }
             AppEvent::Key { key, mods } => self.key(key, mods, cx),
             AppEvent::Text(s) => self.type_text(&s, last, cx),
-            AppEvent::Wheel { x, y, dy } => self.wheel(x, y, dy),
+            AppEvent::Wheel { x, y, dy } => {
+                let (x, y) = (x + self.origin.0, y + self.origin.1);
+                uiview::wheel(&mut self.texts, &mut self.view, x, y, dy)
+            }
             AppEvent::Io => self.io(cx),
             AppEvent::Focus(on) => {
                 self.send(Event::Focus { on }, cx);

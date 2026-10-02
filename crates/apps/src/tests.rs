@@ -287,7 +287,7 @@ fn inks(list: &DrawList) -> Vec<Rgba> {
 /// the accent, or an app icon's ink, and every shape lies on device pixels.
 fn refined(list: &DrawList, t: &Theme, dpr: f32, what: &str) {
     use kit::*;
-    let icons = [TERMINAL, STUDIO, ASSISTANT, SETTINGS, WELCOME, FILES, ABOUT, FEEDBACK];
+    let icons = [TERMINAL, SETTINGS];
     let mut ok = vec![t.text, t.text_dim, t.accent, t.accent_text];
     ok.extend(icons.map(|i| t.icon_colors(i.hue)[2]));
     inks(list).iter().for_each(|i| assert!(ok.contains(i), "{what} in {}: ink {i:?}", t.name));
@@ -318,12 +318,12 @@ fn apps_have_grids_titles_icons_and_sizes_and_are_refined_in_every_theme() {
     t.term.feed(b"\x1b]2;notes\x07");
     assert_eq!(t.title(), "Terminal — notes");
     assert!(t.wants_text_input() && open("launcher").is_none(), "the shell owns the launcher");
-    // About, Feedback and Files are programs now (the system crate), not built in.
-    assert_eq!(NAMES, ["welcome", "terminal", "settings"]);
-    assert!(["about", "feedback", "files", "files:~/apps"].iter().all(|n| open(n).is_none()));
-    #[rustfmt::skip]
+    // About, Feedback, Files and Welcome are programs now (the system crate), not built in.
+    assert_eq!(NAMES, ["terminal", "settings"]);
+    let programs = ["about", "feedback", "files", "files:~/apps", "welcome"];
+    assert!(programs.iter().all(|n| open(n).is_none()));
     let want = [
-        (Glyph::Mark, 0xf472b6, (520.0, 768.0), true), (Glyph::Terminal, 0x2dd4bf, (W80, H24), false),
+        (Glyph::Terminal, 0x2dd4bf, (W80, H24), false),
         (Glyph::Cog, 0x94a3b8, (720.0, 520.0), true),
     ];
     for (name, (glyph, hue, size, compact)) in NAMES.iter().zip(want) {
@@ -337,7 +337,7 @@ fn apps_have_grids_titles_icons_and_sizes_and_are_refined_in_every_theme() {
             let mut app = open(name).unwrap();
             for (w, h) in [(720.0, 520.0), (360.0, 640.0)] {
                 let r = RectF::new(0.0, 36.0, w, h);
-                // Under the pointer and held: the first widget; past Welcome's reveal.
+                // Under the pointer and held: the first widget.
                 let hits = frame(app.as_mut(), &mut ts, r, UiState::default(), theme).1;
                 let id = hits.first().map(|h| h.id);
                 let state = UiState { hover: id, pressed: id, focused: true, now_ms: 1e4 };
@@ -349,45 +349,6 @@ fn apps_have_grids_titles_icons_and_sizes_and_are_refined_in_every_theme() {
             }
         }
     }
-}
-
-#[test]
-fn welcome_lists_the_apps_under_the_mark_it_reveals_once() {
-    let mut ts = text_system();
-    let mut s = Sim::new(Welcome::default());
-    assert!(!s.app.animating(0.0), "not before it is drawn");
-    let at = |now_ms| UiState { focused: true, now_ms, ..UiState::default() };
-    let r = RectF::new(0.0, 36.0, 520.0, 768.0);
-    let (early, hits) = frame(&mut s.app, &mut ts, r, at(100.0), MIDNIGHT);
-    assert_eq!(ids(&hits), [1, 2, 3, 4, 5, 6, 7]);
-    let (a, b) = (hits[0].rect, hits[6].rect);
-    assert!(a.x == b.x && a.w == b.w && b.y == a.y + 6.0 * 55.0 && a.h == 55.0, "{a:?} {b:?}");
-    assert!(a.x >= 27.0 && a.x + a.w <= 493.0 && b.y + b.h <= 796.0, "in the window: {b:?}");
-    // The reveal runs 618 ms from the first draw, frames only meanwhile: 365 dots fading in ring
-    // by ring, then the mark's one glyph (144 px: 1/φ of the shorter side is more; its outer
-    // dots stop short of the box).
-    assert!(s.app.animating(400.0) && !s.app.animating(718.0) && !s.app.animating(f64::NAN));
-    let mid = frame(&mut s.app, &mut ts, r, at(400.0), MIDNIGHT).0;
-    let done = frame(&mut s.app, &mut ts, r, at(718.0), MIDNIGHT).0;
-    // 300 ms in: the center dot and the five inner rings, 132 dots; nothing yet at the start.
-    let fills = |l: &DrawList| of(l, Kind::Fill).count();
-    assert_eq!((fills(&early), fills(&mid)), (fills(&done), fills(&done) + 132));
-    assert_eq!(of(&done, Kind::Glyph).filter(|g| (138.0..147.0).contains(&g.rect[2])).count(), 1);
-    let opened: Vec<String> = (1..=7).map(|i| s.click(i)).collect();
-    assert_eq!(
-        opened.join(","),
-        "open studio,open assistant,open terminal,open files,open settings,open about,open feedback"
-    );
-    assert!(!s.wheel(50.0) && !thumb(&done, MIDNIGHT), "it all fits");
-    assert!(!s.both(AppEvent::Key { key: Key::Enter, mods: NO }).0);
-    // Short: it scrolls, a thumb shows, the rows move up; the mark shrinks to 1/φ.
-    let r = RectF::new(0.0, 0.0, 360.0, 420.0);
-    let (list, hits) = draw(&mut s.app, &mut ts, r, MIDNIGHT);
-    assert!(thumb(&list, MIDNIGHT) && hits.len() < 7, "{hits:?}");
-    let y0 = hits[0].rect.y;
-    assert!(s.wheel(40.0) && s.wheel(1e9) && !s.wheel(1.0));
-    let hits = draw(&mut s.app, &mut ts, r, MIDNIGHT).1;
-    assert!(hits.len() == 7 && hits[0].rect.y < y0 - 40.0, "{y0} {hits:?}");
 }
 
 #[test]

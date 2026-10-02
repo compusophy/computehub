@@ -61,8 +61,8 @@ crates/
              trait, Cx, the Code editor (re-exports text)
   vt/        VT/xterm escape parser        term/  terminal screen model
   guest/     the guest shell the Terminal runs
-  apps/      Welcome, Settings, Terminal
-  system/    About, Feedback, Files (one wasip1 program)
+  apps/      Settings, Terminal
+  system/    About, Feedback, Files, Welcome (one wasip1 program)
   studio/    Studio (wasip1 GUI program): make apps by describing them
   assistant/ the Assistant (wasip1 GUI program): chat; AI code Studio shares
   uiwire/    remote UI protocol: GUI programs send widget trees, get events

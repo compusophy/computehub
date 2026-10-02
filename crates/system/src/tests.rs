@@ -1,11 +1,11 @@
 use std::io::{self, Read, Write};
 
-use uiwire::{Event, Frame, Key, Node, Request, Style, Variant, mods};
+use uiwire::{Event, Frame, Key, Node, REVEAL, Request, SIGIL, Style, Variant, mods};
 use vfs::Vfs;
 
 use super::*;
-use crate::feedback::{AREA, BOX, GO, KIND, MAX, THANKS};
-use crate::files::{CRUMB, ENTRY, UP, size, tint};
+use crate::feedback::{AREA, BOX, GO, KIND, MAX, NEAR, THANKS};
+use crate::files::{CRUMB, ENTRY, LIST, MAX_ROWS, UP, size};
 
 impl Disk for Vfs {
     fn list(&mut self, path: &str) -> io::Result<Vec<Entry>> {
@@ -36,7 +36,7 @@ struct Win {
 impl Win {
     fn new(argv: &str) -> Win {
         let argv: Vec<String> = argv.split(' ').map(String::from).collect();
-        Win { view: view(&argv).expect("an app"), fs: Vfs::new() }
+        Win { view: view(&argv).expect("an app").1, fs: Vfs::new() }
     }
 
     /// Serves `events` over in-memory pipes, one per read; the frames sent.
@@ -91,20 +91,25 @@ fn ids(nodes: &[Node]) -> Vec<u32> {
 #[test]
 fn the_name_it_runs_as_picks_the_app() {
     let argv = |s: &str| s.split(' ').map(String::from).collect::<Vec<_>>();
-    for ok in [
-        "about",
-        "/bin/feedback",
-        "files",
-        "files ~/apps",
-        "system about",
-        "bin/system.wasm files /",
+    for (ok, name) in [
+        ("about", "about"),
+        ("/bin/feedback", "feedback"),
+        ("files", "files"),
+        ("files ~/apps", "files"),
+        ("system about", "about"),
+        ("bin/system.wasm files /", "files"),
+        ("/bin/welcome", "welcome"),
     ] {
-        assert!(view(&argv(ok)).is_some(), "{ok}");
+        assert_eq!(view(&argv(ok)).map(|v| v.0), Some(name), "{ok}");
     }
-    for no in ["", "system", "toolbox", "about more", "files a b", "system system about"] {
+    let no =
+        ["", "system", "toolbox", "about more", "files a b", "system system about", "welcome x"];
+    for no in no {
         assert!(view(&argv(no)).is_none(), "{no:?}");
     }
     assert!(view(&[]).is_none());
+    // In a terminal there is no window: it says so, and how to open one.
+    assert_eq!(hint("files"), "files: an app with a window; open it with: open files");
 }
 
 #[test]
@@ -195,16 +200,28 @@ fn feedback_sends_its_kind_text_and_context_and_thanks() {
         matches!(area(&f), Some(Node::Area { id, value, .. }) if id == AREA + 1 && value.is_empty())
     );
     assert!(texts(&f.nodes).contains(&THANKS));
-    // A late Change of the old text is no text; a new one hides the thanks. Ctrl+Enter sends,
-    // at most MAX bytes.
+    // A late Change of the old text is no text; a new one hides the thanks. Near the most a
+    // count shows; past it Send waits (nothing is cut); at the most, Ctrl+Enter sends.
     let f = w.last(&[change(AREA, "stale")]);
     assert!(texts(&f.nodes).contains(&THANKS) && send(&f) == Some(Variant::Normal));
+    let said = |f: &Frame| {
+        let t = texts(&f.nodes).into_iter().find(|t| t.contains(" bytes")).map(String::from);
+        let error =
+            all(&f.nodes).iter().any(|n| matches!(n, Node::Text { style: Style::Error, .. }));
+        (t, error, send(f))
+    };
+    let f = w.last(&[change(AREA + 1, &"x".repeat(NEAR - 1))]);
+    assert!(!texts(&f.nodes).contains(&THANKS) && said(&f).0.is_none());
+    let f = w.last(&[change(AREA + 1, &"x".repeat(NEAR))]);
+    assert_eq!(said(&f), (Some("7,000 of 8,000 bytes".into()), false, Some(Variant::Primary)));
+    let enter = |m| Event::Key { id: AREA + 1, key: Key::Enter, mods: m, ch: '\0' };
     let long = "é".repeat(MAX);
     let f = w.last(&[change(AREA + 1, &long)]);
-    assert!(!texts(&f.nodes).contains(&THANKS));
-    let enter = |m| Event::Key { id: AREA + 1, key: Key::Enter, mods: m, ch: '\0' };
+    let over = Some("Too long to send: 16,000 of 8,000 bytes".into());
+    assert_eq!(said(&f), (over, true, Some(Variant::Normal)));
+    assert!(w.send(&[enter(mods::CTRL), Event::Click { id: GO }]).is_empty(), "nothing cut");
     assert!(w.send(&[enter(0), enter(mods::SHIFT)]).is_empty());
-    let f = w.last(&[enter(mods::META)]);
+    let f = w.last(&[change(AREA + 1, &long[..MAX]), enter(mods::META)]);
     let Request::Feedback { kind, text, context: false } = &f.requests[0] else {
         panic!("{:?}", f.requests)
     };
@@ -249,10 +266,12 @@ fn files_walks_folders_and_opens_what_it_finds() {
     // Into a folder, the crumbs follow; a .app runs, other files open in Studio.
     let f = w.click(ENTRY).pop().unwrap();
     assert_eq!(texts(&f.nodes), ["\u{2191}", "~", "apps", "clock.app"]);
+    // A .app's tile is its sigil, seeded as the home screen seeds it.
+    let seed = host::sigil(&[h, "/apps/clock.app"].concat()).expect("a sigil");
     let app = Node::Entry {
         id: ENTRY,
-        glyph: icons::Glyph::Window as u8,
-        hue: tint("clock.app"),
+        glyph: SIGIL,
+        hue: seed,
         text: "clock.app".into(),
         detail: "3 B".into(),
         more: false,
@@ -301,32 +320,100 @@ fn files_opens_what_was_shown_and_starts_where_asked() {
     w.fs.remove(&[Vfs::HOME, "/notes.txt"].concat(), false).unwrap();
     let f = w.click(ENTRY + 3).pop().unwrap();
     assert!(f.requests.is_empty() && !texts(&f.nodes).contains(&"notes.txt"));
-    // A deep path, narrow: the first crumbs after ~ give way to an ellipsis; the last stays.
+    // A deep path: every crumb, on one line (the desktop slides it, the last in view), the last
+    // plain; a new size brings no new frame.
     let deep = "~/apps/a/very/deep/folder/indeed";
     w.fs.mkdir_all(&deep.replace('~', Vfs::HOME)).unwrap();
     let mut d = Win::new(&["files ", deep].concat());
     d.fs = std::mem::replace(&mut w.fs, Vfs::new());
-    let wide = texts(&d.last(&[resize(900)]).nodes).len();
     let f = d.last(&[resize(320)]);
-    let said = texts(&f.nodes);
-    assert!(said.len() < wide, "{said:?}");
-    assert_eq!(said[1..5], ["~", "\u{2026}", "folder", "indeed"]);
-    let crumbs: Vec<u32> =
-        ids(&f.nodes).into_iter().filter(|i| (CRUMB..ENTRY).contains(i)).collect();
-    assert_eq!(crumbs, [CRUMB, CRUMB + 5]);
+    let Node::Row { children: bar, .. } = &f.nodes[0] else { panic!("{:?}", f.nodes[0]) };
+    let Node::Strip { children: crumbs, .. } = &bar[1] else { panic!("{:?}", bar[1]) };
+    let said = ["~", "apps", "a", "very", "deep", "folder", "indeed"];
+    assert_eq!(texts(crumbs), said);
+    assert_eq!(ids(crumbs), (CRUMB..CRUMB + 6).collect::<Vec<_>>());
+    assert!(matches!(crumbs.last(), Some(Node::Text { style: Style::Body, .. })));
+    assert!(d.send(&[resize(900)]).is_empty());
 }
 
 #[test]
-fn sizes_read_as_people_say_them_and_app_tiles_match_the_desktops() {
-    assert_eq!([size(5), size(1536), size(3_500_000)], ["5 B", "1.5 KB", "3.3 MB"]);
-    let fnv = |s: &str| {
-        s.bytes().fold(2_166_136_261u32, |h, b| (h ^ u32::from(b)).wrapping_mul(16_777_619))
-    };
-    for name in ["clock.app", "a.app", "dice-roller.app", ""] {
-        let ui::Rgba(r, g, b, _) = ui::theme::app_tint(fnv(name));
-        assert_eq!(tint(name), u32::from(r) << 16 | u32::from(g) << 8 | u32::from(b), "{name}");
+fn files_keeps_its_bar_up_starts_each_folder_at_the_top_and_counts_what_it_cannot_show() {
+    // The bar and its rule stay; the list scrolls below them, a new Scroll for a new folder.
+    let mut w = Win::new("files");
+    w.fs = home();
+    fn scroll(f: &Frame) -> (u32, Vec<&str>) {
+        match &f.nodes[..] {
+            [Node::Row { .. }, Node::Separator, Node::Scroll { id, children }] => {
+                (*id, texts(children))
+            }
+            n => panic!("{n:?}"),
+        }
     }
-    assert_ne!(tint("a.app"), tint("b.app"));
+    let f = w.last(&[resize(640)]);
+    assert_eq!(scroll(&f), (LIST + 1, vec!["apps", "zed", "notes.txt"]));
+    let f = w.last(&[Event::Focus { on: true }, Event::Click { id: ENTRY }]);
+    assert_eq!(scroll(&f), (LIST + 2, vec!["clock.app"]));
+    w.fs.write(&[Vfs::HOME, "/apps/b.app"].concat(), b"").unwrap();
+    assert_eq!(scroll(&w.last(&[Event::Focus { on: true }])).0, LIST + 2, "the same folder");
+    assert_eq!(scroll(&w.click(UP).pop().unwrap()).0, LIST + 3);
+    // A folder of thousands: the first MAX_ROWS rows, then how many more; the frame holds.
+    let big = [Vfs::HOME, "/big"].concat();
+    w.fs.mkdir(&big).unwrap();
+    for i in 0..MAX_ROWS + 4321 {
+        w.fs.write(&[&big, "/f", &i.to_string()].concat(), b"").unwrap();
+    }
+    w.send(&[Event::Focus { on: true }]);
+    let f = w.click(ENTRY + 1).pop().expect("a frame that holds");
+    let (_, said) = scroll(&f);
+    assert_eq!((said.len(), said.last().copied()), (MAX_ROWS + 1, Some("+4,321 more")));
+    assert!(f.encode_checked().is_some());
+    assert_eq!(*ids(&f.nodes).last().unwrap(), ENTRY + MAX_ROWS as u32 - 1);
+}
+
+#[test]
+fn welcome_lists_the_apps_under_the_mark_it_reveals() {
+    let mut w = Win::new("welcome");
+    let f = w.last(&[Event::Resize { w: 520, h: 768 }]);
+    assert!(f.title == "Welcome" && f.requests.is_empty());
+    // The mark, revealed, 1/φ of the shorter side at most 144; the name, a line, the hint.
+    let revealed = icons::Glyph::Mark as u8 | REVEAL;
+    let marks = |f: &Frame| {
+        let mark = |n: &&Node| matches!(n, Node::Glyph { glyph, .. } if *glyph == revealed);
+        all(&f.nodes).into_iter().filter(mark).cloned().collect::<Vec<_>>()
+    };
+    assert_eq!(marks(&f), [Node::Glyph { glyph: revealed, size: 144 }]);
+    let said = texts(&f.nodes);
+    assert_eq!(
+        said[..3],
+        [
+            "compusophy",
+            "a computer in your browser \u{2014} free AI, nothing to install.",
+            welcome::HINT
+        ]
+    );
+    assert!(welcome::HINT.contains("home screen") && welcome::HINT.contains("AI button"));
+    assert!(all(&f.nodes).iter().any(|n| matches!(n, Node::Text { style: Style::Display, .. })));
+    // The apps, a row each: name over what it is for, its icon, a chevron; a click opens it.
+    let rows: Vec<_> = said[3..].iter().map(|t| t.split('\n').next().unwrap()).collect();
+    assert_eq!(rows, ["Studio", "Assistant", "Terminal", "Files", "Settings", "About", "Feedback"]);
+    assert!(
+        said[3..].iter().all(|t| t.contains('\n')) && ids(&f.nodes) == (1..=7).collect::<Vec<_>>()
+    );
+    let opened: Vec<Request> = (1..=7).flat_map(|id| w.click(id).pop().unwrap().requests).collect();
+    let names = welcome::APPS.map(|a| Request::Open { name: a.0.into() });
+    assert_eq!(opened, names);
+    assert!(w.click(8).is_empty() && w.send(&[Event::Resize { w: 600, h: 900 }]).is_empty());
+    // A small window, a smaller mark: 1/φ of its shorter side.
+    let f = w.last(&[Event::Resize { w: 360, h: 200 }]);
+    assert!(matches!(marks(&f)[..], [Node::Glyph { size: 123, .. }]), "{:?}", marks(&f));
+    assert!(welcome::MARK_MAX == 144 && w.send(&[Event::Focus { on: true }]).is_empty());
+}
+
+#[test]
+fn sizes_and_counts_read_as_people_say_them() {
+    assert_eq!([size(5), size(1536), size(3_500_000)], ["5 B", "1.5 KB", "3.3 MB"]);
+    let counts = [0, 7, 999, 1000, 8000, 65_536, 1_234_567].map(group);
+    assert_eq!(counts, ["0", "7", "999", "1,000", "8,000", "65,536", "1,234,567"]);
     // Text styles the apps use exist on the wire.
-    assert!(Style::from_u8(Style::Accent as u8).is_some());
+    assert!(Style::from_u8(Style::Display as u8).is_some());
 }

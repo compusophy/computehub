@@ -27,9 +27,9 @@ const SOURCE: &str = "github.com/compusophy/computehub";
 pub(crate) const STACK: [(&str, &str); 29] = [
     ("os", "The wasm entry: fonts, files, telemetry"),
     ("platform", "The browser boundary: canvas, WebGL2, input"),
-    ("shell", "The desktop: header, dock, keys"), ("home", "The home screen, dock and touch"),
+    ("shell", "The desktop: top bar, windows, keys"), ("home", "The home screen, dock and touch"),
     ("host", "Windows and the apps in them"), ("wm", "Window manager; deterministic"),
-    ("apps", "Welcome, Settings, Terminal"), ("system", "About, Feedback, Files: a program"),
+    ("apps", "Settings, Terminal"), ("system", "About, Feedback, Files, Welcome"),
     ("ui", "Widgets, themes and the App trait"), ("icons", "The mark and the vector icons"),
     ("text", "Fonts and glyphs on the atlas"), ("font", "TrueType reader and rasterizer"),
     ("gfx", "Draw lists and the WebGL2 shaders"), ("vfs", "In-memory filesystem; deterministic"),

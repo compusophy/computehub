@@ -1,25 +1,30 @@
 //! The desktop's half of [`uiwire`]: a GUI program's window as `ui` draws it. [`draw`] lays out a
 //! frame's nodes top to bottom, [`PAD`] inside the content rect, and draws them in the frame's
 //! theme, scrolled as the window's [`View`] says: a following view at the bottom stays there as
-//! the content grows, and an [`Area`] being typed in keeps its caret in view. While the user edits
-//! an Input, a Code or an Area its text is the host's ([`Texts`]). A Glyph or an Entry's tile
-//! whose glyph the desktop does not know is empty space. In a window narrower than [`NARROW`] (a
-//! phone's) chips and quiet buttons are touch targets, [`TOUCH`] tall.
+//! the content grows, an [`Area`] being typed in keeps its caret in view, and while the content
+//! (or a Scroll's) overflows, a thumb at the right shows how far down it is. Only what is in view
+//! is drawn, so a long list costs little. While the user edits an Input, a Code or an Area its
+//! text is the host's ([`Texts`]). A Glyph or an Entry's tile whose glyph the desktop does not
+//! know is empty space; a revealed mark comes in ring by ring by the window's own clock (the page
+//! clock at its first draw), frames asked for only meanwhile ([`View::animating`]). In a window
+//! narrower than [`NARROW`] (a phone's) chips and quiet buttons are touch targets, [`TOUCH`] tall.
 
 #![forbid(unsafe_code)]
 
 mod area;
 #[cfg(test)]
 mod tests;
+mod texts;
 
 use std::mem;
 
 pub use area::Area;
 use gfx::RectF;
-use ui::icon::Glyph;
-use ui::{AppIcon, BUTTON_H, CARD_PAD, Code, FIELD_H, PAD, RADIUS_SM, Rgba, SPACING, Sense};
+pub use texts::Texts;
+use ui::icon::{Glyph, MARK_HOLE, rings};
+use ui::{AppIcon, BUTTON_H, CARD_PAD, FIELD_H, FontId, PAD, RADIUS_SM, Rgba, SPACING, Sense};
 use ui::{TextStyle, TextSystem, Theme, Ui, WidgetId};
-use uiwire::{Node, Style, Variant};
+use uiwire::{Node, REVEAL, SIGIL, Style, Variant};
 
 /// An Item's height, a chip's, a touch target's (a chip's or a quiet button's on a narrow
 /// window), a chip's padding either side of its label, an Entry's (a touch target, Fibonacci as
@@ -35,50 +40,76 @@ pub const TOGGLE_H: f32 = 44.0;
 const CAP: f32 = 0.727;
 /// The widest window that is narrow.
 pub const NARROW: f32 = 560.0;
-
-/// The text the host owns: each Input's id, text and version, each Code and Area by id, and the
-/// focused one (0 for none).
-#[derive(Debug, Default)]
-pub struct Texts {
-    pub inputs: Vec<(u32, String, u32)>,
-    pub codes: Vec<(u32, Code)>,
-    pub areas: Vec<(u32, Area)>,
-    pub focus: u32,
-}
-
-impl Texts {
-    /// Whether the frame holds an Input, Code or Area `id`.
-    pub fn has(&self, id: u32) -> bool {
-        let (i, c) = (self.inputs.iter().any(|i| i.0 == id), self.codes.iter().any(|c| c.0 == id));
-        i || c || self.areas.iter().any(|a| a.0 == id)
-    }
-}
+/// The mark's reveal: band `k` (the center, then each of its seven rings of dots, the last
+/// with the rim) fades in from `STEP * k` ms for `FADE` ms, Fibonacci numbers both: 618 ms.
+const STEP: f64 = 55.0;
+const FADE: f64 = 233.0;
+pub const REVEAL_MS: f64 = 7.0 * STEP + FADE;
 
 /// How a window is scrolled: pixels down, and the content's and the view's height as last drawn;
-/// whether a view at the bottom stays there as the content grows (the Assistant's transcript).
+/// whether a view at the bottom stays there as the content grows (the Assistant's transcript);
+/// each Scroll as last drawn; the page clock when a revealed glyph first drew.
 #[derive(Debug, Default)]
 pub struct View {
     pub scroll: f32,
     pub heights: (f32, f32),
     pub follow: bool,
+    pub scrolls: Vec<Scrolled>,
+    pub reveal: Option<f64>,
+}
+
+/// A Scroll as last drawn: its id, how far down it is, its content's height and its rect.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Scrolled {
+    pub id: u32,
+    pub y: f32,
+    pub content: f32,
+    pub rect: RectF,
+}
+
+impl View {
+    /// Whether a reveal runs at `now_ms` (the page clock): the window wants frames meanwhile.
+    pub fn animating(&self, now_ms: f64) -> bool {
+        self.reveal.is_some_and(|start| now_ms - start < REVEAL_MS)
+    }
+}
+
+/// The wheel at `(x, y)` in the window's content, `dy` px down: it scrolls the Code under it,
+/// else the innermost Scroll under it that overflows, else the window. Whether anything moved.
+pub fn wheel(texts: &mut Texts, view: &mut View, x: f32, y: f32, dy: f32) -> bool {
+    if !dy.is_finite() {
+        return false;
+    }
+    if let Some(c) = texts.codes.iter_mut().find(|c| c.1.contains(x, y)) {
+        return c.1.wheel(dy);
+    }
+    let over = view.scrolls.iter_mut().rev().find(|s| s.rect.contains(x, y));
+    let (at, max) = match over.filter(|s| s.content > s.rect.h) {
+        Some(s) => (&mut s.y, s.content - s.rect.h),
+        None => (&mut view.scroll, view.heights.0 - view.heights.1),
+    };
+    let to = (*at + dy).min(max).max(0.0);
+    mem::replace(at, to) != to
 }
 
 /// Lays out `nodes` in `ui`'s rect and draws them, scrolled as `view` says (see the crate docs).
 pub fn draw(ui: &mut Ui<'_>, nodes: &[Node], texts: &mut Texts, view: &mut View) {
     let r = ui.rect();
     let (w, inner) = ((r.w - 2.0 * PAD).max(0.0), r.h - 2.0 * PAD);
-    let (t, sizes, slack) = (ui.theme(), Vec::new(), Vec::new());
-    let touch = r.w < NARROW;
+    let (t, now, touch) = (ui.theme(), ui.state().now_ms, r.w < NARROW);
+    let old = mem::take(&mut view.scrolls);
     #[rustfmt::skip]
-    let mut lay = Lay { t, texts, sizes, extra: 0.0, fills: 0, slack, again: false, i: 0, y: 0.0,
-        touch };
+    let mut lay = Lay { t, texts, sizes: Vec::new(), extents: Vec::new(), extra: 0.0, fills: 0,
+        slack: Vec::new(), again: false, i: 0, e: 0, y: 0.0, touch, right: r.x + r.w, old,
+        scrolls: Vec::new(), now, reveal: view.reveal };
     let ts = ui.text_system();
     let mut h = lay.stack(ts, nodes, w, SPACING, None);
-    // Again with the room left shared by the Fills, each also taking what it is short of a
-    // taller sibling in a Row.
+    // Again with the room left shared by the Fills and Scrolls, each also taking what it is
+    // short of a taller sibling in a Row.
     let fills = mem::take(&mut lay.fills);
     if fills > 0 && (h < inner || lay.slack.iter().any(|s| *s > 0.0)) {
-        (lay.extra, lay.sizes, lay.again) = ((inner - h).max(0.0) / fills as f32, Vec::new(), true);
+        (lay.extra, lay.again) = ((inner - h).max(0.0) / fills as f32, true);
+        (lay.sizes, lay.extents) = (Vec::new(), Vec::new());
         h = lay.stack(ts, nodes, w, SPACING, None);
     }
     let end = view.follow && view.scroll >= view.heights.0 - view.heights.1;
@@ -91,6 +122,8 @@ pub fn draw(ui: &mut Ui<'_>, nodes: &[Node], texts: &mut Texts, view: &mut View)
     }
     view.scroll = y.min(view.heights.0 - r.h).max(0.0);
     lay.draw_stack(ui, nodes, (r.x + PAD, r.y + PAD - view.scroll), SPACING);
+    ui.thumb(r, view.scroll, view.heights.0);
+    (view.scrolls, view.reveal) = (lay.scrolls, lay.reveal);
 }
 
 /// How a Text of `style` is set.
@@ -106,24 +139,35 @@ fn style_of(style: Style, t: &Theme) -> TextStyle {
         Style::Error => t.body().with_color(t.danger),
         Style::Success => t.body().with_color(t.ansi[2]),
         Style::Accent => t.body().with_color(t.accent),
+        Style::Display => TextStyle::new(FontId::SansBold, 34.0, t.text),
     }
 }
 
-/// One frame's layout in theme `t` over the host's text: each node's size in pre-order, the
-/// height each Fill adds, the Fills so far, each Fill's shortfall beside a taller sibling,
-/// whether this is the second pass, the next size to draw, the top of the node being measured
-/// in the content, whether chips and quiet buttons are touch targets.
+/// One frame's layout in theme `t` over the host's text: each node's size in pre-order, each
+/// Scroll's content height and each Strip's content width in pre-order, the height each Fill or
+/// Scroll adds, the Fills and Scrolls so far, each one's shortfall beside a taller sibling,
+/// whether this is the second pass, the next size and extent to draw, the top of the node being
+/// measured in the content, whether chips and quiet buttons are touch targets, the window's
+/// right edge, the Scrolls as last drawn and as drawn now, the page clock and when the reveal
+/// began.
 struct Lay<'t> {
     t: &'t Theme,
     texts: &'t mut Texts,
     sizes: Vec<(f32, f32)>,
+    extents: Vec<f32>,
     extra: f32,
     fills: usize,
     slack: Vec<f32>,
     again: bool,
     i: usize,
+    e: usize,
     y: f32,
     touch: bool,
+    right: f32,
+    old: Vec<Scrolled>,
+    scrolls: Vec<Scrolled>,
+    now: f64,
+    reveal: Option<f64>,
 }
 
 impl Lay<'_> {
@@ -137,6 +181,16 @@ impl Lay<'_> {
         }
         self.y = top;
         h - if ns.is_empty() { 0.0 } else { gap }
+    }
+
+    /// The height a Fill or Scroll adds to its own: its share of the room left, and what it is
+    /// short of a taller sibling.
+    fn grow(&mut self) -> f32 {
+        if self.slack.len() <= self.fills {
+            self.slack.push(0.0);
+        }
+        self.fills += 1;
+        self.extra + self.slack[self.fills - 1]
     }
 
     /// Measures `n` given width `w` (Buttons, Spacers and Glyphs take their own).
@@ -154,28 +208,37 @@ impl Lay<'_> {
                 (w, h + 2.0 * CARD_PAD)
             }
             Node::Fill { children, .. } => {
-                if self.slack.len() <= self.fills {
-                    self.slack.push(0.0);
-                }
-                let extra = self.extra + self.slack[self.fills];
-                self.fills += 1;
+                let extra = self.grow();
                 let codes = children.iter().filter(|c| matches!(c, Node::Code { .. })).count();
                 let grow = Some(extra / codes.max(1) as f32);
                 (w, self.stack(ts, children, w, SPACING, grow) + [extra, 0.0][codes.min(1)])
+            }
+            // A row tall at least, and what the others leave; its children as tall as they are.
+            Node::Scroll { children, .. } => {
+                let (extra, e) = (self.grow(), self.extents.len());
+                self.extents.push(0.0);
+                self.extents[e] = self.stack(ts, children, w, SPACING, None);
+                (w, ENTRY_H + extra)
             }
             Node::Pane { w: pw, children, .. } => {
                 let w = w.min(f32::from(*pw));
                 (w, self.stack(ts, children, w, SPACING, None))
             }
             // Buttons, Spacers and Glyphs take their width, each Text its own up to an even
-            // share of the rest, the others share what is left.
-            Node::Row { gap, children, .. } => {
+            // share of the rest (in a Strip, all of it), the others share what is left. A Strip
+            // takes the width it is given and keeps what its children take.
+            Node::Row { gap, children, .. } | Node::Strip { gap, children, .. } => {
+                let strip = matches!(n, Node::Strip { .. });
+                let e = self.extents.len();
+                if strip {
+                    self.extents.push(0.0);
+                }
                 let (gap, mut x, mut h) = (f32::from(*gap), 0.0, 0.0f32);
                 let mut own: Vec<_> = children.iter().map(|c| own_width(ts, t, c, w)).collect();
                 let gaps = gap * children.len().saturating_sub(1) as f32;
                 let mut room = (w - own.iter().flatten().sum::<f32>() - gaps).max(0.0);
                 let mut flex = own.iter().filter(|o| o.is_none()).count();
-                let share = room / flex.max(1) as f32;
+                let share = if strip { f32::MAX } else { room / flex.max(1) as f32 };
                 for (c, o) in children.iter().zip(&mut own) {
                     if let Node::Text { style, text, .. } = c {
                         let style = style_of(*style, t);
@@ -183,7 +246,7 @@ impl Lay<'_> {
                         let one = lines.iter().map(|l| ts.measure(l, style)).fold(0.0, f32::max);
                         // A pixel more: snapping must not wrap it.
                         let one = (one.ceil() + 1.0).min(share);
-                        (*o, room, flex) = (Some(one), room - one, flex - 1);
+                        (*o, room, flex) = (Some(one), (room - one).max(0.0), flex - 1);
                     }
                 }
                 let share = room / flex.max(1) as f32;
@@ -198,7 +261,11 @@ impl Lay<'_> {
                 for (fill, ch) in fills.into_iter().filter(|_| !self.again) {
                     self.slack[fill] += h - ch;
                 }
-                (x - if children.is_empty() { 0.0 } else { gap }, h)
+                let x = x - if children.is_empty() { 0.0 } else { gap };
+                if strip {
+                    self.extents[e] = x;
+                }
+                (if strip { w } else { x }, h)
             }
             // 3 to 12 rows as the text has lines; 3 and what is left in a Fill.
             Node::Code { id, text, .. } => {
@@ -240,6 +307,12 @@ impl Lay<'_> {
         self.sizes.get(self.i - usize::from(take)).copied().unwrap_or_default()
     }
 
+    /// The next Scroll's content height or Strip's content width, moving past it.
+    fn extent(&mut self) -> f32 {
+        self.e += 1;
+        self.extents.get(self.e - 1).copied().unwrap_or_default()
+    }
+
     /// Draws `nodes` down from `(x, y)`, `gap` apart.
     fn draw_stack(&mut self, ui: &mut Ui<'_>, nodes: &[Node], (x, mut y): (f32, f32), gap: f32) {
         for n in nodes {
@@ -249,10 +322,16 @@ impl Lay<'_> {
         }
     }
 
-    /// Draws `n` at `(x, y)` in its measured size.
+    /// Draws `n` at `(x, y)` in its measured size: a leaf out of the clip (scrolled away) not at
+    /// all, but for an editor, which keeps where it was drawn.
     fn draw(&mut self, ui: &mut Ui<'_>, n: &Node, x: f32, y: f32) {
         let ((w, h), t) = (self.next(true), self.t);
         let r = ui.snapped(RectF::new(x, y, w, h));
+        let clip = ui.list().clip();
+        let editor = matches!(n, Node::Code { .. } | Node::Area { .. });
+        if n.children().is_empty() && !editor && (r.y >= clip.y + clip.h || r.y + r.h <= clip.y) {
+            return;
+        }
         let at = |ui: &mut Ui<'_>, f: &mut dyn FnMut(&mut Ui<'_>)| ui.within(r, |ui| f(ui));
         match n {
             Node::Col { gap, children: c, .. } => self.draw_stack(ui, c, (x, y), f32::from(*gap)),
@@ -277,15 +356,37 @@ impl Lay<'_> {
                 ui.raised(r);
                 self.draw_stack(ui, children, (x + CARD_PAD, y + CARD_PAD), SPACING);
             }
-            // Leaves center on the row's height; the editors keep to its top.
-            Node::Row { gap, children, .. } => {
-                let mut cx = x;
+            // Where it was scrolled to, if it is the same Scroll; its thumb at the window's edge.
+            Node::Scroll { id, children } => {
+                let content = self.extent();
+                let was = self.old.iter().find(|s| s.id == *id).map_or(0.0, |s| s.y);
+                let down = was.min(content - h).max(0.0);
+                ui.push_clip(r);
+                self.draw_stack(ui, children, (x, y - down), SPACING);
+                ui.pop_clip();
+                ui.thumb(RectF { w: (r.w + PAD).min(self.right - r.x), ..r }, down, content);
+                self.scrolls.push(Scrolled { id: *id, y: down, content, rect: r });
+            }
+            // Leaves and Strips center on the row's height; the editors and the other containers
+            // keep to its top. A Strip that overflows slides left under a clip, its last child at
+            // its right edge.
+            Node::Row { gap, children, .. } | Node::Strip { gap, children, .. } => {
+                let strip = matches!(n, Node::Strip { .. });
+                let over = if strip { (self.extent() - w).max(0.0) } else { 0.0 };
+                let mut cx = x - over;
+                if strip {
+                    ui.push_clip(r);
+                }
                 for c in children {
                     let (cw, ch) = self.next(false);
                     let edits = matches!(c, Node::Code { .. } | Node::Area { .. });
-                    let cy = if c.children().is_empty() && !edits { y + (h - ch) / 2.0 } else { y };
+                    let line = c.children().is_empty() || matches!(c, Node::Strip { .. });
+                    let cy = if line && !edits { y + (h - ch) / 2.0 } else { y };
                     self.draw(ui, c, cx, cy);
                     cx += cw + f32::from(*gap);
+                }
+                if strip {
+                    ui.pop_clip();
                 }
             }
             Node::Text { style, text, .. } => {
@@ -323,11 +424,15 @@ impl Lay<'_> {
             Node::Item { id, text, detail, selected } => {
                 item(ui, WidgetId(*id), r, [text, detail], *selected)
             }
-            Node::Glyph { glyph, .. } => {
-                if let Some(&g) = Glyph::ALL.get(usize::from(*glyph)) {
-                    ui.glyph(r, g, t.text);
+            // A revealed mark's clock starts at its first draw; only the mark has rings.
+            Node::Glyph { glyph, .. } => match Glyph::ALL.get(usize::from(glyph & !REVEAL)) {
+                Some(Glyph::Mark) if glyph & REVEAL != 0 => {
+                    let since = self.now - *self.reveal.get_or_insert(self.now);
+                    mark(ui, r, since);
                 }
-            }
+                Some(&g) => ui.glyph(r, g, t.text),
+                None => {}
+            },
             Node::Entry { id, glyph, hue, text, detail, more } => {
                 entry(ui, WidgetId(*id), r, (*glyph, *hue), [text, detail], *more)
             }
@@ -366,6 +471,38 @@ fn chip_width(ts: &mut TextSystem, t: &Theme, label: &str) -> f32 {
 fn quiet_width(ts: &mut TextSystem, t: &Theme, label: &str) -> f32 {
     let w = (ts.measure(label, t.body()) + 16.0).max(BUTTON_H);
     device(ts, w)
+}
+
+/// compusophy's mark in the text color, in the square centered in `r`, `ms` into its reveal:
+/// from the center out, the center dot and then each ring of dots fades in, then the glyph
+/// stands (as it does at once with no clock: NaN).
+fn mark(ui: &mut Ui<'_>, r: RectF, ms: f64) {
+    let t = ui.theme();
+    if ms.is_nan() || ms >= REVEAL_MS {
+        return ui.glyph(r, Glyph::Mark, t.text);
+    }
+    // The box the glyph fills: a whole number of device pixels, its edges on them.
+    let d = ui.text_system().dpr();
+    let side = (r.w.min(r.h) * d).round();
+    let left = ((r.x + r.w / 2.0) * d - side / 2.0).round();
+    let top = ((r.y + r.h / 2.0) * d + side / 2.0).round() - side;
+    let (cx, cy, k) = ((left + side / 2.0) / d, (top + side / 2.0) / d, side / d / 1000.0);
+    // Ring `i` (the center dot first) fades in, smoothstepped, `STEP` after the one inside it.
+    let ink = |i: usize| {
+        let x = ((ms - i as f64 * STEP) / FADE).clamp(0.0, 1.0) as f32;
+        t.text.with_alpha((f32::from(t.text.3) * x * x * (3.0 - 2.0 * x)).round() as u8)
+    };
+    let dot = |ui: &mut Ui<'_>, (x, y): (f32, f32), radius: f32, color: Rgba| {
+        let s = radius * k;
+        ui.fill(RectF::new(x - s, y - s, 2.0 * s, 2.0 * s), s, color);
+    };
+    dot(ui, (cx, cy), MARK_HOLE, ink(0));
+    for (i, (n, at, size)) in rings().enumerate() {
+        for j in 0..n {
+            let a = core::f32::consts::FRAC_PI_2 - core::f32::consts::TAU * j as f32 / n as f32;
+            dot(ui, (cx + at * k * a.cos(), cy - at * k * a.sin()), size, ink(i + 1));
+        }
+    }
 }
 
 /// The baseline that centers the capitals of `style` in a band `h` tall from `top`.
@@ -450,13 +587,14 @@ fn item(ui: &mut Ui<'_>, id: WidgetId, r: RectF, [text, detail]: [&String; 2], s
     ui.hit(id, r, Sense::Click);
 }
 
-/// An Entry in `r`: its tile, `text` (cut to fit), `detail` small at the right and a chevron
-/// when `more`; washed under the pointer, a hairline under it from the text on; a click hit.
+/// An Entry in `r`: its tile (a `.app` file's sigil for [`SIGIL`]), `text` (cut to fit; a second
+/// line small under the first), `detail` small at the right and a chevron when `more`; washed
+/// under the pointer, a hairline under it from the text on; a click hit.
 fn entry(
     ui: &mut Ui<'_>,
     id: WidgetId,
     r: RectF,
-    tile: (u8, u32),
+    (glyph, hue): (u8, u32),
     [text, detail]: [&String; 2],
     more: bool,
 ) {
@@ -465,8 +603,10 @@ fn entry(
         ui.fill(r, RADIUS_SM, t.wash(s.pressed == Some(id)));
     }
     let at = ui.snapped(RectF::new(r.x + 8.0, r.y + (r.h - TILE) / 2.0, TILE, TILE));
-    if let Some(&glyph) = Glyph::ALL.get(usize::from(tile.0)) {
-        ui.app_icon(at, AppIcon { glyph, hue: Rgba::hex(tile.1) });
+    match Glyph::ALL.get(usize::from(glyph)) {
+        _ if glyph == SIGIL => ui.sigil(at, hue),
+        Some(&glyph) => ui.app_icon(at, AppIcon { glyph, hue: Rgba::hex(hue) }),
+        None => {}
     }
     let (x, mut right) = (at.x + TILE + 13.0, r.x + r.w - 8.0);
     if more {
@@ -483,9 +623,17 @@ fn entry(
         ui.text(dx, base, detail, small);
         right = dx - 13.0;
     }
-    let shown = ui.text_system().ellipsize(text, body, (right - x).max(0.0));
-    let base = cap_base(ui, r.y, r.h, body);
-    ui.text(x, base, &shown, body);
+    // Its lines, as wrap splits them (no search of its own: the boot download is small).
+    let (room, ts) = ((right - x).max(0.0), ui.text_system());
+    let lines = ts.wrap(text, body, f32::MAX);
+    let (name, line) = (lines.first().copied().unwrap_or(""), lines.get(1).copied().unwrap_or(""));
+    let (name, line) = (ts.ellipsize(name, body, room), ts.ellipsize(line, small, room));
+    // One line centered; two each centered in its own line's band, the pair in the row.
+    let (nh, sh) = (ts.line_height(body), ts.line_height(small) * f32::from(!line.is_empty()));
+    let top = r.y + (r.h - nh - sh) / 2.0;
+    let (b1, b2) = (cap_base(ui, top, nh, body), cap_base(ui, top + nh, sh, small));
+    ui.text(x, b1, &name, body);
+    ui.text(x, b2, &line, small);
     let line = ui.px(1.0);
     let rule = ui.snapped(RectF::new(x, r.y + r.h - line, r.x + r.w - x, line));
     ui.fill(RectF { h: line, ..rule }, 0.0, t.border);

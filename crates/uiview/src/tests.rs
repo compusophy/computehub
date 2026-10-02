@@ -1,5 +1,5 @@
 use gfx::{DrawList, Instance, Kind};
-use ui::{Hit, Key, THEMES, UiState};
+use ui::{Code, Hit, Key, THEMES, UiState};
 
 use super::*;
 
@@ -41,10 +41,22 @@ fn draw_at(
     view: &mut View,
     hover: Option<u32>,
 ) -> Drawn {
+    paint(w, 0.0, nodes, texts, view, hover).0
+}
+
+/// The same at page clock `now`, with the text system after (its atlas holds what was drawn).
+fn paint(
+    w: f32,
+    now_ms: f64,
+    nodes: &[Node],
+    texts: &mut Texts,
+    view: &mut View,
+    hover: Option<u32>,
+) -> (Drawn, TextSystem) {
     let mut ts = TextSystem::new(SANS.to_vec()).unwrap();
     ts.set_font(ui::FontId::Mono, MONO.to_vec()).unwrap();
     let (mut list, mut hits) = (DrawList::new(), Vec::new());
-    let state = UiState { focused: true, hover: hover.map(WidgetId), ..UiState::default() };
+    let state = UiState { focused: true, hover: hover.map(WidgetId), now_ms, ..UiState::default() };
     let rect = RectF::new(0.0, 0.0, w, 400.0);
     super::draw(
         &mut Ui::new(&mut list, &mut ts, rect, &mut hits, state, &THEMES[0]),
@@ -52,7 +64,19 @@ fn draw_at(
         texts,
         view,
     );
-    Drawn { list, hits }
+    (Drawn { list, hits }, ts)
+}
+
+/// Whether `d` has a scroll thumb: a 3 px fill in the faint ink.
+fn thumb(d: &Drawn) -> Option<[f32; 4]> {
+    let faint = |i: &&&Instance| i.color == THEMES[0].text_faint && i.rect[2] == 3.0;
+    d.of(Kind::Fill).iter().find(faint).map(|i| i.rect)
+}
+
+/// A file's row, `id` and named `name`.
+fn row(id: u32, name: &str) -> Node {
+    let (text, detail) = (name.into(), String::new());
+    Node::Entry { id, glyph: Glyph::File as u8, hue: 0x94a3b8, text, detail, more: false }
 }
 
 fn text(style: Style, s: &str) -> Node {
@@ -245,4 +269,215 @@ fn areas_edit_wrap_grow_and_keep_the_caret_in_view() {
         None,
     );
     assert!(caret(&d).is_none() && d.hits.len() == 1);
+}
+
+#[test]
+fn a_press_on_a_control_keeps_the_keyboard_and_a_waiting_edit_keeps_its_text() {
+    // Typing in an Area, a chip or a switch pressed: the keyboard stays, so what is typed next
+    // lands; an Input takes it; empty space takes it away.
+    let area = Area::new("");
+    let mut t = Texts {
+        areas: vec![(9, area)],
+        inputs: vec![(5, "".into(), 0)],
+        focus: 0,
+        ..Texts::default()
+    };
+    assert!(t.press(9, 0.0, 0.0) && t.focus == 9);
+    assert!(t.press(2, 0.0, 0.0) && t.focus == 9, "a chip keeps it");
+    assert!(t.press(5, 0.0, 0.0) && t.focus == 5);
+    assert!(t.press(0, 0.0, 0.0) && t.focus == 0);
+    assert!(!t.press(0, 0.0, 0.0) && !t.press(2, 0.0, 0.0) && t.focus == 0);
+    // A frame: the text of the one with the keyboard, and of one whose Change still waits,
+    // stays the host's; the others take the frame's.
+    t.areas[0].1.insert("typed");
+    t.inputs[0].1 = "draft".into();
+    let nodes = [
+        Node::Area { id: 9, value: "old".into(), placeholder: "".into() },
+        Node::Input { id: 5, value: "old".into(), placeholder: "".into() },
+    ];
+    t.adopt(&nodes, &[9]);
+    assert_eq!((t.areas[0].1.text.as_str(), t.inputs[0].1.as_str()), ("typed", "old"));
+    t.adopt(&nodes, &[]);
+    assert_eq!(t.areas[0].1.text, "old");
+    (t.focus, t.inputs[0].1) = (5, "mine".into());
+    t.adopt(&nodes[1..], &[]);
+    assert_eq!((t.inputs[0].1.as_str(), t.focus, t.areas.len()), ("mine", 5, 0));
+    t.adopt(&[], &[]);
+    assert_eq!((t.focus, t.inputs.len()), (0, 0), "gone, and the keyboard with it");
+}
+
+#[test]
+fn scrolls_keep_the_bar_above_them_still_and_start_at_the_top_when_new() {
+    let up = Node::Button { id: 1, variant: Variant::Quiet, label: "\u{2191}".into() };
+    let nodes = |id, n: u32| {
+        let rows = (0..n).map(|i| row(100 + i, "notes.txt")).collect();
+        let list = Node::Col { id: 0, gap: 0, children: rows };
+        vec![up.clone(), Node::Separator, Node::Scroll { id, children: vec![list] }]
+    };
+    let (mut texts, mut view) = (Texts::default(), View::default());
+    let d = draw(&nodes(7, 200), &mut texts, &mut view, None);
+    // The list takes what the bar leaves, to the bottom; the window has nothing to scroll.
+    let s = view.scrolls[0];
+    assert_eq!((s.id, s.y, s.content), (7, 0.0, 200.0 * ENTRY_H));
+    assert!((s.rect.y + s.rect.h - (400.0 - PAD)).abs() < 1.0 && view.heights.0 <= 400.5);
+    assert!(d.hits.iter().filter(|h| h.id.0 >= 100).count() <= 6);
+    let (bar, mark) = (d.hit(1).rect, thumb(&d).expect("a thumb"));
+    assert!(mark[0] == 600.0 - 6.0 && mark[1] == s.rect.y && mark[3] < s.rect.h, "{mark:?}");
+    // The wheel over the list scrolls it; the bar stays, the thumb goes down.
+    let (x, y) = (s.rect.x + 10.0, s.rect.y + 10.0);
+    assert!(wheel(&mut texts, &mut view, x, y, 1e9));
+    assert!(
+        !wheel(&mut texts, &mut view, x, y, 5.0) && !wheel(&mut texts, &mut view, x, y, f32::NAN)
+    );
+    let d = draw(&nodes(7, 200), &mut texts, &mut view, None);
+    let s = view.scrolls[0];
+    assert!(s.y == s.content - s.rect.h && d.hit(1).rect == bar);
+    assert!(d.hits.iter().any(|h| h.id.0 == 299) && !d.hits.iter().any(|h| h.id.0 == 100));
+    let low = thumb(&d).expect("a thumb");
+    assert!((low[1] + low[3] - (s.rect.y + s.rect.h)).abs() < 1.0, "{low:?}");
+    // Over the bar the window would scroll, but it fits.
+    assert!(!wheel(&mut texts, &mut view, bar.x + 2.0, bar.y + 2.0, 50.0));
+    // Another list (a new id) starts at its top; one that fits has no thumb.
+    let d = draw(&nodes(8, 200), &mut texts, &mut view, None);
+    assert!(view.scrolls[0].y == 0.0 && d.hits.iter().any(|h| h.id.0 == 100));
+    let d = draw(&nodes(8, 3), &mut texts, &mut view, None);
+    assert!(thumb(&d).is_none() && !wheel(&mut texts, &mut view, x, y, 50.0));
+}
+
+#[test]
+fn windows_that_overflow_show_a_thumb_and_rows_out_of_view_cost_nothing() {
+    let (mut texts, mut view) = (Texts::default(), View::default());
+    let tall = [Node::Spacer { px: 900 }, text(Style::Body, "end")];
+    let d = draw(&tall, &mut texts, &mut view, None);
+    let t = thumb(&d).expect("a thumb");
+    assert_eq!((t[0], t[1]), (594.0, 0.0));
+    assert!((t[3] - 400.0 * 400.0 / view.heights.0).abs() < 1.0, "as long as the share shown");
+    assert!(wheel(&mut texts, &mut view, 5.0, 5.0, 1e9));
+    let t = thumb(&draw(&tall, &mut texts, &mut view, None)).expect("a thumb");
+    assert!((t[1] + t[3] - 400.0).abs() < 1.0, "at the bottom: {t:?}");
+    assert!(thumb(&draw(&tall[1..], &mut texts, &mut view, None)).is_none(), "it fits");
+    // A thousand rows, the last one named in letters no other row has: what is out of view is
+    // never drawn, so its glyphs never reach the atlas.
+    let rows = |last: &str| {
+        let mut rows: Vec<Node> = (0..999).map(|i| row(i + 1, "aaa")).collect();
+        rows.push(row(1000, last));
+        vec![Node::Col { id: 0, gap: 0, children: rows }]
+    };
+    let atlas = |nodes: &[Node]| {
+        let (d, mut ts) =
+            paint(600.0, 0.0, nodes, &mut Texts::default(), &mut View::default(), None);
+        (d.hits.len(), ts.atlas_mut().pixels().to_vec())
+    };
+    let (seen, plain) = atlas(&rows("aaa"));
+    assert!(seen <= 7, "{seen}");
+    assert!(atlas(&rows("WXYZ")).1 == plain, "the far row's glyphs were drawn");
+}
+
+#[test]
+fn strips_stay_on_one_line_and_slide_left_to_keep_their_end_in_view() {
+    let quiet = |id, label: &str| Node::Button { id, variant: Variant::Quiet, label: label.into() };
+    let mut crumbs: Vec<Node> = (0..8).map(|i| quiet(10 + i, "a-long-folder")).collect();
+    crumbs.push(text(Style::Body, "the-last-folder-of-all"));
+    let strut = Node::Pane { id: 0, w: 0, children: vec![Node::Spacer { px: 44 }] };
+    let bar = vec![Node::Row {
+        id: 0,
+        gap: 0,
+        children: vec![
+            quiet(1, "\u{2191}"),
+            Node::Strip { id: 0, gap: 0, children: crumbs },
+            strut,
+        ],
+    }];
+    let (mut texts, mut view) = (Texts::default(), View::default());
+    let d = draw_at(360.0, &bar, &mut texts, &mut view, None);
+    // Up keeps its place; the first crumbs slid out of view (no hits), the rest on Up's line.
+    let up = d.hit(1).rect;
+    assert!(up.x == PAD && up.h == TOUCH && !d.hits.iter().any(|h| h.id.0 == 10));
+    assert!(d.hits.iter().all(|h| h.rect.y == up.y && h.rect.h == TOUCH), "{:?}", d.hits);
+    // The last crumb, unwrapped, ends at the bar's right edge; every glyph on the one line.
+    let glyphs = d.of(Kind::Glyph);
+    let right = glyphs.iter().map(|g| g.rect[0] + g.rect[2]).fold(0.0, f32::max);
+    assert!(right <= 360.0 - PAD && right > 360.0 - PAD - 6.0, "{right}");
+    assert!(glyphs.iter().all(|g| g.rect[1] >= up.y && g.rect[1] + g.rect[3] <= up.y + up.h));
+    // With room, nothing slides: the first crumb right after Up, centered on the bar too.
+    let d = draw_at(3000.0, &bar, &mut texts, &mut view, None);
+    let (up, first) = (d.hit(1).rect, d.hit(10).rect);
+    assert!(first.x == up.x + up.w && first.y == up.y, "{first:?}");
+    assert_eq!(up.y, PAD + (44.0 - BUTTON_H) / 2.0, "on the strut's line");
+}
+
+#[test]
+fn a_revealed_mark_comes_in_ring_by_ring_once_by_its_windows_clock() {
+    let mark = |reveal| vec![Node::Glyph { glyph: Glyph::Mark as u8 | reveal, size: 144 }];
+    let mut view = View::default();
+    assert!(!view.animating(0.0), "not before it is drawn");
+    let at = |now, nodes: &[Node], view: &mut View| {
+        paint(600.0, now, nodes, &mut Texts::default(), view, None).0
+    };
+    let early = at(100.0, &mark(REVEAL), &mut view);
+    assert_eq!(view.reveal, Some(100.0));
+    assert!(view.animating(400.0) && view.animating(717.0));
+    assert!(!view.animating(718.0) && !view.animating(f64::NAN));
+    let mid = at(400.0, &mark(REVEAL), &mut view);
+    let done = at(718.0, &mark(REVEAL), &mut view);
+    // 300 ms in: the center dot and the five inner rings, 132 dots; nothing at the start; then
+    // the mark's one glyph. Later frames keep the first clock.
+    let fills = |d: &Drawn| d.of(Kind::Fill).len();
+    let whole = |d: &Drawn| d.of(Kind::Glyph).iter().filter(|g| g.rect[2] > 130.0).count();
+    assert_eq!((fills(&early), fills(&mid)), (fills(&done), fills(&done) + 132));
+    assert_eq!([whole(&early), whole(&mid), whole(&done)], [0, 0, 1]);
+    assert_eq!(view.reveal, Some(100.0));
+    // Not revealed, or not the mark: whole at once, and no frames asked for.
+    for nodes in [mark(0), vec![Node::Glyph { glyph: Glyph::Cog as u8 | REVEAL, size: 144 }]] {
+        let mut plain = View::default();
+        let d = at(100.0, &nodes, &mut plain);
+        assert!(plain.reveal.is_none() && whole(&d) == 1 && !plain.animating(100.0));
+    }
+}
+
+#[test]
+fn app_rows_wear_their_sigil_rows_say_two_lines_and_display_is_large() {
+    let t = &THEMES[0];
+    let seed = 0x1234_5678;
+    let entry = |glyph, text: &str| {
+        let (text, detail) = (text.into(), String::new());
+        Node::Entry { id: 1, glyph, hue: seed, text, detail, more: true }
+    };
+    let plates = |d: &Drawn, color| {
+        let tile = |i: &&Instance| i.rect[2] == 34.0 && i.rect[3] == 34.0 && i.color == color;
+        d.list.instances().iter().filter(tile).count()
+    };
+    // A .app's tile: the plate of its seed's tint, as the home screen's, and the sigil on it.
+    let sigil_top = t.icon_colors(ui::theme::app_tint(seed))[0];
+    let window_top = t.icon_colors(Rgba::hex(seed))[0];
+    let (mut texts, mut view) = (Texts::default(), View::default());
+    let d = draw(&[entry(SIGIL, "clock.app")], &mut texts, &mut view, None);
+    assert_eq!((plates(&d, sigil_top), plates(&d, window_top)), (1, 0));
+    let w = draw(&[entry(Glyph::Window as u8, "clock.app")], &mut texts, &mut view, None);
+    assert_eq!(plates(&w, window_top), 1);
+    let ink = |glyph| {
+        let (t, v) = (&mut Texts::default(), &mut View::default());
+        let (_, mut ts) = paint(600.0, 0.0, &[entry(glyph, "")], t, v, None);
+        ts.atlas_mut().pixels().to_vec()
+    };
+    assert!(ink(SIGIL) != ink(Glyph::Window as u8), "a sigil, not a window");
+    // Two lines: the name in the body ink, what it is for small and dim under it.
+    let d = draw(&[entry(Glyph::Studio as u8, "Studio\nbuild apps")], &mut texts, &mut view, None);
+    let band = |color| {
+        let text = |g: &&Instance| g.color == color && g.rect[0] < 500.0; // not the chevron
+        let ink: Vec<_> = d.of(Kind::Glyph).into_iter().filter(text).collect();
+        let top = ink.iter().map(|g| g.rect[1]).fold(f32::MAX, f32::min);
+        (ink.len(), top)
+    };
+    let ((names, name_y), (lines, line_y)) = (band(t.text), band(t.text_dim));
+    assert!(names >= 6 && lines >= 9 && line_y > name_y + 10.0, "{name_y} {line_y}");
+    let r = d.hit(1).rect;
+    assert!(name_y > r.y + 5.0 && line_y < r.y + r.h - 10.0);
+    // Display: a first screen's name, larger and bolder than a Title.
+    let tallest = |style| {
+        let d =
+            draw(&[text(style, "compusophy")], &mut Texts::default(), &mut View::default(), None);
+        d.of(Kind::Glyph).iter().map(|g| g.rect[3]).fold(0.0, f32::max)
+    };
+    assert!(tallest(Style::Display) > tallest(Style::Title) * 1.3);
 }

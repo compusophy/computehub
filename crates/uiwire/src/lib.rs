@@ -30,6 +30,12 @@ pub const MAX_FRAME: usize = 1 << 20;
 pub const MAX_NODES: usize = 4096;
 /// The deepest nesting; a top-level node is at depth 1.
 pub const MAX_DEPTH: usize = 32;
+/// A [`Node::Glyph`]'s `glyph` with this bit added comes in the first time the window shows it:
+/// the mark from its center out, ring by ring, in 618 ms (another glyph draws whole).
+pub const REVEAL: u8 = 0x80;
+/// A [`Node::Entry`]'s `glyph` that is a `.app` file's tile: the sigil of `hue` read as a seed
+/// (FNV-1a of the file's name), on that seed's tint, as the home screen draws the app.
+pub const SIGIL: u8 = u8::MAX;
 
 macro_rules! codes {
     ($($(#[$doc:meta])* $name:ident { $($v:ident = $n:literal,)* })*) => {$(
@@ -53,10 +59,10 @@ macro_rules! codes {
 }
 
 codes! {
-    /// How a [`Node::Text`] is set (Dim is secondary text, Accent is body text in the accent).
-    /// Text wraps to the width.
+    /// How a [`Node::Text`] is set (Dim is secondary text, Accent is body text in the accent,
+    /// Display a first screen's name, larger than a Title). Text wraps to the width.
     Style { Body = 0, Title = 1, Heading = 2, Subheading = 3, Small = 4, Mono = 5, Dim = 6,
-        Error = 7, Success = 8, Accent = 9, }
+        Error = 7, Success = 8, Accent = 9, Display = 10, }
     /// How a [`Node::Button`] looks: an ordinary, the main or a destructive action, a chip
     /// (a small, quiet suggestion), a chip that is on (the chosen one of a set), or quiet (its
     /// label alone, dim until the pointer is over it: a crumb, a toolbar's).
@@ -94,7 +100,7 @@ pub struct Span {
     pub class: Class,
 }
 
-/// One widget of a window and, for the six containers, its children. Ids
+/// One widget of a window and, for the eight containers, its children. Ids
 /// name the nodes events come from; 0 means none.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Node {
@@ -125,10 +131,12 @@ pub enum Node {
     /// given if less; in a Row it takes `w` and its flexible siblings share the rest.
     Pane { id: u32, w: u16, children: Vec<Node> },
     /// A vector icon `size` logical px square in the text color: `glyph` is an `icons::Glyph`
-    /// (its index in `Glyph::ALL`); one the desktop does not know is empty space.
+    /// (its index in `Glyph::ALL`), plus [`REVEAL`] to bring it in; one the desktop does not
+    /// know is empty space.
     Glyph { glyph: u8, size: u16 },
-    /// A list row: `glyph` on an app tile of `hue` (0xRRGGBB), `text`, `detail` dim at the
-    /// right and, when `more` (it leads somewhere, as a folder does), a chevron; a click sends
+    /// A list row: `glyph` on an app tile of `hue` (0xRRGGBB; [`SIGIL`] for a `.app` file's),
+    /// `text` (a second line, after a `\n`, small under the first), `detail` dim at the right
+    /// and, when `more` (it leads somewhere, as a folder does), a chevron; a click sends
     /// [`Event::Click`].
     Entry { id: u32, glyph: u8, hue: u32, text: String, detail: String, more: bool },
     /// A row saying `label`, with a switch at the right that is `on`; a click sends
@@ -140,6 +148,14 @@ pub enum Node {
     /// Children laid out top to bottom, `gap` logical px apart, each centered across the width
     /// (a Text line by line).
     Center { id: u32, gap: u8, children: Vec<Node> },
+    /// Children laid out top to bottom that scroll inside it, the wheel over it moving them,
+    /// while the rest of the window stays (a list under a bar). As a Fill, it takes the height
+    /// the others leave; a new `id` starts at the top (a list of another folder).
+    Scroll { id: u32, children: Vec<Node> },
+    /// Children laid out left to right on one line, `gap` logical px apart, each its own width
+    /// (a Text unwrapped); when they do not fit, the first slide out to the left, so the last
+    /// stays in view (a path bar's crumbs).
+    Strip { id: u32, gap: u8, children: Vec<Node> },
 }
 
 /// One complete picture of a window, program to host: the program's frame
@@ -234,7 +250,9 @@ impl Node {
             | Self::Card { children, .. }
             | Self::Fill { children, .. }
             | Self::Pane { children, .. }
-            | Self::Center { children, .. } => children,
+            | Self::Center { children, .. }
+            | Self::Scroll { children, .. }
+            | Self::Strip { children, .. } => children,
             _ => &[],
         }
     }
@@ -242,6 +260,25 @@ impl Node {
     /// How many nodes the tree holds, this one included.
     pub fn count(&self) -> usize {
         1 + self.children().iter().map(Node::count).sum::<usize>()
+    }
+
+    /// Whether the tree, at `depth`, decodes as it is: it is no deeper than [`MAX_DEPTH`] and
+    /// each Code's spans are in order, apart and on its text's char boundaries.
+    fn valid(&self, depth: usize) -> bool {
+        let spans = match self {
+            Self::Code { text, spans, .. } => {
+                let mut end = 0;
+                spans.iter().all(|s| {
+                    let start = s.start as usize;
+                    let stop = start.saturating_add(s.len as usize);
+                    let ok = start >= end && text.is_char_boundary(start);
+                    end = stop;
+                    ok && text.is_char_boundary(stop)
+                })
+            }
+            _ => true,
+        };
+        depth <= MAX_DEPTH && spans && self.children().iter().all(|c| c.valid(depth + 1))
     }
 
     fn put(&self, o: &mut Out) {
@@ -273,6 +310,8 @@ impl Node {
             Self::Toggle { id, on, label } => o.head(15, *id, n).u8((*on).into()).str(label),
             Self::Area { id, value, placeholder } => o.head(16, *id, n).str(value).str(placeholder),
             Self::Center { id, gap, .. } => o.head(17, *id, n).u8(*gap),
+            Self::Scroll { id, .. } => o.head(18, *id, n),
+            Self::Strip { id, gap, .. } => o.head(19, *id, n).u8(*gap),
         };
         self.children().iter().for_each(|child| child.put(o));
     }
@@ -307,6 +346,8 @@ impl Node {
             15 => Self::Toggle { id, on: r.bool()?, label: r.str()? },
             16 => Self::Area { id, value: r.str()?, placeholder: r.str()? },
             17 => Self::Center { id, gap: r.u8()?, children: Vec::new() },
+            18 => Self::Scroll { id, children: Vec::new() },
+            19 => Self::Strip { id, gap: r.u8()?, children: Vec::new() },
             _ => return None,
         };
         match &mut node {
@@ -315,7 +356,9 @@ impl Node {
             | Self::Card { children, .. }
             | Self::Fill { children, .. }
             | Self::Pane { children, .. }
-            | Self::Center { children, .. } => {
+            | Self::Center { children, .. }
+            | Self::Scroll { children, .. }
+            | Self::Strip { children, .. } => {
                 children.reserve(usize::from(count).min(*budget));
                 for _ in 0..count {
                     children.push(Self::read(r, depth + 1, budget)?);
@@ -347,6 +390,17 @@ impl Node {
 }
 
 impl Frame {
+    /// The bytes, if they decode: within the caps (bytes, nodes, depth, requests), every Code's
+    /// spans in order, apart and on char boundaries. Checked without the decoder, which a
+    /// program then need not carry.
+    pub fn encode_checked(&self) -> Option<Vec<u8>> {
+        let nodes = self.nodes.iter().map(Node::count).sum::<usize>();
+        let ok = self.requests.len() <= usize::from(u16::MAX) && nodes <= MAX_NODES;
+        let bytes = self.encode();
+        let ok = ok && bytes.len() <= MAX_FRAME && self.nodes.iter().all(|n| n.valid(1));
+        ok.then_some(bytes)
+    }
+
     fn put(&self, o: &mut Out) {
         o.u8(VERSION).u32(self.seq).str(&self.title);
         o.u16(u16::try_from(self.requests.len()).unwrap_or(u16::MAX));
