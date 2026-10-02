@@ -48,7 +48,7 @@ AI for all); later pooled compute across tabs and devices. Author handle: compus
 ## Map
 
 ```
-crates/      the OS (boot, kernel, worker); speaks to programs only by uiwire
+crates/      the OS (boot, kernel, worker); speaks to programs by WASI, uiwire
   wm/        floating window manager: stacking, snapping, focus; deterministic
   vfs/       in-memory filesystem, deterministic (/apps, /home, /tmp)
   font/      TrueType reader + glyph rasterizer (no font engine ships)
@@ -73,7 +73,7 @@ crates/      the OS (boot, kernel, worker); speaks to programs only by uiwire
   kernel/    deterministic: wire protocol, process table, consoles
              and file server (main), snap (/home), module
   wasi/      the kernel's worker half: WASI preview 1 Proc, fds, /dev
-  cpu/       the program worker (cdylib; dist/cpu/): loader, WASI imports, homed
+  cpu/       the program worker (cdylib; dist/cpu/): loader, WASI imports
 programs/    wasm32-wasip1 programs (dist/bin/), the app language they share
   fuel/ lang/                 forks of litelite (budgets, parse kit)
   applang-syntax/ applang/    tier 0 app language: front end, runtime

@@ -9,8 +9,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      # Pinned to the compiler the boot size is measured with locally (as
+      # binaryen is below), so CI checks the very wasm the budget was measured
+      # on: a new stable reorders and resizes it. Move both on purpose.
+      - uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: "1.96.0"
           targets: wasm32-unknown-unknown, wasm32-wasip1
           components: clippy, rustfmt
       - name: constitution caps

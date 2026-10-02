@@ -68,7 +68,7 @@ struct Desktop {
     /// Which [`DEFERRED`] fonts are on their way; `None` before the first frame.
     deferred: Option<[bool; 2]>,
     /// The theme's name as storage has it, the AI state the program windows share, and when
-    /// the one-shot timer fires (page clock ms; past: unarmed).
+    /// the one-shot timer fires (page clock ms; past, or once it fired: unarmed).
     saved: &'static str,
     ai: ai::Ai,
     wake: f64,
@@ -159,7 +159,11 @@ impl Desktop {
                 self.report.proc_failed(pid, argv0);
                 self.kernel(KernelIn::Error { pid })
             }
-            Event::Wake => self.kernel(KernelIn::Wake),
+            // The timer is spent, even if it fired a little early: what is still due arms it again.
+            Event::Wake => {
+                self.wake = f64::NEG_INFINITY;
+                self.kernel(KernelIn::Wake)
+            }
             Event::Hidden => self.kernel(KernelIn::Hidden),
             ev => input_of(ev).and_then(|input| self.input(input, ctl)),
         };

@@ -1,7 +1,7 @@
 //! The /home snapshot the desktop keeps in the page's storage: `"CSHM"`, u8 version 1, u8 0, u16
 //! 0, u64 seq, the body (u32 count, then entries of u8 kind (0 dir, 1 file), str path relative to
 //! /home (sorted, parents first) and, for files, u32 len and the bytes), then a u64 FNV-1a-64 of
-//! everything before it. [`take`] makes one; [`give`] reads one whole, then puts it back.
+//! everything before it. [`take`] makes one; [`give`] reads one whole, then puts it back whole.
 
 use vfs::{Vfs, VfsError};
 
@@ -9,13 +9,12 @@ use crate::wire::{Reader, Writer};
 
 const MAGIC: &[u8] = b"CSHM";
 pub const VERSION: u8 = 1;
-const ROOT: &str = "/home";
 
 /// Paths (from /home, or absolute once read back) and, for files, the bytes.
 type Entries<'a> = Vec<(String, Option<&'a [u8]>)>;
 
 /// Why a snapshot was not put back: it is not one, or is damaged; a newer OS wrote it; or the
-/// filesystem refused an entry ([`VfsError`]), which stops it there.
+/// filesystem refused an entry ([`VfsError`]), and then none was put back.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SnapError {
     Damaged,
@@ -31,7 +30,7 @@ pub fn fnv64(b: &[u8]) -> u64 {
 /// The snapshot of /home in `vfs`, numbered `seq`.
 pub fn take(vfs: &Vfs, seq: u64) -> Vec<u8> {
     let mut entries = Vec::new();
-    walk(vfs, ROOT, "", &mut entries);
+    walk(vfs, root(), "", &mut entries);
     let head = Writer::default().bytes(MAGIC).u8(VERSION).u8(0).u16(0).u64(seq);
     let mut w = head.u32(entries.len() as u32);
     for (path, data) in entries {
@@ -58,8 +57,8 @@ fn walk<'a>(vfs: &'a Vfs, dir: &str, rel: &str, out: &mut Entries<'a>) {
     }
 }
 
-/// Puts the snapshot `b` back into `vfs` once all of it reads (a path that leaves /home is
-/// damage); its seq.
+/// Puts the snapshot `b` back into `vfs` once all of it reads (a path that is not a plain one in
+/// /home is damage), all of it or, if the filesystem refuses an entry, none; its seq.
 pub fn give(vfs: &mut Vfs, b: &[u8]) -> Result<u64, SnapError> {
     let (body, sum) = b.split_at_checked(b.len().wrapping_sub(8)).ok_or(SnapError::Damaged)?;
     if sum.try_into().ok().map(u64::from_le_bytes) != Some(fnv64(body)) {
@@ -72,14 +71,22 @@ pub fn give(vfs: &mut Vfs, b: &[u8]) -> Result<u64, SnapError> {
         _ => return Err(SnapError::Damaged),
     }
     let (seq, entries) = read(&mut r).ok_or(SnapError::Damaged)?;
+    let mut into = vfs.clone();
     for (path, data) in entries {
         match data {
-            None => vfs.mkdir_all(&path),
-            Some(d) => vfs.write(&path, d),
+            None => into.mkdir_all(&path),
+            Some(d) => into.write(&path, d),
         }
         .map_err(SnapError::Vfs)?;
     }
+    *vfs = into;
     Ok(seq)
+}
+
+/// /home, cut from [`Vfs::HOME`]: no other text in the bundle names a home (scripts/build-web.sh
+/// scans it for paths that would, and a bare "/home" beside other strings can read as one).
+fn root() -> &'static str {
+    Vfs::HOME.rsplit_once('/').map_or(Vfs::HOME, |(parent, _)| parent)
 }
 
 /// The seq and entries (absolute paths) after the version, if all of it reads.
@@ -88,8 +95,10 @@ fn read<'a>(r: &mut Reader<'a>) -> Option<(u64, Entries<'a>)> {
     let mut entries = Vec::new();
     for _ in 0..n {
         let kind = r.u8()?;
-        let path = Vfs::normalize(ROOT, r.str()?).ok();
-        let path = path.filter(|p| p.strip_prefix(ROOT).is_some_and(|r| r.starts_with('/')))?;
+        // Taken as written, never resolved (`~` is a plain name here, not the guest's home): one
+        // that normalizes to another path (`..`, `.`, an empty name) is damage.
+        let path = Some([root(), "/", r.str()?].concat());
+        let path = path.filter(|p| Vfs::normalize("/", p).is_ok_and(|plain| plain == *p))?;
         let data = match kind {
             0 => None,
             1 => Some(r.u32().and_then(|n| r.take(n as usize))?),

@@ -15,8 +15,7 @@
 #   lazy      the other files in dist/fonts/: the symbol fonts a terminal
 #             fetches when it first opens, never before. Cap 60 KB.
 #   system    dist/cpu/: the program worker (cpu.js, cpu_bg.wasm,
-#             worker.js), fetched when a program first runs or /home is
-#             restored. Cap 40 KB.
+#             worker.js), fetched when a program first runs. Cap 40 KB.
 #   programs  dist/bin/: the programs (toolbox.wasm, the test programs,
 #             studio.wasm, assistant.wasm and system.wasm: About, Feedback,
 #             Files), each fetched when it first runs. Cap 96 KB per file: a

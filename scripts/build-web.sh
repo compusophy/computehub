@@ -148,9 +148,9 @@ cp assets/fonts/deferred/*.ttf dist/fonts/deferred/
 cp assets/fonts/lazy/*.ttf dist/fonts/
 cp assets/fonts/OFL-*.txt dist/licenses/
 
-# The program worker, fetched only when a program first runs or /home is
-# restored: its own cargo invocation, so its web-sys features never unify
-# into os. web/worker.js is its one-line bootstrap.
+# The program worker, fetched only when a program first runs: its own cargo
+# invocation, so its web-sys features never unify into os. web/worker.js is
+# its one-line bootstrap.
 cargo build -p compusophy-cpu --release --target wasm32-unknown-unknown
 wasm-bindgen "${bindgen[@]}" --out-dir dist/cpu --out-name cpu "$target_dir/wasm32-unknown-unknown/release/cpu.wasm"
 optimize dist/cpu/cpu_bg.wasm
@@ -173,11 +173,18 @@ done
 # (vfs::Vfs::HOME), which names no account on the build machine. It is an
 # alternative of its own so that the longest match reports it whole, and is
 # then dropped. ([g] keeps this line from matching caps.sh's own check.)
-leaks=$(LC_ALL=C grep -r -a -o -E '[A-Za-z]:[/\\]+Users[/\\]|/home/[g]uest|/home/[A-Za-z]|/Users/[A-Za-z]|[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+\.[A-Za-z0-9.-]*[A-Za-z]{2,}' dist \
-  | LC_ALL=C grep -a -v -E '^[^:]*:/home/[g]uest$' || true)
+# Each hit is shown with the 32 bytes on either side (unprintable ones as
+# '.'), so a path that leaked can be told from strings that only sit side
+# by side in a wasm's data, and found in the source.
+leaks=$(LC_ALL=C grep -r -a -o -b -E '[A-Za-z]:[/\\]+Users[/\\]|/home/[g]uest|/home/[A-Za-z]|/Users/[A-Za-z]|[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+\.[A-Za-z0-9.-]*[A-Za-z]{2,}' dist \
+  | LC_ALL=C grep -a -v -E '^[^:]*:[0-9]+:/home/[g]uest$' || true)
 if [ -n "$leaks" ]; then
-  echo "ERROR: dist/ holds a local path or email address; do not deploy it:" >&2
-  printf '%s\n' "$leaks" | cut -c1-160 >&2
+  echo "ERROR: dist/ holds a local path or email address; do not deploy it (file:byte: the bytes around it):" >&2
+  printf '%s\n' "$leaks" | head -20 | while IFS=: read -r file at _; do
+    from=$((at > 32 ? at - 32 : 0))
+    around=$(tail -c +$((from + 1)) "$file" | head -c $((at - from + 64)) | LC_ALL=C tr -c '[:print:]' '.')
+    printf '%s:%s: %s\n' "$file" "$at" "$around"
+  done >&2
   exit 1
 fi
 
