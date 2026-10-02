@@ -565,11 +565,11 @@ fn grids_draw_theme_squares_and_points_find_them() {
     let words = ["", "X", "", "", ""].map(String::from).to_vec();
     let grid = Node::Grid { id: 7, cols: 2, cells: vec![0, 1, 8, 2, 0], texts: words };
     let d = draw(std::slice::from_ref(&grid), &mut texts, &mut view, None);
-    // Two columns across the width: 32 px squares (the most), centered, 3 rows, a pixel apart.
-    let x = PAD + (600.0 - 2.0 * PAD - 64.0) / 2.0;
-    let rect = RectF::new(x, PAD, 64.0, 96.0);
+    // Two columns across the width: 96 px squares (the most), centered, 3 rows, a pixel apart.
+    let x = PAD + (600.0 - 2.0 * PAD - 192.0) / 2.0;
+    let rect = RectF::new(x, PAD, 192.0, 288.0);
     assert_eq!(view.grids, [Board { id: 7, nth: 0, rect, cols: 2, n: 5 }]);
-    let square = |c: f32, r: f32| RectF::new(x + 32.0 * c, PAD + 32.0 * r, 31.0, 31.0);
+    let square = |c: f32, r: f32| RectF::new(x + 96.0 * c, PAD + 96.0 * r, 95.0, 95.0);
     assert!(d.filled(square(0.0, 0.0), t.surface_lo) && d.filled(square(1.0, 0.0), t.ansi[1]));
     assert!(d.filled(square(0.0, 1.0), t.ansi[8]) && d.filled(square(1.0, 1.0), t.ansi[2]));
     assert_eq!((d.hit(7).rect, d.hit(7).sense), (rect, Sense::Click));
@@ -578,8 +578,8 @@ fn grids_draw_theme_squares_and_points_find_them() {
     assert_eq!([edge(0.0, 0.0), edge(0.0, 2.0), edge(1.0, 0.0)], [1, 1, 0]);
     // A point finds its square; past the last square, or outside: none.
     let b = view.grids[0];
-    assert_eq!(b.at(x + 40.0, PAD + 40.0), Some((1, 1)));
-    assert!([(x + 40.0, PAD + 70.0), (x - 1.0, PAD)].iter().all(|p| b.at(p.0, p.1).is_none()));
+    assert_eq!(b.at(x + 100.0, PAD + 100.0), Some((1, 1)));
+    assert!([(x + 100.0, PAD + 200.0), (x - 1.0, PAD)].iter().all(|p| b.at(p.0, p.1).is_none()));
     // For the AI: a mark of its size, the rows a line each, then each text by its square.
     let marked = |g: &Node| sem(std::slice::from_ref(g), t).marks[0].value.clone();
     assert_eq!(marked(&grid), "2 columns, 3 rows\n01\n82\n0\n1: X");
@@ -609,12 +609,12 @@ fn grids_draw_theme_squares_and_points_find_them() {
     super::draw(&mut { ui }, &[tap], &mut texts, &mut view);
     let r = view.grids[0].rect;
     assert!(r.x >= PAD && r.x + r.w <= 375.0 - PAD && r.w > 330.0, "{r:?}");
-    // A tall one alone takes two thirds of the view's height at most, so what is under it
-    // shows: 20 rows in 360 px are 12 px squares (11 and a pixel apart).
+    // A tall one alone takes the view's height: 20 rows in 360 px are 18 px squares (17 and a
+    // pixel apart).
     let tall = Node::Grid { id: 0, cols: 10, cells: vec![1; 200], texts: Vec::new() };
     let d = draw(std::slice::from_ref(&tall), &mut texts, &mut view, None);
-    let twelve = |f: &&&Instance| f.rect[2] == 11.0 && f.color == t.ansi[1];
-    assert_eq!(d.of(Kind::Fill).iter().filter(twelve).count(), 200);
+    let eighteen = |f: &&&Instance| f.rect[2] == 17.0 && f.color == t.ansi[1];
+    assert_eq!(d.of(Kind::Fill).iter().filter(eighteen).count(), 200);
     // Among a game's labels and buttons it takes what they leave: all of it shows.
     let button = |id| Node::Button { id, variant: Variant::Normal, label: "Left".into() };
     let row = |id| Node::Row { id: 0, gap: 8, children: vec![button(id), button(id + 1)] };
@@ -627,14 +627,14 @@ fn grids_draw_theme_squares_and_points_find_them() {
 
 #[test]
 fn grid_texts_fit_their_squares_and_its_colors_read_apart() {
-    // Four digits in 32 px squares, and the card's words: each text inside its own square.
+    // Four digits in 96 px squares, and the card's words: each text inside its own square.
     let tiles = ["1024", "2048", "banana", "cherry"].map(String::from).to_vec();
     let grid = Node::Grid { id: 1, cols: 4, cells: vec![3, 4, 0, 0], texts: tiles };
     let (mut texts, mut view) = (Texts::default(), View::default());
     let d = draw(&[grid], &mut texts, &mut view, None);
     let r = view.grids[0].rect;
     for i in 0..4 {
-        let (left, right) = (r.x + 32.0 * i as f32, r.x + 32.0 * (i + 1) as f32 - 1.0);
+        let (left, right) = (r.x + 96.0 * i as f32, r.x + 96.0 * (i + 1) as f32 - 1.0);
         let ink = |g: &&Instance| (left..right).contains(&(g.rect[0] + g.rect[2] / 2.0));
         let glyphs: Vec<_> = d.of(Kind::Glyph).into_iter().filter(ink).collect();
         assert!(glyphs.len() >= 4, "{i}");

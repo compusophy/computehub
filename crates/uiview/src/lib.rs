@@ -207,13 +207,16 @@ impl Play {
     }
 }
 
-/// A grid's square for `cols` across `w`, its rows at most `row` tall: whole device px, 6 to
-/// 32 logical px by the height, but never wider than `w` holds (a device px at least).
-fn side(ts: &TextSystem, (w, cols): (f32, u16), row: f32) -> f32 {
+/// The largest square of a Grid, in logical px: a finger's target several times over.
+pub const SQUARE: f32 = 96.0;
+
+/// A grid's square for `cols` across `w`: whole device px, as wide as `w` holds up to [`SQUARE`]
+/// (a device px at least), times `fit` (the share of their room the boards get), 6 px at least.
+fn side(ts: &TextSystem, (w, cols): (f32, u16), fit: f32) -> f32 {
     let d = ts.dpr();
     // Not `clamp`: its panic message would link float formatting into the boot.
-    let tall = (row * d).floor().min((32.0 * d).floor()).max((6.0 * d).ceil());
-    (w / f32::from(cols) * d).floor().min(tall).max(1.0) / d
+    let most = (w / f32::from(cols) * d).floor().min((SQUARE * d).floor()).max(1.0);
+    (most * fit).floor().max((6.0 * d).ceil()).min(most) / d
 }
 
 /// A Scroll as last drawn: its id, how far down it is, its content's height and its rect.
@@ -259,15 +262,16 @@ pub fn draw(ui: &mut Ui<'_>, nodes: &[Node], texts: &mut Texts, view: &mut View)
     #[rustfmt::skip]
     let mut lay = Lay { t, texts, sizes: Vec::new(), extents: Vec::new(), extra: 0.0, fills: 0,
         slack: Vec::new(), again: false, i: 0, e: 0, y: 0.0, touch, right: r.x + r.w, old,
-        scrolls: Vec::new(), now, reveal: view.reveal, grids: Vec::new(), row: 0.0,
+        scrolls: Vec::new(), now, reveal: view.reveal, grids: Vec::new(), fit: 0.0,
         room: (0.0, 0.0), nth: 0 };
     let ts = ui.text_system();
     let mut h = lay.stack(ts, nodes, w, SPACING, None);
-    // Again with the Grids' rows (measured of 6 px squares) sharing what the rest leaves, a
-    // third to two thirds of the view's height, so what is around them shows too.
-    let (grids, rows) = lay.room;
-    if rows > 0.0 {
-        lay.row = (inner - h + grids).min(inner * 2.0 / 3.0).max(inner / 3.0) / rows;
+    // Again with the boards (measured at their least: Grids of 6 px squares) sharing what the
+    // rest leaves, a third of the view's height at least, each as large as it can be up to its
+    // full width: a game takes the room its labels and buttons leave.
+    let (least, most) = lay.room;
+    if most > 0.0 {
+        lay.fit = ((inner - h + least).max(inner / 3.0) / most).min(1.0);
         lay.fills = 0;
         lay.slack.clear();
         h = lay.restack(ts, nodes, w);
@@ -316,8 +320,8 @@ fn style_of(style: Style, t: &Theme) -> TextStyle {
 /// whether this is the second pass, the next size and extent to draw, the top of the node being
 /// measured in the content, whether chips and quiet buttons are touch targets, the window's
 /// right edge, the Scrolls as last drawn and as drawn now, the page clock, when the reveal
-/// began, the Grids drawn, the most height a Grid's row takes, the Grids' height and rows as
-/// measured, and the Grids drawn or passed.
+/// began, the boards drawn, the share of its largest size each board takes (0: its least), the
+/// boards' heights as measured and at their largest, and the boards drawn or passed.
 struct Lay<'t> {
     t: &'t Theme,
     texts: &'t mut Texts,
@@ -337,7 +341,7 @@ struct Lay<'t> {
     now: f64,
     reveal: Option<f64>,
     grids: Vec<Board>,
-    row: f32,
+    fit: f32,
     room: (f32, f32),
     nth: u32,
 }
@@ -370,6 +374,13 @@ impl Lay<'_> {
         }
         self.fills += 1;
         self.extra + self.slack[self.fills - 1]
+    }
+
+    /// A board (a Grid or a Canvas) `w` wide, `h` tall as measured and `most` at its largest:
+    /// its size, its room noted.
+    fn board(&mut self, w: f32, h: f32, most: f32) -> (f32, f32) {
+        self.room = (self.room.0 + h, self.room.1 + most);
+        (w, h)
     }
 
     /// Measures `n` given width `w` (Buttons, Spacers and Glyphs take their own).
@@ -480,10 +491,10 @@ impl Lay<'_> {
             }
             Node::Separator => (w, 1.0),
             Node::Grid { cols, cells, .. } => {
-                let rows = cells.len().div_ceil(usize::from(*cols).max(1)) as f32;
-                let h = rows * side(ts, (w, (*cols).max(1)), self.row);
-                self.room = (self.room.0 + h, self.room.1 + rows);
-                (w, h)
+                let (rows, cols) =
+                    (cells.len().div_ceil(usize::from(*cols).max(1)), (*cols).max(1));
+                let rows = rows as f32;
+                self.board(w, rows * side(ts, (w, cols), self.fit), rows * side(ts, (w, cols), 1.0))
             }
         };
         self.sizes[at] = size;
