@@ -68,6 +68,8 @@ pub struct Studio {
     pub(crate) width: u16,
     pub(crate) requests: Vec<Request>,
     pub(crate) framed: bool,
+    /// The timer and keys asked for the app.
+    pub(crate) asked: (u32, bool),
 }
 
 impl Studio {
@@ -103,7 +105,7 @@ impl Studio {
         self.status = (Style::Small, shown(&self.path));
         match disk.read(&self.path) {
             Ok(text) if text.len() > MAX_TEXT => self.block("the file is over 256 KiB".into()),
-            Ok(text) => self.replace(text),
+            Ok(text) => self.replace(text, disk),
             Err(e) if e.kind() == ErrorKind::NotFound => self.status.1.push_str(" \u{b7} new file"),
             Err(e) => self.block(format!("cannot read it: {e}")),
         }
@@ -121,10 +123,10 @@ impl Studio {
     }
 
     /// Takes `text` as the program: a fresh Code, and the preview running it.
-    pub(crate) fn replace(&mut self, text: String) {
+    pub(crate) fn replace(&mut self, text: String, disk: &mut dyn Disk) {
         self.edits = self.edits.wrapping_add(1);
         (self.version, self.dirty, self.lost, self.mark) = (1, false, false, None);
-        self.live = Some(Live::new(&text));
+        self.live = Some(Live::new(&text, &self.path, disk));
         self.text = text;
     }
 
@@ -148,18 +150,18 @@ impl Studio {
             (self.mark, self.status) = (d.span, (Style::Error, problem(&d, &self.text)));
         } else {
             self.mark = None;
-            self.live = Some(Live::new(&self.text));
+            self.live = Some(Live::new(&self.text, &self.path, disk));
             self.status = self.save(disk, "Checked \u{2713} \u{2014} saved ");
         }
     }
 
-    fn change(&mut self, ev: &Event) {
+    fn change(&mut self, ev: &Event, disk: &mut dyn Disk) {
         let Event::Change { id, version, text } = ev else { return };
         if *id == self.prompt_id() {
             self.prompt = clip(text, MAX_PROMPT);
         } else if *id != self.code_id() {
             if let Some(live) = &mut self.live {
-                live.event(ev);
+                live.event(ev, disk);
             }
         } else if text.len() > MAX_TEXT {
             self.lost = true;
@@ -230,7 +232,7 @@ impl View for Studio {
                 }
             }
             // Every Change gets a frame: the desktop sends the next one then.
-            Some(ev @ Event::Change { .. }) => self.change(ev),
+            Some(ev @ Event::Change { .. }) => self.change(ev, disk),
             Some(&Event::Key { id, key: Key::Enter, mods, .. }) if cmd(mods) => {
                 if id == self.prompt_id() {
                     self.make()
@@ -249,7 +251,12 @@ impl View for Studio {
                 self.asks.push(clip(text, MAX_PROMPT));
                 self.next_ask();
             }
-            Some(ev) if self.live.as_mut().is_some_and(|live| live.event(ev)) => {}
+            Some(ev) if self.live.as_mut().is_some_and(|live| live.event(ev, disk)) => {
+                // A press on an app that takes keys gives it the keyboard.
+                if matches!(ev, Event::Click { .. } | Event::Tap { .. }) && self.asked.1 {
+                    self.requests.push(Request::Focus { id: 0 });
+                }
+            }
             _ => return fresh,
         }
         true

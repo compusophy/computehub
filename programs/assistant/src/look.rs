@@ -14,8 +14,9 @@ use uiwire::scene::{Hit, Mark, Scene, Win, state};
 /// The most bytes of screen text a request carries.
 pub const MAX_TEXT: usize = 12 << 10;
 /// The roles of `ui::sem`, by code; 0 is the hit's sense's.
-const ROLES: [&str; 10] =
-    ["", "button", "tab", "switch", "option", "textbox", "item", "code", "terminal", "link"];
+const ROLES: [&str; 11] = [
+    "", "button", "tab", "switch", "option", "textbox", "item", "code", "terminal", "link", "grid",
+];
 /// The most refs a session keeps; past it they start over.
 const MAX_REFS: usize = 4096;
 
@@ -167,6 +168,8 @@ fn describe(role: &str, name: &str, mark: Option<&Mark>) -> String {
         "textbox" if !value.is_empty() => out += &format!(" value {}", quoted(&clip(value, 160))),
         "textbox" if !name.is_empty() => out += &format!(" placeholder {}", quoted(name)),
         "textbox" => out += " empty",
+        // The text in its squares, then its columns and a row of square colors (0 empty) a line.
+        "grid" => out += &format!(" {} squares {}", quoted(name), quoted(value)),
         _ if !name.is_empty() => out += &[" ", &quoted(name)].concat(),
         _ => {}
     }

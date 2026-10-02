@@ -271,18 +271,20 @@ fn makes_checks_fixes_and_saves() {
     let f = w.last(&[think(id, "Hm\u{e9}. "), think(id, "Ok.")]);
     assert!(has(&f, "Thinking\u{2026} 8 chars"), "{:?}", words(&f));
     // A reply that does not compile goes back with its problem, once checked: a fresh request
-    // with what was asked, the problem at its line with a caret, the rule, and the program.
+    // with what was asked, the problem at its line with a caret, the rule, and the program. Its
+    // request stops once the program's block closes (what follows is never used).
     let bad = "row {\n  label 1\n}\n";
-    let frames = w.answer(id, &app(bad));
+    let frames = w.answer(id, &[&app(bad), "Now a second draft:\n```app\nlabel 2;\n"].concat());
     assert!(has(&frames[0], "Writing\u{2026} 5 chars"));
     let n = frames.len();
-    assert!(has(&frames[n - 2], "Checking\u{2026}") && frames[n - 2].requests.is_empty());
+    assert!(has(&frames[n - 2], "Checking\u{2026}"));
+    assert_eq!(frames[n - 2].requests, [Request::AiCancel { id }]);
     assert!(has(&frames[n - 1], "Retrying (1 of 3) \u{2014} asking\u{2026}"));
     let (id, body) = ai(&frames[n - 1]);
     let (role, fix) = message(&body, 1);
     let want = "You were asked: a counter\n\nYour program did not compile: E0101 at line 3, col 1: \
-                expected `;`, found `}`\n  }\n  ^\nRule: label, input, let and assignments end \
-                with ;, also inside the braces of if, row and col";
+                expected `;`, found `}`\n  }\n  ^\nRule: every widget, let, assignment, call \
+                and return ends with ;, also inside the braces of if, row, col and for";
     assert!(messages(&body) == 2 && role == "user" && fix.starts_with(want), "{fix}");
     let tail = "fix every occurrence.\n\nYour program:\n```app\nrow {\n  label 1\n}\n```\nReply \
                 with the corrected complete program in one app block.";
@@ -401,11 +403,13 @@ fn a_program_that_faults_when_it_first_renders_goes_back_and_is_never_saved() {
         let (role, fix) = message(&body, 1);
         let want = format!(
             "The program now:\n```app\n{}\n```\nChange it: show the average\n\nYour program \
-             faults when it first renders: E0203 at line 3, col 21: ",
+             faults when it runs: E0203 at line 3, col 21: ",
             COUNTER.trim_end()
         );
         assert!(role == "user" && fix.starts_with(&want), "{fix}");
-        assert!(fix.contains("\nRule: guard every / and % so the divisor is never 0.\n"));
+        let rule = "\nRule: guard every / and % so the divisor is never 0.\nIt came while the \
+                    first render.\n";
+        assert!(fix.contains(rule), "{fix}");
     }
     assert!(w.disk["/apps/counter.app"] == COUNTER && !w.disk.contains_key(CORPUS));
 }
@@ -788,6 +792,41 @@ fn host_clicks_and_inputs_reach_the_app_and_serve_frames_until_close() {
     let mut ui = Client::new(feed(vec![click(APP + 1).encode()]), &mut [0u8; 0][..]);
     let err = serve(&mut ui, w.view.as_mut(), &mut w.disk).unwrap_err();
     assert_eq!(err.kind(), ErrorKind::WriteZero);
+}
+
+#[test]
+fn games_tick_take_keys_and_taps_and_keep_their_saved_state() {
+    let src = "saved state best = 0; state x = 0; state cells = [0; 4];
+        every 100 { x += 1; best = max(best, x); }
+        on key \"left\" { x -= 10; }
+        label \"x \" + x;
+        grid 2, cells { cells[cell] = 1; }";
+    let (path, state) = ("/apps/game.app", [HOME, "/.appdata/game.state"].concat());
+    let mut w = Win::new(&["run", path], with(&[(path, src), (&state, "best = 7;\n")]));
+    // It asks for ticks and keys; its grid taps as the first handler shown.
+    let f = w.last(&[WIDE]);
+    assert_eq!(f.requests, [Request::Timer { ms: 100 }, Request::Keys { on: true }]);
+    let grid = |f: &Frame| {
+        let g = all(&f.nodes).into_iter().find(|n| matches!(n, Node::Grid { .. }));
+        let Some(Node::Grid { id, cells, .. }) = g else { panic!("a grid") };
+        (*id, cells.clone())
+    };
+    assert_eq!(grid(&f), (APP, vec![0; 4]));
+    // Every tick answers; one that makes the every due runs it.
+    assert!(has(&w.last(&[Event::Tick { ms: 100 }]), "x 1"));
+    assert!(has(&w.last(&[Event::Tick { ms: 50 }]), "x 1"));
+    // A plain key is the app's, a chord the window's; a tap is its grid's.
+    let key = |mods| Event::Key { id: 0, key: Key::Left, mods, ch: '\0' };
+    assert!(has(&w.last(&[key(0)]), "x -9") && w.send(&[key(mods::CTRL)]).is_none());
+    assert_eq!(grid(&w.last(&[Event::Tap { id: APP, cell: 3 }])).1, [0, 0, 0, 1]);
+    // The saved best came back (7), and is kept once it passes it.
+    assert_eq!(w.disk[&state], "best = 7;\n");
+    w.frames(&vec![Event::Tick { ms: 100 }; 20]);
+    assert_eq!(w.disk[&state], "best = 11;\n");
+    // In Studio the preview ticks; showing the code stops its timer.
+    let mut s = Win::new(&["edit", path], w.disk.clone());
+    assert!(s.last(&[WIDE]).requests.contains(&Request::Timer { ms: 100 }));
+    assert!(s.last(&[click(TOGGLE)]).requests.contains(&Request::Timer { ms: 0 }));
 }
 
 #[test]

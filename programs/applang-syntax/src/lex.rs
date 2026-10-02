@@ -11,26 +11,30 @@ use crate::codes;
 #[rustfmt::skip]
 pub(crate) enum TokKind {
     Int(i64), Ident, Str, True, False,
-    State, Label, Button, Input, Row, Col, Let, If, Else, Repeat,
-    Plus, Minus, Star, Slash, Percent, Bang, BangEq, Assign, EqEq,
-    Lt, LtEq, Gt, GtEq, AndAnd, OrOr, LParen, RParen, LBrace, RBrace, Semi, Eof,
+    State, Label, Button, Input, Row, Col, Let, If, Else, Repeat, Fn, For, In, Return,
+    Plus, Minus, Star, Slash, Percent, Bang, BangEq, Assign, EqEq, PlusEq, MinusEq,
+    Lt, LtEq, Gt, GtEq, AndAnd, OrOr, LParen, RParen, LBrace, RBrace, Semi,
+    LBracket, RBracket, Comma, Colon, Arrow, DotDot, Eof,
 }
 use TokKind::*;
 
+/// The reserved words. `saved`, `every`, `on`, `key`, `grid` and `cell` are words only where
+/// a name could not be (so a state may still be called `grid` or `on`).
 #[rustfmt::skip]
-const KEYWORDS: [(&str, TokKind); 12] = [
+const KEYWORDS: [(&str, TokKind); 16] = [
     ("state", State), ("label", Label), ("button", Button), ("input", Input), ("row", Row),
     ("col", Col), ("let", Let), ("if", If), ("else", Else), ("repeat", Repeat),
-    ("true", True), ("false", False),
+    ("true", True), ("false", False), ("fn", Fn), ("for", For), ("in", In), ("return", Return),
 ];
 
 /// Two-char operators first, so the longest match wins.
 #[rustfmt::skip]
-const PUNCT: [(&str, TokKind); 20] = [
+const PUNCT: [(&str, TokKind); 28] = [
     ("&&", AndAnd), ("||", OrOr), ("==", EqEq), ("!=", BangEq), ("<=", LtEq), (">=", GtEq),
+    ("+=", PlusEq), ("-=", MinusEq), ("->", Arrow), ("..", DotDot),
     ("+", Plus), ("-", Minus), ("*", Star), ("/", Slash), ("%", Percent), ("!", Bang),
     ("=", Assign), ("<", Lt), (">", Gt), ("(", LParen), (")", RParen), ("{", LBrace),
-    ("}", RBrace), (";", Semi),
+    ("}", RBrace), (";", Semi), ("[", LBracket), ("]", RBracket), (",", Comma), (":", Colon),
 ];
 
 /// A spanned token.

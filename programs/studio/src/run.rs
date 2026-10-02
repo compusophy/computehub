@@ -3,11 +3,11 @@
 
 use crate::{Disk, View, file_name, text};
 use applang::{App, Limits, Node as A};
-use assistant::ai::{clip, problem};
-use uiwire::{Event, Frame, MAX_DEPTH, Node, Request, Style, Variant};
+use assistant::ai::{HOME, clip, problem};
+use uiwire::{Event, Frame, Key, MAX_DEPTH, Node, Request, Style, Variant, mods};
 
-/// The app's buttons are this plus applang's ids, its inputs [`INPUT`] plus their state's place
-/// in declaration order: ids below [`APP`] are the window's own.
+/// The app's buttons and grids are this plus applang's ids, its inputs [`INPUT`] plus their
+/// state's place in declaration order: ids below [`APP`] are the window's own.
 pub const APP: u32 = 1 << 30;
 pub const INPUT: u32 = 1 << 31;
 /// "Edit in Studio", shown when the file cannot run.
@@ -19,7 +19,9 @@ pub(crate) const TOO_BIG: &str =
     "renders more than 4,000 widgets or nests them deeper than 32; the rest is not shown";
 
 /// A program compiled and running with [`Limits::default`], or why it cannot run; a fault
-/// (a handler or render that failed) shows as an error under it until the next event.
+/// (a handler or render that failed), or what its saved states said as they came back, shows
+/// under it until the next event. Its `saved` states live in `~/.appdata/<name>.state` (its
+/// file's name), read when it starts and written when they change.
 #[derive(Debug)]
 pub struct Live {
     src: String,
@@ -27,17 +29,49 @@ pub struct Live {
     app: Result<App, (String, String)>,
     nodes: Vec<A>,
     fault: Option<String>,
+    /// Where its saved states go ("": nowhere), and what was last written there.
+    state: String,
+    saved: String,
+}
+
+/// The file the saved states of the app at `path` go to ("" for none).
+pub fn state_path(path: &str) -> String {
+    let name = file_name(path);
+    let stem = name.strip_suffix(".app").unwrap_or(name);
+    if stem.is_empty() { String::new() } else { [HOME, "/.appdata/", stem, ".state"].concat() }
+}
+
+/// A seed for `random`: the clock's nanoseconds, so each run deals afresh.
+fn seed() -> u64 {
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH);
+    now.map_or(1, |d| d.as_nanos() as u64)
 }
 
 impl Live {
-    /// `src` compiled and started.
-    pub fn new(src: &str) -> Live {
-        let app = applang::compile(src).map(|p| App::new(p, Limits::default())).map_err(|d| {
+    /// `src` (the app at `path`, "" for none) compiled and started, its saved states back.
+    pub fn new(src: &str, path: &str, disk: &mut dyn Disk) -> Live {
+        let app = applang::compile(src).map(|p| App::new(p, Limits::default(), seed()));
+        let app = app.map_err(|d| {
             let snip = d.span.and_then(|s| lang::diag::render_snippet(src, s));
             let snip = snip.as_deref().and_then(|s| s.split_once('\n')).map(|(_, s)| s);
             (problem(&d, src), clip(snip.unwrap_or_default(), 4096))
         });
-        let mut live = Live { src: src.into(), app, nodes: Vec::new(), fault: None };
+        let state = state_path(path);
+        let mut live = Live {
+            src: src.into(),
+            app,
+            nodes: Vec::new(),
+            fault: None,
+            state,
+            saved: String::new(),
+        };
+        if let Ok(app) = &mut live.app {
+            live.saved = app.saved();
+            let back = (!live.saved.is_empty()).then(|| disk.read(&live.state).ok()).flatten();
+            let notes = back.map(|text| app.restore(&text)).unwrap_or_default();
+            live.fault = (!notes.is_empty()).then(|| notes.join("; "));
+            live.saved = app.saved();
+        }
         live.render();
         live
     }
@@ -50,8 +84,10 @@ impl Live {
                 app: Err((format!("error cannot read {path}: {e}"), String::new())),
                 nodes: Vec::new(),
                 fault: None,
+                state: String::new(),
+                saved: String::new(),
             },
-            |src| Live::new(&src),
+            |src| Live::new(&src, path, disk),
         )
     }
 
@@ -60,20 +96,38 @@ impl Live {
         self.app.is_ok()
     }
 
+    /// What it wants of the window: a tick every so many ms (0: none), and plain keys.
+    pub fn play(&mut self) -> (u32, bool) {
+        self.app.as_mut().map_or((0, false), |app| (app.timer(), app.keys()))
+    }
+
     fn render(&mut self) {
-        let Ok(app) = &self.app else { return };
+        let Ok(app) = &mut self.app else { return };
         match app.render() {
             Ok(nodes) => self.nodes = nodes,
             Err(d) => (self.nodes, self.fault) = (Vec::new(), Some(problem(&d, &self.src))),
         }
     }
 
-    /// Runs `ev` if it is the app's (a click of its button, a change of its input); whether it was.
-    pub fn event(&mut self, ev: &Event) -> bool {
+    /// Runs `ev` if it is the app's (a click of its button, a tap of its grid, a change of its
+    /// input, a tick, a key it may handle); whether the window changed (a tick always answers,
+    /// so the desktop sends the next).
+    pub fn event(&mut self, ev: &Event, disk: &mut dyn Disk) -> bool {
         let Ok(app) = &mut self.app else { return false };
         let ev = match ev {
             &Event::Click { id } if (APP..INPUT).contains(&id) => {
                 applang::Event::Click { id: id - APP }
+            }
+            &Event::Tap { id, cell } if (APP..INPUT).contains(&id) => {
+                applang::Event::Tap { id: id - APP, cell }
+            }
+            &Event::Tick { ms } => applang::Event::Tick { ms },
+            // Chords are the window's own.
+            &Event::Key { key, mods, ch, .. } if mods & !mods::SHIFT == 0 => {
+                match key_name(key, ch) {
+                    Some(name) => applang::Event::Key { name },
+                    None => return false,
+                }
             }
             Event::Change { id, text, .. } => {
                 let i = id.checked_sub(INPUT).and_then(|i| usize::try_from(i).ok());
@@ -83,7 +137,19 @@ impl Live {
             }
             _ => return false,
         };
-        self.fault = app.handle(&ev).err().map(|d| problem(&d, &self.src));
+        let tick = matches!(ev, applang::Event::Tick { .. });
+        let ran = app.handle(&ev);
+        if let Ok(false) = ran {
+            return tick;
+        }
+        self.fault = ran.err().map(|d| problem(&d, &self.src));
+        let saved = app.saved();
+        if saved != self.saved && !self.state.is_empty() {
+            match disk.write(&self.state, &saved) {
+                Ok(()) => self.saved = saved,
+                Err(e) => self.fault = Some(format!("its saved state was not kept: {e}")),
+            }
+        }
         self.render();
         true
     }
@@ -109,9 +175,33 @@ impl Live {
     }
 }
 
+/// The name an `on key` handler gives `key` (`ch` for a character key), if it has one.
+fn key_name(key: Key, ch: char) -> Option<String> {
+    let name = match key {
+        Key::Left => "left",
+        Key::Right => "right",
+        Key::Up => "up",
+        Key::Down => "down",
+        Key::Enter => "enter",
+        Key::Escape => "escape",
+        Key::Char if ch == ' ' => "space",
+        Key::Char if ch.is_ascii_alphanumeric() => return Some(ch.to_ascii_lowercase().into()),
+        _ => return None,
+    };
+    Some(name.into())
+}
+
+/// Asks for the timer and keys of `now` where they differ from those `asked` before.
+pub(crate) fn ask(asked: &mut (u32, bool), now: (u32, bool), out: &mut Vec<Request>) {
+    let was = std::mem::replace(asked, now);
+    out.extend((was.0 != now.0).then_some(Request::Timer { ms: now.0 }));
+    out.extend((was.1 != now.1).then_some(Request::Keys { on: now.1 }));
+}
+
 /// Puts `nodes` (at `depth`; `names` the app's states) into `out` as wire
 /// nodes while they fit in `left` and [`MAX_DEPTH`]; whether all of them did.
 fn wire(nodes: &[A], depth: usize, left: &mut usize, names: &[&str], out: &mut Vec<Node>) -> bool {
+    let app = |id: u32| APP.checked_add(id).filter(|&id| id < INPUT).unwrap_or(0);
     nodes.iter().all(|n| {
         let kids = match n {
             A::Row { children } | A::Col { children } => children.as_slice(),
@@ -126,8 +216,7 @@ fn wire(nodes: &[A], depth: usize, left: &mut usize, names: &[&str], out: &mut V
         out.push(match n {
             A::Label { text } => Node::Text { id: 0, style: Style::Body, text: text.clone() },
             A::Button { text, id } => {
-                let id = APP.checked_add(*id).filter(|&id| id < INPUT).unwrap_or(0);
-                Node::Button { id, variant: Variant::Normal, label: text.clone() }
+                Node::Button { id: app(*id), variant: Variant::Normal, label: text.clone() }
             }
             A::Input { state, value } => {
                 let i = names.iter().position(|n| n == state).and_then(|i| u32::try_from(i).ok());
@@ -136,6 +225,10 @@ fn wire(nodes: &[A], depth: usize, left: &mut usize, names: &[&str], out: &mut V
             }
             A::Row { .. } => Node::Row { id: 0, gap: 8, children },
             A::Col { .. } => Node::Col { id: 0, gap: 8, children },
+            A::Grid { id, cols, cells, texts } => {
+                let (cells, texts) = (cells.clone(), texts.clone());
+                Node::Grid { id: id.map_or(0, app), cols: *cols, cells, texts }
+            }
         });
         all
     })
@@ -148,6 +241,8 @@ pub struct AppHost {
     path: String,
     live: Option<Live>,
     requests: Vec<Request>,
+    /// The timer and keys asked for.
+    asked: (u32, bool),
 }
 
 impl AppHost {
@@ -166,8 +261,8 @@ impl View for AppHost {
                 self.requests.push(Request::Open { name: ["studio:", &self.path].concat() })
             }
             // Every Change gets a frame: the desktop sends the next one then.
-            Some(ev @ Event::Change { .. }) => _ = live.event(ev),
-            Some(ev) if live.event(ev) => {}
+            Some(ev @ Event::Change { .. }) => _ = live.event(ev, disk),
+            Some(ev) if live.event(ev, disk) => {}
             _ => return fresh,
         }
         true
@@ -175,7 +270,8 @@ impl View for AppHost {
 
     fn frame(&mut self) -> Frame {
         let mut nodes = Vec::new();
-        if let Some(live) = &self.live {
+        let mut requests = std::mem::take(&mut self.requests);
+        if let Some(live) = &mut self.live {
             let name = file_name(&self.path);
             let broken = !live.runs();
             nodes.extend(broken.then(|| text(Style::Heading, &[name, " cannot run"].concat())));
@@ -186,8 +282,8 @@ impl View for AppHost {
                 label: "Edit in Studio".into(),
             };
             nodes.extend(broken.then(edit));
+            ask(&mut self.asked, live.play(), &mut requests);
         }
-        let requests = std::mem::take(&mut self.requests);
         Frame { seq: 0, title: file_name(&self.path).into(), requests, nodes }
     }
 }

@@ -178,10 +178,8 @@ fn clicks_keys_and_requests_go_through() {
     assert!(s.ev(AppEvent::Focus(false)), "the window's focus, told");
     // Chords and Escape and Enter are keys; plain keys are not.
     assert!(!s.ev(key(Key::Char('s'), "c")));
-    for ev in [key(Key::Char('s'), ""), key(Key::Enter, ""), key(Key::Space, "ms")] {
-        s.ev(ev);
-    }
-    s.ev(key(Key::F(5), "c"));
+    let plain = [key(Key::Char('s'), ""), key(Key::Enter, ""), key(Key::Space, "ms")];
+    plain.into_iter().chain([key(Key::F(5), "c")]).for_each(|ev| _ = s.ev(ev));
     let k = |key, mods, ch| Event::Key { id: 0, key, mods, ch };
     let (char, ms) = (uiwire::Key::Char, mods::META | mods::SHIFT);
     let keys = [k(char, mods::CTRL, 's'), k(uiwire::Key::Enter, 0, '\0'), k(char, ms, ' ')];
@@ -195,6 +193,9 @@ fn clicks_keys_and_requests_go_through() {
     let ev = [AppEvent::Click(WidgetId(1)), AppEvent::Agent(Event::Halt)].map(|e| s.ev(e));
     assert!(ev == [false; 2] && s.r.busy() && s.events() == [Event::Click { id: 1 }, Event::Halt]);
     assert!(s.show(vec![], vec![]) && !s.r.busy());
+    // A program that asks for keys gets plain ones too, while no field has the keyboard.
+    s.show(vec![], vec![Request::Keys { on: true }]);
+    assert!(!s.ev(key(Key::Left, "")) && s.events() == [k(uiwire::Key::Left, 0, '\0')]);
     // Closing says Close once; the program's exit then ends the window.
     (0..2).for_each(|_| s.cx(|r, cx| r.closing(cx)));
     assert_eq!(s.events(), [Event::Close]);
@@ -239,8 +240,7 @@ fn inputs_and_codes_keep_the_text_the_user_edits() {
     let gold = THEMES[0].ansi[3];
     let nums =
         |s: &mut Sys| s.draw().0.instances().iter().any(|i| i.kind == 4.0 && i.color == gold);
-    s.ev(press(4));
-    s.ev(key(Key::End, ""));
+    [press(4), key(Key::End, "")].into_iter().for_each(|ev| _ = s.ev(ev));
     for ev in [key(Key::Enter, ""), text("\n"), key(Key::Tab, ""), text("\t"), text("y")] {
         s.ev(ev);
     }

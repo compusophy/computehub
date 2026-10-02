@@ -1,8 +1,10 @@
 //! Making with the AI: the prompt (with the program it changes) goes out as a chat request (at
-//! most [`MAX_BODY`] bytes), the reply streams in, then is checked. A program that does not
-//! compile or faults when it first renders goes back in a fresh request, with what was asked (and
-//! the program a change changes), its problem (its line, a caret, the rule broken) and the
-//! program; a reply cut off by the token limit before its program ended asks for the same app
+//! most [`MAX_BODY`] bytes) under applang's card and its example programs, the reply streams in,
+//! then is checked. A program that does not compile or faults when it runs ([`applang::smoke`]:
+//! drawn, clicked, ticked, keyed, tapped, typed into) goes back in a fresh request, with what was
+//! asked (and the program a change changes), its problem (its line, a caret, the rule broken,
+//! what led to it) and the program; a reply cut off by the token limit before its program ended
+//! asks for the same app
 //! shorter (what it holds is never run), and one without a program asks again: at most
 //! [`RETRIES`] times (then E0906, saying what was tried, or E0907 out of room). Never with an
 //! empty or cut-off reply as context, and never asking for reasoning (the free AI bounds it to
@@ -24,10 +26,12 @@ pub(crate) const EXAMPLES: [&str; 4] =
 const SYSTEM: [&str; 2] = [
     "You write apps for Studio, the app maker of compusophyOS, a desktop that runs in a browser \
      tab. Apps are written in applang:\n\n",
-    "\n\napplang has no clock and no randomness: for chance, keep a seed in state and step it \
-     (seed = (seed * 1103515245 + 12345) % 2147483648). Keep programs under 150 lines. Decide \
-     quickly what applang can make, then write it: your reply has room for the program, not for \
-     long deliberation.\n\n\
+    "\n\nA game remembers its world in states and lists of its own (what has landed, where \
+     things are), and draws the list a grid shows anew from them; it moves with every, is \
+     steered with on key and with buttons too (a phone has no arrow keys), and shows Start until \
+     it runs. Write small functions instead of \
+     repeating code; keep programs under 200 lines. Decide quickly what applang can make, then \
+     write it: your reply has room for the program, not for long deliberation.\n\n\
      Reply with the complete program in one fenced block whose info string is app, and nothing \
      else; after its first comment, a label naming the app. ",
 ];
@@ -136,9 +140,17 @@ impl Studio {
         }
     }
 
+    /// More of the reply. Once its program's block closes the rest is never used (a model may
+    /// go on drafting until it runs out of room), so the request stops and the check comes next.
     pub(crate) fn data(&mut self, data: &[u8]) {
-        if let Some(m) = &mut self.make {
+        if let Some(m) = self.make.as_mut().filter(|m| !m.done) {
             m.stream.feed(data, &mut m.reply, MAX_REPLY);
+            if fenced(&m.reply).is_some_and(|(_, closed)| closed) {
+                m.done = true;
+                self.requests.push(Request::AiCancel { id: m.id });
+                self.status = (Style::Dim, "Checking\u{2026}".into());
+                return;
+            }
         }
         self.status = (Style::Dim, self.progress());
     }
@@ -209,11 +221,15 @@ impl Studio {
             self.path = path;
         }
         let note = about(&src);
-        self.replace(src);
+        self.replace(src, disk);
         self.made.push(m.prompt.clone());
         self.made.drain(..self.made.len().saturating_sub(5));
         if self.prompt.trim() == m.prompt {
             self.set_prompt("");
+        }
+        // A game that takes keys has the keyboard at once.
+        if self.live.as_mut().is_some_and(|live| live.play().1) {
+            self.requests.push(Request::Focus { id: 0 });
         }
         let note = if note.is_empty() { "Ready \u{2713}" } else { note.as_str() };
         let (style, mut said) = self.save(disk, &[note, " \u{2014} saved "].concat());

@@ -47,6 +47,10 @@ impl Studio {
         if !std::mem::replace(&mut self.framed, true) {
             requests.insert(0, Request::Size { w: SIZE.0, h: SIZE.1 });
         }
+        // The app's timer runs while it shows, not its code.
+        let play = self.live.as_mut().map_or((0, false), |live| live.play());
+        let play = if self.code { (0, play.1) } else { play };
+        crate::run::ask(&mut self.asked, play, &mut requests);
         Frame { seq: 0, title, requests, nodes }
     }
 

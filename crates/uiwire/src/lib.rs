@@ -161,6 +161,12 @@ pub enum Act {
     Theme {
         name: String,
     },
+    /// Tap square `cell` of Grid `id` of window `win`.
+    Tap {
+        win: u32,
+        id: u32,
+        cell: u32,
+    },
 }
 
 /// A highlighted byte range of a [`Node::Code`]'s text: `len` bytes from `start`.
@@ -227,7 +233,14 @@ pub enum Node {
     /// (a Text unwrapped); when they do not fit, the first slide out to the left, so the last
     /// stays in view (a path bar's crumbs).
     Strip { id: u32, gap: u8, children: Vec<Node> },
+    /// Squares `cols` a row (at least 1), each a color: 0 empty, 1 to 8 the theme's palette (at
+    /// most [`GRID_COLOR`]); `texts` empty or one per square, written in it. With an id, a press
+    /// on a square, and the pointer dragged onto another while pressed, sends [`Event::Tap`].
+    Grid { id: u32, cols: u16, cells: Vec<u8>, texts: Vec<String> },
 }
+
+/// The highest color of a [`Node::Grid`]'s square.
+pub const GRID_COLOR: u8 = 8;
 
 /// One complete picture of a window, program to host: the program's frame
 /// counter, the window title, what it asks of the desktop (in order) and
@@ -264,6 +277,11 @@ pub enum Request {
     /// The overlay only: whether it works on a task (the desktop shows it, and the person's
     /// own input outside the overlay then halts it).
     Status { working: bool },
+    /// Send [`Event::Tick`] about every `ms` while the window shows (0: stop).
+    Timer { ms: u32 },
+    /// Whether plain keys (arrows, letters, digits, space) come as [`Event::Key`] while no text
+    /// field of the window has the keyboard.
+    Keys { on: bool },
 }
 
 /// Something that happened in the window, host to program.
@@ -273,8 +291,9 @@ pub enum Event {
     Click { id: u32 },
     /// An Input's or Code's text changed; `version` counts the host's edits.
     Change { id: u32, version: u32, text: String },
-    /// A Ctrl, Alt or Meta combination, or Enter or Escape in an input. `id`
-    /// is the focused node or 0; `ch` is the character for [`Key::Char`].
+    /// A Ctrl, Alt or Meta combination, or Enter or Escape in an input; and the plain keys
+    /// [`Request::Keys`] asks for. `id` is the focused node or 0; `ch` is the character for
+    /// [`Key::Char`].
     Key { id: u32, key: Key, mods: u8, ch: char },
     /// The content size in logical px; also the first event, before any frame.
     Resize { w: u16, h: u16 },
@@ -299,6 +318,10 @@ pub enum Event {
     Acted { id: u32, code: u16, note: String, scene: Vec<u8> },
     /// The person took over (a press, key or wheel outside the overlay): stop acting.
     Halt,
+    /// `ms` passed since the last tick ([`Request::Timer`]).
+    Tick { ms: u32 },
+    /// Square `cell` of Grid `id` was pressed, or dragged onto.
+    Tap { id: u32, cell: u32 },
 }
 
 /// The public `encode` and `decode` of each message, from its `put` and `get`.
@@ -350,6 +373,7 @@ impl Node {
     /// each Code's spans are in order, apart and on its text's char boundaries.
     fn valid(&self, depth: usize) -> bool {
         let spans = match self {
+            Self::Grid { cols, cells, texts, .. } => grid(*cols, cells, texts.len()),
             Self::Code { text, spans, .. } => {
                 let mut end = 0;
                 spans.iter().all(|s| {
@@ -396,6 +420,10 @@ impl Node {
             Self::Center { id, gap, .. } => o.head(17, *id, n).u8(*gap),
             Self::Scroll { id, .. } => o.head(18, *id, n),
             Self::Strip { id, gap, .. } => o.head(19, *id, n).u8(*gap),
+            Self::Grid { id, cols, cells, texts } => {
+                let o = o.head(20, *id, n).u16(*cols).bytes(cells).len(texts.len());
+                texts.iter().fold(o, |o, t| o.str(t))
+            }
         };
         self.children().iter().for_each(|child| child.put(o));
     }
@@ -432,6 +460,15 @@ impl Node {
             17 => Self::Center { id, gap: r.u8()?, children: Vec::new() },
             18 => Self::Scroll { id, children: Vec::new() },
             19 => Self::Strip { id, gap: r.u8()?, children: Vec::new() },
+            20 => {
+                let (cols, cells) = (r.u16()?, r.bytes()?.to_vec());
+                let n = r.count().filter(|n| *n <= r.0.len() / 4 && grid(cols, &cells, *n))?;
+                let mut texts = Vec::with_capacity(n);
+                for _ in 0..n {
+                    texts.push(r.str()?);
+                }
+                Self::Grid { id, cols, cells, texts }
+            }
             _ => return None,
         };
         match &mut node {
@@ -471,6 +508,11 @@ impl Node {
         }
         Some(Self::Code { id, version, line_numbers, text, spans })
     }
+}
+
+/// Whether a Grid of `cols`, `cells` and `texts` texts decodes.
+fn grid(cols: u16, cells: &[u8], texts: usize) -> bool {
+    cols > 0 && cells.iter().all(|c| *c <= GRID_COLOR) && (texts == 0 || texts == cells.len())
 }
 
 impl Frame {
@@ -523,6 +565,8 @@ impl Request {
             }
             Self::Act { id, act } => o.u8(8).u32(*id).bytes(act),
             Self::Status { working } => o.u8(9).u8((*working).into()),
+            Self::Timer { ms } => o.u8(10).u32(*ms),
+            Self::Keys { on } => o.u8(11).u8((*on).into()),
         }
     }
 
@@ -540,6 +584,8 @@ impl Request {
                 Act::decode(act).map(|_| Self::Act { id, act: act.into() })?
             }
             9 => Self::Status { working: r.bool()? },
+            10 => Self::Timer { ms: r.u32()? },
+            11 => Self::Keys { on: r.bool()? },
             _ => return None,
         })
     }
@@ -558,6 +604,7 @@ impl Act {
             Self::Open { name } => o.u8(6).str(name),
             Self::Window { win, op } => o.u8(7).u32(*win).u8(*op as u8),
             Self::Theme { name } => o.u8(8).str(name),
+            Self::Tap { win, id, cell } => o.u8(9).u32(*win).u32(*id).u32(*cell),
         };
     }
 
@@ -575,6 +622,7 @@ impl Act {
             6 => Self::Open { name: r.str()? },
             7 => Self::Window { win: r.u32()?, op: WinOp::from_u8(r.u8()?)? },
             8 => Self::Theme { name: r.str()? },
+            9 => Self::Tap { win: r.u32()?, id: r.u32()?, cell: r.u32()? },
             _ => return None,
         })
     }
@@ -600,6 +648,8 @@ impl Event {
                 o.u8(12).u32(*id).u16(*code).str(note).bytes(scene)
             }
             Self::Halt => o.u8(13),
+            Self::Tick { ms } => o.u8(14).u32(*ms),
+            Self::Tap { id, cell } => o.u8(15).u32(*id).u32(*cell),
         }
     }
 
@@ -628,6 +678,8 @@ impl Event {
                 scene: r.bytes()?.to_vec(),
             },
             13 => Self::Halt,
+            14 => Self::Tick { ms: r.u32()? },
+            15 => Self::Tap { id: r.u32()?, cell: r.u32()? },
             _ => return None,
         })
     }
