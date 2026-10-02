@@ -37,6 +37,10 @@ fn shown(a: &mut App) -> Vec<String> {
     texts(&a.render().unwrap())
 }
 
+fn ints(v: &[i64]) -> Value {
+    Value::List(v.iter().copied().map(Value::Int).collect())
+}
+
 #[test]
 fn the_counter_demo_end_to_end() {
     let mut a = app("state count = 0;
@@ -173,6 +177,42 @@ fn lists_functions_and_loops_run_and_fault_coded() {
 }
 
 #[test]
+fn plus_equals_runs_its_index_once_and_fuel_pays_for_bytes() {
+    // `counts[random(6)] += 1` reads and writes one square: the counts add up to the rolls.
+    let mut a = app("state counts = [0; 6]; state rolls = 0;
+         button \"roll\" { counts[random(6)] += 1; rolls += 1; }");
+    (0..300).for_each(|_| assert_eq!(click(&mut a, 0), None));
+    let Value::List(counts) = &vals(&a)[0] else { panic!() };
+    let sum: i64 = counts.iter().map(|v| if let Value::Int(n) = v { *n } else { 0 }).sum();
+    assert_eq!((sum, &vals(&a)[1]), (300, &Value::Int(300)));
+    // An index that changes state runs once; the item is read before the value runs (as
+    // `x += v` reads x first), and a value that empties the list faults, coded.
+    let mut a = app("state xs = [0; 4]; state k = 0;
+         fn next() -> int { k += 1; return k % 4; }
+         fn set() -> int { xs[0] = 100; return 1; }
+         fn empty() -> int { clear(xs); return 1; }
+         button \"b\" { xs[next()] += 10; xs[next()] -= 1; xs[0] += set(); }
+         button \"c\" { xs[0] += empty(); }");
+    assert_eq!((click(&mut a, 0), vals(&a)), (None, vec![ints(&[1, 10, -1, 0]), Value::Int(2)]));
+    assert_eq!(click(&mut a, 1), Some(codes::INDEX_OUT_OF_RANGE));
+    // A copy costs a step per item and per 64 bytes: 4,096 copies of 4 KiB (16 MiB) cost
+    // 266,240 steps, so an event makes at most 64 MB and a render 12.8 MB, faulting coded.
+    let t = "let t = \"xxxxxxxxxxxxxxxx\"; repeat 8 { t = t + t; }";
+    let mut a = app(&format!("state n = 0; button \"b\" {{ {t} let a = [t; 4096]; n = len(a); }}"));
+    a.handle(&Event::Click { id: 0 }).unwrap();
+    assert!(a.steps() > 4096 * 65, "{}", a.steps());
+    let src = format!("button \"b\" {{ {t} repeat 4 {{ let a = [t; 4096]; }} }}");
+    assert_eq!(click(&mut app(&src), 0), Some(codes::FUEL_EXHAUSTED));
+    let src = format!("fn big() -> int {{ {t} let a = [t; 4096]; return 0; }} label big();");
+    let mut a = App::new(compile(&src).unwrap(), Limits::default(), 1);
+    assert_eq!(a.render().unwrap_err().code, Some(codes::FUEL_EXHAUSTED));
+    // Text built a char at a time still fits in an event: 4,000 appends.
+    let mut a = app("state s = \"\"; button \"b\" { repeat 4000 { s += \"x\"; } }");
+    a.handle(&Event::Click { id: 0 }).unwrap();
+    assert!(a.steps() < 400_000, "{}", a.steps());
+}
+
+#[test]
 fn widget_loops_capture_their_values_and_grids_tap_by_square() {
     let mut a = app("state picks = [0; 3]; state hit = -1; state board = [0, 1, 8, 2];
          for i in 0..3 { button \"pick \" + i { picks[i] += 1; } }
@@ -267,6 +307,105 @@ fn saved_states_round_trip_and_changed_types_drop_with_a_note() {
     assert_eq!(notes, ["dropped the saved `best`: it is string now"]);
     assert_eq!(vals(&c), [Value::Str(String::new()), Value::List(Vec::new())]);
     assert_eq!(c.restore("best = ").len(), 1);
+}
+
+#[test]
+fn a_changed_app_takes_back_only_saved_states_it_can_show() {
+    // The board never changes length, so one saved by an older, smaller app is dropped; a list
+    // that grows comes back at any length; a bad line loses only itself; the least int reads
+    // back.
+    let mut a = app("saved state board = [0; 9]; saved state words = [\"\"; 2];
+         saved state low = 0; saved state best = 0;
+         button \"add\" { push(words, \"w\"); } grid 3, board { board[cell] = 1; }");
+    let notes = a.restore(
+        "board = [1, 0, 0, 1];\nwords = [\"a\", \"b\", \"c\"];\nbest = 99999999999999999999;\n\
+         low = -9223372036854775808;\n",
+    );
+    let bad = "dropped saved line 3: it did not read (E0003 integer literal out of range (max \
+               9223372036854775807))";
+    assert_eq!(notes, ["dropped the saved `board`: it holds 9 items now", bad]);
+    let words = Value::List(["a", "b", "c"].map(|w| Value::Str(w.into())).to_vec());
+    let want = [ints(&[0; 9]), words, Value::Int(i64::MIN), Value::Int(0)];
+    assert_eq!(vals(&a), want);
+    let mut b = app("saved state low = 0; label low;");
+    assert!(b.restore(&a.saved()).is_empty() && vals(&b) == [Value::Int(i64::MIN)]);
+    // A saved list this app cannot show starts it afresh, with a note; one it cannot show
+    // afresh either is kept.
+    let mut a = app("saved state top = [0; 5]; button \"x\" { push(top, 1); }
+         for i in 0..5 { label top[i]; }");
+    let notes = a.restore("top = [7, 7];");
+    let note = "the saved state faults when it shows (E0215 index 2 is outside `top`, which has 2 \
+                items); it starts afresh";
+    assert_eq!((notes, vals(&a)), (vec![note.to_string()], vec![ints(&[0; 5])]));
+    let src = "saved state xs = [0; 0]; button \"x\" { push(xs, 1); } label xs[1];";
+    let mut b = App::new(compile(src).unwrap(), Limits::default(), 1);
+    assert!(b.restore("xs = [4];").is_empty() && vals(&b) == [ints(&[4])]);
+}
+
+#[test]
+fn ticks_roll_back_whole_and_smoke_runs_slow_timers_and_reopens() {
+    // A faulted tick rolls back how far each `every` is too: its beat comes late, never lost.
+    let mut a = app("state a = 0; state f = false; every 1000 { a += 1; }
+         every 1000 { if f { a = 1 / 0; } } button \"break\" { f = true; } button \"fix\" { f = false; }");
+    let tick = |a: &mut App| a.handle(&Event::Tick { ms: 500 }).map_err(|e| e.code);
+    assert_eq!((tick(&mut a), click(&mut a, 0)), (Ok(false), None));
+    assert_eq!((tick(&mut a), click(&mut a, 1)), (Err(Some(codes::DIV_BY_ZERO)), None));
+    assert_eq!((tick(&mut a), vals(&a)[0].clone()), (Ok(true), Value::Int(1)));
+    // A level-up every 20 s runs in a smoke test of a 50 ms game, and faults at level 4.
+    let src = "state y = 0; state level = 1; state speeds = [500, 300, 200];
+         every 50 { y = (y + 1) % 20; } every 20000 { level += 1; }
+         label \"speed \" + speeds[level - 1] + \" \" + y;";
+    let f = smoke(compile(src).unwrap(), 1).fault.expect("level 4 has no speed");
+    let want = (Some(codes::INDEX_OUT_OF_RANGE), "the render after tick 60");
+    assert_eq!((f.diag.code, f.during.as_str()), want);
+    // A list saved apart from the list it is read with faults once it is opened again.
+    let src = "saved state habits = [\"\"; 0]; state streak = [0; 0]; state name = \"\";
+         input name; button \"Add\" { if name != \"\" { push(habits, name); push(streak, 0); } }
+         for i in 0..len(habits) { label habits[i] + \": \" + streak[i]; }";
+    let f = smoke(compile(src).unwrap(), 1).fault.expect("streak is not saved");
+    assert_eq!(f.diag.code, Some(codes::INDEX_OUT_OF_RANGE));
+    assert!(f.during.starts_with("the first render after closing and opening it again"));
+    let fixed = src.replacen("state streak", "saved state streak", 1);
+    assert!(smoke(compile(&fixed).unwrap(), 1).fault.is_none());
+}
+
+#[test]
+fn the_snake_shot_steers_by_its_states_and_rests_when_still() {
+    let snake = |seed| {
+        let mut a = App::new(compile(SHOTS[0].1).unwrap(), Limits::default(), seed);
+        a.render().unwrap();
+        a
+    };
+    let at = |a: &App, i: usize| match &vals(a)[i] {
+        Value::Int(n) => vec![*n],
+        Value::List(items) => {
+            items.iter().map(|v| if let Value::Int(n) = v { *n } else { -1 }).collect()
+        }
+        v => panic!("{v:?}"),
+    };
+    let (key, tick) = (|n: &str| Event::Key { name: n.into() }, Event::Tick { ms: 150 });
+    // No timer runs before Start; up then left within one step turns up, never back.
+    let mut a = snake(1);
+    assert_eq!(a.timer(), 0);
+    assert_eq!(click(&mut a, 4), None);
+    assert_eq!(a.timer(), 150);
+    for e in [key("up"), key("left"), tick.clone()] {
+        assert_eq!(ev(&mut a, e), None);
+    }
+    assert_eq!((at(&a, 1), at(&a, 2), at(&a, 9)), (vec![4, 5, 5], vec![7, 7, 6], vec![150]));
+    // Food never starts on the body (seeds 132, 246 and 495 once put it there).
+    for seed in 1..600 {
+        let mut a = snake(seed);
+        click(&mut a, 4);
+        let (fx, fy) = (at(&a, 7)[0], at(&a, 8)[0]);
+        assert!(fy != 7 || !(3..6).contains(&fx), "seed {seed}");
+    }
+    // The head runs into its body even where the food is drawn over it, and the timer stops.
+    a.state.vals[1] = ints(&[6, 5, 5, 4, 4]);
+    a.state.vals[2] = ints(&[6, 6, 7, 7, 6]);
+    a.state.vals[3..9].clone_from_slice(&[1, 0, 1, 0, 5, 6].map(Value::Int));
+    assert_eq!(ev(&mut a, tick), None);
+    assert_eq!((at(&a, 9), a.timer()), (vec![0], 0));
 }
 
 #[test]

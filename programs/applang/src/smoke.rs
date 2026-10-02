@@ -1,19 +1,28 @@
 //! The smoke test: a program run as a person and a clock would, before anyone sees it. It
 //! renders (an app that shows nothing at first faults: `SHOWS_NOTHING`), clicks every button it
 //! shows once (each as it shows by then, by its text: an earlier click may have moved or hidden
-//! it), then lets [`TICKS`] ticks pass (each the program's own interval): every 5th it presses
-//! the next key the program handles, every 7th taps a square of a grid that has a handler,
-//! every 11th clicks a button, every 13th types "12", "hello" or "" in each input, re-rendering
-//! after each event. It stops at the first fault, or after [`BUDGET`] steps in all, and says
-//! what it saw.
+//! it), then lets [`TICKS`] ticks pass (each the program's shortest interval, every [`SLOW`]th
+//! its longest, so a slow `every` runs too): every 5th it presses the next key the program
+//! handles, every 7th taps a square of a grid that has a handler, every 11th clicks a button,
+//! every 13th types "12", "hello" or "" in each input, re-rendering after each event. Then, if
+//! it saves state, it is closed and opened again with what it saved, as a person comes back to
+//! it: it renders, each button it shows is clicked once and [`AGAIN`] ticks pass. It stops at
+//! the first fault, or after [`BUDGET`] steps in all, and says what it saw.
 
 use crate::{App, Diag, Event, Limits, Node, Program, codes};
 
 /// The ticks a smoke test lets pass, and the most steps it spends.
 pub const TICKS: u32 = 300;
 const BUDGET: u64 = 20_000_000;
+/// Every this many ticks, one lets the program's longest interval pass.
+const SLOW: u32 = 20;
+/// The ticks that pass after it is opened again.
+const AGAIN: u32 = 10;
 /// The last events a fault's account keeps.
 const BEFORE: usize = 5;
+/// What the first render after it is opened again is called.
+const REOPENED: &str =
+    "the first render after closing and opening it again (only saved states keep their values)";
 
 /// The first fault: its diagnostic, what was done when it came ("clicking \"Start\"", "tick
 /// 12", "the render after key \"left\""), and the events before that, oldest first.
@@ -47,19 +56,12 @@ pub fn smoke(program: Program, seed: u64) -> Smoke {
         t.fault(Diag::new_code(codes::SHOWS_NOTHING, msg), "the first render".into());
         return t.out;
     }
-    for (_, text) in buttons(&first) {
-        let now = buttons(&t.last);
-        let Some(&(id, _)) = now.iter().find(|b| b.1 == text) else { continue };
-        if !t.step(Event::Click { id }, quoted("clicking ", &text), false) {
-            return t.out;
-        }
+    if !t.click_each(&first, "") {
+        return t.out;
     }
     let mut changed = false;
     for n in 1..=TICKS {
-        let ms = match t.app().timer() {
-            0 => 100,
-            ms => ms,
-        };
+        let ms = t.ms(n % SLOW == 0);
         let before = t.last.clone();
         if !t.step(Event::Tick { ms }, format!("tick {n}"), true) {
             return t.out;
@@ -99,6 +101,10 @@ pub fn smoke(program: Program, seed: u64) -> Smoke {
             break;
         }
     }
+    let saved = t.app().saved();
+    if !saved.is_empty() && !t.reopen(&saved) {
+        return t.out;
+    }
     if timed && !changed {
         t.out.warnings.push(format!("{TICKS} ticks never changed what it shows"));
     }
@@ -124,6 +130,44 @@ struct Tester {
 impl Tester {
     fn app(&mut self) -> &mut App {
         self.app.as_mut().unwrap_or_else(|| unreachable!("made first"))
+    }
+
+    /// The ms a tick lets pass: the program's shortest interval, or its longest (`slow`); 100
+    /// when no timer runs.
+    fn ms(&mut self, slow: bool) -> u32 {
+        let all = self.app().intervals().into_iter();
+        let ms = if slow { all.max() } else { all.min() };
+        ms.unwrap_or(100)
+    }
+
+    /// Clicks each button of `first` once, each as it shows by then, by its text (an earlier
+    /// click may have moved or hidden it), saying `after` it; whether the test goes on.
+    fn click_each(&mut self, first: &[Node], after: &str) -> bool {
+        for (_, text) in buttons(first) {
+            let now = buttons(&self.last);
+            let Some(&(id, _)) = now.iter().find(|b| b.1 == text) else { continue };
+            if !self.step(Event::Click { id }, [&quoted("clicking ", &text), after].concat(), false)
+            {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// Closes the app and opens it again with `saved`, its saved states (anything they could
+    /// not bring back is a warning); whether the test goes on.
+    fn reopen(&mut self, saved: &str) -> bool {
+        let notes = self.app().reopen(saved);
+        self.out.warnings.extend(notes);
+        let Some(first) = self.render(REOPENED) else { return false };
+        let again = " after opening it again";
+        if !self.click_each(&first, again) {
+            return false;
+        }
+        (1..=AGAIN).all(|n| {
+            let ms = self.ms(false);
+            self.step(Event::Tick { ms }, format!("tick {n}{again}"), true)
+        })
     }
 
     /// A number below `n` (0 if `n` is 0).

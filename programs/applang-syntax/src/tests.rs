@@ -1,4 +1,4 @@
-use super::ast::{Expr, Lit, Slot, Stmt, Type, Widget};
+use super::ast::{BinOp, Expr, Lit, Slot, Stmt, Type, Widget};
 use super::codes::*;
 use super::*;
 
@@ -74,8 +74,8 @@ fn v2_lists_functions_handlers_and_grids_check_and_fail_coded() {
     #[rustfmt::skip]
     let cases = [
         // Functions call only functions above them: no recursion, direct or not.
-        ("fn f() { f(); }", CALL_BELOW), ("label g(); fn g() -> int { return 1; }", CALL_BELOW),
-        ("fn a() { b(); } fn b() { }", CALL_BELOW), ("label h();", UNKNOWN_NAME),
+        ("fn f() { f(); }", CALL_BELOW), ("fn a() { b(); } fn b() { }", CALL_BELOW),
+        ("label h();", UNKNOWN_NAME),
         ("fn f() -> int { if true { return 1; } }", MISSING_RETURN),
         ("fn f() -> int { }", MISSING_RETURN),
         ("fn f(x: int) { } fn f() { }", DUP_STATE), ("fn len() { }", DUP_STATE),
@@ -110,10 +110,49 @@ fn v2_lists_functions_handlers_and_grids_check_and_fail_coded() {
         ("state n = 0; button \"b\" { n = cell; }", UNKNOWN_NAME),
         ("for i in 0..3 { label i; } label i;", UNKNOWN_NAME),
         ("every true { }", TYPE_MISMATCH),
+        // `xs[i] += v` stores `xs[i] + v`, an item's type.
+        ("state xs = [true; 2]; button \"b\" { xs[0] += true; }", TYPE_MISMATCH),
+        ("state xs = [0; 2]; button \"b\" { xs[0] += \"a\"; }", TYPE_MISMATCH),
+        ("state ws = [\"\"; 2]; button \"b\" { ws[0] -= 1; }", TYPE_MISMATCH),
+        ("label 9223372036854775808;", BAD_INT), ("label -9223372036854775808;", BAD_INT),
     ];
     for (src, want) in cases {
         assert_eq!(code(src), Some(want), "{src}");
     }
+    // All state fits in its limit as declared: a fill is measured before it is made (4,000
+    // strings of 70 bytes would be 280,008), and the states together (two of 240,008).
+    let src = format!("state n = 0; state a = [\"{}\"; 4000];", "x".repeat(70));
+    let e = compile(&src).unwrap_err();
+    let fill = Span::new(src.find('[').unwrap(), src.find(']').unwrap());
+    assert_eq!((e.code, e.span), (Some(STATE_TOO_BIG), Some(fill)));
+    let src = format!("state a = [\"{}\"; 4000]; state b = [\"{0}\"; 4000];", "x".repeat(60));
+    let (e, b) = (compile(&src).unwrap_err(), src.find("b =").unwrap());
+    assert_eq!((e.code, e.span), (Some(STATE_TOO_BIG), Some(Span::new(b, b + 1))));
+    // Handlers and widgets, unlike functions, call functions in any order.
+    let any = "state n = 0; every 100 { step(); } on key \"left\" { step(); } label twice(n);
+               grid 1, [0] { step(); } fn step() { n += 1; } fn twice(x: int) -> int { return x * 2; }";
+    assert!(compile(any).is_ok());
+}
+
+#[test]
+fn plus_equals_keeps_its_index_whole_and_lists_know_their_shape() {
+    let p = compile(
+        "state a = [0; 3]; state b = [0; 3]; state c = [0; 3]; state d = [0; 3];
+         state e = [0; 3]; saved state f = [\"\"; 0]; state n = 0;
+         fn grow() { push(b, 1); }
+         button \"x\" { a[n] += 1; a[0] -= n; c = [0; 3]; c = [1, 2, 3]; d = [1, 2]; e = [0; n]; }
+         button \"y\" { let l = [0; 1]; push(l, 1); clear(l); f[0] += \"!\"; }",
+    )
+    .unwrap();
+    let fixed: Vec<bool> = p.states().iter().map(|s| s.fixed).collect();
+    assert_eq!(fixed, [true, false, true, false, false, true, true]);
+    // `a[n] += 1` keeps its index once, apart from the value it adds.
+    let Widget::Button { handler, .. } = &p.widgets()[0] else { panic!() };
+    let Stmt::SetIndex { index: Expr::Var(i), op, value: Expr::Int(1, _), .. } = &handler.body[0]
+    else {
+        panic!("{:?}", handler.body[0])
+    };
+    assert_eq!((i.slot, *op), (Slot::State(6), Some(BinOp::Add)));
 }
 
 #[test]
@@ -160,18 +199,27 @@ fn a_v2_program_resolves_every_name_to_a_slot() {
 
 #[test]
 fn saved_lines_read_back_as_literals() {
-    let got = literals("best = 12; // kept\nname = \"a\\\"b\"; xs = [1, -2]; none = [\"\"; 0];");
+    let got = literals(
+        "best = 12; // kept\nname = \"a\\\"b\"; xs = [1, -2]; none = [\"\"; 0];\n\
+         low = -9223372036854775808;",
+    );
     let want = [
         ("best", Lit::Int(12)),
         ("name", Lit::Str("a\"b".into())),
         ("xs", Lit::List(Type::Ints, vec![Lit::Int(1), Lit::Int(-2)])),
         ("none", Lit::List(Type::Strs, Vec::new())),
+        ("low", Lit::Int(i64::MIN)),
     ];
     let got: Vec<_> = got.unwrap().into_iter().collect();
     assert_eq!(got, want.map(|(n, l)| (n.to_string(), l)));
-    for bad in ["best = ;", "best 1;", "best = 1", "= 1;", "x = [1, true];"] {
+    let bad =
+        ["best = ;", "best 1;", "best = 1", "= 1;", "x = [1, true];", "x = 9223372036854775808;"];
+    for bad in bad {
         assert!(literals(bad).is_err(), "{bad}");
     }
+    // A saved line never fills past what all state may hold.
+    let e = literals(&format!("xs = [\"{}\"; 4096];", "x".repeat(70))).unwrap_err();
+    assert_eq!(e.code, Some(STATE_TOO_BIG));
 }
 
 #[test]
