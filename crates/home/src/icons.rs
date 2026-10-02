@@ -1,14 +1,18 @@
 //! The home screen's grid: every app, behind the windows, in the work area from its top-left
-//! corner, filling columns on a wide screen and rows of four on a narrow one; each cell a tile
-//! with its label under it in up to two lines. The person's order is kept as the [`PREF`]
-//! preference: icons move by drag, several at once once selected by a box.
+//! corner, its cells down the columns on a wide screen and across rows of four on a narrow one;
+//! each cell a tile with its label under it in up to two lines. Where each app sits is the
+//! person's ([`crate::place`]), kept as the [`PREF`] preference: icons move by drag, several at
+//! once once selected by a box.
 
 use gfx::{DrawList, RectF};
 use host::paint::{cap_baseline, faded, px};
 use ui::{AppIcon, FontId, TextStyle, TextSystem, Theme};
 
-/// The preference that keeps the order (the apps' names, joined by commas); not `home`, which
-/// the page's storage gives the saved `/home` (`compusophy.home`).
+use crate::place::Dims;
+
+/// The preference that keeps where the icons sit ([`crate::place::format`]; before, the apps'
+/// names in order); not `home`, which the page's storage gives the saved `/home`
+/// (`compusophy.home`).
 pub const PREF: &str = "home.order";
 /// A cell's size, the grid's margin in the work area, a tile's side and its distance from the
 /// cell's top, the label's size and line height; how much larger a carried tile is; the
@@ -22,8 +26,8 @@ const LINE: f32 = 15.0;
 const LIFT: f32 = 0.08;
 const WASH: u8 = 31;
 
-/// Cell `i` in the work area `a`: down the columns from the top-left on a wide screen, across
-/// rows of four evenly spaced cells on a narrow one.
+/// The cell at position `i` in reading order in the work area `a`: down the columns from the
+/// top-left on a wide screen, across rows of four evenly spaced cells on a narrow one.
 pub fn cell(i: usize, a: RectF, narrow: bool) -> RectF {
     let (left, top) = (a.x + MARGIN, a.y + MARGIN);
     let (col, row, w) = if narrow {
@@ -34,56 +38,29 @@ pub fn cell(i: usize, a: RectF, narrow: bool) -> RectF {
     RectF::new((left + col as f32 * w).round(), top + row as f32 * CELL.1, w, CELL.1)
 }
 
-/// How many cells a column of `a` holds on a wide screen (at least one).
+/// How many cells a column of `a` holds (at least one).
 fn per(a: RectF) -> usize {
     ((a.h - 2.0 * MARGIN) / CELL.1).max(1.0) as usize
 }
 
-/// The icon of `n` under `(x, y)`.
-pub fn at(n: usize, a: RectF, narrow: bool, x: f32, y: f32) -> Option<usize> {
-    (0..n).find(|&i| cell(i, a, narrow).contains(x, y))
+/// The grid's shape in the work area `a`: four columns on a narrow screen, as many as fit on a
+/// wide one; as many rows as fit; at least one of each.
+pub fn dims(a: RectF, narrow: bool) -> Dims {
+    let cols = if narrow { 4 } else { ((a.w - 2.0 * MARGIN) / CELL.0).max(1.0) as usize };
+    Dims::new(cols, per(a), narrow)
 }
 
-/// Where icons dropped with their first cell's center at `(x, y)` go among `n` others: the cell
-/// under it (its row or column kept to the grid's), or past the last, the end.
-pub fn slot(n: usize, a: RectF, narrow: bool, (x, y): (f32, f32)) -> usize {
+/// Which of the icons at positions `spots` is under `(x, y)`.
+pub fn at(spots: &[usize], a: RectF, narrow: bool, x: f32, y: f32) -> Option<usize> {
+    spots.iter().position(|&s| cell(s, a, narrow).contains(x, y))
+}
+
+/// The position of the cell shown under `(x, y)` (or nearest it): where icons dropped with
+/// their first cell's center there go.
+pub fn slot(a: RectF, narrow: bool, (x, y): (f32, f32)) -> usize {
     let c = cell(0, a, narrow);
     // `as` saturates: NaN and negatives are 0, past the screen is far.
-    let (col, row) = (((x - c.x) / c.w) as usize, ((y - c.y) / c.h) as usize);
-    let i = match narrow {
-        true => row.saturating_mul(4).saturating_add(col.min(3)),
-        false => col.saturating_mul(per(a)).saturating_add(row.min(per(a) - 1)),
-    };
-    i.min(n)
-}
-
-/// `items` (apps in their default order, each called `name(item)`) as the person ordered them:
-/// those `order` names first, as they come there, then the rest; and whether there were any.
-pub fn arrange<T>(
-    order: &[String],
-    mut items: Vec<T>,
-    name: impl Fn(&T) -> &str,
-) -> (Vec<T>, bool) {
-    let mut out = Vec::new();
-    for o in order {
-        if let Some(i) = items.iter().position(|t| name(t) == o) {
-            out.push(items.remove(i));
-        }
-    }
-    let new = !items.is_empty();
-    out.append(&mut items);
-    (out, new)
-}
-
-/// The order of `n` items (their indices) once those `carried` (in their sequence) move to
-/// `slot` among the rest.
-pub fn moved(n: usize, carried: &[usize], slot: usize) -> Vec<usize> {
-    let mut rest: Vec<usize> = (0..n).filter(|i| !carried.contains(i)).collect();
-    let at = slot.min(rest.len());
-    for (k, &i) in carried.iter().enumerate() {
-        rest.insert(at + k, i);
-    }
-    rest
+    dims(a, narrow).nearest(((x - c.x) / c.w) as usize, ((y - c.y) / c.h) as usize)
 }
 
 /// How an icon shows: hovered (`Some(held)`), selected, and lifted (0 to 1) while carried.
