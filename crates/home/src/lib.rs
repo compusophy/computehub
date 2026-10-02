@@ -4,9 +4,9 @@
 //! - [`bar`]: the top bar, its buttons and clock;
 //! - [`icons`]: every app as an icon in a grid behind the windows, in the person's order;
 //! - [`grid`]: the grid as it behaves: listed, carried to a new place, selected by a box;
-//! - [`dock`]: the bottom strip, the AI button at the bottom center and above it, while it holds
-//!   any, the dock (the person's favorites, kept as the `dock` preference, then the others
-//!   running);
+//! - [`dock`]: the bottom row, one tile high: the dock at its left (the person's favorites, kept
+//!   as the `dock` preference and moved as icons are, then the others running) and the
+//!   Assistant alone at the bottom-right corner;
 //! - [`menu`]: context menus, for right clicks and long presses;
 //! - [`touch`]: a finger scrolling what it holds, flinging it on, or long-pressing.
 //!
@@ -25,8 +25,8 @@ pub mod touch;
 use gfx::{DrawList, RectF};
 use ui::{AppIcon, TextSystem, Theme};
 
-/// What the work area leaves free at the bottom at least: the AI button's row ([`dock::clear`]).
-pub const CLEAR: f32 = dock::BOTTOM + dock::BUTTON + dock::GAP;
+/// What the work area leaves free at the bottom: the bottom row ([`dock::ROW`]).
+pub const CLEAR: f32 = dock::ROW;
 
 /// Whether a screen `w` wide is a phone's.
 pub fn narrow(w: f32) -> bool {
@@ -35,9 +35,11 @@ pub fn narrow(w: f32) -> bool {
 
 /// The names of a stored list (joined by commas), each once.
 pub fn names(stored: &str) -> Vec<String> {
-    let mut out = Vec::new();
+    let mut out: Vec<String> = Vec::new();
     for name in stored.split(',') {
-        dock::pin(&mut out, name, true);
+        if !name.is_empty() && !out.iter().any(|n| n == name) {
+            out.push(name.to_string());
+        }
     }
     out
 }

@@ -18,15 +18,21 @@ impl Shell {
         }
     }
 
-    /// A button-0 press on `hit` (see `home::grid::Grid::press`).
+    /// A button-0 press on `hit` (see `home::grid::Grid::press`); a mouse's on a kept dock tile
+    /// may carry it.
     pub(crate) fn press_home(&mut self, hit: Option<Target>, touch: bool) {
+        let at = self.pointer.unwrap_or_default();
+        self.dock.carry = match hit {
+            Some(Target::Dock(i)) if !touch => self.dock.pick(i, at, false),
+            _ => None,
+        };
         let on = match hit {
             Some(Target::Icon(i)) => Press::Icon(i),
             Some(Target::Desktop) => Press::Desktop,
             Some(Target::Menu(_) | Target::MenuPanel) => Press::Menu,
             _ => Press::Other,
         };
-        self.grid.press(on, self.pointer.unwrap_or_default(), touch);
+        self.grid.press(on, at, touch);
     }
 
     /// Puts carried icons down (`keep`: where they are headed).
@@ -34,8 +40,14 @@ impl Shell {
         self.grid.drop(keep, self.pointer, &mut self.pending);
     }
 
-    /// Escape and Enter for the icons (forgetting a press they end); whether `key` was theirs.
+    /// Escape and Enter for the icons (forgetting a press they end), Escape for a dock tile
+    /// carried; whether `key` was theirs.
     pub(crate) fn home_key(&mut self, key: Key, m: Mods, out: &mut Response) -> bool {
+        if key == Key::Escape && self.dock.carry.is_some() {
+            self.dock.drop(false, &mut self.pending);
+            self.armed = None;
+            return true;
+        }
         let busy = self.grid.carry.is_some() || self.grid.lasso.is_some();
         let Some(open) = self.grid.key(key, m, self.pointer) else { return false };
         if busy {
@@ -56,8 +68,9 @@ impl Shell {
         self.grid.draw(list, &mut self.host.text, theme, now, hover, self.pointer);
     }
 
-    /// The icons carried, over everything but menus.
+    /// The icons or dock tile carried, over everything but menus.
     pub(crate) fn draw_carried(&mut self, list: &mut DrawList, theme: &Theme) {
         self.grid.draw_carried(list, &mut self.host.text, theme, self.pointer);
+        self.draw_carried_tile(list, theme);
     }
 }

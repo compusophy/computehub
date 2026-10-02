@@ -586,19 +586,6 @@ fn the_scene_holds_each_window_its_hits_its_marks_and_the_text_that_shows() {
 }
 
 #[test]
-fn a_window_opening_gives_the_dock_its_row_first() {
-    // The shell's work area once the dock shows: a window opens into it, placed there.
-    let (mut h, _, _) = host();
-    let docked = Rect::new(0, 32, 1280, 600);
-    h.docked = Some(docked);
-    h.open("nope", None, &mut Response::default());
-    assert_eq!(h.wm().area(), Rect::new(0, 32, 1280, 684));
-    h.open("sized", None, &mut Response::default());
-    let r = h.rect_of(3).unwrap();
-    assert_eq!((h.wm().area(), r.x, r.y), (docked, (1280 - r.w) / 2, 32 + (600 - r.h) / 2));
-}
-
-#[test]
 fn windows_held_move_snap_maximize_on_a_double_click_and_resize() {
     // Welcome, its titlebar held: under 4 px of travel nothing moves; then it follows exactly.
     let (mut h, _, _) = host();

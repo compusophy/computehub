@@ -1,6 +1,6 @@
 [package]
 name = "compusophy-shell"
-description = "The compusophyOS desktop: floating window chrome, the home screen wired to the pointer (icons, the AI button and the dock, menus, touch), the Assistant's overlay, motion, the living grain and bindings around the app host. Turns input into wm commands and app events, and draws the desktop into a draw list."
+description = "The compusophyOS desktop: floating window chrome, the home screen wired to the pointer (icons, the bottom row's dock and Assistant, menus, touch), the Assistant's overlay, motion, the living grain and bindings around the app host. Turns input into wm commands and app events, and draws the desktop into a draw list."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

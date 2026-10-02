@@ -39,6 +39,25 @@ pub struct Carry {
     pub slot: usize,
 }
 
+impl Carry {
+    /// The pointer moved to `at`: whether they start to move now, past their travel (a mouse's
+    /// 4 px, a finger's 8 once it held them).
+    pub fn travel(&mut self, at: (f32, f32)) -> bool {
+        let far = (at.0 - self.from.0).abs().max((at.1 - self.from.1).abs());
+        let travel = if self.touch { FINGER_PX } else { MOUSE_PX };
+        let start = !self.moved && (self.lifted || !self.touch) && far >= travel;
+        if start {
+            (self.moved, self.lifted) = (true, true);
+        }
+        start
+    }
+
+    /// Where a finger held them, if it picked them up and lifts unmoved: their menu opens there.
+    pub fn held(&self) -> Option<(f32, f32)> {
+        (self.touch && self.lifted && !self.moved).then_some(self.from)
+    }
+}
+
 /// What a button-0 press lands on, as the grid sees it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Press {
@@ -170,12 +189,7 @@ impl Grid {
     /// slot under them opens. Whether they just started to move (a press is no click then).
     pub fn carry_to(&mut self, at: Option<(f32, f32)>) -> bool {
         let (Some(at), Some(c)) = (at, &mut self.carry) else { return false };
-        let far = (at.0 - c.from.0).abs().max((at.1 - c.from.1).abs());
-        let travel = if c.touch { FINGER_PX } else { MOUSE_PX };
-        let start = !c.moved && (c.lifted || !c.touch) && far >= travel;
-        if start {
-            (c.moved, c.lifted) = (true, true);
-        }
+        let start = c.travel(at);
         if c.moved {
             let r = icons::cell(0, self.area, self.narrow);
             let center = (at.0 - c.off.0 + r.w / 2.0, at.1 - c.off.1 + r.h / 2.0);

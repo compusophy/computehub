@@ -375,7 +375,7 @@ fn theme_card(ui: &mut Ui<'_>, i: usize, card: RectF, th: &Theme, ph: f32) {
     ui.mark(id, sem::OPTION, if current { sem::SELECTED } else { 0 }, "");
 }
 
-/// `th`'s desktop in small inside `p` (light, a window, a dock), its corners
+/// `th`'s desktop in small inside `p` (light, a window, the Assistant), its corners
 /// concentric with the card's, the light trimmed by a ring in `under`.
 fn miniature(ui: &mut Ui<'_>, p: RectF, th: &Theme, under: gfx::Rgba) {
     let (t, line) = (ui.theme(), ui.px(1.0));
@@ -411,15 +411,13 @@ fn miniature(ui: &mut Ui<'_>, p: RectF, th: &Theme, under: gfx::Rgba) {
     let button = ui.snapped(at);
     ui.fill(button, bh / 2.0, th.accent);
     ui.border(win, 4.0, line, th.border);
-    // The AI button: a round of glass, a dot of ink in it.
-    let side = (11.0 * u).round().max(6.0);
-    let at =
-        RectF::new(p.x + (p.w - side) / 2.0, p.y + p.h - side - (0.06 * p.h).round(), side, side);
-    let button = ui.snapped(at);
-    ui.fill(button, side / 2.0, th.glass);
-    ui.border(button, side / 2.0, line, th.border);
-    let dot = ui.snapped(button.inset((side * 0.36).round()));
-    ui.fill(dot, dot.w / 2.0, th.text);
+    // The Assistant's tile in the bottom-right corner, on the accent's hue, a dot of its ink.
+    let (side, edge) = ((12.0 * u).round().max(6.0), (0.05 * p.h).round());
+    let at = RectF::new(p.x + p.w - side - edge, p.y + p.h - side - edge, side, side);
+    let (tile, [plate, _, ink]) = (ui.snapped(at), th.icon_colors(th.accent));
+    ui.fill(tile, (side / 4.0).round(), plate);
+    let dot = ui.snapped(tile.inset((side * 0.36).round()));
+    ui.fill(dot, dot.w / 2.0, ink);
     ui.pop_clip();
     let k = ui.px((radius * 0.5).ceil());
     ui.border(p.inset(-k), radius + k, k, under);

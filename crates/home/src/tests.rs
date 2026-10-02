@@ -2,7 +2,7 @@ use gfx::{DrawList, Kind, RectF, Rgba};
 use host::{Effect, Entry};
 use ui::{AppIcon, Key, Mods, THEMES, TextSystem};
 
-use super::dock::{Look, Spot, Strip, favorites, pin};
+use super::dock::{Dock, Look, Spot, Strip, favorites, pin, shift};
 use super::grid::{APPS, Grid, Press};
 use super::icons;
 use super::menu::{Item, Menu};
@@ -70,104 +70,135 @@ fn fingers_scroll_past_eight_px_long_press_when_still_and_fling_on() {
 }
 
 #[test]
-fn the_strip_centers_the_ai_button_and_the_dock_above_it_only_while_it_holds_any() {
-    let names = |s: &[&str]| s.iter().map(|n| n.to_string()).collect::<Vec<_>>();
-    assert_eq!(
-        (favorites(None), favorites(Some("terminal,,studio,terminal"))),
-        (names(&[]), names(&["terminal", "studio"]))
-    );
-    let mut f = favorites(Some("a"));
-    assert!(pin(&mut f, "b", true) && !pin(&mut f, "b", true));
-    assert!(!pin(&mut f, "x,y", true) && !pin(&mut f, "", true));
-    assert!(pin(&mut f, "a", false) && !pin(&mut f, "a", false) && f == names(&["b"]));
-    assert_eq!(
-        (super::joined(&names(&["a", "b,c", "d"])), super::names("d,,a,d")),
-        ("a,d".into(), names(&["d", "a"]))
-    );
-    // Nothing kept, nothing running: the button alone, 64 px at the bottom center, 13 px above
-    // the screen's bottom; no dock at all, nothing to hit but the button.
+fn the_row_holds_the_dock_at_the_left_and_the_assistant_alone_at_the_right() {
+    // One tile high: 8 px above the tiles, 10 below (the dots'), which the work area leaves.
+    assert_eq!((super::CLEAR, super::dock::ROW), (62.0, 62.0));
+    // Nothing kept, nothing running: the Assistant alone, 44 px, 10 px from the screen's
+    // bottom-right corner, and out to it; nothing else in the row to hit or draw.
     let alone = Strip::new(0, 0, (1280.0, 800.0));
-    assert_eq!(
-        (alone.button, alone.shelf.w, alone.top()),
-        (RectF::new(608.0, 723.0, 64.0, 64.0), 0.0, 723.0)
-    );
-    assert_eq!(
-        [alone.at(640.0, 755.0), alone.at(640.0, 700.0), alone.at(560.0, 755.0)],
-        [Some(Spot::Button), None, None]
-    );
+    assert_eq!((alone.top, alone.assistant), (738.0, RectF::new(1226.0, 746.0, 44.0, 44.0)));
+    let hits = [(1279.0, 799.0), (1222.0, 740.0), (1221.0, 760.0), (1250.0, 737.0)];
+    let want = [Some(Spot::Assistant), Some(Spot::Assistant), None, None];
+    assert_eq!(hits.map(|(x, y)| alone.at(x, y)), want);
     let (mut list, mut text, t) = (DrawList::new(), text(), &THEMES[0]);
     alone.draw(&mut list, &mut text, t, &[]);
     assert!(list.instances().is_empty());
-    // Two favorites, then one running app: one shelf centered above the button (8 px between),
-    // a hairline between the groups; a tile takes half the space beside it.
+    // Two kept, then one running: left-aligned from 10 px, 8 px apart, a hairline between the
+    // groups; a tile takes half the space beside it, the hairline's gap none; past the last,
+    // the Assistant's rect.
     let s = Strip::new(2, 1, (1280.0, 800.0));
-    assert_eq!((s.button, s.tile, s.top()), (alone.button, 44.0, 651.0));
-    assert_eq!((s.shelf, s.sep), (RectF::new(554.0, 651.0, 173.0, 64.0), Some(666.0)));
     assert_eq!(
-        (&s.xs[..], s.tile(2)),
-        (&[562.0, 614.0, 675.0][..], RectF::new(675.0, 659.0, 44.0, 44.0))
+        (s.tile, s.y, &s.xs[..], s.sep),
+        (44.0, 746.0, &[10.0, 62.0, 123.0][..], Some(114.0))
     );
-    let at = |x, y| s.at(x, y);
-    assert_eq!(
-        [at(640.0, 755.0), at(570.0, 670.0), at(612.0, 670.0), at(556.0, 670.0), at(666.0, 670.0)],
-        [
-            Some(Spot::Button),
-            Some(Spot::Tile(0)),
-            Some(Spot::Tile(1)),
-            Some(Spot::Shelf),
-            Some(Spot::Shelf)
-        ]
-    );
-    assert_eq!((at(700.0, 645.0), at(640.0, 719.0), s.tile(3)), (None, None, s.button));
-    // A phone: the button centered and 64 px still; tiles shrink evenly to fit 8 apps or more
-    // between 13 px margins, never off the screen.
-    let phone = Strip::new(1, 3, (390.0, 844.0));
-    assert_eq!((phone.button, phone.tile), (RectF::new(163.0, 767.0, 64.0, 64.0), 44.0));
-    assert_eq!(phone.shelf, RectF::new(83.0, 695.0, 225.0, 64.0));
-    for (favs, others, tile) in
-        [(0, 8, 36.0), (4, 4, 35.0), (0, 9, 31.0), (6, 6, 20.0), (20, 0, 9.0)]
+    let hits = [(6.0, 790.0), (57.0, 760.0), (58.0, 760.0), (114.0, 760.0), (5.0, 760.0)];
+    let want = [Some(Spot::Tile(0)), Some(Spot::Tile(0)), Some(Spot::Tile(1)), None, None];
+    assert_eq!(hits.map(|(x, y)| s.at(x, y)), want);
+    assert_eq!((s.tile(2), s.tile(3)), (RectF::new(123.0, 746.0, 44.0, 44.0), s.assistant));
+    // A tile carried with its middle at x lands in the nearest of the kept ones' slots.
+    assert_eq!([0.0, 32.0, 90.0, 500.0, f32::NAN].map(|x| s.slot(x, 2)), [0, 0, 1, 1, 0]);
+    // A phone: the Assistant in its corner still; the dock's tiles shrink evenly to fit beside
+    // it, never under it or off the screen.
+    for (kept, others, tile) in
+        [(0, 6, 44.0), (7, 0, 40.0), (0, 8, 34.0), (4, 4, 33.0), (20, 0, 8.0)]
     {
-        let s = Strip::new(favs, others, (390.0, 844.0));
-        assert_eq!((s.tile, s.xs.len(), s.button.x), (tile, favs + others, 163.0));
-        let (l, r) = (s.shelf.x, s.shelf.x + s.shelf.w);
-        assert!(l >= 13.0 && r <= 377.0 && (l + r - 390.0).abs() <= 1.0, "{favs} {others}");
-        assert!(s.xs.iter().all(|&x| x >= l && x + s.tile <= r), "{favs} {others}");
+        let p = Strip::new(kept, others, (411.0, 794.0));
+        assert_eq!((p.assistant.x, p.tile, p.xs.len()), (357.0, tile, kept + others));
+        let right = p.xs.last().map_or(0.0, |x| x + p.tile);
+        assert!(p.xs[0] == 10.0 && right <= 341.0, "{kept} {others}");
     }
-    // The work area leaves the button's row, and the dock's while it shows.
-    assert_eq!((super::dock::clear(false), super::dock::clear(true)), (85.0, 157.0));
-    // Drawn: the shelf and tiles, the hairline, the focused app's dot in the accent, the others'
-    // dim; the button's glass, washed while held.
-    let look = |running, focused| Look {
+    // Drawn: the hairline, each tile at its own rect over its dot (the focus's in the accent, a
+    // running app's dim, none for one that does not run); a tile carried, shadowed.
+    let look = |i, dot, focused| Look {
         icon: AppIcon::default(),
         sigil: None,
+        r: s.tile(i),
         lift: 0.0,
-        running,
+        dot,
         focused,
     };
-    s.draw(&mut list, &mut text, t, &[look(true, true), look(true, false), look(false, false)]);
-    assert!(fills(&list, t.accent) && fills(&list, t.text_dim) && fills(&list, t.glass));
-    assert!(fills(&list, t.border));
-    s.draw_button(&mut list, &mut text, t, Some(true));
-    assert!(fills(&list, t.wash(true)));
+    s.draw(
+        &mut list,
+        &mut text,
+        t,
+        &[look(0, 1.0, true), look(1, 1.0, false), look(2, 0.0, false)],
+    );
+    assert!(fills(&list, t.accent) && fills(&list, t.text_dim) && fills(&list, t.border));
+    let n = list.instances().len();
+    look(3, 0.0, false).draw_carried(&mut list, &mut text, t);
+    assert!(list.instances().len() > n);
 }
 
 #[test]
-fn the_overlay_sits_above_the_strip_a_card_a_sheet_or_a_pill() {
-    // Wide: a card 560 px wide at most, 60% of the screen tall at most, centered above the
-    // button (or the dock, while it shows); working, a pill 52 px tall, 420 px wide at most.
-    let (s, alone) = (Strip::new(2, 1, (1280.0, 800.0)), Strip::new(0, 0, (1280.0, 800.0)));
-    assert_eq!(s.overlay((1280.0, 800.0), 44.0, false), RectF::new(360.0, 163.0, 560.0, 480.0));
-    assert_eq!(s.overlay((1280.0, 800.0), 44.0, true), RectF::new(430.0, 591.0, 420.0, 52.0));
-    assert_eq!(alone.overlay((1280.0, 800.0), 44.0, false), RectF::new(360.0, 235.0, 560.0, 480.0));
-    assert_eq!(alone.overlay((1280.0, 800.0), 44.0, true), RectF::new(430.0, 663.0, 420.0, 52.0));
-    // A short screen keeps it under the bar; a narrow one inside its gutters.
-    assert_eq!(Strip::new(2, 1, (1280.0, 300.0)).overlay((1280.0, 300.0), 44.0, false).y, 52.0);
+fn the_overlay_sits_above_the_assistant_a_card_a_sheet_or_a_pill() {
+    // Wide: a card 560 px wide at most, 60% of the screen tall at most, 8 px above the
+    // Assistant, its right edge the Assistant's; working, a pill 52 px tall, 420 px wide at most.
+    let s = Strip::new(2, 1, (1280.0, 800.0));
+    assert_eq!(s.overlay((1280.0, 800.0), 44.0, false), RectF::new(710.0, 258.0, 560.0, 480.0));
+    assert_eq!(s.overlay((1280.0, 800.0), 44.0, true), RectF::new(850.0, 686.0, 420.0, 52.0));
+    // A short screen keeps it under the bar; a narrow one a sheet inside its gutters.
+    assert_eq!(Strip::new(0, 0, (1280.0, 250.0)).overlay((1280.0, 250.0), 44.0, false).y, 52.0);
     let phone = Strip::new(1, 3, (390.0, 844.0));
-    let sheet = phone.overlay((390.0, 844.0), 44.0, false);
-    assert_eq!(sheet, RectF::new(16.0, 265.0, 358.0, 422.0));
-    assert_eq!(phone.overlay((390.0, 844.0), 44.0, true), RectF::new(16.0, 635.0, 358.0, 52.0));
-    let bare = Strip::new(0, 0, (390.0, 844.0)).overlay((390.0, 844.0), 44.0, false);
-    assert_eq!(bare, RectF::new(16.0, 337.0, 358.0, 422.0));
+    assert_eq!(phone.overlay((390.0, 844.0), 44.0, false), RectF::new(16.0, 360.0, 358.0, 422.0));
+    assert_eq!(phone.overlay((390.0, 844.0), 44.0, true), RectF::new(16.0, 730.0, 358.0, 52.0));
+}
+
+#[test]
+fn the_dock_is_the_persons_own_its_kept_tiles_carried_to_a_new_order() {
+    let names = |s: &[&str]| s.iter().map(|n| n.to_string()).collect::<Vec<_>>();
+    // None kept at first; a stored list each once, never the Assistant (its corner is its own).
+    assert_eq!(
+        (favorites(None), favorites(Some("terminal,,assistant,studio,terminal"))),
+        (names(&[]), names(&["terminal", "studio"]))
+    );
+    let mut f = favorites(Some("a"));
+    assert!(pin(&mut f, "b", true) && !pin(&mut f, "b", true) && !pin(&mut f, "assistant", true));
+    assert!(!pin(&mut f, "x,y", true) && !pin(&mut f, "", true));
+    assert!(pin(&mut f, "a", false) && !pin(&mut f, "a", false) && f == names(&["b"]));
+    assert_eq!(
+        (super::joined(&names(&["a", "b,c", "d"])), super::names("d,,a,d,assistant")),
+        ("a,d".into(), names(&["d", "a", "assistant"]))
+    );
+    let mut v = [0, 1, 2, 3];
+    for (from, to, want) in [(0, 2, [1, 2, 0, 3]), (2, 0, [0, 1, 2, 3]), (3, 9, [0, 1, 2, 3])] {
+        shift(&mut v, from, to);
+        assert_eq!(v, want);
+    }
+    // Kept a, x (which the registry does not know: it does not show) and b; then one running.
+    // Only a kept tile carries: a mouse's once it travels 4 px, to the slot under it.
+    let (mut d, mut fx, size) = (Dock::new(Some("a,x,b")), Vec::new(), (1280.0, 800.0));
+    d.layout(vec![0, 2], 3, size);
+    let at = |i: usize| (32.0 + 52.0 * i as f32, 768.0);
+    assert!(d.pick(2, at(2), false).is_none());
+    d.carry = d.pick(0, at(0), false);
+    assert!(!d.carry_to(Some((at(0).0 + 3.0, 768.0))) && d.carried(Some(at(1))).is_none());
+    assert!(d.carry_to(Some(at(1))) && d.moving() == Some((0, 1)));
+    assert_eq!(d.carried(Some(at(1))), Some((1, d.strip.tile(1))));
+    // Put down there: the favorites shift (x with them), and are kept.
+    d.drop(true, &mut fx);
+    assert_eq!(d.favs, names(&["x", "b", "a"]));
+    assert_eq!(fx, [Effect::Pref { key: "dock".into(), value: "x,b,a".into() }]);
+    // Put back (Escape, the pointer gone), or down where it was: nothing changes.
+    d.layout(vec![1, 2], 3, size);
+    for (keep, to) in [(false, 0), (true, 1)] {
+        d.carry = d.pick(1, at(1), false);
+        d.carry_to(Some(at(to)));
+        d.drop(keep, &mut fx);
+        assert!(d.carry.is_none() && fx.len() == 1 && d.favs == names(&["x", "b", "a"]));
+    }
+    // A finger held on one picks it up at once: lifted unmoved it holds its menu's place; moved
+    // 8 px from there it drags. A tile gone from the kept puts it down.
+    d.carry = d.pick(1, at(1), true);
+    assert_eq!(d.carry.as_ref().and_then(|c| c.held()), Some(at(1)));
+    assert!(!d.carry_to(Some((at(1).0 - 7.0, 768.0))) && d.carry_to(Some(at(0))));
+    d.layout(vec![1], 1, size);
+    assert!(d.carry.is_none());
+    // Kept or not by the menus, the preference following.
+    d.keep("c", true, &mut fx);
+    d.keep("x", false, &mut fx);
+    d.keep("assistant", true, &mut fx);
+    let pref = |v: &str| Effect::Pref { key: "dock".into(), value: v.into() };
+    assert_eq!(fx[1..], [pref("x,b,a,c"), pref("b,a,c")]);
 }
 
 #[test]
@@ -305,11 +336,10 @@ fn the_persons_order_survives_new_apps_and_moves() {
     assert_ne!(glyph(&lifted), glyph(&list));
     icons::draw_box(&mut list, &text, t, (300.0, 200.0), (100.0, 400.0));
     assert_eq!(list.instances().last().map(|i| i.rect), Some([100.0, 200.0, 200.0, 200.0]));
-    assert_eq!(super::CLEAR, 85.0);
 }
 
 /// A 1280 x 800 desktop's grid area.
-const AREA: RectF = RectF { x: 0.0, y: 44.0, w: 1280.0, h: 671.0 };
+const AREA: RectF = RectF { x: 0.0, y: 44.0, w: 1280.0, h: 694.0 };
 
 /// The home screen of `names`, as the host lists them.
 fn entries(names: &[&str]) -> Vec<Entry> {
