@@ -63,15 +63,17 @@ pub enum Glyph {
     Close,
     /// Feedback in the top bar: a beetle.
     Bug,
+    /// The Editor: lines of text, a caret after the last.
+    Editor,
 }
 
 impl Glyph {
     /// Every glyph, in order.
     #[rustfmt::skip]
-    pub const ALL: [Glyph; 15] = {
+    pub const ALL: [Glyph; 16] = {
         use Glyph::*;
         [Mark, Apps, Cog, Studio, Assistant, Terminal, Folder, Home, File, Window, Feedback,
-            About, Chevron, Close, Bug]
+            About, Chevron, Close, Bug, Editor]
     };
 
     /// The function that appends this glyph's contours to its argument.
@@ -93,6 +95,7 @@ impl Glyph {
             Chevron => chevron,
             Close => close,
             Bug => bug,
+            Editor => editor,
         }
     }
 }
@@ -388,6 +391,16 @@ fn bug(o: &mut Outline) {
         }
         stroke(o, &[(x(30.0), 790.0), (x(110.0), 900.0)]);
     }
+}
+
+/// Three lines of text, the last 1/φ as long, and a caret a stroke after its end.
+fn editor(o: &mut Outline) {
+    let (x0, x1) = (150.0, 850.0);
+    for y in [780.0, 540.0] {
+        rect(o, x0, y - H, x1, y + H);
+    }
+    rect(o, x0, 300.0 - H, x0 + (x1 - x0) / PHI, 300.0 + H);
+    rect(o, 715.0 - H, 170.0, 715.0 + H, 430.0);
 }
 
 /// The sigil of `seed` (a hash of a `.app` file's name): sacred geometry in the glyphs' weight

@@ -273,6 +273,24 @@ fn areas_edit_wrap_grow_and_keep_the_caret_in_view() {
         None,
     );
     assert!(caret(&d).is_none() && d.hits.len() == 1);
+    // In a Fill (Editor's text): down to the bottom at least; with more rows, as tall as they.
+    let page = |texts: &mut Texts| {
+        let fill = Node::Fill { id: 0, children: vec![area("")] };
+        let d = draw(&[text(Style::Body, "bar"), fill], texts, &mut View::default(), None);
+        let well = d.of(Kind::Fill).into_iter().find(|i| i.color == THEMES[0].surface_lo);
+        well.expect("the well").rect
+    };
+    texts.areas[0].1.set("short");
+    let r = page(&mut texts);
+    assert!(r[3] > 144.0 && (r[1] + r[3] - (400.0 - PAD)).abs() < 1.0, "{r:?}");
+    // A press under its text puts the caret at the end, as Down on the last row does.
+    let ed = &mut texts.areas[0].1;
+    ed.at = 0;
+    ed.click(r[0] + 20.0, r[1] + r[3] - 9.0);
+    page(&mut texts);
+    assert_eq!(texts.areas[0].1.at, 5);
+    texts.areas[0].1.set(&"line\n".repeat(40));
+    assert!(page(&mut texts)[3] > 600.0);
 }
 
 #[test]

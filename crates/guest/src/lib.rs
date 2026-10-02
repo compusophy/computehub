@@ -14,8 +14,9 @@ use vfs::Vfs;
 use vfs::VfsError::{self, IsADir, NotADir, NotFound};
 
 /// The apps `open` knows by name.
-const BUILTIN: [&str; 8] =
-    ["studio", "assistant", "terminal", "files", "settings", "feedback", "about", "welcome"];
+#[rustfmt::skip]
+const BUILTIN: [&str; 9] = ["studio", "assistant", "terminal", "files", "editor",
+    "settings", "feedback", "about", "welcome"];
 const KEYS: &str = "Up and Down recall history, Ctrl+C cancels the line, Ctrl+L clears the \
 screen. Quotes group words: \"a b\" or 'a b'.";
 /// `uname`, then `uname -a`.
@@ -62,7 +63,7 @@ const COMMANDS: [(&str, &str, usize, usize, &str, &str, Cmd); 20] = [
     ("open", "", 1, 1, "open <app|file.app>", "open one in a new window", open),
     ("run", "", 1, 1, "run <file.app>", "run an applang app",
         |g, a, _, io, cx| g.each(a, io, cx, Op::Run(a[0]))),
-    ("edit", "", 1, 1, "edit <file>", "edit a file in Studio",
+    ("edit", "", 1, 1, "edit <file>", "edit a file (an app in Studio)",
         |g, a, _, io, cx| g.each(a, io, cx, Op::Edit)),
     ("history", "", 0, ANY, "history", "list past commands", |g, _, _, io, _| {
         for (i, h) in g.history.iter().enumerate() {
@@ -540,7 +541,8 @@ impl Guest {
             Op::Edit
                 if fs.is_dir(a.get(..a.rfind('/').unwrap_or(0).max(1)).unwrap_or_default()) =>
             {
-                cx.open(&("studio:".to_string() + a));
+                let with = if a.ends_with(".app") { "studio:" } else { "editor:" };
+                cx.open(&(with.to_string() + a));
             }
             Op::Cd | Op::Open | Op::Run(_) | Op::Edit => return Err(NotFound),
         }

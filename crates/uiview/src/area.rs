@@ -1,5 +1,6 @@
 //! [`Area`]: a multi-line input. Its text wraps to the box, which grows with it; the caret goes
-//! where a press lands, and Left, Right, Home and End move it, Up and Down by the rows drawn.
+//! where a press lands (under the last row: to the end), and Left, Right, Home and End move it,
+//! Up and Down by the rows drawn.
 
 use gfx::RectF;
 use ui::{CODE_MAX, Key, RADIUS_SM, Sense, TextStyle, TextSystem, Ui, WidgetId};
@@ -137,12 +138,12 @@ impl Area {
             (None, 0) => None,
             (None, n) => Some((row as f32 + n as f32 + 0.5, x_of(ts, row, self.at))),
         };
-        // The char boundary nearest that point.
+        // The char boundary nearest that point; under the last row, the end.
         if let Some((r, x)) = want {
             row = (r.max(0.0) as usize).min(spans.len() - 1);
-            let (s, e) = spans[row];
-            let mut best = (f32::MAX, s);
-            for i in (s..=e).filter(|&i| text.is_char_boundary(i)) {
+            let ((s, e), below) = (spans[row], r >= spans.len() as f32);
+            let mut best = (f32::MAX, if below { e } else { s });
+            for i in (s..=e).filter(|&i| !below && text.is_char_boundary(i)) {
                 let gap = (ts.measure(text.get(s..i).unwrap_or_default(), style) - x).abs();
                 if gap < best.0 {
                     best = (gap, i);

@@ -1,15 +1,16 @@
-//! About, Feedback, Files and Welcome: compusophyOS's system apps as one wasm32-wasip1 GUI
-//! program (`dist/bin/system.wasm`) on the [`uiwire`] protocol, fetched when one first opens and
-//! never with the boot download. It runs the app its name says, as the /bin markers `about`,
-//! `feedback`, `files` and `welcome` run it ([`view`]): [`About`], [`Feedback`], [`Files`] (at a
-//! folder, if one follows) or [`Welcome`]. [`serve`] runs one until its window closes; run in a
-//! terminal, which has no window for it, it says how to open one ([`hint`]). Files reads folders
-//! through a [`Disk`]: [`Fs`] in the program (`std::fs`, which WASI serves from the desktop's
-//! VFS), a VFS in tests.
+//! About, Editor, Feedback, Files and Welcome: compusophyOS's system apps as one wasm32-wasip1
+//! GUI program (`dist/bin/system.wasm`) on the [`uiwire`] protocol, fetched when one first opens
+//! and never with the boot download. It runs the app its name says, as the /bin markers `about`,
+//! `editor`, `feedback`, `files` and `welcome` run it ([`view`]): [`About`], [`Editor`] (on a
+//! file, if one follows), [`Feedback`], [`Files`] (at a folder, if one follows) or [`Welcome`].
+//! [`serve`] runs one until its window closes; run in a terminal, which has no window for it, it
+//! says how to open one ([`hint`]). Files and Editor reach files through a [`Disk`]: [`Fs`] in
+//! the program (`std::fs`, which WASI serves from the desktop's VFS), a VFS in tests.
 
 #![forbid(unsafe_code)]
 
 mod about;
+mod editor;
 mod feedback;
 mod files;
 #[cfg(test)]
@@ -19,6 +20,7 @@ mod welcome;
 use std::io::{self, ErrorKind, Read, Write};
 
 pub use about::About;
+pub use editor::Editor;
 pub use feedback::Feedback;
 pub use files::Files;
 use uiwire::client::Client;
@@ -34,12 +36,27 @@ pub trait View {
 
     /// The window now, with the requests since the last frame; `seq` 0, for [`serve`] to fill.
     fn frame(&mut self) -> Frame;
+
+    /// An event did not decode (it may have been an edit); whether the window changed.
+    fn garbled(&mut self) -> bool {
+        false
+    }
+
+    /// The window is closing: the last moment to keep what it holds.
+    fn close(&mut self, disk: &mut dyn Disk) {
+        _ = disk;
+    }
 }
 
-/// What Files reads.
+/// What Files and Editor reach.
 pub trait Disk {
     /// The entries of the folder at `path`, in the order listed (`.` and `..` left out).
     fn list(&mut self, path: &str) -> io::Result<Vec<Entry>>;
+    /// The file at `path`, whole.
+    fn read(&mut self, path: &str) -> io::Result<Vec<u8>>;
+    /// Puts `data` in the file at `path`, whole, making the folders above it; a write that fails
+    /// leaves what was there.
+    fn write(&mut self, path: &str, data: &[u8]) -> io::Result<()>;
 }
 
 /// The program's files: `std::fs`, which WASI serves from the desktop's VFS.
@@ -58,11 +75,33 @@ impl Disk for Fs {
         }
         Ok(out)
     }
+
+    fn read(&mut self, path: &str) -> io::Result<Vec<u8>> {
+        std::fs::read(path)
+    }
+
+    /// Written beside it (`.<name>.saving`), then moved over it, so it is never half written.
+    fn write(&mut self, path: &str, data: &[u8]) -> io::Result<()> {
+        let (dir, name) = path.rsplit_once('/').ok_or(ErrorKind::InvalidInput)?;
+        // Each folder above it (one that cannot be made, the write says why); not
+        // create_dir_all, whose path parsing would ship.
+        for (i, b) in path.bytes().enumerate().skip(1) {
+            if b == b'/' {
+                _ = std::fs::create_dir(&path[..i]);
+            }
+        }
+        let part = [dir, "/.", name, ".saving"].concat();
+        let wrote = std::fs::write(&part, data).and_then(|()| std::fs::rename(&part, path));
+        if wrote.is_err() {
+            _ = std::fs::remove_file(&part);
+        }
+        wrote
+    }
 }
 
 /// The app `argv` names by its first word's file name (less a `.wasm`; `system <app> ...` names
-/// it next), and the app: About, Feedback, Files at home or at the folder after it, or Welcome.
-/// `None` for any other.
+/// it next), and the app: About, Editor (a new note, or the file after it), Feedback, Files at
+/// home or at the folder after it, or Welcome. `None` for any other.
 pub fn view(argv: &[String]) -> Option<(&'static str, Box<dyn View>)> {
     let base = |s: &str| {
         let name = s.rsplit('/').next().unwrap_or(s);
@@ -75,6 +114,8 @@ pub fn view(argv: &[String]) -> Option<(&'static str, Box<dyn View>)> {
     let (app, args) = argv.split_first()?;
     Some(match (base(app).as_str(), args) {
         ("about", []) => ("about", Box::new(About::default())),
+        ("editor", []) => ("editor", Box::new(Editor::new(""))),
+        ("editor", [file]) => ("editor", Box::new(Editor::new(file))),
         ("feedback", []) => ("feedback", Box::new(Feedback::default())),
         ("files", []) => ("files", Box::new(Files::new("~"))),
         ("files", [dir]) => ("files", Box::new(Files::new(dir))),
@@ -99,8 +140,9 @@ pub fn hint_to(ttys: [bool; 3]) -> Option<u8> {
     }
 }
 
-/// Runs `view` on `ui`, a frame per event that changes it, until Close or the end of the events;
-/// an event that does not decode is skipped.
+/// Runs `view` on `ui`, a frame per event that changes it, until Close (told to the view first)
+/// or the end of the events; an event that does not decode is the view's to note
+/// ([`View::garbled`]).
 pub fn serve<R: Read, W: Write>(
     ui: &mut Client<R, W>,
     view: &mut dyn View,
@@ -108,14 +150,17 @@ pub fn serve<R: Read, W: Write>(
 ) -> io::Result<()> {
     let mut seq = 0u32;
     loop {
-        let ev = match ui.next_event() {
-            Ok(Event::Close) => return Ok(()),
-            Ok(ev) => ev,
-            Err(e) if e.kind() == ErrorKind::InvalidData => continue,
+        let changed = match ui.next_event() {
+            Ok(Event::Close) => {
+                view.close(disk);
+                return Ok(());
+            }
+            Ok(ev) => view.event(&ev, disk),
+            Err(e) if e.kind() == ErrorKind::InvalidData => view.garbled(),
             Err(e) if e.kind() == ErrorKind::UnexpectedEof => return Ok(()),
             Err(e) => return Err(e),
         };
-        if view.event(&ev, disk) {
+        if changed {
             ui.show(&Frame { seq, ..view.frame() })?;
             seq = seq.wrapping_add(1);
         }

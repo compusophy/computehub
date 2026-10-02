@@ -386,9 +386,11 @@ impl Lay<'_> {
                 self.y -= CARD_PAD;
                 (w, h + 2.0 * CARD_PAD)
             }
+            // Its Codes and Areas share the room it adds (else it takes it under them).
             Node::Fill { children, .. } => {
                 let extra = self.grow();
-                let codes = children.iter().filter(|c| matches!(c, Node::Code { .. })).count();
+                let edits = |c: &&Node| matches!(c, Node::Code { .. } | Node::Area { .. });
+                let codes = children.iter().filter(edits).count();
                 let grow = Some(extra / codes.max(1) as f32);
                 (w, self.stack(ts, children, w, SPACING, grow) + [extra, 0.0][codes.min(1)])
             }
@@ -470,9 +472,11 @@ impl Lay<'_> {
             Node::Item { .. } => (w, ITEM_H),
             Node::Entry { .. } => (w, ENTRY_H),
             Node::Toggle { .. } => (w, TOGGLE_H),
+            // As tall as its rows, and what it takes of a Fill's room.
             Node::Area { id, .. } => {
                 let (y, a) = (self.y, self.texts.areas.iter_mut().find(|a| a.0 == *id));
-                (w, a.map_or(area::MIN_H, |a| a.1.layout(ts, t.body(), w, y)))
+                let h = a.map_or(area::MIN_H, |a| a.1.layout(ts, t.body(), w, y));
+                (w, h + grow.unwrap_or(0.0))
             }
             Node::Separator => (w, 1.0),
             Node::Grid { cols, cells, .. } => {

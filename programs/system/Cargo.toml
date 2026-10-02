@@ -1,6 +1,6 @@
 [package]
 name = "compusophy-system"
-description = "compusophyOS About, Feedback, Files and Welcome: one wasm32-wasip1 GUI program on the remote UI protocol, run as about, feedback, files or welcome and fetched when one first opens, never with the boot download. Built into dist/bin/, never committed."
+description = "compusophyOS About, Editor, Feedback, Files and Welcome: one wasm32-wasip1 GUI program on the remote UI protocol, run as about, editor, feedback, files or welcome and fetched when one first opens, never with the boot download. Built into dist/bin/, never committed."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

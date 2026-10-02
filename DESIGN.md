@@ -107,7 +107,7 @@ frame: os → shell::draw → gfx::DrawList → platform::Renderer: one draw cal
 | `vt`, `term` | VT/xterm escape parser; terminal screen model |
 | `guest` | the shell the Terminal runs over the VFS |
 | `apps` | Terminal, Settings |
-| `system` | About, Feedback, Files and Welcome: one wasip1 GUI program (`dist/bin/system.wasm`), off the boot download |
+| `system` | About, Editor, Feedback, Files and Welcome: one wasip1 GUI program (`dist/bin/system.wasm`), off the boot download |
 | `studio` | the applang editor, and `AppHost`, which runs `.app` files |
 | `coder` | the coding agent Studio runs: write, check (compile, smoke on 3 seeds), fix by SEARCH/REPLACE edits, keep the best so far, stop by budget; sans-IO, replayable |
 | `uiwire`, `uiview` | the remote UI protocol GUI programs speak; the desktop's half, which draws their trees |
@@ -173,8 +173,8 @@ one. Forked crates keep their Apache-2.0 license and note their origin.
   and move the least to fit inside it. Every change is a `wm::Cmd`, so
   window state replays and hashes.
 - **Home screen**: every app is an icon behind the windows (Studio,
-  Assistant, Terminal, Files, Settings, Feedback, About, Welcome, then each
-  `~/apps/*.app`, newest last), down the columns from the top left on a
+  Assistant, Terminal, Files, Editor, Settings, Feedback, About, Welcome, then
+  each `~/apps/*.app`, newest last), down the columns from the top left on a
   wide screen, in rows of four on a phone; there is no other list. A
   `.app` file's icon is its sigil, sacred geometry made from its name. A
   click opens; a mouse dragged 4 px carries an icon, and the others slide
@@ -247,9 +247,9 @@ one. Forked crates keep their Apache-2.0 license and note their origin.
   VFS, the page clock, and requests (open or close a window, load the
   fallback fonts, switch the theme). `os` owns the registry: `apps::open`
   makes `terminal` and `settings`; `remote::open` makes the GUI programs'
-  windows: `about`, `feedback`, `files`, `files:<dir>` and `welcome` (the
-  `system` program), `assistant`, `studio`, `studio:<path>` and any `*.app`
-  path.
+  windows: `about`, `editor`, `editor:<path>`, `feedback`, `files`,
+  `files:<dir>` and `welcome` (the `system` program), `assistant`, `studio`,
+  `studio:<path>` and any `*.app` path.
 - **Terminal**: `vt` + `term` + a cell renderer, running the `guest` shell
   over the VFS (`ls`, `cd`, `cat`, `mkdir`, `mv`, `open`, `edit`, `run`,
   `theme`, ...). `term` already speaks xterm, keys and replies included, for
@@ -257,7 +257,9 @@ one. Forked crates keep their Apache-2.0 license and note their origin.
 - **Studio** makes and edits applang apps: the `coder` loop asks the free
   AI, checks each reply and fixes it by edits, showing what moves (thinking,
   writing 48 lines, fixing line 43, testing); `studio::AppHost` runs a `.app`
-  in its own window. **Welcome** (a program, its mark revealed by the desktop's clock)
+  in its own window. **Editor** writes plain text, a new note in `~/notes`;
+  Files and the Terminal's `edit` open files in it (a `.app` in Studio).
+  **Welcome** (a program, its mark revealed by the desktop's clock)
   is the first screen; **Settings** picks the theme and
   lists what compusophyOS is made of.
 - Two tiers:

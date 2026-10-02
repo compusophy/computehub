@@ -168,7 +168,7 @@ fn errors_are_reported_once_a_session_unless_reports_are_off() {
 
 #[test]
 fn the_desktop_sends_feedback_and_reports_failures_and_tells_apps() {
-    // A terminal opens a file in Studio.
+    // A terminal opens a file in Editor.
     let mut desk = desktop(true);
     run(&mut desk, "edit diary-2026.txt");
     // Feedback an app asked for leaves at the flush after it, with what is open: apps, no files.
@@ -183,7 +183,7 @@ fn the_desktop_sends_feedback_and_reports_failures_and_tells_apps() {
     desk.flush(&mut ctl, false);
     let sent = streamed(&ctl);
     assert_eq!(sent.len(), 1);
-    assert!(sent[0].1.contains(r"windows  welcome, terminal, studio\n"), "{sent:?}");
+    assert!(sent[0].1.contains(r"windows  welcome, terminal, editor\n"), "{sent:?}");
     assert!(sent[0].1.contains("Bug: Dock flickers") && !sent[0].1.contains("diary"));
     // Its answer is the report's, not the AI's; a 503 holds it, and apps hear so.
     let mut ctl = Ctl::default();
