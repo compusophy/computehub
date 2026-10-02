@@ -224,6 +224,10 @@ fn areas_edit_wrap_grow_and_keep_the_caret_in_view() {
     assert!(a.key(Key::Tab).is_none() && a.key(Key::Escape).is_none() && a.text == "abd\n");
     a.set("other");
     assert_eq!((a.text.as_str(), a.at), ("other", 5));
+    // A char goes whole, however many bytes it takes.
+    let mut b = Area::new("éaü");
+    let keys = [Key::Backspace, Key::Home, Key::Delete].map(|k| b.key(k));
+    assert_eq!((keys, b.text.as_str(), b.at), ([Some(true), Some(false), Some(true)], "a", 0));
     // In a frame: a text hit, at least 144 tall, growing with its rows.
     let area = |value: &str| Node::Area { id: 9, value: value.into(), placeholder: "Say".into() };
     let mut texts = Texts { areas: vec![(9, Area::new(""))], focus: 9, ..Texts::default() };

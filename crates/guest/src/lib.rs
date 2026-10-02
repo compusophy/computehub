@@ -352,7 +352,7 @@ impl Guest {
         self.mark.clear();
         let start = self.out.len();
         self.run(&line, cx);
-        let printed = &self.out[start..];
+        let printed = self.out.get(start..).unwrap_or_default();
         if !printed.is_empty() && !printed.ends_with('\n') && !printed.ends_with("\x1b[2J") {
             self.out.push('\n');
         }
@@ -530,14 +530,16 @@ impl Guest {
                 let mut dst = self.abs(to)?;
                 if fs.is_dir(&dst) && a != dst {
                     dst.push_str(if dst.ends_with('/') { "" } else { "/" });
-                    dst.push_str(&a[a.rfind('/').map_or(0, |i| i + 1)..]);
+                    dst.push_str(a.get(a.rfind('/').map_or(0, |i| i + 1)..).unwrap_or_default());
                 }
                 fs.rename(a, &dst)?;
             }
             Op::Open | Op::Run(_) if fs.is_file(a) && a.ends_with(".app") => cx.open(a),
             Op::Run(p) if fs.is_file(a) => io.err(&["run: ", p, ": not an .app file"]),
             Op::Run(_) | Op::Edit if fs.is_dir(a) => return Err(IsADir),
-            Op::Edit if fs.is_dir(&a[..a.rfind('/').unwrap_or(0).max(1)]) => {
+            Op::Edit
+                if fs.is_dir(a.get(..a.rfind('/').unwrap_or(0).max(1)).unwrap_or_default()) =>
+            {
                 cx.open(&("studio:".to_string() + a));
             }
             Op::Cd | Op::Open | Op::Run(_) | Op::Edit => return Err(NotFound),
@@ -622,7 +624,7 @@ fn flags<'a, 'b>(args: &'a [&'b str], ok: &str, io: &mut Io<'_>) -> Option<(u32,
         if ok.is_empty() || arg.len() < 2 || !arg.starts_with('-') {
             return Some((set, &args[n..]));
         }
-        for c in arg[1..].chars() {
+        for c in arg.chars().skip(1) {
             let Some(i) = ok.bytes().position(|o| char::from(o) == c) else {
                 let cmd = io.cmd;
                 io.err(&[cmd, ": unknown option -", c.encode_utf8(&mut [0; 4])]);

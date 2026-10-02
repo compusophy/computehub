@@ -61,9 +61,9 @@ fn a_report_is_json_with_a_context_block_and_nothing_else() {
     assert_eq!(json, raw);
     // Titles: the first line with text, at most 80 chars; signatures: 8 hex digits, stable.
     assert_eq!(title("\n  \n  First line  \nsecond"), "First line");
-    let long = title(&"word ".repeat(30));
+    let long = title(&"wörd ".repeat(30));
     assert!(long.chars().count() <= 80 && long.ends_with('\u{2026}'), "{long}");
-    assert_eq!(title(&"y".repeat(80)), "y".repeat(80));
+    assert_eq!(title(&"é".repeat(80)), "é".repeat(80));
     assert_eq!((sig("error", "x"), sig("error", "x").len()), (sig("error", "x"), 8));
     assert!(sig("error", "x") != sig("panic", "x") && sig("error", "x") != sig("error", "y"));
     // Huge feedback is cut so the report stays under the inbox's limit.

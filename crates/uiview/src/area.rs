@@ -93,7 +93,7 @@ impl Area {
                 self.at = self.step(key == Key::Backspace).min(at);
                 let gone = self.at < self.text.len() && (key == Key::Delete || self.at < at);
                 if gone {
-                    self.text.remove(self.at);
+                    self.text.drain(self.at..self.step(false));
                 }
                 return Some(self.edited(gone));
             }
@@ -129,7 +129,7 @@ impl Area {
             spans.push((at, at + r.len()));
         }
         let x_of = |ts: &mut TextSystem, row: usize, at: usize| {
-            ts.measure(&text[spans[row].0..at.max(spans[row].0)], style)
+            ts.measure(text.get(spans[row].0..at.max(spans[row].0)).unwrap_or_default(), style)
         };
         let mut row = spans.iter().rposition(|s| s.0 <= self.at).unwrap_or(0);
         let want = match (self.press.take(), std::mem::take(&mut self.rows)) {
@@ -143,7 +143,7 @@ impl Area {
             let (s, e) = spans[row];
             let mut best = (f32::MAX, s);
             for i in (s..=e).filter(|&i| text.is_char_boundary(i)) {
-                let gap = (ts.measure(&text[s..i], style) - x).abs();
+                let gap = (ts.measure(text.get(s..i).unwrap_or_default(), style) - x).abs();
                 if gap < best.0 {
                     best = (gap, i);
                 }
@@ -193,7 +193,7 @@ impl Area {
         }
         for (i, &(s, e)) in self.spans.iter().enumerate() {
             let y = ui.text_system().snap(ty + i as f32 * self.lh);
-            ui.text(tx, y + base, &self.text[s..e], style);
+            ui.text(tx, y + base, self.text.get(s..e).unwrap_or_default(), style);
         }
         if focus {
             let (y, w) = (ty + self.row as f32 * self.lh + base - a, ui.px(1.5));
