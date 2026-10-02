@@ -26,8 +26,8 @@
 //! that selects the icons it touches; dragging a selected icon carries them all. Bindings,
 //! pointer rules and motion are those of `DESIGN.md`. While anything moves (or a held finger
 //! waits to long-press), [`Shell::draw`] asks for the next frame; otherwise none, but for the
-//! living grain's ([`Shell::grain_in`]). Above the windows lies the overlay, the Assistant that
-//! uses the desktop as a person does.
+//! living grain's and an app's timer's ([`Shell::frame_in`]). Above the windows lies the overlay,
+//! the Assistant that uses the desktop as a person does.
 
 #![forbid(unsafe_code)]
 

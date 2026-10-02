@@ -56,8 +56,8 @@ pub(crate) fn run(desk: &mut Desktop, line: &str) -> Vec<Fx> {
 /// A frame as [`App::frame`] draws it, without a renderer, and what it asked.
 fn frame(desk: &mut Desktop) -> Vec<Fx> {
     let mut ctl = Ctl::default();
-    let (_, animating) = desk.paint(1.0, &ctl);
-    desk.drawn(animating, &mut ctl);
+    desk.paint(1.0, &ctl);
+    desk.drawn(&mut ctl);
     ctl.effects().to_vec()
 }
 
@@ -177,7 +177,7 @@ fn shell_starts_at_the_first_usable_size() {
     }
     assert!(desk.missed_tick);
     // A frame before the shell clears to the default theme's base.
-    assert_eq!(desk.paint(1.0, &Ctl::default()), (ui::theme("").base, false));
+    assert_eq!(desk.paint(1.0, &Ctl::default()), ui::theme("").base);
     // On a first visit Welcome opens, focused, wanting no text input, and that is kept.
     let seen = Fx::Store { key: "compusophy.seen".into(), value: "1".into() };
     let want = ((true, false), vec![seen, Fx::TextInput(false)]);
@@ -187,8 +187,7 @@ fn shell_starts_at_the_first_usable_size() {
     let new = Shell::new(1280.0, 800.0, text, fs, registry(Default::default()), Default::default());
     let got = shell(&desk);
     let wm = |s: &Shell| (s.wm().state_hash(), s.wm().layout());
-    assert_eq!(wm(got), wm(&new));
-    assert_eq!(got.wm().layout().len(), 1);
+    assert!(wm(got) == wm(&new) && got.wm().layout().len() == 1);
     assert_eq!(got.vfs().read(remote::STUDIO), Ok(&b"#!wasm bin/studio.wasm\n"[..]));
     let started = (got.theme_name(), desk.saved, desk.parts.is_none());
     assert_eq!(started, ("Mono", "Mono", true));
@@ -252,8 +251,9 @@ fn fonts_load_in_groups_and_frames_come_only_while_something_moves() {
         assert_eq!(frame(&mut desk), [Fx::RequestFrame]);
         assert!(send(&mut desk, Event::PointerMove { x: 9.0, y: 300.0 }).0.0);
         let mut ctl = Ctl::default();
-        desk.drawn(false, &mut ctl);
-        assert_eq!(ctl.effects(), [Fx::FrameIn(125)]); // but the living grain's, by timer
+        desk.shell.as_mut().expect("made").set_now(1000.0);
+        desk.drawn(&mut ctl);
+        assert_eq!(ctl.effects(), [Fx::FrameIn(125)]); // faded in, the living grain's, by timer
         let (h, fx) = send(&mut desk, fetched(bold, Ok(got)));
         assert_eq!((h.1, fx, has(&mut desk, FontId::SansBold)), (false, vec![], want));
     }

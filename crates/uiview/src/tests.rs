@@ -520,6 +520,22 @@ fn app_rows_wear_their_sigil_rows_say_two_lines_and_display_is_large() {
     assert!(tallest(Style::Display) > tallest(Style::Title) * 1.3);
 }
 
+/// How many of `d`'s `kind` instances cover `r` exactly in `color`.
+fn at(d: &Drawn, kind: Kind, r: RectF, color: Rgba) -> usize {
+    let on = |i: &&&Instance| i.rect == [r.x, r.y, r.w, r.h] && i.color == color;
+    d.of(kind).iter().filter(on).count()
+}
+
+/// What a recording draw of `nodes` at 600 x 400 in theme `t` notes.
+fn sem(nodes: &[Node], t: &Theme) -> gfx::Sem {
+    let mut ts = TextSystem::new(SANS.to_vec()).unwrap();
+    let (mut list, mut hits) = (DrawList::recording(), Vec::new());
+    let r = RectF::new(0.0, 0.0, 600.0, 400.0);
+    let ui = Ui::new(&mut list, &mut ts, r, &mut hits, UiState::default(), t);
+    super::draw(&mut { ui }, nodes, &mut Texts::default(), &mut View::default());
+    list.take_sem().unwrap()
+}
+
 #[test]
 fn grids_draw_theme_squares_and_points_find_them() {
     let t = &THEMES[0];
@@ -529,64 +545,163 @@ fn grids_draw_theme_squares_and_points_find_them() {
     let d = draw(std::slice::from_ref(&grid), &mut texts, &mut view, None);
     // Two columns across the width: 32 px squares (the most), centered, 3 rows, a pixel apart.
     let x = PAD + (600.0 - 2.0 * PAD - 64.0) / 2.0;
-    assert_eq!(view.grids, [(7, RectF::new(x, PAD, 64.0, 96.0), 2, 5)]);
+    let rect = RectF::new(x, PAD, 64.0, 96.0);
+    assert_eq!(view.grids, [Board { id: 7, nth: 0, rect, cols: 2, n: 5 }]);
     let square = |c: f32, r: f32| RectF::new(x + 32.0 * c, PAD + 32.0 * r, 31.0, 31.0);
     assert!(d.filled(square(0.0, 0.0), t.surface_lo) && d.filled(square(1.0, 0.0), t.ansi[1]));
     assert!(d.filled(square(0.0, 1.0), t.ansi[8]) && d.filled(square(1.0, 1.0), t.ansi[2]));
-    assert_eq!((d.hit(7).rect, d.hit(7).sense), (RectF::new(x, PAD, 64.0, 96.0), Sense::Click));
-    // A point finds its square; past the last square, outside, or another id: none.
-    assert_eq!(cell(&view, 7, x + 40.0, PAD + 40.0), Some(3));
-    let none = [(7, x + 40.0, PAD + 70.0), (7, x - 1.0, PAD), (8, x, PAD)];
-    assert!(none.iter().all(|&(id, px, py)| cell(&view, id, px, py).is_none()));
-    // For the AI: a mark with the rows, a line each, and the texts as runs.
-    let mut ts = TextSystem::new(SANS.to_vec()).unwrap();
-    let (mut list, mut hits) = (DrawList::recording(), Vec::new());
-    let r = RectF::new(0.0, 0.0, 600.0, 400.0);
-    let ui = Ui::new(&mut list, &mut ts, r, &mut hits, UiState::default(), t);
-    super::draw(&mut { ui }, &[grid], &mut texts, &mut view);
-    let sem = list.take_sem().unwrap();
-    let mark = (sem.marks[0].role, sem.marks[0].value.as_str());
-    assert_eq!(mark, (ui::sem::GRID, "2 columns\n01\n82\n0"));
-    assert_eq!(sem.runs.iter().map(|r| r.text.as_str()).collect::<Vec<_>>(), ["X"]);
-    // A hundred columns are 6 px squares (the least) with no gap; with no id, nothing to tap.
+    assert_eq!((d.hit(7).rect, d.hit(7).sense), (rect, Sense::Click));
+    // The empty ones outlined, as a text field is, so the board shows on any surface.
+    let edge = |c, r| at(&d, Kind::Border, square(c, r), t.border);
+    assert_eq!([edge(0.0, 0.0), edge(0.0, 2.0), edge(1.0, 0.0)], [1, 1, 0]);
+    // A point finds its square; past the last square, or outside: none.
+    let b = view.grids[0];
+    assert_eq!(b.at(x + 40.0, PAD + 40.0), Some((1, 1)));
+    assert!([(x + 40.0, PAD + 70.0), (x - 1.0, PAD)].iter().all(|p| b.at(p.0, p.1).is_none()));
+    // For the AI: a mark of its size, the rows a line each, then each text by its square.
+    let marked = |g: &Node| sem(std::slice::from_ref(g), t).marks[0].value.clone();
+    assert_eq!(marked(&grid), "2 columns, 3 rows\n01\n82\n0\n1: X");
+    // Boards alike but for where their texts are read apart.
+    let board = |at: [usize; 3]| {
+        let mut texts = vec![String::new(); 9];
+        (texts[at[0]], texts[at[1]], texts[at[2]]) = ("X".into(), "O".into(), "X\n".into());
+        Node::Grid { id: 1, cols: 3, cells: vec![0; 9], texts }
+    };
+    let (a, b) = (marked(&board([0, 4, 8])), marked(&board([1, 3, 7])));
+    assert!(a.ends_with("\n000\n0: X\n4: O\n8: X ") && b.ends_with("\n1: X\n3: O\n7: X "), "{a}");
+    // A hundred columns are as wide as the width holds (here 5 px squares) with no gap, the
+    // whole outlined; with no id, nothing to tap.
     let wide = Node::Grid { id: 0, cols: 100, cells: vec![1; 100], texts: Vec::new() };
     let d = draw(&[wide], &mut texts, &mut view, None);
     assert!(view.grids.is_empty() && d.hits.is_empty());
-    let six = |f: &&&Instance| f.rect[2] == 6.0 && f.color == t.ansi[1];
-    assert_eq!(d.of(Kind::Fill).iter().filter(six).count(), 100);
-    // A tall one takes two thirds of the view's height at most, so what is under it shows:
-    // 20 rows in 360 px are 12 px squares (11 and a pixel apart).
+    let five = |f: &&&Instance| f.rect[2] == 5.0 && f.color == t.ansi[1];
+    assert_eq!(d.of(Kind::Fill).iter().filter(five).count(), 100);
+    assert_eq!(at(&d, Kind::Border, RectF::new(PAD + 30.0, PAD, 500.0, 5.0), t.border), 1);
+    // On a phone's window, 3 device px a px, every column stays in the content.
+    let mut ts = TextSystem::new(SANS.to_vec()).unwrap();
+    ts.set_dpr(3.0);
+    let (mut list, mut hits, phone) =
+        (DrawList::new(), Vec::new(), RectF::new(0.0, 0.0, 375.0, 400.0));
+    let ui = Ui::new(&mut list, &mut ts, phone, &mut hits, UiState::default(), t);
+    let tap = Node::Grid { id: 2, cols: 100, cells: vec![1; 400], texts: Vec::new() };
+    super::draw(&mut { ui }, &[tap], &mut texts, &mut view);
+    let r = view.grids[0].rect;
+    assert!(r.x >= PAD && r.x + r.w <= 375.0 - PAD && r.w > 330.0, "{r:?}");
+    // A tall one alone takes two thirds of the view's height at most, so what is under it
+    // shows: 20 rows in 360 px are 12 px squares (11 and a pixel apart).
     let tall = Node::Grid { id: 0, cols: 10, cells: vec![1; 200], texts: Vec::new() };
-    let d = draw(&[tall], &mut texts, &mut view, None);
+    let d = draw(std::slice::from_ref(&tall), &mut texts, &mut view, None);
     let twelve = |f: &&&Instance| f.rect[2] == 11.0 && f.color == t.ansi[1];
     assert_eq!(d.of(Kind::Fill).iter().filter(twelve).count(), 200);
+    // Among a game's labels and buttons it takes what they leave: all of it shows.
+    let button = |id| Node::Button { id, variant: Variant::Normal, label: "Left".into() };
+    let row = |id| Node::Row { id: 0, gap: 8, children: vec![button(id), button(id + 1)] };
+    let score = || text(Style::Body, "Score 0");
+    let game = [score(), score(), tall, row(1), row(3), button(5)];
+    let d = draw(&game, &mut texts, &mut view, None);
+    assert!(view.heights.0 <= 400.0 && d.hit(5).rect.y + BUTTON_H <= 400.0 - PAD, "{view:?}");
+    assert_eq!(d.of(Kind::Fill).iter().filter(|f| f.color == t.ansi[1]).count(), 200);
+}
+
+#[test]
+fn grid_texts_fit_their_squares_and_its_colors_read_apart() {
+    // Four digits in 32 px squares, and the card's words: each text inside its own square.
+    let tiles = ["1024", "2048", "banana", "cherry"].map(String::from).to_vec();
+    let grid = Node::Grid { id: 1, cols: 4, cells: vec![3, 4, 0, 0], texts: tiles };
+    let (mut texts, mut view) = (Texts::default(), View::default());
+    let d = draw(&[grid], &mut texts, &mut view, None);
+    let r = view.grids[0].rect;
+    for i in 0..4 {
+        let (left, right) = (r.x + 32.0 * i as f32, r.x + 32.0 * (i + 1) as f32 - 1.0);
+        let ink = |g: &&Instance| (left..right).contains(&(g.rect[0] + g.rect[2] / 2.0));
+        let glyphs: Vec<_> = d.of(Kind::Glyph).into_iter().filter(ink).collect();
+        assert!(glyphs.len() >= 4, "{i}");
+        assert!(glyphs.iter().all(|g| g.rect[0] >= left && g.rect[0] + g.rect[2] <= right), "{i}");
+    }
+    // Silver (7) and gray (8) read apart in every theme, and their texts on them.
+    let lum = |c: Rgba| {
+        let f = |v: u8| {
+            let v = f32::from(v) / 255.0;
+            if v <= 0.04045 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) }
+        };
+        0.2126 * f(c.0) + 0.7152 * f(c.1) + 0.0722 * f(c.2)
+    };
+    let contrast = |a: Rgba, b: Rgba| {
+        let (a, b) = (lum(a), lum(b));
+        (a.max(b) + 0.05) / (a.min(b) + 0.05)
+    };
+    for t in &THEMES {
+        let ((silver, on_silver), (gray, on_gray)) = (color(t, 7), color(t, 8));
+        assert!(contrast(silver, gray) >= 2.0, "{} {}", t.name, contrast(silver, gray));
+        assert!(contrast(on_silver, silver) >= 4.5 && contrast(on_gray, gray) >= 3.0, "{}", t.name);
+    }
 }
 
 #[test]
 fn play_ticks_while_shown_once_answered_and_taps_new_squares() {
     let mut p = Play::default();
+    assert_eq!(p.due_in(0.0), None, "no timer");
     assert!(p.ask(&Request::Timer { ms: 100 }) && p.ask(&Request::Keys { on: true }));
     assert!(!p.ask(&Request::Close) && p.keys);
     // The first frame starts the count; due after 100 ms, then not until answered (or 1 s).
     let tick = |p: &mut Play, now: f64| p.tick(now, now - 10.0);
+    assert_eq!(p.due_in(1000.0), Some(0), "a frame to start the count");
     assert_eq!([tick(&mut p, 1000.0), tick(&mut p, 1050.0)], [None, None]);
+    assert_eq!((p.due_in(1050.0), p.due_in(1099.5)), (Some(50), Some(1)));
     assert_eq!(tick(&mut p, 1116.0), Some(Event::Tick { ms: 116 }));
-    assert_eq!(tick(&mut p, 1300.0), None);
+    assert_eq!((tick(&mut p, 1300.0), p.due_in(1300.0)), (None, Some(816)));
     p.answered();
+    assert_eq!(p.due_in(1300.0), Some(0));
     assert_eq!(tick(&mut p, 1300.0), Some(Event::Tick { ms: 184 }));
     assert_eq!(tick(&mut p, 2400.0), Some(Event::Tick { ms: 1100 }));
+    // With frames only when due, a slow timer's window last drew one wait before: it ticks.
+    let mut slow = Play::default();
+    slow.ask(&Request::Timer { ms: 5000 });
+    assert_eq!(slow.tick(100.0, 90.0), None);
+    assert_eq!(slow.tick(5100.0, 100.0), Some(Event::Tick { ms: 5000 }));
     // Hidden (not drawn for a while), none; shown again, the count starts over; 0 stops.
     assert_eq!((p.tick(5000.0, 2400.0), tick(&mut p, 5016.0)), (None, None));
     p.answered();
     assert_eq!(tick(&mut p, 5117.0), Some(Event::Tick { ms: 101 }));
     assert!(p.ask(&Request::Timer { ms: 0 }) && tick(&mut p, 9000.0).is_none());
     // A press taps its square; a drag taps each new square of the grid pressed, none other.
-    let grids = vec![(7, RectF::new(10.0, 10.0, 64.0, 64.0), 2, 4)];
-    let mut view = View { grids, ..View::default() };
-    assert_eq!(p.tap(&view, Some(7), 50.0, 50.0), Some(Event::Tap { id: 7, cell: 3 }));
-    assert_eq!(p.tap(&view, None, 51.0, 51.0), None);
-    assert_eq!(p.tap(&view, None, 11.0, 11.0), Some(Event::Tap { id: 7, cell: 0 }));
-    assert_eq!((p.tap(&view, Some(3), 11.0, 11.0), p.tap(&view, None, 50.0, 11.0)), (None, None));
+    let board = |id, nth, rect| Board { id, nth, rect, cols: 2, n: 4 };
+    let (tap, none) = (|cells: &[u32]| (7, cells.to_vec()), (0, vec![]));
+    let mut view =
+        View { grids: vec![board(7, 0, RectF::new(10.0, 10.0, 64.0, 64.0))], ..View::default() };
+    assert!(!p.pressed());
+    assert_eq!(p.tap(&view, Some(7), 50.0, 50.0), tap(&[3]));
+    assert!(p.pressed(), "its Click is none");
+    assert_eq!(p.tap(&view, None, 51.0, 51.0), tap(&[]));
+    assert_eq!(p.tap(&view, None, 11.0, 11.0), tap(&[0]));
+    assert_eq!(p.tap(&view, Some(3), 11.0, 11.0), none);
+    assert!(p.tap(&view, None, 50.0, 11.0) == none && !p.pressed());
+    // Moved farther than a square between samples: each square on the way, once.
+    view.grids = vec![Board { cols: 4, n: 16, ..board(7, 0, RectF::new(0.0, 0.0, 64.0, 64.0)) }];
+    assert_eq!(p.tap(&view, Some(7), 1.0, 1.0), tap(&[0]));
+    assert_eq!(p.tap(&view, None, 63.0, 63.0), tap(&[5, 10, 15]));
+    assert_eq!(p.tap(&view, None, 1.0, 40.0), tap(&[14, 9, 8]));
+    // Off the squares and back: from where it came back, alone.
+    assert_eq!(p.tap(&view, None, 80.0, 1.0), tap(&[]));
+    assert_eq!(p.tap(&view, None, 63.0, 1.0), tap(&[3]));
+    // What was sent is answered in order, after the frames of the Tick and the Change out; till
+    // then, and till that answer draws, a drag waits, then taps the squares passed meanwhile.
+    let mut q = Play::default();
+    q.ask(&Request::Timer { ms: 100 });
+    assert_eq!((q.tick(0.0, 0.0), q.tick(100.0, 90.0)), (None, Some(Event::Tick { ms: 100 })));
+    assert_eq!(q.tap(&view, Some(7), 1.0, 1.0), tap(&[0]));
+    q.sent(true);
+    for _ in 0..3 {
+        assert!(q.busy() && q.tap(&view, None, 40.0, 1.0) == none);
+        q.answered();
+    }
+    assert!(!q.busy() && q.tap(&view, None, 63.0, 1.0) == none);
+    q.drew();
+    assert_eq!(q.tap(&view, None, 63.0, 1.0), tap(&[1, 2, 3]));
+    // The grid pressed has another id now (a button shown above it): its taps take that.
+    view.grids =
+        vec![board(9, 0, RectF::new(10.0, 50.0, 64.0, 64.0)), board(7, 1, view.grids[0].rect)];
+    assert_eq!(p.tap(&view, None, 11.0, 51.0), (9, vec![0]));
     view.grids.clear();
-    assert_eq!(p.tap(&view, Some(7), 50.0, 50.0), None);
+    assert_eq!(p.tap(&view, Some(7), 50.0, 50.0), none);
 }

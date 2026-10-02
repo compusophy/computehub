@@ -481,7 +481,7 @@ impl Host {
         let now_ms = self.now_ms;
         let shown: Vec<WinId> = self.wm.layout().iter().map(|p| p.win).collect();
         for win in self.wins.iter().map(|w| w.id).collect::<Vec<_>>() {
-            let animates = || self.win(win).is_some_and(|w| w.app.animating(now_ms));
+            let animates = || self.win(win).is_some_and(|w| w.app.frame_in(now_ms) == Some(0));
             if all || shown.contains(&win) && animates() {
                 self.deliver(win, AppEvent::Tick { now_ms }, out);
             }

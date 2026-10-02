@@ -13,9 +13,9 @@ const SANS: &[u8] = include_bytes!("../../../assets/fonts/Inter-Regular.ttf");
 const SYM_A: &[u8] = include_bytes!("../../../assets/fonts/lazy/symbols-a.ttf");
 const SYM_B: &[u8] = include_bytes!("../../../assets/fonts/lazy/symbols-b.ttf");
 /// The names the registry knows (`welcome` and `sized` are compact; `page` draws a page, `long`
-/// a page of too much).
+/// a page of too much, `board` a grid of 9 squares).
 const KNOWN: &str =
-    "welcome terminal /apps/counter.app sized huge nan assistant files about page long";
+    "welcome terminal /apps/counter.app sized huge nan assistant files about page long board";
 
 thread_local! {
     /// What a Probe told `agent` asks of the desktop, the Probe that is busy, the one that ended.
@@ -38,6 +38,10 @@ impl App for Probe {
         if self.1 == "long" {
             return (0..300).for_each(|i| ui.mark(W(i), sem::TEXTBOX, 0, &"x".repeat(2000)));
         }
+        if self.1 == "board" {
+            ui.mark(W(1), sem::GRID, 0, &"0".repeat(4100));
+            ui.mark(W(2), sem::GRID, 0, &"1".repeat(20_000));
+        }
         if self.1 != "page" {
             return ui.hit(ui::WidgetId(1), ui.rect(), ui::Sense::Click);
         }
@@ -50,6 +54,9 @@ impl App for Probe {
     }
     fn busy(&self) -> bool {
         BUSY.with(|b| b.get() == self.0)
+    }
+    fn squares(&self, id: u32) -> Option<u32> {
+        (self.1 == "board" && id == 1).then_some(9)
     }
     fn ended(&self) -> bool {
         ENDED.with(|b| b.get() == self.0)
@@ -563,13 +570,19 @@ fn the_scene_holds_each_window_its_hits_its_marks_and_the_text_that_shows() {
     assert!(s.wins[2].hits.is_empty() && s.wins[2].runs.is_empty());
     // Reading the screen drew nothing on the atlas.
     assert!(h.text.atlas_mut().take_dirty().is_none());
+    // A grid's mark keeps every square of a big board; past 12 KiB it is cut, and says so.
+    h.open("board", None, &mut Response::default());
+    let s = h.scene();
+    let lens: Vec<_> =
+        s.wins[0].marks.iter().map(|m| (m.value.len(), m.value.ends_with('…'))).collect();
+    assert_eq!(lens, [(4100, false), (12 << 10, true)]);
     // However much the windows say, the scene stays within 64 KiB as sent (the top windows
-    // first), a mark's value within 512 bytes.
+    // first), a mark's value within 512 bytes, cut ones saying so.
     h.open("long", None, &mut Response::default());
     let (s, room) = (h.scene(), agent::SCENE);
     let marks = &s.wins[0].marks;
     assert!((room - 600..=room).contains(&s.encode().len()) && marks.len() > 100);
-    assert!(marks.iter().all(|m| m.value.len() == 512));
+    assert!(marks.iter().all(|m| m.value.len() == 512 && m.value.ends_with('…')));
 }
 
 #[test]
@@ -711,9 +724,18 @@ fn the_overlay_acts_as_a_person_and_hears_once_the_screen_settles() {
     assert!(log.borrow().contains(&(1, ctrl_s)));
     h.acts(21, Act::Theme { name: "dawn".into() });
     assert_eq!(h.theme.current().name, "Dawn");
-    // A tap names a grid's square: the window's program hears it as a pointer's tap.
-    h.acts(22, Act::Tap { win: 1, id: 1, cell: 4 });
-    assert!(log.borrow().contains(&(1, E::Agent(Event::Tap { id: 1, cell: 4 }))));
+    // A tap names a grid's square: the window's program hears it as a pointer's tap. Only a
+    // square the grid has, of a grid; and a grid takes no click.
+    h.open("board", None, &mut Response::default());
+    let (b, board) = (*made.borrow(), h.names().iter().find(|n| n.1 == "board").unwrap().0);
+    h.acts(22, Act::Tap { win: board, id: 1, cell: 8 });
+    assert!(log.borrow().contains(&(b, E::Agent(Event::Tap { id: 1, cell: 8 }))));
+    let tap = |win, cell| Act::Tap { win, id: 1, cell };
+    for (i, act) in (23..).zip([tap(board, 9), tap(1, 0), Act::Click { win: board, id: 1 }]) {
+        h.acts(i, act);
+        assert_eq!(heard(&log, me).last().map(|a| (a.0, a.1)), Some((i, acted::MALFORMED)));
+    }
+    assert!(!log.borrow().iter().any(|e| matches!(e.1, E::Click(_) if e.0 == b)));
     let n = log.borrow().len();
     h.ask(1, vec![Ask::Act { id: 5, act: Act::Window { win: 1, op: WinOp::Close }.encode() }]);
     let no = Event::Acted { id: 5, code: acted::REFUSED, note: "".into(), scene: vec![] };

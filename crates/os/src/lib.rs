@@ -218,26 +218,27 @@ impl Desktop {
         }
     }
 
-    /// Draws into the draw list; the clear color, and whether an animation runs.
-    fn paint(&mut self, dpr: f32, ctl: &Ctl) -> (Rgba, bool) {
+    /// Draws into the draw list; the clear color.
+    fn paint(&mut self, dpr: f32, ctl: &Ctl) -> Rgba {
         let Some(shell) = &mut self.shell else {
             self.list.clear();
-            return (ui::theme("").base, false);
+            return ui::theme("").base;
         };
         shell.set_now(ctl.monotonic_ms());
         shell.set_dpr(dpr);
         shell.set_reduced_motion(ctl.reduced_motion());
-        let animating = shell.draw(&mut self.list);
-        (shell.clear_color(), animating)
+        shell.draw(&mut self.list);
+        shell.clear_color()
     }
 
-    /// After a frame: the next while animating (else the living grain's, by timer), the
-    /// deferred fonts after the first, what the shell queued.
-    fn drawn(&mut self, animating: bool, ctl: &mut Ctl) {
-        if animating {
-            ctl.request_frame();
-        } else if let Some(ms) = self.shell.as_ref().and_then(Shell::grain_in) {
-            ctl.frame_in(ms);
+    /// After a frame: the next when the shell wants it (at once while anything moves, else by
+    /// timer: the living grain's, an app's timer's), the deferred fonts after the first, what
+    /// the shell queued.
+    fn drawn(&mut self, ctl: &mut Ctl) {
+        match self.shell.as_ref().and_then(Shell::frame_in) {
+            Some(0) => ctl.request_frame(),
+            Some(ms) => ctl.frame_in(ms),
+            None => {}
         }
         if self.deferred.is_none() {
             self.deferred = Some([true; 2]);
@@ -280,11 +281,11 @@ impl App for Desktop {
     }
 
     fn frame(&mut self, r: &mut Renderer, ctl: &mut Ctl) {
-        let (bg, animating) = self.paint(r.dpr(), ctl);
+        let bg = self.paint(r.dpr(), ctl);
         if let Some(text) = text_of(&mut self.shell, &mut self.parts) {
             r.draw(&self.list, bg, text.atlas_mut());
         }
-        self.drawn(animating, ctl);
+        self.drawn(ctl);
     }
 }
 

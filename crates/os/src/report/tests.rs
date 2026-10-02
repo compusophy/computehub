@@ -81,8 +81,7 @@ fn reports_wait_in_the_outbox_until_the_inbox_takes_them() {
     r.feedback("idea", "Dark mode for the dock\nplease", true);
     r.pump(&mut ctl, phone);
     let sent = streamed(&ctl);
-    assert_eq!(sent.len(), 1);
-    let (id, json) = &sent[0];
+    let [(id, json)] = &sent[..] else { panic!("{sent:?}") };
     let start = r#"{"kind":"feedback","title":"Idea: Dark mode for the dock","body":"Dark mode"#;
     assert!(json.starts_with(start));
     assert!(json.contains("windows  2 open") && sig_of(json).len() == 16, "{json}");

@@ -8,7 +8,8 @@
 //! - **Hands.** An [`Act`] goes the way a person's pointer and keys go: a click raises the window,
 //!   tells it its focus, then presses and releases the widget's middle (`PointerDown`, then
 //!   `Click` for a button); a tap names a grid's square, which its program hears as a pointer's
-//!   tap; a window verb is the title bar's control; opening an app is the home screen's tile.
+//!   tap (a grid takes only taps, of squares it has: [`ui::App::squares`]); a window verb is the
+//!   title bar's control; opening an app is the home screen's tile.
 //!   Each act flashes what it touched ([`Agent::flash`]).
 //! - **Settling.** An act is answered by one [`Event::Acted`] once no window is
 //!   [`ui::App::busy`] or [`SETTLE_MS`] passed (a wait: once its time passed), with the scene
@@ -34,13 +35,15 @@ pub const ASSISTANT: &str = "assistant";
 /// How long an act waits for busy windows, and how long its flash shows.
 pub const SETTLE_MS: f64 = 1500.0;
 pub const FLASH_MS: f64 = 600.0;
-/// What a window's scene keeps at most: hits (and marks), runs, bytes of text; a title's and a
-/// mark's value's bytes; and the whole scene's, as sent.
+/// What a window's scene keeps at most: hits (and marks), runs, bytes of text; a title's, a
+/// mark's value's and a grid's (its squares' colors a row a line, even 4,096 in one column, and
+/// texts); and the whole scene's, as sent.
 const HITS: usize = 300;
 const RUNS: usize = 400;
 const TEXT: usize = 16 << 10;
 const NAME: usize = 256;
 const VALUE: usize = 512;
+const GRID: usize = 12 << 10;
 pub const SCENE: usize = 64 << 10;
 
 /// The act settling: its id and code, its deadline, whether only the deadline ends it (a
@@ -241,6 +244,7 @@ impl Host {
         let state = UiState { focused: true, now_ms: now, ..UiState::default() };
         self.draw_content(&mut DrawList::new(), w, [c, c], &theme, state);
         let hit = self.win(w).and_then(|x| x.hits.iter().rev().find(|h| h.id.0 == id).copied());
+        let squares = self.win(w).and_then(|x| x.app.squares(id));
         let middle = |r: RectF| (r.x + r.w / 2.0 - c.x, r.y + r.h / 2.0 - c.y);
         let ev = match act {
             Act::Key { code, mods: m, .. } => {
@@ -269,9 +273,13 @@ impl Host {
                 self.agent.flash = Some((r, now));
                 AppEvent::Wheel { x, y, dy: f32::from(dy) }
             }
-            // A grid's square, by number: the program hears the tap as from a pointer.
+            // A grid's square, by number: the program hears the tap as from a pointer. Only a
+            // grid's, and a square it has; and a grid is only tapped so.
             Act::Tap { cell, .. } => {
                 let Some(h) = hit else { return acted::OFF_SCREEN };
+                if squares.is_none_or(|n| cell >= n) {
+                    return acted::MALFORMED;
+                }
                 self.agent.flash = Some((h.rect, now));
                 AppEvent::Agent(Event::Tap { id, cell })
             }
@@ -284,6 +292,9 @@ impl Host {
                 };
                 if typed.is_some() && h.sense != Sense::Text {
                     return acted::NOT_TEXT;
+                }
+                if squares.is_some() {
+                    return acted::MALFORMED;
                 }
                 let (x, y) = middle(h.rect);
                 self.agent.flash = Some((h.rect, now));
@@ -343,7 +354,8 @@ impl Host {
             let fit = |_: &&ui::Hit| take(&mut room, 13);
             w.hits = hits.iter().take(HITS).take_while(fit).map(hit).collect();
             let mark = |m: gfx::Mark| {
-                let (id, role, flags, value) = (m.id, m.role, m.flags, clip(m.value, VALUE));
+                let max = if m.role == ui::sem::GRID { GRID } else { VALUE };
+                let (id, role, flags, value) = (m.id, m.role, m.flags, clip(m.value, max));
                 scene::Mark { id, role, flags, value }
             };
             let fit = |m: &scene::Mark| take(&mut room, 10 + m.value.len());
@@ -381,10 +393,14 @@ fn take(room: &mut usize, n: usize) -> bool {
     room.checked_sub(n).map(|r| *room = r).is_some()
 }
 
-/// `s` cut to `max` bytes at most, on a char boundary.
+/// `s` cut to `max` bytes at most (at least 3), on a char boundary; ending in `…` if cut, so
+/// what reads it knows there was more.
 fn clip(mut s: String, max: usize) -> String {
-    let end = (0..=max.min(s.len())).rev().find(|&i| s.is_char_boundary(i)).unwrap_or(0);
-    s.truncate(end);
+    if s.len() > max {
+        let end = (0..=max - 3).rev().find(|&i| s.is_char_boundary(i)).unwrap_or(0);
+        s.truncate(end);
+        s.push('\u{2026}');
+    }
     s
 }
 

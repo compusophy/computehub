@@ -112,12 +112,10 @@ fn names_open_studio_and_the_first_size_starts_it() {
     assert_eq!(argv("studio:counter.app"), studio("Studio \u{2014} counter.app"));
     assert_eq!(argv("/tmp/x.app"), Some(("x.app".into(), APP_ICON, None)));
     assert!(["studio:", "terminal", ".apps", ""].iter().all(|n| open(n).is_none()));
-    let assistant = Some(("Assistant".into(), ASSISTANT_ICON, Some((560.0, 600.0))));
-    assert_eq!(argv("assistant"), assistant);
+    assert_eq!(argv("assistant"), Some(("Assistant".into(), ASSISTANT_ICON, Some((560.0, 600.0)))));
     // About, Feedback and Files: bin/system.wasm, as their markers name it.
     let sys = |n: &str| open(n).map(|a| (a.title(), a.icon(), a.preferred_size(), a.compact()));
-    let want =
-        |i: usize, compact| Some((SYSTEM[i].1.into(), SYSTEM[i].2, Some(SYSTEM[i].3), compact));
+    let want = |i: usize, c| Some((SYSTEM[i].1.into(), SYSTEM[i].2, Some(SYSTEM[i].3), c));
     let got = [sys("about"), sys("feedback"), sys("files:~/a")];
     assert_eq!(got, [want(0, true), want(1, true), want(2, false)]);
     assert!(SYSTEM[2].2.glyph == Glyph::Folder && open("system").is_none());
@@ -149,8 +147,7 @@ fn names_open_studio_and_the_first_size_starts_it() {
     assert!(!s.cx(|r, cx| r.frame(2, &f[1..], cx)) && s.r.title() == "Mine");
     // A missing program says so and none starts; a failed one says why.
     let mut s = Sys::new(false);
-    s.fs.remove(STUDIO, false).unwrap();
-    s.ev(AppEvent::Resized { w: 1.0, h: 1.0 });
+    assert!(s.fs.remove(STUDIO, false).is_ok() && s.ev(AppEvent::Resized { w: 1.0, h: 1.0 }));
     assert_eq!((s.r.note.as_str(), s.k.procs().len()), ("/bin/studio: not found", 0));
     let mut s = Sys::new(true);
     s.k.message(&mut s.fs, 2, &wire::Msg::ConsWrite { data: b"panicked\n" }.encode());
@@ -193,9 +190,20 @@ fn clicks_keys_and_requests_go_through() {
     let ev = [AppEvent::Click(WidgetId(1)), AppEvent::Agent(Event::Halt)].map(|e| s.ev(e));
     assert!(ev == [false; 2] && s.r.busy() && s.events() == [Event::Click { id: 1 }, Event::Halt]);
     assert!(s.show(vec![], vec![]) && !s.r.busy());
-    // A program that asks for keys gets plain ones too, while no field has the keyboard.
-    s.show(vec![], vec![Request::Keys { on: true }]);
+    // A program that asks for keys gets plain ones too, while no field has the keyboard; a
+    // grid's press taps its square (a Tick out, after that one's frame); each busy till its
+    // answer. The tap's Click, on what has the grid's id by then, is none.
+    let grid = || vec![Node::Grid { id: 7, cols: 2, cells: vec![0; 4], texts: Vec::new() }];
+    s.show(grid(), vec![Request::Keys { on: true }, Request::Timer { ms: 100 }]);
     assert!(!s.ev(key(Key::Left, "")) && s.events() == [k(uiwire::Key::Left, 0, '\0')]);
+    assert!(s.r.busy() && s.show(grid(), vec![]) && !s.r.busy() && s.draw().1.len() == 1);
+    [0.0, 100.0].into_iter().for_each(|now_ms| _ = s.ev(AppEvent::Tick { now_ms }));
+    s.ev(AppEvent::PointerDown { x: 270.0, y: 25.0, id: Some(WidgetId(7)) });
+    let again = vec![Node::Button { id: 7, variant: Variant::Normal, label: "Again".into() }];
+    assert!(s.show(grid(), vec![]) && s.r.busy() && s.show(again, vec![]) && !s.r.busy());
+    assert!(s.draw().1.len() == 1 && !s.ev(AppEvent::Click(WidgetId(7))));
+    assert_eq!(s.events(), [Event::Tick { ms: 100 }, Event::Tap { id: 7, cell: 0 }]);
+    assert_eq!((s.r.frame_in(150.0), s.r.frame_in(250.0)), (Some(50), Some(0))); // next Tick's
     // Closing says Close once; the program's exit then ends the window.
     (0..2).for_each(|_| s.cx(|r, cx| r.closing(cx)));
     assert_eq!(s.events(), [Event::Close]);
@@ -229,10 +237,8 @@ fn inputs_and_codes_keep_the_text_the_user_edits() {
     s.show(vec![input(5, "x")], vec![]);
     assert_eq!(texts(&s), ["x"]);
     // An input that leaves the frame takes the focus with it.
-    s.ev(press(5));
-    s.show(vec![], vec![]);
+    assert!(s.ev(press(5)) && s.show(vec![], vec![]));
     assert!(!s.r.wants_text_input() && !s.ev(text("q")));
-
     // A Code: Enter echoed as text and Tab as text are one edit each.
     let kw = Span { start: 0, len: 5, class: Class::Keyword };
     s.show(vec![code(1, "state x", vec![kw])], vec![]);
@@ -240,15 +246,12 @@ fn inputs_and_codes_keep_the_text_the_user_edits() {
     let gold = THEMES[0].ansi[3];
     let nums =
         |s: &mut Sys| s.draw().0.instances().iter().any(|i| i.kind == 4.0 && i.color == gold);
-    [press(4), key(Key::End, "")].into_iter().for_each(|ev| _ = s.ev(ev));
-    for ev in [key(Key::Enter, ""), text("\n"), key(Key::Tab, ""), text("\t"), text("y")] {
-        s.ev(ev);
-    }
+    let typed = [press(4), key(Key::End, ""), key(Key::Enter, ""), text("\n"), key(Key::Tab, "")];
+    typed.into_iter().chain([text("\t"), text("y")]).for_each(|ev| _ = s.ev(ev));
     assert_eq!(got(&s).0, "state x\n  y");
     assert_eq!(s.events(), [change(4, 2, "state x\n")]);
-    // A stale frame keeps the host's text and its spans go unused; the same
-    // version takes spans (the `y`, byte 10, as a number); a newer one
-    // replaces the text.
+    // A stale frame keeps the host's text and its spans go unused; the same version takes spans
+    // (the `y`, byte 10, as a number); a newer one replaces the text.
     let num = |start| Span { start, len: 1, class: Class::Number };
     s.show(vec![code(2, "state x\n", vec![num(6)])], vec![]);
     assert_eq!(s.events(), [change(4, 4, "state x\n  y")]);
@@ -296,8 +299,7 @@ fn trees_draw_with_the_toolkit_and_fills_take_the_rest() {
     assert!(code.rect.y > PAD + BUTTON_H && code.rect.h > 100.0);
     assert_eq!(field.rect.x, PAD + CARD_PAD);
     // Too tall to fit: the wheel scrolls the window.
-    s.show(vec![Node::Spacer { px: 900 }, input(5, "")], vec![]);
-    s.draw();
+    assert!(s.show(vec![Node::Spacer { px: 900 }, input(5, "")], vec![]) && s.draw().1.is_empty());
     assert!(s.ev(AppEvent::Wheel { x: 10.0, y: 10.0, dy: 2000.0 }));
     assert_eq!(s.draw().1[0].rect.y, 400.0 - PAD - FIELD_H);
     assert!(!s.ev(AppEvent::Wheel { x: 10.0, y: 10.0, dy: 5.0 }));
@@ -322,8 +324,7 @@ fn asks_wait_for_the_start_and_frames_move_the_keyboard() {
     s.show(vec![input(5, "")], vec![Request::Focus { id: 5 }, Request::Focus { id: 9 }]);
     assert!(s.r.wants_text_input() && s.r.texts.focus == 5);
     // Once it runs, a prompt goes at once, after the Change that waits.
-    s.ev(text("x"));
-    s.ev(text("y"));
+    ["x", "y"].into_iter().for_each(|t| _ = s.ev(text(t)));
     assert!(!s.ev(AppEvent::Ask("more".into())));
     assert_eq!(s.events(), [change(5, 1, "x"), change(5, 2, "xy"), ask("more")]);
 }

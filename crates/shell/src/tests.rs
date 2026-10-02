@@ -69,6 +69,11 @@ impl App for Probe {
     fn preferred_size(&self) -> Option<(f32, f32)> {
         self.compact().then_some((678.0, 439.0))
     }
+
+    /// About's timer wants a frame each 40 ms; Files animates.
+    fn frame_in(&self, _: f64) -> Option<u32> {
+        [("about", 40), ("files", 0)].iter().find(|a| a.0 == self.0).map(|a| a.1)
+    }
 }
 
 fn desk_with(w: f32, h: f32, prefs: Prefs) -> (Shell, Log) {
@@ -782,7 +787,7 @@ fn icons_move_and_open_by_the_pointer_and_the_keys() {
 
 #[test]
 fn the_grain_lives_eight_times_a_second_by_timer_unless_told_not_to() {
-    let (mut s, _) = desk();
+    let (mut s, log) = desk();
     s.rest(1000.0);
     // Each 125 ms a new pattern; the next frame by a timer, never a frame loop.
     let frame = |s: &mut Shell, t: f64| {
@@ -802,6 +807,14 @@ fn the_grain_lives_eight_times_a_second_by_timer_unless_told_not_to() {
     s.set_reduced_motion(false);
     s.say(1, "grain off");
     assert!(!s.host.grain && s.grain_in().is_none());
+    // A shown app's timer wants its frame by timer too; one that animates, every frame, hearing
+    // each.
+    s.say(1, "open about");
+    s.rest(1000.0);
+    assert_eq!((s.frame_in(), s.animating()), (Some(40), false));
+    s.say(1, "open files");
+    s.rest(1000.0);
+    assert!(s.animating() && log.take().iter().any(|e| matches!(e, ("files", E::Tick { .. }))));
     let (s, _) = desk_with(1280.0, 800.0, Prefs { grain_off: true, ..Prefs::default() });
     assert_eq!(s.grain_in(), None);
 }
