@@ -61,8 +61,8 @@ pub struct Studio {
     /// What the line under the app says, and how; what the program's first comment says.
     pub(crate) status: (Style, String),
     pub(crate) caption: String,
-    /// The make's status and draft as the last frame showed them.
-    pub(crate) seen: (String, usize),
+    /// The make's status as the last frame showed it (it moves with each line the draft gains).
+    pub(crate) seen: String,
     /// The content size, as the last Resize said.
     pub(crate) width: u16,
     pub(crate) height: u16,

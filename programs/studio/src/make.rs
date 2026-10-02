@@ -94,11 +94,11 @@ impl Studio {
         true
     }
 
-    /// Whether the make's status or draft changed since the last frame showed them.
+    /// Whether the make's status changed since the last frame showed it: a frame a second while
+    /// it thinks, one a line (or an edit) while it writes, none else.
     pub(crate) fn shows(&mut self) -> bool {
         let Some(mk) = &self.make else { return true };
-        let (draft, _) = mk.m.draft();
-        let now = (mk.m.status(now()), draft.len());
+        let now = mk.m.status(now());
         now != std::mem::replace(&mut self.seen, now.clone())
     }
 
