@@ -34,21 +34,32 @@ pub struct Fault {
 }
 
 /// What a smoke test saw: the first fault, the most steps one event or render took (and
-/// which), how many events ran, and what looked wrong without faulting.
+/// which), how many events ran, the steps they took in all, and what looked wrong without
+/// faulting.
 #[derive(Debug, Clone, Default)]
 pub struct Smoke {
     pub fault: Option<Fault>,
     pub most: (u64, String),
     pub events: u32,
+    pub spent: u64,
     pub warnings: Vec<String>,
 }
 
 /// Smoke-tests `program` with `random` seeded by `seed` (see the module docs).
 pub fn smoke(program: Program, seed: u64) -> Smoke {
+    smoke_from(program, seed, "")
+}
+
+/// [`smoke`], the program started as it will really start: from `saved` ([`App::saved`]'s lines,
+/// what its file of saved states holds), whatever they show ("": none).
+pub fn smoke_from(program: Program, seed: u64, saved: &str) -> Smoke {
     let keys: Vec<String> = program.keys().iter().map(|k| k.key.clone()).collect();
     let timed = !program.everys().is_empty();
-    let app = Some(App::new(program, Limits::default(), seed));
-    let mut t = Tester { app, ..Tester::default() };
+    let mut app = App::new(program, Limits::default(), seed);
+    if !saved.is_empty() {
+        app.take_back(saved);
+    }
+    let mut t = Tester { app: Some(app), ..Tester::default() };
     t.rng = seed | 1;
     let Some(first) = t.render("the first render") else { return t.out };
     if first.is_empty() {
@@ -97,7 +108,7 @@ pub fn smoke(program: Program, seed: u64) -> Smoke {
                 return t.out;
             }
         }
-        if t.spent > BUDGET {
+        if t.out.spent > BUDGET {
             break;
         }
     }
@@ -115,14 +126,13 @@ pub fn smoke(program: Program, seed: u64) -> Smoke {
     t.out
 }
 
-/// A smoke test under way: the app, what it showed last, the events so far, the steps spent,
-/// its own xorshift for picks, and the report.
+/// A smoke test under way: the app, what it showed last, the events so far, its own xorshift
+/// for picks, and the report.
 #[derive(Default)]
 struct Tester {
     app: Option<App>,
     last: Vec<Node>,
     log: Vec<String>,
-    spent: u64,
     rng: u64,
     out: Smoke,
 }
@@ -182,7 +192,7 @@ impl Tester {
     /// Notes `steps` spent by `what`.
     fn spend(&mut self, what: &str) {
         let steps = self.app().steps();
-        self.spent += steps;
+        self.out.spent += steps;
         if steps > self.out.most.0 {
             self.out.most = (steps, what.to_string());
         }

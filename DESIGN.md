@@ -109,6 +109,7 @@ frame: os → shell::draw → gfx::DrawList → platform::Renderer: one draw cal
 | `apps` | Terminal, Settings |
 | `system` | About, Feedback, Files and Welcome: one wasip1 GUI program (`dist/bin/system.wasm`), off the boot download |
 | `studio` | the applang editor, and `AppHost`, which runs `.app` files |
+| `coder` | the coding agent Studio runs: write, check (compile, smoke on 3 seeds), fix by SEARCH/REPLACE edits, keep the best so far, stop by budget; sans-IO, replayable |
 | `uiwire`, `uiview` | the remote UI protocol GUI programs speak; the desktop's half, which draws their trees |
 | `host` | the wm plus one app per window, the home screen's apps, windows held by the pointer, the keyboard's squeeze; motion, frame geometry |
 | `home` | the top bar, the home grid in the person's order (icons carried, the selection box), the AI button and the dock above it, menus, touch |
@@ -246,8 +247,10 @@ one. Forked crates keep their Apache-2.0 license and note their origin.
   over the VFS (`ls`, `cd`, `cat`, `mkdir`, `mv`, `open`, `edit`, `run`,
   `theme`, ...). `term` already speaks xterm, keys and replies included, for
   the programs the kernel will run.
-- **Studio** edits applang; `studio::AppHost` runs a `.app` in its own
-  window. **Welcome** (a program, its mark revealed by the desktop's clock)
+- **Studio** makes and edits applang apps: the `coder` loop asks the free
+  AI, checks each reply and fixes it by edits, showing what moves (thinking,
+  writing 48 lines, fixing line 43, testing); `studio::AppHost` runs a `.app`
+  in its own window. **Welcome** (a program, its mark revealed by the desktop's clock)
   is the first screen; **Settings** picks the theme and
   lists what compusophyOS is made of.
 - Two tiers:

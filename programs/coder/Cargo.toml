@@ -1,0 +1,16 @@
+[package]
+name = "compusophy-coder"
+description = "compusophyOS's coding agent: a sans-IO, replayable loop that makes applang apps with the free AI (write, check, fix with SEARCH/REPLACE edits, keep the best so far, stop by budget). Studio runs it; the Assistant shares its JSON and AI helpers."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[lib]
+name = "coder"
+
+[dependencies]
+compusophy-applang.workspace = true
+compusophy-lang.workspace = true

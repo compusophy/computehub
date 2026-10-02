@@ -127,6 +127,34 @@ function fail(res, status, error) {
   res.end(JSON.stringify({ error: { message: error } }));
 }
 
+// Counts into `seen` what `text`, the next of a stream, carried: its events, and the chars of text
+// their deltas held (content, reasoning, tool calls' arguments), a line at a time (a part may end
+// mid-line; the rest waits in `seen.line`).
+function streamed(seen, text) {
+  const lines = (seen.line + text).split('\n');
+  seen.line = lines.pop();
+  for (const line of lines) {
+    if (!line.startsWith('data:')) continue;
+    seen.events += 1;
+    let j;
+    try {
+      j = JSON.parse(line.slice(5));
+    } catch {
+      continue;
+    }
+    for (const c of object(j) && Array.isArray(j.choices) ? j.choices : []) {
+      const d = object(c) && object(c.delta) ? c.delta : {};
+      for (const v of [d.content, d.reasoning, d.reasoning_content]) {
+        if (typeof v === 'string') seen.chars += v.length;
+      }
+      for (const t of Array.isArray(d.tool_calls) ? d.tool_calls : []) {
+        const f = object(t) && object(t.function) ? t.function : {};
+        if (typeof f.arguments === 'string') seen.chars += f.arguments.length;
+      }
+    }
+  }
+}
+
 async function readBody(req, max) {
   const parts = [];
   let n = 0;
@@ -203,7 +231,12 @@ export default async function handler(req, res) {
   const t = body.temperature;
   if (typeof t === 'number' && t >= 0 && t <= 2) out.temperature = t;
   // What it could cost (a token per 3 chars in, every output token used), held until the usage
-  // says what it did cost.
+  // says what it did cost: its own `cost` (the gateway's price, cached tokens at theirs), else its
+  // tokens at list price. A request the client stopped (Studio stops one once its program is in)
+  // never gets the usage: it costs the input and the text streamed, a token per 2.5 of its chars
+  // (GLM 5.3 writes 2.64 to 4.2 a token, measured on 29 replies, so this books a little over),
+  // or per event if more, never more than was held. Not a token per event: Fireworks sends about
+  // one an event, but Baseten and Runware 2.7 to 5.2, which booked a stopped reply at 38 to 48%.
   const [priceIn, priceOut] = MODELS[model];
   const chars = JSON.stringify(messages).length + (tools.length ? JSON.stringify(tools).length : 0);
   const entry = { t: now, who, usd: ((chars / 3) * priceIn + out.max_tokens * priceOut) / 1e6 };
@@ -215,6 +248,7 @@ export default async function handler(req, res) {
   const abort = new AbortController();
   res.on('close', () => res.writableFinished || abort.abort());
   let [up, tail] = [null, ''];
+  const [seen, utf8] = [{ events: 0, chars: 0, line: '' }, new TextDecoder()];
   try {
     up = await fetch(GATEWAY, {
       method: 'POST',
@@ -229,7 +263,9 @@ export default async function handler(req, res) {
     res.setHeader('cache-control', 'no-store');
     for await (const part of up.body) {
       res.write(part);
-      tail = (tail + Buffer.from(part).toString('latin1')).slice(-4096);
+      const text = utf8.decode(part, { stream: true });
+      streamed(seen, text);
+      tail = (tail + text).slice(-4096);
     }
     res.end();
   } catch {
@@ -240,7 +276,12 @@ export default async function handler(req, res) {
     res.end('\n\ndata: {"error":{"message":"the answer was cut off"}}\n\n');
   }
   const usage = tail.slice(tail.lastIndexOf('"usage"'));
-  const tokens = (k) => Number((new RegExp(`"${k}":\\s*(\\d+)`).exec(usage) || [])[1]);
-  const [i, o] = [tokens('prompt_tokens'), tokens('completion_tokens')];
-  if (i >= 0 && o >= 0) entry.usd = (i * priceIn + o * priceOut) / 1e6;
+  const num = (k) => Number((new RegExp(`"${k}":\\s*([\\d.]+)`).exec(usage) || [])[1]);
+  const [i, o, cost] = [num('prompt_tokens'), num('completion_tokens'), num('cost')];
+  if (cost >= 0) entry.usd = cost;
+  else if (i >= 0 && o >= 0) entry.usd = (i * priceIn + o * priceOut) / 1e6;
+  else if (up && up.ok) {
+    const tokens = Math.min(out.max_tokens, Math.max(seen.events, seen.chars / 2.5));
+    entry.usd = Math.min(entry.usd, ((chars / 3) * priceIn + tokens * priceOut) / 1e6);
+  }
 }

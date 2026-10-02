@@ -3,7 +3,7 @@
 
 use crate::{Disk, View, file_name, text};
 use applang::{App, Limits, Node as A};
-use assistant::ai::{clip, problem, shown, state_path};
+use coder::ai::{clip, problem, shown, state_path};
 use uiwire::{Event, Frame, Key, MAX_DEPTH, Node, Request, Style, Variant, mods};
 
 /// The app's buttons and grids are this plus applang's ids, its inputs [`INPUT`] plus their
@@ -44,16 +44,10 @@ pub struct Live {
     kept: String,
 }
 
-/// A seed for `random`: the clock's nanoseconds, so each run deals afresh.
-fn seed() -> u64 {
-    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH);
-    now.map_or(1, |d| d.as_nanos() as u64)
-}
-
 impl Live {
     /// `src` (the app at `path`, "" for none) compiled and started, its saved states back.
     pub fn new(src: &str, path: &str, disk: &mut dyn Disk) -> Live {
-        let app = applang::compile(src).map(|p| App::new(p, Limits::default(), seed()));
+        let app = applang::compile(src).map(|p| App::new(p, Limits::default(), crate::clock()));
         let app = app.map_err(|d| {
             let snip = d.span.and_then(|s| lang::diag::render_snippet(src, s));
             let snip = snip.as_deref().and_then(|s| s.split_once('\n')).map(|(_, s)| s);

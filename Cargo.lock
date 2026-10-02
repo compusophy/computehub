@@ -45,14 +45,21 @@ dependencies = [
 name = "compusophy-assistant"
 version = "0.1.0"
 dependencies = [
- "compusophy-applang",
  "compusophy-apps",
+ "compusophy-coder",
  "compusophy-host",
- "compusophy-lang",
  "compusophy-ui",
  "compusophy-uiwire",
  "compusophy-vfs",
  "compusophy-wm",
+]
+
+[[package]]
+name = "compusophy-coder"
+version = "0.1.0"
+dependencies = [
+ "compusophy-applang",
+ "compusophy-lang",
 ]
 
 [[package]]
@@ -169,7 +176,7 @@ name = "compusophy-studio"
 version = "0.1.0"
 dependencies = [
  "compusophy-applang",
- "compusophy-assistant",
+ "compusophy-coder",
  "compusophy-lang",
  "compusophy-uiwire",
 ]
