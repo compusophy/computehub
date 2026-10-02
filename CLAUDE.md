@@ -29,7 +29,7 @@ devices. Author handle: compusophy.
    HashMap/HashSet, no clocks, no randomness. State must replay bit-for-bit
    and hash identically.
 5. **wasm32 always green:** `cargo check --workspace --target wasm32-unknown-unknown`.
-6. **Budgets** (`scripts/budget.sh`, gzip -9): boot ≤180 KB (top-level
+6. **Budgets** (`scripts/budget.sh`, gzip -9): boot ≤192 KB (top-level
    `dist/` files), deferred fonts ≤30 KB (`dist/fonts/deferred/`), lazy
    fonts ≤60 KB (the rest of `dist/fonts/`), system ≤40 KB (`dist/cpu/`),
    programs ≤64 KB (`dist/bin/`), licenses not counted;

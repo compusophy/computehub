@@ -5,11 +5,11 @@
 #
 #   boot      the files directly in dist/ (page, glue, wasm with the boot
 #             font inside): everything a visitor downloads before the first
-#             frame. Cap 180 KB (150 KB until R4, the desktop compusophy
-#             asked for: vector icons, menus, the everything bar, touch,
-#             About, Feedback, Files, telemetry). R5 moved About, Feedback
-#             and Files to a program (system.wasm); the cap comes back down
-#             as more leaves the boot.
+#             frame. Cap 192 KB: 150 KB until R4 (the desktop compusophy
+#             asked for), 180 KB in R4, 192 KB in R7 for the AI that uses
+#             the computer (its screen reader and hands live in the boot).
+#             About, Feedback, Files and Welcome left the boot for
+#             system.wasm; the cap comes down as more leaves it.
 #   deferred  dist/fonts/deferred/: Inter SemiBold and JetBrains Mono, which
 #             the page fetches right after its first frame. Cap 30 KB.
 #   lazy      the other files in dist/fonts/: the symbol fonts a terminal
@@ -30,7 +30,7 @@
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
-BOOT_CAP=$((180 * 1024))
+BOOT_CAP=$((192 * 1024))
 DEFERRED_CAP=$((30 * 1024))
 LAZY_CAP=$((60 * 1024))
 SYSTEM_CAP=$((40 * 1024))
