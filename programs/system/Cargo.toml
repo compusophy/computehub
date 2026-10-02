@@ -22,3 +22,4 @@ compusophy-vfs.workspace = true
 
 [dev-dependencies]
 compusophy-host.workspace = true
+compusophy-ui.workspace = true

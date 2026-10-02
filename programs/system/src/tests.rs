@@ -463,9 +463,20 @@ fn sizes_and_counts_read_as_people_say_them() {
     assert!(Style::from_u8(Style::Display as u8).is_some());
 }
 
-/// An Editor frame's status line, as its style and text.
+/// An Editor frame's column (centered, at most 720 wide): its bar, status line and text.
+fn column(f: &Frame) -> &[Node] {
+    match &f.nodes[..] {
+        [Node::Row { children, .. }] => match &children[..] {
+            [_, Node::Pane { w: 720, children, .. }, _] => children,
+            n => panic!("{n:?}"),
+        },
+        n => panic!("{n:?}"),
+    }
+}
+
+/// Its status line, as its style and text.
 fn status(f: &Frame) -> (Style, &str) {
-    match &f.nodes[1] {
+    match &column(f)[1] {
         Node::Text { style, text, .. } => (*style, text.as_str()),
         n => panic!("{n:?}"),
     }
@@ -481,7 +492,7 @@ fn save(f: &Frame) -> Option<Variant> {
 
 /// Its text's id and value, if it has one (in a Fill: the window's height).
 fn text_of(f: &Frame) -> Option<(u32, &str)> {
-    match &f.nodes[2] {
+    match &column(f)[2] {
         Node::Fill { children, .. } => match &children[..] {
             [Node::Area { id, value, .. }] => Some((*id, value.as_str())),
             n => panic!("{n:?}"),
@@ -598,21 +609,24 @@ fn editor_opens_text_files_and_leaves_alone_what_it_cannot_hold() {
     assert_eq!((status(&f).1, text_of(&f)), ("~/drafts \u{b7} new file", Some((AREA, ""))));
     w.send(&[edit(AREA, "hi"), Event::Click { id: editor::SAVE }]);
     assert_eq!(w.fs.read(&[h, "/drafts/new.md"].concat()).unwrap(), b"hi");
-    // Not UTF-8, too big, a folder: why, and no text, no Save; nothing written, even on close.
+    // Not UTF-8, too big, a folder, a device: why, and no text, no Save; nothing written, even on close.
     let refusals = [
         ("a.bin", "a.bin is not UTF-8 text, so Editor leaves it as it is."),
         ("big.log", "big.log is 65,001 bytes; Editor opens text up to 65,000."),
         ("zed", "Can't open zed: it is a folder"),
         ("/tmp/x\0", "Not a path to a file: /tmp/x\0"),
+        ("/dev/events", "Not a path to a file: /dev/events"),
     ];
     for (path, why) in refusals {
         let (mut w, f) = open(path);
-        assert_eq!(f.nodes[2], Node::Text { id: 0, style: Style::Error, text: why.into() });
+        assert_eq!(column(&f)[2], Node::Text { id: 0, style: Style::Error, text: why.into() });
         assert!(save(&f).is_none() && f.requests.is_empty(), "{path}");
         w.send(&[key_s(mods::CTRL), Event::Click { id: editor::SAVE }, Event::Close]);
         assert!(w.fs == fs, "{path}");
     }
-    // At the most it opens, and says it is full; near it, how near.
+    // At the most (as much as the desktop's text holds) it opens, and says it is full; near
+    // it, how near.
+    assert_eq!(MAX, ui::CODE_MAX);
     let (mut w, f) = open("full.txt");
     assert_eq!(status(&f).1, "~ \u{b7} full: 65,000 bytes");
     let f = w.last(&[edit(AREA, &"z".repeat(NEAR))]);

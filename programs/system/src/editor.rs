@@ -6,7 +6,7 @@ use std::mem;
 use uiwire::{Event, Frame, Key, Node, Request, Style, Variant, mods};
 use vfs::Vfs;
 
-use crate::{Disk, View, group, space, text};
+use crate::{Disk, View, center, group, space, text};
 
 /// Where a new note goes, under home.
 pub(crate) const NOTES: &str = "/notes";
@@ -20,13 +20,15 @@ pub(crate) const SAVE: u32 = 1;
 pub(crate) const NAME: u32 = 2;
 pub(crate) const AREA: u32 = 100;
 const HINT: &str = "Write something";
+/// The column's widest: lines of text a person reads at a glance.
+const MAX_W: u16 = 720;
 pub(crate) const LOST: &str = "An edit did not arrive whole: type anything to send the text \
 again, then save.";
 
 /// A plain text editor: the file's name (a field for a new note's, its suggestion from the
 /// first line), Save (Ctrl+S, or Enter in the name), the folder and whether there are unsaved
 /// changes (the title says so too, and Save is in the accent), and the text, in the UI font,
-/// wrapping, the window's whole height. A new note goes to `~/notes`, under the name typed
+/// wrapping, the window's whole height; in one column, 720 px at most. A new note goes to `~/notes`, under the name typed
 /// (`.txt` added if it has no extension) or one from its first line that is free there. Nothing
 /// is replaced unawares: a file that changed since it was read, or a name already taken, is
 /// replaced by a second Save. A file it cannot edit (not UTF-8, over 65,000 bytes, unreadable)
@@ -62,9 +64,10 @@ impl Editor {
     pub fn new(path: &str) -> Editor {
         let mut e = Editor { path: path.to_string(), ..Editor::default() };
         if !path.is_empty() {
+            // Not a device: /dev/events is the window's own.
             match Vfs::normalize(Vfs::HOME, path) {
-                Ok(p) => e.path = p,
-                Err(_) => e.refused = Some(["Not a path to a file: ", path].concat()),
+                Ok(p) if p != "/dev" && !p.starts_with("/dev/") => e.path = p,
+                _ => e.refused = Some(["Not a path to a file: ", path].concat()),
             }
         }
         e
@@ -312,7 +315,9 @@ impl View for Editor {
                 Node::Fill { id: 0, children: vec![area] }
             }
         };
-        let nodes = vec![Node::Row { id: 0, gap: 8, children: bar }, self.status(), body];
+        // One column, centered, at most as wide as reads well.
+        let column = vec![Node::Row { id: 0, gap: 8, children: bar }, self.status(), body];
+        let nodes = vec![center(Node::Pane { id: 0, w: MAX_W, children: column })];
         Frame { seq: 0, title, requests: mem::take(&mut self.requests), nodes }
     }
 }
