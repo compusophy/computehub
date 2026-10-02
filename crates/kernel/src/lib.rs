@@ -9,7 +9,7 @@
 //! CONS_WRITE; EXIT, a kill or a failed worker ends a process, leaving its status for
 //! [`Kernel::reap`]; both wake its owner window. File ops are served at once, each path checked
 //! against the roots; a GUI process draws ([`Effect::Draw`]) and reads [`Kernel::post_event`]'s
-//! events. Not yet: console reads, modes, homed.
+//! events. Not yet: console reads, modes.
 
 #![forbid(unsafe_code)]
 
@@ -77,8 +77,6 @@ pub enum Effect {
     Kill { pid: u32 },
     /// Arm the one-shot timer: [`Kernel::wake`] in `ms`.
     Wake { ms: u32 },
-    /// Set `localStorage` `compusophy.home` to `"1"`.
-    Saved,
     /// Show `frame`, a uiwire frame as written (unchecked), for process `pid`.
     Draw { pid: u32, frame: Vec<u8> },
 }
@@ -256,10 +254,10 @@ impl Kernel {
         core::mem::take(&mut self.woken)
     }
 
-    /// `Vfs::generation` moved: /home may need saving (homed, not yet).
+    /// `Vfs::generation` moved: nothing yet (the desktop keeps /home, see `os::home`).
     pub fn vfs_changed(&mut self) {}
 
-    /// The one-shot timer fired, or the page was hidden (homed, not yet).
+    /// The one-shot timer fired, or the page was hidden: nothing yet.
     pub fn wake(&mut self) {}
 
     /// The effects asked for so far, oldest first, leaving none.

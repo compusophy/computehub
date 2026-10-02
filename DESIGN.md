@@ -258,8 +258,14 @@ one. Forked crates keep their Apache-2.0 license and note their origin.
 
 ### Storage
 
-Today the VFS lives in memory, with Studio's sample apps installed at boot;
-only the theme persists. OPFS persistence comes with the kernel.
+The VFS lives in memory. /home is kept across reloads (`os::home`): a
+`kernel::snap` snapshot of it (FNV-checked) in `localStorage`, put back at
+boot, written at once after a change, then at most once a second, and when
+the page hides. So made apps (`~/apps/*.app`) and their saved state stay. A
+write the browser refuses (full, blocked) is reported and said in Settings →
+Privacy; a snapshot that does not read back whole is set aside.
+`localStorage` holds about 5 MB; IndexedDB or OPFS replace it when homes
+grow past that. Preferences and the theme are kept there too.
 
 ## What is next
 

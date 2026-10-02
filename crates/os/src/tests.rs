@@ -364,13 +364,13 @@ fn programs_reach_the_kernel_and_its_effects_the_page() {
     let fx = [K::Spawn { pid: 2, sab: true }, K::Send { pid: 1, msg: vec![0x81] },
         K::Start { pid: 2, msg: vec![1], program: kernel::Load::Bytes(vec![0]) },
         K::Reply { pid: 2, errno: 44, data: vec![7] }, K::Word { pid: 2, index: 5, value: 1 },
-        K::Kill { pid: 2 }, K::Wake { ms: 1000 }, K::Saved];
+        K::Kill { pid: 2 }, K::Wake { ms: 1000 }];
     fx.into_iter().for_each(|k| effect(Effect::Kernel(k), &mut ctl, &desk.ai));
     #[rustfmt::skip]
     let want = [Fx::Spawn { pid: 2, sab: true }, Fx::Send { pid: 1, msg: vec![0x81] },
         Fx::Start { pid: 2, msg: vec![1], program: platform::Load::Bytes(vec![0]) },
         Fx::Reply { pid: 2, errno: 44, data: vec![7] }, Fx::Word { pid: 2, index: 5, value: 1 },
-        Fx::Kill(2), Fx::Wake(1000), Fx::Store { key: HOME_KEY.into(), value: "1".into() }];
+        Fx::Kill(2), Fx::Wake(1000)];
     assert_eq!(ctl.effects(), want);
     // The AI model loads with the shell (one not on offer is the default), as do the theme,
     // the dock's favorites and the first visit's mark (after which no Welcome opens).

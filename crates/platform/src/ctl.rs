@@ -142,6 +142,13 @@ impl Ctl {
         self.effects.push(Effect::Cursor(css));
     }
 
+    /// Stores `value` under `key` in `localStorage` now, not queued: whether it took it (not when
+    /// full or blocked). Natively there is no storage, and it says yes.
+    pub fn storage_put(&mut self, key: &str, value: &str) -> bool {
+        !cfg!(target_arch = "wasm32")
+            || crate::io::storage().is_some_and(|st| st.set_item(key, value).is_ok())
+    }
+
     /// `localStorage[key]`, newest queued write first; `None` when absent or
     /// storage is unavailable.
     pub fn storage_get(&self, key: &str) -> Option<String> {

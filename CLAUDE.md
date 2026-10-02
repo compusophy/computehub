@@ -68,8 +68,8 @@ crates/      the OS (boot, kernel, worker); speaks to programs only by uiwire
   platform/  the browser boundary: canvas, WebGL2, input, textarea, fetch,
              frames on demand, localStorage, workers, beacon
   os/        wasm entry: fonts, VFS, registry, prefs, event glue, Remote (a
-             program's window), ai (/api/ai), report (telemetry, outbox)
-  kernel/    R2 kernel, deterministic: wire protocol, process table, consoles
+             program's window), ai, report (telemetry), home (/home kept)
+  kernel/    deterministic: wire protocol, process table, consoles
              and file server (main), snap (/home), module
   wasi/      the kernel's worker half: WASI preview 1 Proc, fds, /dev
   cpu/       the program worker (cdylib; dist/cpu/): loader, WASI imports, homed

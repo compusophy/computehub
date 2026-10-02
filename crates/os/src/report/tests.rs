@@ -192,7 +192,7 @@ fn the_desktop_sends_feedback_and_reports_failures_and_tells_apps() {
     let wake = |ms| shell::Effect::Kernel(ui::kernel::Effect::Wake { ms });
     apply([1500, 2000, 100].map(wake).into(), &mut timer, (&ai, &mut 0.0), &mut desk.report);
     assert_eq!(timer.effects(), [Fx::Wake(1500), Fx::Wake(100)]);
-    desk.flush(&mut ctl);
+    desk.flush(&mut ctl, false);
     let sent = streamed(&ctl);
     assert_eq!(sent.len(), 1);
     assert!(sent[0].1.contains(r"windows  welcome, terminal, studio\n"), "{sent:?}");
@@ -210,7 +210,7 @@ fn the_desktop_sends_feedback_and_reports_failures_and_tells_apps() {
     // An AI request's failure is noted (its stream is not a report's); others' ends are not.
     desk.ai.ask(5, uiwire::Request::Ai { id: 1, body: "{}".into() });
     let mut ctl = Ctl::default();
-    desk.flush(&mut ctl);
+    desk.flush(&mut ctl, false);
     let ai = ctl.effects().iter().find_map(|e| match e {
         Fx::Stream { id, url, .. } if url == crate::ai::URL => Some(*id),
         _ => None,
