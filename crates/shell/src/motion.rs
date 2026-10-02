@@ -123,10 +123,18 @@ impl Shell {
         self.host.theme.arm(now);
     }
 
-    /// Whether frames must come: something moves, flings, or a finger waits to long-press.
+    /// Whether frames must come: something moves, flings, a finger waits to long-press, or a
+    /// shown app animates.
     pub(crate) fn animating(&self) -> bool {
+        self.frame_in() == Some(0)
+    }
+
+    /// When the next frame is wanted, in ms: at once (0) while frames must come; else when the
+    /// living grain's next pattern or a shown app's timer wants one ([`ui::App::frame_in`]);
+    /// `None`, not till an event.
+    pub fn frame_in(&self) -> Option<u32> {
         let (now, m) = (self.host.now_ms, &self.motion);
-        m.wins.iter().any(|w| w.1.is_running(now))
+        if m.wins.iter().any(|w| w.1.is_running(now))
             || m.lifts.iter().any(|l| l.1.is_running(now))
             || self.grid.moving(now)
             || m.ai.is_running(now)
@@ -135,11 +143,15 @@ impl Shell {
             || self.touch.is_some_and(|t| !t.0.done)
             || self.fling.is_some()
             || self.agent_moves(now)
-            || self
-                .host
-                .wm()
-                .layout()
-                .iter()
-                .any(|p| self.host.win(p.win).is_some_and(|w| w.app.animating(now)))
+        {
+            return Some(0);
+        }
+        let mut next = self.grain_in();
+        for p in self.host.wm().layout() {
+            if let Some(ms) = self.host.win(p.win).and_then(|w| w.app.frame_in(now)) {
+                next = Some(next.map_or(ms, |n| n.min(ms)));
+            }
+        }
+        next
     }
 }

@@ -478,14 +478,13 @@ impl Host {
     /// Time passed: every app hears it (`all`, the minute), or each shown one that animates (a
     /// frame).
     pub fn tick(&mut self, all: bool, out: &mut Response) {
-        let now_ms = self.now_ms;
-        let shown: Vec<WinId> = self.wm.layout().iter().map(|p| p.win).collect();
-        for win in self.wins.iter().map(|w| w.id).collect::<Vec<_>>() {
-            let animates = || self.win(win).is_some_and(|w| w.app.animating(now_ms));
-            if all || shown.contains(&win) && animates() {
-                self.deliver(win, AppEvent::Tick { now_ms }, out);
+        let (now_ms, shown) = (self.now_ms, self.wm.layout());
+        self.each(out, |h, win, out| {
+            let animates = || h.win(win).is_some_and(|w| w.app.frame_in(now_ms) == Some(0));
+            if all || shown.iter().any(|p| p.win == win) && animates() {
+                h.deliver(win, AppEvent::Tick { now_ms }, out);
             }
-        }
+        });
     }
 
     /// Maximizes what shows on a narrow work area (once it widens, puts back those it did and

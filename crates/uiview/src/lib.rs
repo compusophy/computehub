@@ -49,7 +49,7 @@ pub const REVEAL_MS: f64 = 7.0 * STEP + FADE;
 /// How a window is scrolled: pixels down, and the content's and the view's height as last drawn;
 /// whether a view at the bottom stays there as the content grows (the Assistant's transcript);
 /// each Scroll as last drawn; the page clock when a revealed glyph first drew; each Grid with an
-/// id as last drawn (its id, squares' rect, columns and squares).
+/// id as last drawn.
 #[derive(Debug, Default)]
 pub struct View {
     pub scroll: f32,
@@ -57,19 +57,45 @@ pub struct View {
     pub follow: bool,
     pub scrolls: Vec<Scrolled>,
     pub reveal: Option<f64>,
-    pub grids: Vec<(u32, RectF, u16, u32)>,
+    pub grids: Vec<Board>,
+}
+
+/// A Grid with an id as last drawn: its id, its place among the frame's Grids (the same grid in
+/// a later frame, whatever its id there), its squares' rect, its columns and squares.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Board {
+    pub id: u32,
+    pub nth: u32,
+    pub rect: RectF,
+    pub cols: u16,
+    pub n: u32,
+}
+
+impl Board {
+    /// The square at `(x, y)`, as its column and row, if one is there.
+    pub fn at(&self, x: f32, y: f32) -> Option<(u32, u32)> {
+        let (r, cols) = (self.rect, u32::from(self.cols.max(1)));
+        let side = r.w / cols as f32;
+        let (col, row) = ((((x - r.x) / side) as u32).min(cols - 1), ((y - r.y) / side) as u32);
+        (r.contains(x, y) && row * cols + col < self.n).then_some((col, row))
+    }
 }
 
 /// What a program asked of its window for play: a timer every `timer` ms (0: none), and plain
-/// keys; with when the last Tick went and whether it is unanswered, and the Grid square last
-/// tapped while the pointer is down.
+/// keys; with when the last Tick went and whether it is unanswered, the Grid pressed (its place
+/// among the frame's Grids) and the square of it last tapped (the Grid's id then, the square's
+/// column and row) while the pointer is down, the frames until the last event the person (or
+/// the AI) sent is answered, and whether an answer came since the window drew.
 #[derive(Debug, Default)]
 pub struct Play {
     pub timer: u32,
     pub keys: bool,
     at: Option<f64>,
     waiting: bool,
-    tapping: Option<(u32, u32)>,
+    grid: Option<u32>,
+    last: Option<(u32, u32, u32)>,
+    owed: u8,
+    moved: bool,
 }
 
 impl Play {
@@ -83,54 +109,111 @@ impl Play {
         true
     }
 
-    /// A frame came, so the last Tick was answered.
+    /// A click, submit, tap or plain key went, after a Change still unanswered if `changing`: the
+    /// program reads events in order and answers each of these (and each Tick and Change) with a
+    /// frame, so its answer is the frame after those for the Tick and Change out.
+    pub fn sent(&mut self, changing: bool) {
+        self.owed = 1 + u8::from(changing) + u8::from(self.waiting);
+    }
+
+    /// A frame came: it answers the last Tick, or one of the frames owed.
     pub fn answered(&mut self) {
-        self.waiting = false;
+        self.moved |= self.owed > 0;
+        (self.waiting, self.owed) = (false, self.owed.saturating_sub(1));
+    }
+
+    /// Whether what was sent is still unanswered: the window is busy.
+    pub fn busy(&self) -> bool {
+        self.owed > 0
+    }
+
+    /// The window drew what came.
+    pub fn drew(&mut self) {
+        self.moved = false;
+    }
+
+    /// How long a Tick waits after the last: the timer's ms, a second at least while the last
+    /// is unanswered.
+    fn wait(&self) -> f64 {
+        f64::from(if self.waiting { self.timer.max(1000) } else { self.timer })
+    }
+
+    /// The ms from `now` until the next Tick is due (0: due, or its count starts), when the
+    /// window wants its next frame; `None` with no timer.
+    pub fn due_in(&self, now: f64) -> Option<u32> {
+        let at = self.at.unwrap_or(f64::MIN);
+        (self.timer > 0).then(|| (at + self.wait() - now).max(0.0).ceil() as u32)
     }
 
     /// The Tick due at `now` (page ms), the window last drawn at `drawn`: one only while it
-    /// shows (drew in the last half second), the timer's ms after the last, once that was
-    /// answered or a second went by; `ms` the time since the last.
+    /// shows (drew within half a second of the wait), the timer's ms after the last, once that
+    /// was answered or a second went by; `ms` the time since the last.
     pub fn tick(&mut self, now: f64, drawn: f64) -> Option<Event> {
-        if self.timer == 0 || now - drawn > 500.0 {
+        if self.timer == 0 || now - drawn > self.wait() + 500.0 {
             self.at = None;
             return None;
         }
         let at = *self.at.get_or_insert(now);
-        let due = now - at >= f64::from(self.timer) && (!self.waiting || now - at > 1000.0);
-        due.then(|| {
+        (now - at >= self.wait()).then(|| {
             (self.at, self.waiting) = (Some(now), true);
             Event::Tick { ms: (now - at) as u32 }
         })
     }
 
-    /// The pointer went down on hit `id` (`None`: dragged while down) at `(x, y)`: the Tap of a
-    /// Grid's square, if it is a new one.
-    pub fn tap(&mut self, view: &View, id: Option<u32>, x: f32, y: f32) -> Option<Event> {
+    /// The pointer went down on hit `id` (`None`: dragged while down) at `(x, y)`: the Grid to
+    /// tap (its id now) and its squares newly under it. A drag stays on the Grid pressed (found
+    /// by its place in the frame, as its id may change) and taps each square on the line from
+    /// the last one, as the pointer moves past squares between samples; off the squares and
+    /// back, it goes on from where it came back. It waits while what was sent is unanswered,
+    /// and until the answer draws (which may give the Grids other ids), so it never taps by a
+    /// stale id.
+    pub fn tap(&mut self, view: &View, id: Option<u32>, x: f32, y: f32) -> (u32, Vec<u32>) {
+        let mut taps = (0, Vec::new());
         if id.is_some() {
-            self.tapping = None;
+            (self.grid, self.last) = (None, None);
+        } else if self.owed > 0 || self.moved {
+            return taps;
         }
-        let id = id.or(self.tapping.map(|t| t.0))?;
-        let cell = cell(view, id, x, y)?;
-        (self.tapping.replace((id, cell)) != Some((id, cell))).then_some(Event::Tap { id, cell })
+        let grid = self.grid;
+        let b = view.grids.iter().find(|b| match (id, grid) {
+            (Some(id), _) => b.id == id && b.rect.contains(x, y),
+            (_, Some(nth)) => b.nth == nth,
+            _ => false,
+        });
+        let Some(b) = b else { return taps };
+        // From the last square tapped, of the grid as it was then.
+        let from = self.last.filter(|l| l.0 == b.id).map(|l| (l.1, l.2));
+        let to = b.at(x, y);
+        (self.grid, self.last, taps.0) = (Some(b.nth), to.map(|(c, r)| (b.id, c, r)), b.id);
+        if let Some((c, r)) = to {
+            let (c0, r0) = from.unwrap_or((c, r));
+            // The square alone for a press or a return; none for the same square.
+            let n = c.abs_diff(c0).max(r.abs_diff(r0)).max(u32::from(from.is_none()));
+            // `i` of `n` steps from `p` to `q`, rounded.
+            let step = |p: u32, q: u32, i: u32| (p * (n - i) + q * i + n / 2) / n;
+            for i in 1..=n {
+                let cell = step(r0, r, i) * u32::from(b.cols) + step(c0, c, i);
+                if cell < b.n {
+                    taps.1.push(cell);
+                }
+            }
+        }
+        taps
+    }
+
+    /// Whether the pointer's last press was on a Grid: its tap went, so its Click is none.
+    pub fn pressed(&self) -> bool {
+        self.grid.is_some()
     }
 }
 
-/// The square of Grid `id` at `(x, y)`, as last drawn.
-pub fn cell(view: &View, id: u32, x: f32, y: f32) -> Option<u32> {
-    let &(_, r, cols, n) = view.grids.iter().find(|g| g.0 == id && g.1.contains(x, y))?;
-    let side = r.w / f32::from(cols);
-    let (col, row) = (((x - r.x) / side) as u32, ((y - r.y) / side) as u32);
-    Some(row * u32::from(cols) + col.min(u32::from(cols) - 1)).filter(|c| *c < n)
-}
-
-/// A grid's square for `cols` across `w` and `rows` down `tall`: whole device px, 6 to 32
-/// logical px.
-fn side(ts: &TextSystem, (w, cols): (f32, u16), (tall, rows): (f32, usize)) -> f32 {
+/// A grid's square for `cols` across `w`, its rows at most `row` tall: whole device px, 6 to
+/// 32 logical px by the height, but never wider than `w` holds (a device px at least).
+fn side(ts: &TextSystem, (w, cols): (f32, u16), row: f32) -> f32 {
     let d = ts.dpr();
-    let fit = (w / f32::from(cols)).min(tall / rows.max(1) as f32);
     // Not `clamp`: its panic message would link float formatting into the boot.
-    (fit * d).floor().min((32.0 * d).floor()).max((6.0 * d).ceil()) / d
+    let tall = (row * d).floor().min((32.0 * d).floor()).max((6.0 * d).ceil());
+    (w / f32::from(cols) * d).floor().min(tall).max(1.0) / d
 }
 
 /// A Scroll as last drawn: its id, how far down it is, its content's height and its rect.
@@ -176,17 +259,25 @@ pub fn draw(ui: &mut Ui<'_>, nodes: &[Node], texts: &mut Texts, view: &mut View)
     #[rustfmt::skip]
     let mut lay = Lay { t, texts, sizes: Vec::new(), extents: Vec::new(), extra: 0.0, fills: 0,
         slack: Vec::new(), again: false, i: 0, e: 0, y: 0.0, touch, right: r.x + r.w, old,
-        scrolls: Vec::new(), now, reveal: view.reveal, grids: Vec::new(),
-        tall: inner * 2.0 / 3.0 };
+        scrolls: Vec::new(), now, reveal: view.reveal, grids: Vec::new(), row: 0.0,
+        room: (0.0, 0.0), nth: 0 };
     let ts = ui.text_system();
     let mut h = lay.stack(ts, nodes, w, SPACING, None);
+    // Again with the Grids' rows (measured of 6 px squares) sharing what the rest leaves, a
+    // third to two thirds of the view's height, so what is around them shows too.
+    let (grids, rows) = lay.room;
+    if rows > 0.0 {
+        lay.row = (inner - h + grids).min(inner * 2.0 / 3.0).max(inner / 3.0) / rows;
+        lay.fills = 0;
+        lay.slack.clear();
+        h = lay.restack(ts, nodes, w);
+    }
     // Again with the room left shared by the Fills and Scrolls, each also taking what it is
     // short of a taller sibling in a Row.
     let fills = mem::take(&mut lay.fills);
     if fills > 0 && (h < inner || lay.slack.iter().any(|s| *s > 0.0)) {
         (lay.extra, lay.again) = ((inner - h).max(0.0) / fills as f32, true);
-        (lay.sizes, lay.extents) = (Vec::new(), Vec::new());
-        h = lay.stack(ts, nodes, w, SPACING, None);
+        h = lay.restack(ts, nodes, w);
     }
     let end = view.follow && view.scroll >= view.heights.0 - view.heights.1;
     view.heights = (h + 2.0 * PAD, r.h);
@@ -225,7 +316,8 @@ fn style_of(style: Style, t: &Theme) -> TextStyle {
 /// whether this is the second pass, the next size and extent to draw, the top of the node being
 /// measured in the content, whether chips and quiet buttons are touch targets, the window's
 /// right edge, the Scrolls as last drawn and as drawn now, the page clock, when the reveal
-/// began, and the Grids drawn.
+/// began, the Grids drawn, the most height a Grid's row takes, the Grids' height and rows as
+/// measured, and the Grids drawn or passed.
 struct Lay<'t> {
     t: &'t Theme,
     texts: &'t mut Texts,
@@ -244,9 +336,10 @@ struct Lay<'t> {
     scrolls: Vec<Scrolled>,
     now: f64,
     reveal: Option<f64>,
-    grids: Vec<(u32, RectF, u16, u32)>,
-    /// The most height a grid takes: two thirds of the view's, so what is around it shows too.
-    tall: f32,
+    grids: Vec<Board>,
+    row: f32,
+    room: (f32, f32),
+    nth: u32,
 }
 
 impl Lay<'_> {
@@ -260,6 +353,13 @@ impl Lay<'_> {
         }
         self.y = top;
         h - if ns.is_empty() { 0.0 } else { gap }
+    }
+
+    /// Measures `ns`, the frame's nodes `w` wide, again; their height.
+    fn restack(&mut self, ts: &mut TextSystem, ns: &[Node], w: f32) -> f32 {
+        self.sizes.clear();
+        self.extents.clear();
+        self.stack(ts, ns, w, SPACING, None)
     }
 
     /// The height a Fill or Scroll adds to its own: its share of the room left, and what it is
@@ -376,8 +476,10 @@ impl Lay<'_> {
             }
             Node::Separator => (w, 1.0),
             Node::Grid { cols, cells, .. } => {
-                let rows = cells.len().div_ceil(usize::from(*cols).max(1));
-                (w, rows as f32 * side(ts, (w, (*cols).max(1)), (self.tall, rows)))
+                let rows = cells.len().div_ceil(usize::from(*cols).max(1)) as f32;
+                let h = rows * side(ts, (w, (*cols).max(1)), self.row);
+                self.room = (self.room.0 + h, self.room.1 + rows);
+                (w, h)
             }
         };
         self.sizes[at] = size;
@@ -409,6 +511,8 @@ impl Lay<'_> {
     /// all, but for an editor, which keeps where it was drawn.
     fn draw(&mut self, ui: &mut Ui<'_>, n: &Node, x: f32, y: f32) {
         let ((w, h), t) = (self.next(true), self.t);
+        // Grids count in the frame's order, drawn or not.
+        self.nth += u32::from(matches!(n, Node::Grid { .. }));
         let r = ui.snapped(RectF::new(x, y, w, h));
         let clip = ui.list().clip();
         let editor = matches!(n, Node::Code { .. } | Node::Area { .. });
@@ -526,16 +630,19 @@ impl Lay<'_> {
                 // The square measured: the rows share the height.
                 let cols = (*cols).max(1);
                 let side = h / cells.len().div_ceil(usize::from(cols)).max(1) as f32;
-                let at = grid(ui, (r, side), *id, cols, (cells, texts));
-                self.grids.extend((*id != 0).then_some((*id, at, cols, cells.len() as u32)));
+                let rect = grid(ui, (r, side), *id, cols, (cells, texts));
+                let (id, nth, n) = (*id, self.nth - 1, cells.len() as u32);
+                self.grids.extend((id != 0).then_some(Board { id, nth, rect, cols, n }));
             }
         }
     }
 }
 
-/// A Grid's squares centered across `r`, each a color of the theme (0 sunken, 1 to 8 its
-/// palette), a text in it if it has one and room; with an id, a click hit over the squares and,
-/// for the AI, a mark holding them a row a line. Where the squares are.
+/// A Grid's squares centered across `r` in their colors ([`color`]), a text in each that has one
+/// and room (made to fit); the empty ones outlined, as text fields are, and the whole where no
+/// gap parts them, so a board shows on any surface. With an id, a click hit over the squares
+/// and, for the AI, a mark of its size, a row of colors a line, then each text by its square.
+/// Where the squares are.
 fn grid(
     ui: &mut Ui<'_>,
     (r, side): (RectF, f32),
@@ -547,29 +654,72 @@ fn grid(
     let n = usize::from(cols);
     let x = ts.snap(r.x + (r.w - side * f32::from(cols)) / 2.0);
     let at = RectF::new(x, r.y, side * f32::from(cols), r.h);
-    let gap = if side < 10.0 { 0.0 } else { ui.px(1.0) };
-    let ink = TextStyle::new(FontId::Sans, (side * 0.5).round(), t.text);
+    let (edge, round) = (ui.px(1.0), (side / 8.0).floor());
+    let gap = if side < 10.0 { 0.0 } else { edge };
     for (i, &c) in cells.iter().enumerate() {
         let (cx, cy) = (x + (i % n) as f32 * side, r.y + (i / n) as f32 * side);
         let square = RectF::new(cx, cy, side - gap, side - gap);
-        let fill = if c == 0 { t.surface_lo } else { t.ansi[usize::from(c.min(8))] };
-        ui.fill(square, (side / 8.0).floor(), fill);
-        if let Some(text) = texts.get(i).filter(|s| !s.is_empty() && side >= 14.0) {
-            label_in(ui, square, text, ink.with_color(if c == 0 { t.text } else { t.base }));
+        let (fill, ink) = color(t, c);
+        ui.fill(square, round, fill);
+        if c == 0 && gap > 0.0 {
+            ui.border(square, round, edge, t.border);
         }
+        if let Some(text) = texts.get(i).filter(|s| !s.is_empty() && side >= 14.0) {
+            fit(ui, square, text, TextStyle::new(FontId::Sans, (side * 0.5).round(), ink));
+        }
+    }
+    if gap == 0.0 {
+        ui.border(at, 0.0, edge, t.border);
     }
     if id != 0 {
         ui.hit(WidgetId(id), at, Sense::Click);
         if ui.list().sem().is_some() {
-            let mut rows = format!("{cols} columns").into_bytes();
-            for row in cells.chunks(n) {
-                rows.push(b'\n');
-                rows.extend(row.iter().map(|c| b'0' + c));
+            let mut v = String::new();
+            for (num, k) in [(n, " columns, "), (cells.len().div_ceil(n), " rows")] {
+                ui::push_num(&mut v, num);
+                v += k;
             }
-            ui.mark(WidgetId(id), ui::sem::GRID, 0, &String::from_utf8_lossy(&rows));
+            for (i, &c) in cells.iter().enumerate() {
+                if i % n == 0 {
+                    v.push('\n');
+                }
+                v.push(char::from(b'0' + c));
+            }
+            for (i, s) in texts.iter().enumerate() {
+                if !s.is_empty() {
+                    v.push('\n');
+                    ui::push_num(&mut v, i);
+                    v += ": ";
+                    v += s;
+                }
+            }
+            ui.mark(WidgetId(id), ui::sem::GRID, 0, &v);
         }
     }
     at
+}
+
+/// The fill of a Grid's square of color `c` in theme `t`, and the ink of its text: 0 the
+/// sunken well, 1 to 8 the palette (ANSI 1 to 8); but 7, silver, is the faint ink on a light
+/// theme, whose ANSI white is dark and next to 8, gray.
+fn color(t: &Theme, c: u8) -> (Rgba, Rgba) {
+    match c {
+        0 => (t.surface_lo, t.text),
+        7 if !t.dark => (t.text_faint, t.text),
+        c => (t.ansi[usize::from(c.min(8))], t.base),
+    }
+}
+
+/// `text` centered in the square `r` in `style`, smaller where that is too wide (2 px spare
+/// each side; 8 px at least), cut short where even that is.
+fn fit(ui: &mut Ui<'_>, r: RectF, text: &str, mut style: TextStyle) {
+    let (ts, room) = (ui.text_system(), r.w - 4.0);
+    let w = ts.measure(text, style);
+    if w > room {
+        style.size = (style.size * room / w).floor().max(8.0);
+    }
+    let shown = ts.ellipsize(text, style, room);
+    label_in(ui, r, &shown, style);
 }
 
 /// The width a Button, Spacer, Glyph or Pane takes in a Row `w` wide; `None` for the others.

@@ -54,11 +54,19 @@ pub trait App {
     fn compact(&self) -> bool {
         false
     }
-    /// Whether it animates at `now_ms` (the page clock of [`UiState::now_ms`]): the shell draws
-    /// frames while a shown app does, and only then, so an idle desktop draws none.
-    fn animating(&self, now_ms: f64) -> bool {
+    /// When it next animates, in ms from `now_ms` (the page clock of [`UiState::now_ms`]): 0
+    /// while it animates, when the shell draws frames for a shown app (and only then, so an idle
+    /// desktop draws none); later, a frame by a timer then and none between (a program's timer);
+    /// `None`, not till an event.
+    fn frame_in(&self, now_ms: f64) -> Option<u32> {
         let _ = now_ms;
-        false
+        None
+    }
+    /// How many squares its grid widget `id` has, as last drawn (`None`: no such grid): the
+    /// AI taps one by number.
+    fn squares(&self, id: u32) -> Option<u32> {
+        let _ = id;
+        None
     }
     /// GUI process `pid` drew `frame` (uiwire bytes, unchecked). Every app hears every frame and
     /// takes only its own process's; returns whether to redraw.
@@ -93,7 +101,8 @@ pub mod sem {
     pub const CODE: u8 = 7;
     pub const TERMINAL: u8 = 8;
     pub const LINK: u8 = 9;
-    /// Squares to tap by number; the value is "N columns", then a row of digits a line.
+    /// Squares to tap by number; the value is "N columns, M rows", a row of their colors' digits
+    /// a line, then a line "K: text" for each square K with a text.
     pub const GRID: u8 = 10;
     pub const SELECTED: u8 = 1;
     pub const CHECKED: u8 = 2;

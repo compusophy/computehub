@@ -114,7 +114,7 @@ pub mod acted {
     pub const REFUSED: u16 = 916;
     /// Another act is still settling.
     pub const IN_FLIGHT: u16 = 917;
-    /// An unknown key, a scroll out of range.
+    /// An unknown key, a scroll out of range, a tap of no grid's square (or a grid clicked).
     pub const MALFORMED: u16 = 918;
 }
 
@@ -126,7 +126,7 @@ pub enum Act {
     Wait {
         ms: u16,
     },
-    /// Press and release widget `id` of window `win`.
+    /// Press and release widget `id` of window `win` (not a Grid: its squares are tapped).
     Click {
         win: u32,
         id: u32,
@@ -320,7 +320,7 @@ pub enum Event {
     Halt,
     /// `ms` passed since the last tick ([`Request::Timer`]).
     Tick { ms: u32 },
-    /// Square `cell` of Grid `id` was pressed, or dragged onto.
+    /// Square `cell` of Grid `id` was pressed, or dragged onto (or across).
     Tap { id: u32, cell: u32 },
 }
 
