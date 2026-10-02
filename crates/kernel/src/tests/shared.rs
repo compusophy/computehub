@@ -144,6 +144,33 @@ fn paths_must_be_normalized_and_under_a_root() {
 }
 
 #[test]
+fn programs_read_bin_and_never_write_it() {
+    // The desktop writes its markers into the Vfs itself; a program, even under `/`, only reads.
+    let (mut s, marker) = (
+        Sys::new(&["/"]),
+        b"#!wasm bin/assistant.wasm
+"
+        .to_vec(),
+    );
+    s.fs.mkdir_all("/bin").and(s.fs.write("/bin/assistant", &marker)).unwrap();
+    let (creat, trunc, path) = (wire::O_CREAT, wire::O_TRUNC, "/bin/assistant");
+    let (open, rm) =
+        (|oflags, path| Msg::Open { oflags, path }, |kind, path| Msg::Remove { kind, path });
+    #[rustfmt::skip]
+    let refused = [open(creat, "/bin/x"), open(trunc, path), open(creat | trunc, "/bin"),
+        Msg::Write { off: 0, path, data: b"#!wasm /tmp/x" }, Msg::Mkdir { path: "/bin/d" },
+        rm(1, path), rm(2, "/bin"), Msg::Rename { from: path, to: "/tmp/a" },
+        Msg::Rename { from: "/tmp", to: "/bin/t" }, Msg::SetLen { len: 0, path }];
+    for m in refused {
+        assert_eq!(s.ask(m), (wire::EROFS, vec![]), "{m:?}");
+    }
+    let read = Msg::Read { off: 0, max: 64, path };
+    assert_eq!([s.ask(open(0, path)).0, s.ask(read).0, s.ask(open(creat, "/binx")).0], [0; 3]);
+    assert_eq!((s.fs.read(path), s.fs.list("/bin").map(|l| l.len())), (Ok(&marker[..]), Ok(1)));
+    assert!(s.fs.is_file("/binx") && !s.fs.exists("/tmp/a"));
+}
+
+#[test]
 fn frames_become_draws_and_events_wait_for_their_reader() {
     let mut s = Sys::new(&["/"]);
     let pid = s.pid;

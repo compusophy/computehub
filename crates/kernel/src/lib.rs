@@ -8,8 +8,9 @@
 //! [`Kernel::spawn`] asks for a worker and sends its Start at READY. Output arrives as
 //! CONS_WRITE; EXIT, a kill or a failed worker ends a process, leaving its status for
 //! [`Kernel::reap`]; both wake its owner window. File ops are served at once, each path checked
-//! against the roots; a GUI process draws ([`Effect::Draw`]) and reads [`Kernel::post_event`]'s
-//! events. Not yet: console reads, modes.
+//! against the roots, and none writes under /bin (EROFS): only the desktop does. A GUI process
+//! draws ([`Effect::Draw`]) and reads [`Kernel::post_event`]'s events. Not yet: console reads,
+//! modes.
 
 #![forbid(unsafe_code)]
 
@@ -325,11 +326,18 @@ impl Kernel {
     }
 }
 
-/// Serves file op `m` for a process under `roots`: the reply, or the errno.
+/// Serves file op `m` for a process under `roots`: the reply, or the errno. What writes (OPEN
+/// with CREAT or TRUNC, WRITE, MKDIR, REMOVE, RENAME, SETLEN) is EROFS under /bin, which only
+/// the desktop writes: what a `/bin` marker names runs as that app, the overlay's too.
 fn file<'a>(vfs: &mut Vfs, roots: &[String], m: Msg<'a>) -> Result<Vec<u8>, u16> {
     let at = |path: &'a str| checked(roots, path);
+    let bin = |p: &str| p.strip_prefix("/bin").is_some_and(|t| t.is_empty() || t.starts_with('/'));
+    let to = |path: &'a str| at(path).and_then(|p| if bin(p) { Err(wire::EROFS) } else { Ok(p) });
     let none = |r: Result<(), VfsError>| r.map(|()| Vec::new()).map_err(wire::errno);
     match m {
+        Msg::Open { oflags, path } if oflags & (wire::O_CREAT | wire::O_TRUNC) != 0 => {
+            open(vfs, to(path)?, oflags)
+        }
         Msg::Open { oflags, path } => open(vfs, at(path)?, oflags),
         Msg::Read { off, max, path } => {
             let data = vfs.read(at(path)?).map_err(wire::errno)?;
@@ -338,7 +346,7 @@ fn file<'a>(vfs: &mut Vfs, roots: &[String], m: Msg<'a>) -> Result<Vec<u8>, u16>
             Ok(data[from..from + n].to_vec())
         }
         Msg::Write { off, path, data } => {
-            Ok(vfs.write_at(at(path)?, off, data).map_err(wire::errno)?.to_le_bytes().into())
+            Ok(vfs.write_at(to(path)?, off, data).map_err(wire::errno)?.to_le_bytes().into())
         }
         Msg::List { skip, path } => {
             let mut w = wire::Writer::default();
@@ -350,15 +358,15 @@ fn file<'a>(vfs: &mut Vfs, roots: &[String], m: Msg<'a>) -> Result<Vec<u8>, u16>
             }
             Ok(w.done())
         }
-        Msg::Mkdir { path } => none(vfs.mkdir(at(path)?)),
-        Msg::Remove { kind, path } => match (kind, at(path)?) {
+        Msg::Mkdir { path } => none(vfs.mkdir(to(path)?)),
+        Msg::Remove { kind, path } => match (kind, to(path)?) {
             (wire::KIND_FILE, path) if vfs.is_dir(path) => Err(wire::EISDIR),
             (wire::KIND_DIR, path) if vfs.is_file(path) => Err(wire::ENOTDIR),
             (wire::KIND_FILE | wire::KIND_DIR, path) => none(vfs.remove(path, false)),
             _ => Err(wire::EINVAL),
         },
-        Msg::Rename { from, to } => none(vfs.rename(at(from)?, at(to)?)),
-        Msg::SetLen { len, path } => none(vfs.set_len(at(path)?, len)),
+        Msg::Rename { from, to: dest } => none(vfs.rename(to(from)?, to(dest)?)),
+        Msg::SetLen { len, path } => none(vfs.set_len(to(path)?, len)),
         _ => Err(wire::EINVAL),
     }
 }
