@@ -26,8 +26,9 @@ pub(crate) const EXAMPLES: [&str; 4] =
 const SYSTEM: [&str; 2] = [
     "You write apps for Studio, the app maker of compusophyOS, a desktop that runs in a browser \
      tab. Apps are written in applang:\n\n",
-    "\n\nA game keeps its board in a list shown with grid, moves with every, and is steered with \
-     on key and with buttons too (a phone has no arrow keys). Write small functions instead of \
+    "\n\nA game keeps its board in a list shown with grid, moves with every, is steered with on \
+     key and with buttons too (a phone has no arrow keys), and shows Start until it runs. Write \
+     small functions instead of \
      repeating code; keep programs under 200 lines. Decide quickly what applang can make, then \
      write it: your reply has room for the program, not for long deliberation.\n\n\
      Reply with the complete program in one fenced block whose info string is app, and nothing \
@@ -138,9 +139,17 @@ impl Studio {
         }
     }
 
+    /// More of the reply. Once its program's block closes the rest is never used (a model may
+    /// go on drafting until it runs out of room), so the request stops and the check comes next.
     pub(crate) fn data(&mut self, data: &[u8]) {
-        if let Some(m) = &mut self.make {
+        if let Some(m) = self.make.as_mut().filter(|m| !m.done) {
             m.stream.feed(data, &mut m.reply, MAX_REPLY);
+            if fenced(&m.reply).is_some_and(|(_, closed)| closed) {
+                m.done = true;
+                self.requests.push(Request::AiCancel { id: m.id });
+                self.status = (Style::Dim, "Checking\u{2026}".into());
+                return;
+            }
         }
         self.status = (Style::Dim, self.progress());
     }

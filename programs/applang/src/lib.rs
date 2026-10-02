@@ -268,7 +268,10 @@ fn dispatch(
                 (Event::Tap { cell, .. }, Some(n)) if *cell < n => {
                     run.locals.push(Value::Int(i64::from(*cell)));
                 }
-                _ => return Err(bad(format!("{event:?} does not fit what {id} is"))),
+                _ => {
+                    let msg = format!("{id} is a button clicked or a grid tapped on a square");
+                    return Err(bad(msg));
+                }
             }
             body(run, stmts)?;
         }
@@ -402,6 +405,10 @@ pub fn rule(code: u16) -> &'static str {
             "a grid has 1 to 100 columns, squares 0 to 8, and texts (if any) one per square."
         }
         codes::CALLS_TOO_DEEP => "call functions at most 32 deep.",
+        codes::SHOWS_NOTHING => {
+            "after its states, functions and handlers an app has its widgets (label, button, \
+             input, row, col, if, for, grid), and some show from the start."
+        }
         codes::DUP_STATE => {
             "declare each state, function and parameter once; built-ins keep \
                              their names."

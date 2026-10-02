@@ -1,11 +1,13 @@
 //! The smoke test: a program run as a person and a clock would, before anyone sees it. It
-//! renders, clicks every button it shows once, then lets [`TICKS`] ticks pass (each the
-//! program's own interval): every 5th it presses the next key the program handles, every 7th
-//! taps a square of a grid that has a handler, every 11th clicks a button, every 13th types
-//! "12", "hello" or "" in each input, re-rendering after each event. It stops at the first
-//! fault, or after [`BUDGET`] steps in all, and says what it saw.
+//! renders (an app that shows nothing at first faults: `SHOWS_NOTHING`), clicks every button it
+//! shows once (each as it shows by then, by its text: an earlier click may have moved or hidden
+//! it), then lets [`TICKS`] ticks pass (each the program's own interval): every 5th it presses
+//! the next key the program handles, every 7th taps a square of a grid that has a handler,
+//! every 11th clicks a button, every 13th types "12", "hello" or "" in each input, re-rendering
+//! after each event. It stops at the first fault, or after [`BUDGET`] steps in all, and says
+//! what it saw.
 
-use crate::{App, Diag, Event, Limits, Node, Program};
+use crate::{App, Diag, Event, Limits, Node, Program, codes};
 
 /// The ticks a smoke test lets pass, and the most steps it spends.
 pub const TICKS: u32 = 300;
@@ -41,10 +43,14 @@ pub fn smoke(program: Program, seed: u64) -> Smoke {
     t.rng = seed | 1;
     let Some(first) = t.render("the first render") else { return t.out };
     if first.is_empty() {
-        t.out.warnings.push("it shows nothing".into());
+        let msg = "the app shows nothing: it has no widgets, or none shows at first";
+        t.fault(Diag::new_code(codes::SHOWS_NOTHING, msg), "the first render".into());
+        return t.out;
     }
-    for (id, text) in buttons(&first) {
-        if !t.step(Event::Click { id }, format!("clicking {text:?}"), false) {
+    for (_, text) in buttons(&first) {
+        let now = buttons(&t.last);
+        let Some(&(id, _)) = now.iter().find(|b| b.1 == text) else { continue };
+        if !t.step(Event::Click { id }, quoted("clicking ", &text), false) {
             return t.out;
         }
     }
@@ -62,7 +68,7 @@ pub fn smoke(program: Program, seed: u64) -> Smoke {
         let mut events = Vec::new();
         if n % 5 == 0 && !keys.is_empty() {
             let name = keys[(n as usize / 5) % keys.len()].clone();
-            events.push((Event::Key { name: name.clone() }, format!("key {name:?}")));
+            events.push((Event::Key { name: name.clone() }, quoted("key ", &name)));
         }
         if n % 7 == 0 {
             let grids = grids(&t.last);
@@ -74,13 +80,13 @@ pub fn smoke(program: Program, seed: u64) -> Smoke {
         if n % 11 == 0 {
             let all = buttons(&t.last);
             if let Some((id, text)) = all.get(t.pick(all.len())) {
-                events.push((Event::Click { id: *id }, format!("clicking {text:?}")));
+                events.push((Event::Click { id: *id }, quoted("clicking ", text)));
             }
         }
         if n % 13 == 0 {
             let text = ["12", "hello", ""][(n as usize / 13) % 3];
             for state in inputs(&t.last) {
-                let what = format!("typing {text:?} in {state}");
+                let what = [&quoted("typing ", text), " in ", &state].concat();
                 events.push((Event::Input { state, text: text.into() }, what));
             }
         }
@@ -177,6 +183,11 @@ impl Tester {
         }
         !ran || self.render(&["the render after ", &what].concat()).is_some()
     }
+}
+
+/// `what` and then `text` in quotes.
+fn quoted(what: &str, text: &str) -> String {
+    [what, "\"", text, "\""].concat()
 }
 
 /// Every (id, text) of `nodes`' buttons, in order.

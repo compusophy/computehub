@@ -271,12 +271,14 @@ fn makes_checks_fixes_and_saves() {
     let f = w.last(&[think(id, "Hm\u{e9}. "), think(id, "Ok.")]);
     assert!(has(&f, "Thinking\u{2026} 8 chars"), "{:?}", words(&f));
     // A reply that does not compile goes back with its problem, once checked: a fresh request
-    // with what was asked, the problem at its line with a caret, the rule, and the program.
+    // with what was asked, the problem at its line with a caret, the rule, and the program. Its
+    // request stops once the program's block closes (what follows is never used).
     let bad = "row {\n  label 1\n}\n";
-    let frames = w.answer(id, &app(bad));
+    let frames = w.answer(id, &[&app(bad), "Now a second draft:\n```app\nlabel 2;\n"].concat());
     assert!(has(&frames[0], "Writing\u{2026} 5 chars"));
     let n = frames.len();
-    assert!(has(&frames[n - 2], "Checking\u{2026}") && frames[n - 2].requests.is_empty());
+    assert!(has(&frames[n - 2], "Checking\u{2026}"));
+    assert_eq!(frames[n - 2].requests, [Request::AiCancel { id }]);
     assert!(has(&frames[n - 1], "Retrying (1 of 3) \u{2014} asking\u{2026}"));
     let (id, body) = ai(&frames[n - 1]);
     let (role, fix) = message(&body, 1);

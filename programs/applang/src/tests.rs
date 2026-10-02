@@ -342,9 +342,18 @@ fn the_shots_and_a_model_written_tetris_smoke_clean() {
         (f.during.as_str(), &f.before[..]),
         ("tick 1", &["clicking \"Go\"".to_string()][..])
     );
-    // An app whose ticks do nothing is flagged; one that shows nothing too.
+    // An app whose ticks do nothing is flagged; one that shows nothing faults (a model's reply
+    // that lost its widgets).
+    let report = smoke(compile("state n = 0; every 100 { n = 0; } label \"n\";").unwrap(), 1);
+    assert_eq!(report.warnings, ["300 ticks never changed what it shows"]);
     let report = smoke(compile("state n = 0; every 100 { n = 0; }").unwrap(), 1);
-    assert_eq!(report.warnings, ["it shows nothing", "300 ticks never changed what it shows"]);
+    assert_eq!(report.fault.map(|f| f.diag.code), Some(Some(codes::SHOWS_NOTHING)));
+    // Each button of the first screen is clicked as it shows by then: Start hides itself, which
+    // moves the others' ids, and the Right after it is still Right.
+    let src = "state on = false; state x = 0; if !on { button \"Start\" { on = true; } }
+               button \"Left\" { x -= 1; } button \"Right\" { x += 1; } label x;";
+    let report = smoke(compile(src).unwrap(), 1);
+    assert!(report.fault.is_none(), "{report:?}");
 }
 
 #[test]
@@ -356,7 +365,7 @@ fn each_code_has_a_rule_and_the_card_says_what_models_got_wrong() {
     );
     #[rustfmt::skip]
     let all = [1, 2, 3, 4, 5, 101, 102, 203, 204, 205, 206, 211, 212, 214, 215, 216, 217, 218, 219,
-        220, 301, 302, 303, 304, 305, 306, 307, 308];
+        220, 221, 301, 302, 303, 304, 305, 306, 307, 308];
     for code in all {
         assert!(rule(code).ends_with('.'), "{code}");
     }

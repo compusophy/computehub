@@ -72,6 +72,8 @@ pub mod codes {
     pub const BAD_GRID: u16 = 219;
     /// Calls nested past the runtime's depth cap.
     pub const CALLS_TOO_DEEP: u16 = 220;
+    /// An app whose first render shows nothing (the smoke test's; no span).
+    pub const SHOWS_NOTHING: u16 = 221;
     /// A name declared twice (a state, function or parameter).
     pub const DUP_STATE: u16 = 301;
     /// A name that is no declared state or visible local.

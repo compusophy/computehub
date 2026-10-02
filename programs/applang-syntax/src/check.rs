@@ -110,7 +110,8 @@ pub(crate) fn check(p: &mut Program) -> Result<(), Diag> {
             k.key.len() == 1 && k.key.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit());
         if !one && !KEYS.contains(&k.key.as_str()) {
             let msg = format!(
-                "no key is called {:?}: use left, right, up, down, space, enter, escape, a to z or 0 to 9",
+                "no key is called \"{}\": use left, right, up, down, space, enter, escape, a to z \
+                 or 0 to 9",
                 k.key
             );
             return Err(Diag::at_code(codes::BAD_KEY, msg, k.span));
