@@ -41,9 +41,11 @@ impl App for Probe {
         if self.1 == "board" {
             ui.mark(W(1), sem::GRID, 0, &"0".repeat(4100));
             ui.mark(W(2), sem::GRID, 0, &"1".repeat(20_000));
+            ui.mark(W(3), sem::CANVAS, 0, &"line 1 2 3 4 5 6\n".repeat(100));
         }
         if self.1 != "page" {
-            return ui.hit(ui::WidgetId(1), ui.rect(), ui::Sense::Click);
+            let sense = if self.1 == "board" { ui::Sense::Pad } else { ui::Sense::Click };
+            return ui.hit(ui::WidgetId(1), ui.rect(), sense);
         }
         // A heading, a switch that is on, a field, and more text than the window shows.
         ui.heading("Privacy");
@@ -457,11 +459,12 @@ fn tweens_ease_out_from_their_first_frame_replays_scale_and_themes_crossfade() {
     src.gradient(r, 4.0, Rgba(1, 1, 1, 255), Rgba(2, 2, 2, 51), -1.5);
     src.glow(r, Rgba(7, 7, 7, 100));
     src.grain(r, 20, -3.0);
+    src.segment(r, 6.0, true, Rgba(4, 4, 4, 255));
     let vis = Vis { rect: RectF::new(0.0, 0.0, 200.0, 200.0), s: 0.5, dx: 10.0, dy: -10.0, a: 0.5 };
     let mut dst = DrawList::new();
     replay(&mut dst, &src, vis);
     let out = dst.instances();
-    assert_eq!(out.len(), 8);
+    assert_eq!(out.len(), 9);
     for (o, i) in out.iter().zip(src.instances()) {
         assert_eq!((o.kind, o.uv, o.rect), (i.kind, i.uv, [110.0, 90.0, 20.0, 10.0]));
         assert_eq!(o.clip, [105.0, 85.0, 50.0, 50.0]);
@@ -473,10 +476,11 @@ fn tweens_ease_out_from_their_first_frame_replays_scale_and_themes_crossfade() {
     assert_eq!(params[..4], want);
     assert_eq!((params[5].1, params[7].1), (-1.5, -3.0));
     assert_eq!(out[7].kind, Kind::Grain as u8 as f32);
+    assert_eq!((out[8].kind, params[8]), (Kind::Line as u8 as f32, (0.0, 3.0, 1.0)));
     assert!(Vis::at(r).is_plain() && !vis.is_plain());
     // Faded to nothing, nothing is drawn.
     replay(&mut dst, &src, Vis { a: 0.0, ..vis });
-    assert_eq!(dst.len(), 8);
+    assert_eq!(dst.len(), 9);
     // Themes crossfade and switch by name.
     let [mid, dawn, mono] = &THEMES;
     assert_eq!(blend(mid, dawn, 0.0).base, mid.base);
@@ -600,12 +604,14 @@ fn the_scene_holds_each_window_its_hits_its_marks_and_the_text_that_shows() {
     assert!(s.wins[2].hits.is_empty() && s.wins[2].runs.is_empty());
     // Reading the screen drew nothing on the atlas.
     assert!(h.text.atlas_mut().take_dirty().is_none());
-    // A grid's mark keeps every square of a big board; past 12 KiB it is cut, and says so.
+    // A grid's mark keeps every square of a big board, a canvas's mark its shapes; past 12 KiB
+    // it is cut, and says so.
     h.open("board", None, &mut Response::default());
     let s = h.scene();
     let lens: Vec<_> =
         s.wins[0].marks.iter().map(|m| (m.value.len(), m.value.ends_with('…'))).collect();
-    assert_eq!(lens, [(4100, false), (12 << 10, true)]);
+    assert_eq!(lens, [(4100, false), (12 << 10, true), (1700, false)]);
+    assert_eq!(s.wins[0].hits[0].sense, 0, "a pad reads as a click");
     // However much the windows say, the scene stays within 64 KiB as sent (the top windows
     // first), a mark's value within 512 bytes, cut ones saying so.
     h.open("long", None, &mut Response::default());

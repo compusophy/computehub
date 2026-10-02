@@ -1,37 +1,45 @@
 //! The static checker: the declared states fit in the state limit, every name resolves (to a
 //! state's or a local's slot, written into the tree), every expression has one type, a function
 //! calls only functions above it (so calls never recurse; handlers and widgets call any), a
-//! function with a result ends in `return`, what draws changes nothing, and which state lists
-//! keep their length. Unguarded recursion is safe: the parser bounds AST depth.
+//! function with a result ends in `return`, what renders changes nothing, shapes are drawn only
+//! where a canvas draws (in the function it calls, and the functions those call: a function that
+//! draws changes nothing), and which state lists keep their length. Unguarded recursion is safe:
+//! the parser bounds AST depth.
 
 use lang::{Diag, Span};
 
 use crate::codes;
-use crate::parse::{BUILTINS, BinOp, Builtin, Call, Expr, Lit, MAX_STATE_BYTES, Program, Slot};
+use crate::parse::{BUILTINS, BinOp, Builtin, Call, DRAWN, Expr, Lit, MAX_STATE_BYTES, Program};
+use crate::parse::{SHAPES, Slot};
 use crate::parse::{Stmt, Target, Type, UnOp, Var, Widget};
 
 /// The keys an `on key` handler may name, besides a letter or digit.
 pub const KEYS: [&str; 7] = ["left", "right", "up", "down", "space", "enter", "escape"];
 
 #[rustfmt::skip]
-const BUILTIN: [Builtin; 10] = [
+const BUILTIN: [Builtin; 18] = [
     Builtin::Len, Builtin::Min, Builtin::Max, Builtin::Abs, Builtin::Random, Builtin::Parse,
-    Builtin::Push, Builtin::Insert, Builtin::Remove, Builtin::Clear,
+    Builtin::Push, Builtin::Insert, Builtin::Remove, Builtin::Clear, Builtin::Rect,
+    Builtin::Circle, Builtin::Ring, Builtin::Line, Builtin::Text, Builtin::Sprite, Builtin::Sin,
+    Builtin::Cos,
 ];
 
 /// A checked function as calls see it: name, parameter types, result, whether it changes
-/// nothing.
+/// nothing, whether it draws.
 struct Sig {
     name: String,
     params: Vec<Type>,
     ret: Option<Type>,
     pure: bool,
+    draws: bool,
 }
 
 /// What code is checked against: the states (and their declared lengths, 0 for a scalar), the
 /// functions it may call (in a function, those above it), every function's name, the frame's
 /// locals, the result a `return` gives (in a function), whether it may change nothing (a render
-/// or an interval), whether it changed state, and which states' lengths it may change.
+/// or an interval), whether it changed state, which states' lengths it may change, whether the
+/// program has a canvas, whether it may draw (a function, or a canvas's call) and whether it
+/// drew.
 struct Ck<'a> {
     states: &'a [(String, Type)],
     lens: &'a [usize],
@@ -42,6 +50,9 @@ struct Ck<'a> {
     pure: bool,
     changes: bool,
     resized: Vec<bool>,
+    canvas: bool,
+    draw: bool,
+    drew: bool,
 }
 
 fn mismatch(msg: String, sp: Span) -> Diag {
@@ -71,9 +82,21 @@ pub(crate) fn check(p: &mut Program) -> Result<(), Diag> {
     }
     let names: Vec<String> = p.fns.iter().map(|f| f.name.clone()).collect();
     let (mut sigs, mut resized) = (Vec::new(), vec![false; states.len()]);
+    // The names that came with the canvas are built in only beside one: an older program may
+    // have its own `line`.
+    let canvas = p.widgets.iter().any(has_canvas);
     for f in &mut p.fns {
-        if sigs.iter().any(|s: &Sig| s.name == f.name) || BUILTINS.contains(&f.name.as_str()) {
-            let msg = format!("`{}` is declared twice (or is built in)", f.name);
+        let built = BUILTINS.iter().position(|b| *b == f.name);
+        if sigs.iter().any(|s: &Sig| s.name == f.name) || built.is_some_and(|i| i < DRAWN || canvas)
+        {
+            let msg = match built {
+                Some(DRAWN..) => format!(
+                    "`{}` is built in beside a canvas (rect, circle, ring, line, text and sprite \
+                     draw; sin and cos give values): name your function otherwise",
+                    f.name
+                ),
+                _ => format!("`{}` is declared twice (or is built in)", f.name),
+            };
             return Err(Diag::at_code(codes::DUP_STATE, msg, f.name_span));
         }
         for (i, (n, _)) in f.params.iter().enumerate() {
@@ -93,6 +116,9 @@ pub(crate) fn check(p: &mut Program) -> Result<(), Diag> {
             pure: false,
             changes: false,
             resized,
+            canvas,
+            draw: true,
+            drew: false,
         };
         ck.ret = Some(f.ret);
         ck.block(&mut f.body)?;
@@ -100,9 +126,18 @@ pub(crate) fn check(p: &mut Program) -> Result<(), Diag> {
             let msg = format!("`{}` must end in `return` (on every path)", f.name);
             return Err(Diag::at_code(codes::MISSING_RETURN, msg, f.name_span));
         }
+        if ck.drew && ck.changes {
+            let msg = format!(
+                "`{}` draws, so it changes nothing (no state set, no list changed, no random): \
+                 change state in handlers, and the canvas shows it",
+                f.name
+            );
+            return Err(Diag::at_code(codes::IMPURE_RENDER, msg, f.name_span));
+        }
         (f.pure, resized) = (!ck.changes, ck.resized);
         let params = f.params.iter().map(|p| p.1).collect();
-        sigs.push(Sig { name: f.name.clone(), params, ret: f.ret, pure: f.pure });
+        let (pure, draws) = (f.pure, ck.drew);
+        sigs.push(Sig { name: f.name.clone(), params, ret: f.ret, pure, draws });
     }
     let mut ck = Ck {
         states: &states,
@@ -114,11 +149,14 @@ pub(crate) fn check(p: &mut Program) -> Result<(), Diag> {
         pure: true,
         changes: false,
         resized,
+        canvas,
+        draw: false,
+        drew: false,
     };
     for e in &mut p.everys {
         ck.pure = true;
         ck.expect(&mut e.interval, Type::Int, "an `every` interval")?;
-        ck.handler(&mut e.body, false)?;
+        ck.handler(&mut e.body, &[])?;
     }
     for k in &mut p.keys {
         let one =
@@ -131,13 +169,26 @@ pub(crate) fn check(p: &mut Program) -> Result<(), Diag> {
             );
             return Err(Diag::at_code(codes::BAD_KEY, msg, k.span));
         }
-        ck.handler(&mut k.body, false)?;
+        ck.handler(&mut k.body, &[])?;
     }
     p.widgets.iter_mut().try_for_each(|w| ck.widget(w))?;
     for (s, resized) in p.states.iter_mut().zip(ck.resized) {
         s.fixed = !resized;
     }
     Ok(())
+}
+
+/// Whether `w` is a canvas or holds one.
+fn has_canvas(w: &Widget) -> bool {
+    match w {
+        Widget::Canvas { .. } => true,
+        Widget::Row { children, .. } | Widget::Col { children, .. } => {
+            children.iter().any(has_canvas)
+        }
+        Widget::For { body, .. } => body.iter().any(has_canvas),
+        Widget::If { arms, els, .. } => arms.iter().flat_map(|a| &a.1).chain(els).any(has_canvas),
+        _ => false,
+    }
 }
 
 /// The length a list expression surely has: a literal's, or a fill's by a literal count.
@@ -172,7 +223,7 @@ impl Ck<'_> {
             Widget::Label { value, .. } => self.scalar(value, "a label").map(drop),
             Widget::Button { text, handler, .. } => {
                 self.scalar(text, "a button's text")?;
-                self.handler(&mut handler.body, false)
+                self.handler(&mut handler.body, &[])
             }
             Widget::Input { state, .. } => {
                 let i = self.states.iter().position(|(n, _)| *n == state.name);
@@ -217,22 +268,60 @@ impl Ck<'_> {
                 if let Some(texts) = texts {
                     self.expect(texts, Type::Strs, "a grid's texts")?;
                 }
-                handler.as_mut().map_or(Ok(()), |h| self.handler(&mut h.body, true))
+                handler.as_mut().map_or(Ok(()), |h| self.handler(&mut h.body, &["cell"]))
+            }
+            Widget::Canvas { w, h, scene, handler, span } => {
+                self.expect(w, Type::Int, "a canvas's width")?;
+                self.expect(h, Type::Int, "a canvas's height")?;
+                // Its call draws it, and may draw only there.
+                self.draw = true;
+                let drawn = self.call(scene, false);
+                self.draw = false;
+                drawn?;
+                let Some(handler) = handler else { return Ok(()) };
+                // A state or a loop's variable of the name would be hidden in the handler.
+                let mut names = self.states.iter().chain(&self.locals).map(|(n, _)| n.as_str());
+                if let Some(n) = names.find(|n| *n == "x" || *n == "y") {
+                    let msg = format!(
+                        "`{n}` is taken here: a canvas's handler names the tap's place x and y, \
+                         so name your state or loop variable otherwise"
+                    );
+                    return Err(Diag::at_code(codes::DUP_STATE, msg, *span));
+                }
+                self.handler(&mut handler.body, &["x", "y"])
             }
         }
     }
 
-    /// A handler's statements, seeing the loop variables around it (and `cell` in a grid's).
-    fn handler(&mut self, body: &mut [Stmt], cell: bool) -> Result<(), Diag> {
-        let (mark, pure, ret) = (self.locals.len(), self.pure, self.ret);
-        (self.pure, self.ret) = (false, None);
-        if cell {
-            self.locals.push(("cell".into(), Type::Int));
-        }
+    /// A handler's statements, seeing the loop variables around it and `names`, ints (`cell` in
+    /// a grid's, `x` and `y` in a canvas's).
+    fn handler(&mut self, body: &mut [Stmt], names: &[&str]) -> Result<(), Diag> {
+        let (mark, pure, ret, draw) = (self.locals.len(), self.pure, self.ret, self.draw);
+        (self.pure, self.ret, self.draw) = (false, None, false);
+        self.locals.extend(names.iter().map(|n| (n.to_string(), Type::Int)));
         let r = self.block(body);
-        (self.pure, self.ret) = (pure, ret);
+        (self.pure, self.ret, self.draw) = (pure, ret, draw);
         self.locals.truncate(mark);
         r
+    }
+
+    /// A shape or a function that draws, called `name` at `sp`: drawn here, or where nothing
+    /// may draw, an error.
+    fn drawing(&mut self, name: &str, sp: Span) -> Result<(), Diag> {
+        let msg = match (self.canvas, self.draw) {
+            (true, true) => {
+                self.drew = true;
+                return Ok(());
+            }
+            (false, _) => format!(
+                "`{name}` draws only on a canvas: add canvas W, H, scene(); and draw in scene"
+            ),
+            (true, false) => format!(
+                "`{name}` draws, so only a canvas, or a function a canvas calls, may call it: \
+                 handlers change state, and the canvas shows it"
+            ),
+        };
+        Err(Diag::at_code(codes::DRAW_OUTSIDE, msg, sp))
     }
 
     fn block(&mut self, stmts: &mut [Stmt]) -> Result<(), Diag> {
@@ -408,10 +497,16 @@ impl Ck<'_> {
 
     /// A call: its result type (`None`: none), which `value` requires.
     fn call(&mut self, c: &mut Call, value: bool) -> Result<Option<Type>, Diag> {
-        let ret = match BUILTINS.iter().position(|n| *n == c.name) {
+        // A name that came with the canvas is the program's own function, if it has one.
+        let built = BUILTINS.iter().position(|n| *n == c.name);
+        let ret = match built.filter(|&i| i < DRAWN || !self.names.contains(&c.name)) {
             Some(i) => {
-                c.target = Target::Builtin(BUILTIN[i]);
-                self.builtin(BUILTIN[i], c)?
+                let b = BUILTIN[i];
+                c.target = Target::Builtin(b);
+                if b.draws() {
+                    self.drawing(&c.name, c.span)?;
+                }
+                self.builtin(b, c)?
             }
             None => {
                 // In a function, `sigs` holds only the functions above it.
@@ -431,6 +526,9 @@ impl Ck<'_> {
                 self.args(c, &sig.params)?;
                 if !sig.pure {
                     self.impure(&format!("`{}`", c.name), c.span)?;
+                }
+                if sig.draws {
+                    self.drawing(&c.name, c.span)?;
                 }
                 c.target = Target::Fn(i as u32);
                 sig.ret
@@ -469,7 +567,41 @@ impl Ck<'_> {
                 }
             }
             Builtin::Min | Builtin::Max => self.args(c, &ints(2))?,
-            Builtin::Abs => self.args(c, &ints(1))?,
+            Builtin::Abs | Builtin::Sin | Builtin::Cos => self.args(c, &ints(1))?,
+            // The shapes: the thing first (a text's value, a sprite's rows), then ints.
+            Builtin::Rect
+            | Builtin::Circle
+            | Builtin::Ring
+            | Builtin::Line
+            | Builtin::Text
+            | Builtin::Sprite => {
+                let k = b as usize - Builtin::Rect as usize;
+                let n = SHAPES[k].split(", ").count();
+                if c.args.len() != n {
+                    let msg = format!(
+                        "`{}` takes {n} arguments ({}), not {}",
+                        c.name,
+                        SHAPES[k],
+                        c.args.len()
+                    );
+                    return Err(Diag::at_code(codes::ARITY, msg, c.span));
+                }
+                let first = match b {
+                    Builtin::Text => {
+                        self.scalar(&mut c.args[0], "a text")?;
+                        1
+                    }
+                    Builtin::Sprite => {
+                        self.expect(&mut c.args[0], Strs, "a sprite's rows")?;
+                        1
+                    }
+                    _ => 0,
+                };
+                for a in &mut c.args[first..] {
+                    self.expect(a, Int, &format!("an argument of `{}`", c.name))?;
+                }
+                return Ok(None);
+            }
             Builtin::Random => {
                 self.args(c, &ints(1))?;
                 self.impure("`random`", c.span)?;

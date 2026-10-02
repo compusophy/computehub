@@ -66,13 +66,38 @@ pub struct Var {
     pub slot: Slot,
 }
 
-/// The built-in functions: values, then the list changes (statements only).
+/// The built-in functions: values, the list changes (statements only), the shapes a canvas
+/// draws (statements, only where a canvas draws), then more values. The names from [`DRAWN`]
+/// on came later: a program without a canvas may define its own (see `check`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[rustfmt::skip]
-pub enum Builtin { Len, Min, Max, Abs, Random, Parse, Push, Insert, Remove, Clear }
+pub enum Builtin {
+    Len, Min, Max, Abs, Random, Parse, Push, Insert, Remove, Clear,
+    Rect, Circle, Ring, Line, Text, Sprite, Sin, Cos,
+}
 
-pub const BUILTINS: [&str; 10] =
-    ["len", "min", "max", "abs", "random", "parse", "push", "insert", "remove", "clear"];
+#[rustfmt::skip]
+pub const BUILTINS: [&str; 18] = ["len", "min", "max", "abs", "random", "parse", "push", "insert",
+    "remove", "clear", "rect", "circle", "ring", "line", "text", "sprite", "sin", "cos"];
+/// The first of [`BUILTINS`] that came with the canvas.
+pub const DRAWN: usize = 10;
+/// The parameters of each shape, from `rect` to `sprite`, in order: the sizes are w, h, r,
+/// width, size and side.
+pub const SHAPES: [&str; 6] = [
+    "x, y, w, h, color",
+    "x, y, r, color",
+    "x, y, r, width, color",
+    "x1, y1, x2, y2, width, color",
+    "value, x, y, size, color",
+    "rows, x, y, side",
+];
+
+impl Builtin {
+    /// Whether it draws a shape on a canvas.
+    pub fn draws(self) -> bool {
+        (Builtin::Rect as usize..=Builtin::Sprite as usize).contains(&(self as usize))
+    }
+}
 
 /// What a call calls, once checked.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -215,7 +240,7 @@ pub struct OnKey {
     pub span: Span,
 }
 
-/// A button's or grid's handler: its id (parse order, from 0) and statements.
+/// A button's, grid's or canvas's handler: its id (parse order, from 0) and statements.
 #[derive(Debug)]
 pub struct Handler {
     pub id: u32,
@@ -234,6 +259,8 @@ pub enum Widget {
     If { arms: Vec<(Expr, Vec<Widget>)>, els: Vec<Widget>, span: Span },
     For { var: String, from: Expr, to: Expr, body: Vec<Widget>, span: Span },
     Grid { cols: Expr, cells: Expr, texts: Option<Expr>, handler: Option<Handler>, span: Span },
+    /// `canvas W, H, scene();`: `scene` (a call) draws it; a tap's handler sees `x` and `y`.
+    Canvas { w: Expr, h: Expr, scene: Call, handler: Option<Handler>, span: Span },
 }
 
 impl Widget {
@@ -246,7 +273,8 @@ impl Widget {
             | Widget::Col { span, .. }
             | Widget::If { span, .. }
             | Widget::For { span, .. }
-            | Widget::Grid { span, .. } => *span,
+            | Widget::Grid { span, .. }
+            | Widget::Canvas { span, .. } => *span,
         }
     }
 }
@@ -572,19 +600,42 @@ fn widget(src: &str, t: &mut Toks<'_>, ids: &mut u32) -> PResult<Widget> {
                     Some(_) => Some(expr(src, t)?),
                     None => None,
                 };
-                let (handler, end) = match t.eat(|x| x.kind == TokKind::Semi) {
-                    Some(semi) => (None, semi.span),
-                    None => handler(src, t, ids).map(|(h, end)| (Some(h), end))?,
-                };
+                let (handler, end) = tail(src, t, ids)?;
                 Ok(Widget::Grid { cols, cells, texts, handler, span: span(end.end) })
+            }
+            _ if word(src, &tok, "canvas") => {
+                t.advance();
+                let w = expr(src, t)?;
+                expect(src, t, TokKind::Comma, "`,` and the canvas's height")?;
+                let h = expr(src, t)?;
+                expect(src, t, TokKind::Comma, "`,` and the call of the function that draws it")?;
+                let scene = match expr(src, t)? {
+                    Expr::Call(c) => c,
+                    e => {
+                        let what = "expected a call of the function that draws it, as in \
+                                    canvas 160, 120, scene();";
+                        return Err(PErr(Diag::at_code(codes::UNEXPECTED_TOKEN, what, e.span())));
+                    }
+                };
+                let (handler, end) = tail(src, t, ids)?;
+                Ok(Widget::Canvas { w, h, scene, handler, span: span(end.end) })
             }
             _ => Err(unexpected(
                 src,
                 t.peek(),
-                "a widget (label, button, input, row, col, if, for, grid), fn, every or on key",
+                "a widget (label, button, input, row, col, if, for, grid, canvas), fn, every or \
+                 on key",
             )),
         }
     })
+}
+
+/// A grid's or canvas's end: `;`, or its handler (its id the next of `ids`); and where it ends.
+fn tail(src: &str, t: &mut Toks<'_>, ids: &mut u32) -> PResult<(Option<Handler>, Span)> {
+    match t.eat(|x| x.kind == TokKind::Semi) {
+        Some(semi) => Ok((None, semi.span)),
+        None => handler(src, t, ids).map(|(h, end)| (Some(h), end)),
+    }
 }
 
 /// `for NAME in FROM..TO`, up to its block.

@@ -26,7 +26,7 @@ pub use parse::{Program, literals};
 
 /// The parsed tree, read-only, for the `applang` runtime.
 pub mod ast {
-    pub use crate::parse::{BUILTINS, MAX_ITEMS, MAX_STATE_BYTES};
+    pub use crate::parse::{BUILTINS, DRAWN, MAX_ITEMS, MAX_STATE_BYTES, SHAPES};
     pub use crate::parse::{BinOp, Builtin, Call, Every, Expr, FnDecl, Handler, Lit, OnKey};
     pub use crate::parse::{Slot, StateDecl, Stmt, Target, Type, UnOp, Var, Widget};
 }
@@ -75,6 +75,13 @@ pub mod codes {
     pub const CALLS_TOO_DEEP: u16 = 220;
     /// An app whose first render shows nothing (the smoke test's; no span).
     pub const SHOWS_NOTHING: u16 = 221;
+    /// A canvas or a shape it cannot draw: a side past 1 to 1,024, a color past 0 to 11, a
+    /// negative size, a number past -32,768 to 32,767, a text (or a sprite's row) of two lines,
+    /// or more ink in one render than a canvas holds.
+    pub const BAD_DRAW: u16 = 222;
+    /// Canvases showed, but nothing they drew in a whole smoke test reached inside one (the
+    /// smoke test's; at the program's first canvas).
+    pub const OFF_CANVAS: u16 = 223;
     /// A name declared twice (a state, function or parameter).
     pub const DUP_STATE: u16 = 301;
     /// A name that is no declared state or visible local.
@@ -90,10 +97,14 @@ pub mod codes {
     pub const BAD_KEY: u16 = 307;
     /// A call with the wrong number of arguments.
     pub const ARITY: u16 = 308;
+    /// A shape, or a function that draws, called where no canvas draws: a handler, an `every`
+    /// or `on key`, a widget's expression, or a program with no canvas.
+    pub const DRAW_OUTSIDE: u16 = 309;
 }
 
 /// Parses and statically checks `src`: the verify step. Running the [`Program`] can then only
-/// fault on arithmetic, indexes, list and string bounds, grids, `random`'s bound or fuel.
+/// fault on arithmetic, indexes, list and string bounds, grids, canvases' draws, `random`'s bound
+/// or fuel.
 pub fn compile(src: &str) -> Result<Program, Diag> {
     let mut program = parse::parse(src)?;
     check::check(&mut program)?;

@@ -36,8 +36,8 @@ pub const ASSISTANT: &str = "assistant";
 pub const SETTLE_MS: f64 = 1500.0;
 pub const FLASH_MS: f64 = 600.0;
 /// What a window's scene keeps at most: hits (and marks), runs, bytes of text; a title's, a
-/// mark's value's and a grid's (its squares' colors a row a line, even 4,096 in one column, and
-/// texts); and the whole scene's, as sent.
+/// mark's value's and a board's (a grid's squares' colors a row a line, even 4,096 in one column,
+/// and texts; a canvas's shapes); and the whole scene's, as sent.
 const HITS: usize = 300;
 const RUNS: usize = 400;
 const TEXT: usize = 16 << 10;
@@ -349,12 +349,14 @@ impl Host {
                 break;
             }
             let hits = self.win(p.win).map_or(&[][..], |x| &x.hits);
-            let hit =
-                |h: &ui::Hit| scene::Hit { id: h.id.0, sense: h.sense as u8, rect: px(h.rect) };
+            // A pad reads as a click's: the scene's senses are click, text and scroll.
+            let sense = |h: &ui::Hit| [0, 1, 2, 0][h.sense as usize];
+            let hit = |h: &ui::Hit| scene::Hit { id: h.id.0, sense: sense(h), rect: px(h.rect) };
             let fit = |_: &&ui::Hit| take(&mut room, 13);
             w.hits = hits.iter().take(HITS).take_while(fit).map(hit).collect();
             let mark = |m: gfx::Mark| {
-                let max = if m.role == ui::sem::GRID { GRID } else { VALUE };
+                let board = matches!(m.role, ui::sem::GRID | ui::sem::CANVAS);
+                let max = if board { GRID } else { VALUE };
                 let (id, role, flags, value) = (m.id, m.role, m.flags, clip(m.value, max));
                 scene::Mark { id, role, flags, value }
             };

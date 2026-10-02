@@ -661,6 +661,31 @@ fn games_tick_take_keys_and_taps_and_keep_their_saved_state() {
 }
 
 #[test]
+fn a_canvas_draws_in_its_window_and_a_tap_says_where() {
+    let src = "state hits = 0; state at = \"\";
+        fn scene() { rect(0, 0, 10, 10, 2); text(hits, 50, 5, 4, 9); sprite([\"1.1\"], 0, 18, 1); }
+        canvas 100, 20, scene() { hits += 1; at = x + \",\" + y; }
+        label at;";
+    let path = "/apps/pad.app";
+    let mut w = Win::new(&["run", path], with(&[(path, src)]));
+    let canvas =
+        |f: &Frame| match all(&f.nodes).into_iter().find(|n| matches!(n, Node::Canvas { .. })) {
+            Some(Node::Canvas { id, w, h, draws }) => (*id, *w, *h, draws.clone()),
+            _ => panic!("a canvas"),
+        };
+    let d = |shape, color, at, text: &str| uiwire::Draw { shape, color, at, text: text.into() };
+    use uiwire::Shape::{Rect, Sprite, Text};
+    let shapes = |hits: &str| {
+        let text = d(Text, 9, [50, 5, 4, 0, 0], hits);
+        vec![d(Rect, 2, [0, 0, 10, 10, 0], ""), text, d(Sprite, 0, [0, 18, 1, 0, 0], "1.1")]
+    };
+    assert_eq!(canvas(&w.last(&[WIDE])), (APP, 100, 20, shapes("0")));
+    // A tap is the unit y * 100 + x: the app hears x and y, and draws anew.
+    let f = w.last(&[Event::Tap { id: APP, cell: 7 * 100 + 42 }]);
+    assert!(has(&f, "42,7") && canvas(&f).3 == shapes("1"), "{f:?}");
+}
+
+#[test]
 fn runs_of_one_app_keep_each_others_saved_states() {
     // Its window and Studio's preview: what one wrote comes back before the other's next event
     // but a tick, whose write keeps what it did not change (and another version's states).

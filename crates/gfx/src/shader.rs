@@ -30,8 +30,8 @@ void main() {
 }
 ";
 
-/// Fragment shader: coverage from the signed distance to the rounded rect or icon (antialiased
-/// over one physical pixel), the atlas texel's red channel, or the glow falloff; zero outside the
+/// Fragment shader: coverage from the signed distance to the rounded rect, icon or line
+/// (antialiased over one physical pixel), the atlas texel's red channel, or the glow falloff; zero outside the
 /// clip; written premultiplied. Shadows, gradients and glows are dithered by under half an 8-bit
 /// step. Uniforms: `u_atlas` (an `R8` `NEAREST` texture on unit 0), `u_atlas_size`.
 pub const FRAGMENT_SHADER: &str = r"#version 300 es
@@ -50,7 +50,7 @@ float rbox(vec2 p, vec2 b, float r) {
 }
 float seg(vec2 p, vec2 a, vec2 b) {
   vec2 pa = p - a, ba = b - a;
-  return length(pa - ba * clamp(dot(pa, ba) / dot(ba, ba), 0.0, 1.0));
+  return length(pa - ba * clamp(dot(pa, ba) / max(dot(ba, ba), 1e-12), 0.0, 1.0));
 }
 float icon(vec2 p, float s, int id, float w) {
   float hw = w * 0.5, l = 0.35 * s;
@@ -102,6 +102,10 @@ void main() {
     float n = (float(h & 0xffffu) + float(h >> 16)) / 65535.0 - 1.0;
     float a = abs(n) * v_color.a;
     c = vec4(vec3(n > 0.0 ? a : 0.0), a);
+  } else if (kind == 8) {
+    vec2 e = max(v_half - v_params.z * 0.5, 0.0);
+    if (v_params.w > 0.5) e.y = -e.y;
+    cov = clamp(0.5 - (seg(v_local, -e, e) - v_params.z * 0.5) / aa, 0.0, 1.0);
   }
   if (any(lessThan(v_pos, v_clip.xy)) || any(greaterThanEqual(v_pos, v_clip.xy + v_clip.zw))) {
     cov = 0.0;
