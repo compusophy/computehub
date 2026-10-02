@@ -31,10 +31,10 @@ AI for all); later pooled compute across tabs and devices. Author handle: compus
    HashMap/HashSet, no clocks, no randomness. State must replay bit-for-bit
    and hash identically.
 5. **wasm32 always green:** `cargo check --workspace --target wasm32-unknown-unknown`.
-6. **Budgets** (`scripts/budget.sh`, gzip -9): boot ≤192 KB (top-level
+6. **Budgets** (`scripts/budget.sh`, gzip -9): boot ≤224 KB (top-level
    `dist/` files), deferred fonts ≤30 KB (`dist/fonts/deferred/`), lazy
    fonts ≤60 KB (the rest of `dist/fonts/`), system ≤40 KB (`dist/cpu/`),
-   programs ≤96 KB each (`dist/bin/`), licenses not counted; first frame
+   programs ≤256 KB each (`dist/bin/`), licenses not counted; first frame
    ≤100 ms after the wasm arrives; idle draws zero frames (only input or
    an animation draws; one opt-out exception: the living grain, 8/s).
 7. **Every failure is coded and spanned** in the language crates; never a

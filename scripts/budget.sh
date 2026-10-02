@@ -5,11 +5,13 @@
 #
 #   boot      the files directly in dist/ (page, glue, wasm with the boot
 #             font inside): everything a visitor downloads before the first
-#             frame. Cap 192 KB: 150 KB until R4 (the desktop compusophy
+#             frame. Cap 224 KB: 150 KB until R4 (the desktop compusophy
 #             asked for), 180 KB in R4, 192 KB in R7 for the AI that uses
-#             the computer (its screen reader and hands live in the boot).
+#             the computer (its screen reader and hands live in the boot),
+#             224 KB on 2026-10-02 for Activity, made apps' icons, the
+#             canvas and the welcome (32 KB is about 25 ms on a phone's 4G).
 #             About, Feedback, Files and Welcome left the boot for
-#             system.wasm; the cap comes down as more leaves it.
+#             system.wasm; what can leave it, should.
 #   deferred  dist/fonts/deferred/: Inter SemiBold and JetBrains Mono, which
 #             the page fetches right after its first frame. Cap 30 KB.
 #   lazy      the other files in dist/fonts/: the symbol fonts a terminal
@@ -18,9 +20,10 @@
 #             worker.js), fetched when a program first runs. Cap 40 KB.
 #   programs  dist/bin/: the programs (toolbox.wasm, the test programs,
 #             studio.wasm, assistant.wasm and system.wasm: About, Feedback,
-#             Files), each fetched when it first runs. Cap 96 KB per file: a
-#             program is downloaded on its own (64 KB until R8, when applang
-#             v2's compiler and runtime joined Studio).
+#             Files), each fetched when it first runs, then cached. Cap 256 KB
+#             per file, about half a second on a phone's 4G the first time
+#             (64 KB until R8, 96 KB until 2026-10-02, when compusophy found
+#             it too small for Studio, a serious piece of software).
 #   licenses  dist/licenses/: the font licenses, shipped but never fetched by
 #             the page. Not counted.
 #
@@ -30,11 +33,11 @@
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
-BOOT_CAP=$((192 * 1024))
+BOOT_CAP=$((224 * 1024))
 DEFERRED_CAP=$((30 * 1024))
 LAZY_CAP=$((60 * 1024))
 SYSTEM_CAP=$((40 * 1024))
-PROGRAMS_CAP=$((96 * 1024))
+PROGRAMS_CAP=$((256 * 1024))
 
 if [ ! -d dist ]; then
   echo "budget: SKIP, no dist/ yet (run scripts/build-web.sh)"

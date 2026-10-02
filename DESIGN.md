@@ -63,11 +63,11 @@ they can, in CI.
 
    | budget | cap |
    |---|---|
-   | boot: every top-level file in `dist/` (page, glue, wasm with the boot font) | 192 KB |
+   | boot: every top-level file in `dist/` (page, glue, wasm with the boot font) | 224 KB |
    | deferred: `dist/fonts/deferred/`, fetched right after the first frame | 30 KB |
    | lazy: the rest of `dist/fonts/`, fetched when a terminal first opens | 60 KB |
    | system: `dist/cpu/`, the program worker | 40 KB |
-   | each program: `dist/bin/*.wasm`, fetched when it first runs | 96 KB |
+   | each program: `dist/bin/*.wasm`, fetched when it first runs, then cached | 256 KB |
    | licenses: `dist/licenses/`, never fetched by the page | not counted |
    | first frame after the wasm arrives | 100 ms |
    | idle | zero frames: one only on input or while an animation runs; the one opt-out exception, the living grain, 8 a second by timer |
@@ -344,6 +344,7 @@ and the theme are kept there too.
   Alt+Q, Alt+arrows and Alt+Backquote before a terminal sees them
   (readline's Alt+F still arrives). A way through for apps that want them
   waits on the Super key question.
-- **The boot budget** is nearly spent (about 4 KB of headroom). Studio
-  and applang are the largest optional part of the boot wasm; separately
-  loaded modules (R4) are how the OS grows past it.
+- **The boot budget** (224 KB since 2026-10-02, about 35 KB of headroom)
+  pays for what must draw the first frame. Everything else should be a
+  program, fetched when it first runs (Studio and applang already are;
+  Settings and the Terminal could be).
