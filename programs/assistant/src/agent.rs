@@ -651,7 +651,7 @@ impl Agent {
             if self.turns.is_empty() {
                 nodes.push(text(
                     Style::Dim,
-                    "Ask anything, or say what to do: \u{201c}turn off error reports\u{201d}",
+                    "Ask anything, or say what to do: open an app, change a setting, make one",
                 ));
             }
             for t in &self.turns {
