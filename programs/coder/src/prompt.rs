@@ -1,0 +1,110 @@
+//! The words of a make: one system prompt that never changes (so the provider's prefix cache
+//! can hold it across turns and makes) and a fresh user message for each turn.
+
+use crate::ai::{HONEST, SHORTER, put_numbered};
+
+/// Who the model writes for.
+const INTRO: &str = "You write apps for Studio, the app maker of compusophyOS, a desktop that runs \
+                     in a browser tab. Apps are written in applang:\n\n";
+/// How apps are made, after applang's card.
+const RULES: &str = "\n\nA game remembers its world in states and lists of its own (what has \
+                     landed, where things are), and draws the list a grid shows anew from them; \
+                     it moves with every, is steered with on key and with buttons too (a phone \
+                     has no arrow keys), and shows Start until it runs. Saved states come back as \
+                     they were kept, also after a change: a saved list keeps its old length (one \
+                     a change adds starts as declared), so check a list's length before indexing \
+                     it. Write small functions instead of repeating code; keep programs under 200 \
+                     lines. Decide quickly what applang can make, then write it: your reply has \
+                     room for the program, not for long deliberation.\n\n";
+/// What a reply holds.
+const REPLIES: &str = "A new app: the complete program in one fenced block whose info string is \
+                       app, and nothing else; after its first comment, a label naming the app.\n\
+                       A fix or a change to a program shown with line numbers: edit blocks, and \
+                       nothing else:\n<<<<<<< SEARCH\nlines copied exactly from the program, \
+                       without their numbers\n=======\nthe lines to put there\n>>>>>>> REPLACE\n\
+                       Each SEARCH matches one place only: quote whole lines, enough to be \
+                       unique. If most of the program changes, reply with the complete program in \
+                       one app block instead. If applang can make nothing close to what was \
+                       asked, reply with only a // comment saying why.\n\n";
+
+/// The system prompt: who the model writes for, applang's card, how apps are made, what a reply
+/// holds, [`HONEST`] and the example replies ([`applang::SHOTS`], each tested to compile and pass
+/// the smoke test). Nothing in it varies: no model, path or date.
+pub fn system() -> String {
+    let mut out = [INTRO, applang::REFERENCE, RULES, REPLIES, HONEST].concat();
+    for (i, (ask, src)) in applang::SHOTS.iter().enumerate() {
+        let and = if i == 0 { "" } else { "\nAnd for " };
+        out += &[and, "\"", ask, "\":\n```app\n", src, "```\n"].concat();
+    }
+    out
+}
+
+/// A first make's message.
+pub fn write(ask: &str) -> String {
+    let mut out = String::from("Make: ");
+    out += ask;
+    out
+}
+
+/// A change's message: the program it changes, numbered, and what to change.
+pub fn change(ask: &str, base: &str) -> String {
+    let mut out = String::from("The program, numbered:\n");
+    put_numbered(&mut out, base, 1);
+    out += "\nChange it: ";
+    out += ask;
+    out += "\nKeep its first comment true.";
+    out
+}
+
+/// What was asked, the program numbered, `why` (what is wrong with it) and `then`: a fix's or a
+/// rewrite's message.
+fn shown(ask: &str, src: &str, why: &str, then: &str) -> String {
+    let mut out = String::from("You were asked: ");
+    out += ask;
+    out += "\n\nThe program, numbered:\n";
+    put_numbered(&mut out, src, 1);
+    out.push('\n');
+    out += why;
+    out += then;
+    out
+}
+
+/// A fix's message: what was asked, the program numbered and what is wrong with it.
+pub fn fix(ask: &str, src: &str, account: &str) -> String {
+    shown(ask, src, account, "\nReply with edit blocks.")
+}
+
+/// The one rewrite: what was asked, the program, what twice failed to clear (`why`).
+pub fn rewrite(ask: &str, src: &str, why: &str) -> String {
+    let again = "\nTwo tries did not clear this. Write the program again, simpler, as one complete \
+                 app block.";
+    shown(ask, src, why, again)
+}
+
+/// `asked` again, then `more`.
+fn again(asked: &str, more: &[&str]) -> String {
+    let mut out = String::from(asked);
+    for m in more {
+        out += m;
+    }
+    out
+}
+
+/// The message after edits that did not apply (`why`), in reply to `asked`.
+pub fn missed(asked: &str, why: &str) -> String {
+    let lead = "\n\nYour edits did not apply, so the program is unchanged: ";
+    let copy = "\nCopy SEARCH lines exactly as the program has them, without their numbers.";
+    again(asked, &[lead, why, copy])
+}
+
+/// The message after a reply cut off before its program or edits ended.
+pub fn shorter(first: &str) -> String {
+    again(first, &["\n\n", SHORTER])
+}
+
+/// The message after a reply that held neither a program nor edits.
+pub fn format(asked: &str) -> String {
+    let only = "\n\nYour reply held no app block and no edit blocks. Reply with one complete app \
+                block, or with edit blocks, and nothing else.";
+    again(asked, &[only])
+}

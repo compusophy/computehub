@@ -52,8 +52,7 @@ crates/      the OS (boot, kernel, worker); speaks to programs by WASI, uiwire
   wm/        floating window manager: stacking, snapping, focus; deterministic
   vfs/       in-memory filesystem, deterministic (/apps, /home, /tmp)
   font/      TrueType reader + glyph rasterizer (no font engine ships)
-  gfx/       instanced-quad draw list (fills, borders, shadows, glyphs,
-             gradients, glows, grain), glyph atlas, the WebGL2 shaders
+  gfx/       instanced-quad draw list, glyph atlas, the WebGL2 shaders
   text/      TextSystem: font slots, fallbacks, glyphs on the atlas
   icons/     the mark and desktop glyphs as vector outlines (`ui::icon`)
   ui/        immediate-mode widgets, themes (Midnight, Dawn, Mono), the App
@@ -78,6 +77,7 @@ programs/    wasm32-wasip1 programs (dist/bin/), the app language they share
   fuel/ lang/                 forks of litelite (budgets, parse kit)
   applang-syntax/ applang/    tier 0 app language: front end, runtime
   studio/    Studio: make apps by describing them; runs `.app` files
+  coder/     the coding agent Studio runs: write, test, fix by edits, keep the best
   assistant/ the Assistant: the overlay AI using the desktop
   system/    About, Feedback, Files, Welcome (one multicall program)
   toolbox/   test programs (one multicall binary)

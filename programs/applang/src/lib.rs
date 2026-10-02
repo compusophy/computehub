@@ -43,7 +43,7 @@ pub use applang_syntax::ast::Type;
 pub use applang_syntax::{Class, Program, codes, compile, highlight};
 pub use eval::Value;
 pub use lang::{Diag, Span};
-pub use smoke::{Fault, Smoke, TICKS, smoke};
+pub use smoke::{Fault, Smoke, TICKS, smoke, smoke_from};
 
 use applang_syntax::ast::{Lit, Stmt};
 use eval::{Render, Run, Shown, State};

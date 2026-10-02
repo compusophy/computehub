@@ -8,8 +8,8 @@
 //!   the task's first screen is left out once steps follow it, so a step costs about the same
 //!   however many came before. The last [`MEMORY`] tasks go along as plain prompts and answers.
 //! - **Recovery.** A failure goes back to the model as its coded result. Two in a row add a hint
-//!   and ask it to think a little; three in a row, or the same call on the same screen three
-//!   times (E0924), end the task, as do [`MAX_STEPS`] model calls or [`MAX_ACTS`] acts, or a
+//!   and bound its thinking (1,024 tokens); three in a row, or the same call on the same screen
+//!   three times (E0924), end the task, as do [`MAX_STEPS`] model calls or [`MAX_ACTS`] acts, or a
 //!   request past the free AI's [`MAX_MESSAGES`] or [`MAX_BODY`] (E0921; the memory goes first),
 //!   an AI error (E0901 to E0905, with Retry), Stop, and the person taking over ([`Event::Halt`]).
 //! - **Guard.** Acts into Feedback (the one app that sends what it holds off the device) wait for
@@ -329,7 +329,7 @@ impl Agent {
                 ));
             }
         }
-        let effort = if t.fails >= 2 { ",\"reasoning\":{\"effort\":\"low\"}" } else { "" };
+        let effort = if t.fails >= 2 { ",\"reasoning\":{\"max_tokens\":1024}" } else { "" };
         format!(
             "{{\"model\":{},\"stream\":true,\"stream_options\":{{\"include_usage\":true}},\
              \"max_tokens\":2048,\"temperature\":0.2,\"tool_choice\":\"auto\",\"tools\":{TOOLS}{effort},\
@@ -347,7 +347,8 @@ impl Agent {
         c.end();
         let (i, o) = c.usage.unwrap_or_default();
         t.usage = (t.usage.0 + i, t.usage.1 + o);
-        if let Some((style, why)) = failure(status, error, &c.error) {
+        if let Some((code, why)) = failure(status, error, &c.error) {
+            let style = if code == 0 { Style::Dim } else { Style::Error };
             self.retry = (style == Style::Error).then(|| t.prompt.clone());
             return self.end(style, why);
         }

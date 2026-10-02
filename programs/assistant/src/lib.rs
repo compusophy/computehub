@@ -6,17 +6,14 @@
 //! [`uiwire::Event::AiEnd`] and read by [`calls`]), and does what the model calls for as a person
 //! would ([`uiwire::Request::Act`]). To make an app it opens Studio, as a person would.
 //!
-//! [`ai`] (the free AI's requests, failures and applang helpers) and [`json`] are what Studio
-//! shares with it.
+//! [`ai`] (the free AI's requests and failures) and [`json`] are the coding agent's
+//! ([`coder`]), which Studio runs.
 
 #![forbid(unsafe_code)]
 
 pub mod agent;
-pub mod ai;
 pub mod calls;
-pub mod json;
 pub mod look;
-#[cfg(test)]
-mod tests;
 
-pub use ai::{DEFAULT_MODEL, RETRIES};
+pub use coder::ai::DEFAULT_MODEL;
+pub use coder::{ai, json};

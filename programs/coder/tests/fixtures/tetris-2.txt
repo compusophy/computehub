@@ -1,0 +1,159 @@
+```app
+// Tetris: arrows move and rotate, space drops; buttons too. Fill lines to score; stack to the top ends it.
+state board = [0; 200];   // 10 x 20 well, 0 empty, 1..7 colors
+state stack = [0; 200];    // the settled pieces
+state shape = [0; 8];      // the falling piece: x,y pairs, relative to px, py
+state px = 0;
+state py = 0;
+state kind = 0;            // 1..7, also its color
+state nextk = 0;
+state score = 0;
+state lines = 0;
+state over = false;
+saved state best = 0;
+
+fn at(x: int, y: int) -> int { return y * 10 + x; }
+
+fn setshape(k: int) {
+  kind = k;
+  if k == 1 { shape = [-1, 0, 0, 0, 1, 0, 2, 0]; }       // I
+  else if k == 2 { shape = [-1, 0, 0, 0, -1, 1, 0, 1]; } // O
+  else if k == 3 { shape = [-1, 0, 0, 0, 1, 0, 0, 1]; }  // T
+  else if k == 4 { shape = [0, 0, 1, 0, -1, 1, 0, 1]; }  // S
+  else if k == 5 { shape = [-1, 0, 0, 0, 0, 1, 1, 1]; }  // Z
+  else if k == 6 { shape = [0, 0, 1, 0, 1, 1, 0, 2]; }   // J
+  else { shape = [0, 0, 1, 0, 0, 1, 0, 2]; }             // L
+}
+
+fn freecell(x: int, y: int) -> bool {
+  if x < 0 || x >= 10 || y < 0 || y >= 20 { return false; }
+  return stack[at(x, y)] == 0;
+}
+
+fn fits(dx: int, dy: int) -> bool {
+  for i in 0..4 {
+    if !freecell(px + shape[i * 2] + dx, py + shape[i * 2 + 1] + dy) { return false; }
+  }
+  return true;
+}
+
+fn paint() {
+  for i in 0..len(board) { board[i] = stack[i]; }
+  if kind > 0 {
+    for i in 0..4 { board[at(px + shape[i * 2], py + shape[i * 2 + 1])] = kind; }
+  }
+}
+
+fn spawn() {
+  setshape(nextk);
+  nextk = random(7) + 1;
+  px = 4;
+  py = 0;
+  if !fits(0, 0) {
+    kind = 0;
+    over = true;
+    best = max(best, score);
+  }
+  paint();
+}
+
+fn clearlines() {
+  let y = 19;
+  repeat 20 {
+    let full = true;
+    for x in 0..10 {
+      if stack[at(x, y)] == 0 { full = false; }
+    }
+    if full {
+      remove(stack, at(0, y));
+      remove(stack, at(0, y));
+      insert(stack, 0, 0);
+      insert(stack, 0, 0);
+      insert(stack, 0, 0);
+      insert(stack, 0, 0);
+      insert(stack, 0, 0);
+      insert(stack, 0, 0);
+      insert(stack, 0, 0);
+      insert(stack, 0, 0);
+      insert(stack, 0, 0);
+      insert(stack, 0, 0);
+      lines += 1;
+      score += 10;
+    } else { y -= 1; }
+  }
+}
+
+fn lock() {
+  for i in 0..4 { stack[at(px + shape[i * 2], py + shape[i * 2 + 1])] = kind; }
+  clearlines();
+  spawn();
+}
+
+fn fall() {
+  if fits(0, 1) { py += 1; } else { lock(); }
+  paint();
+}
+
+fn shift(dx: int) {
+  if fits(dx, 0) { px += dx; paint(); }
+}
+
+fn rotate() {
+  if kind == 2 { return; }
+  let old = [0; 8];
+  for i in 0..8 { old[i] = shape[i]; }
+  for i in 0..4 { shape[i * 2] = old[i * 2 + 1]; shape[i * 2 + 1] = -old[i * 2]; }
+  if !fits(0, 0) {
+    if fits(1, 0) { px += 1; }
+    else if fits(-1, 0) { px -= 1; }
+    else {
+      for i in 0..8 { shape[i] = old[i]; }
+      return;
+    }
+  }
+  paint();
+}
+
+fn drop() {
+  repeat 20 {
+    if fits(0, 1) { py += 1; score += 1; }
+  }
+  lock();
+}
+
+fn start() {
+  for i in 0..len(stack) { stack[i] = 0; }
+  score = 0;
+  lines = 0;
+  over = false;
+  nextk = random(7) + 1;
+  spawn();
+}
+
+every 400 {
+  if !over && kind > 0 { fall(); }
+}
+
+on key "left" { if !over { shift(-1); } }
+on key "right" { if !over { shift(1); } }
+on key "up" { if !over { rotate(); } }
+on key "down" { if !over { fall(); } }
+on key "space" { if !over { drop(); } }
+
+label "Tetris";
+label "Score " + score + "   Lines " + lines + "   Best " + best;
+grid 10, board;
+row {
+  button "<" { if !over { shift(-1); } }
+  button "Rotate" { if !over { rotate(); } }
+  button ">" { if !over { shift(1); } }
+}
+row {
+  button "Drop" { if !over { drop(); } }
+  button "Down" { if !over { fall(); } }
+}
+if over {
+  label "Game over";
+  button "Start" { start(); }
+}
+```

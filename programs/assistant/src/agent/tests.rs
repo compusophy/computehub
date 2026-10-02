@@ -360,7 +360,7 @@ fn failures_go_back_coded_and_three_end_the_task() {
         last.1.starts_with("E0912: e99 is not on screen now")
             && last.1.contains("Hint: two actions failed")
     );
-    assert_eq!(d.bodies[2].get("reasoning").map(encode).as_deref(), Some(r#"{"effort":"low"}"#));
+    assert_eq!(d.bodies[2].get("reasoning").map(encode).as_deref(), Some(r#"{"max_tokens":1024}"#));
     let said = shown(&mut a);
     assert!(
         d.bodies.len() == 3 && said.contains("I couldn't finish: E0912: e99 is not on screen"),

@@ -16,8 +16,7 @@ name = "assistant"
 path = "src/main.rs"
 
 [dependencies]
-compusophy-applang.workspace = true
-compusophy-lang.workspace = true
+compusophy-coder.workspace = true
 compusophy-uiwire.workspace = true
 
 # A real desktop for the agent to drive in tests: the host, Settings and its toolkit.
