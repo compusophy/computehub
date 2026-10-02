@@ -1,4 +1,4 @@
-//! /home kept across reloads: a [`kernel::snap`] of it in `localStorage` ([`KEY`]), a byte a
+//! /home kept across reloads: a [`ui::kernel::snap`] of it in `localStorage` ([`KEY`]), a byte a
 //! char (U+0000 to U+00FF), put back as the desktop starts. A change is kept at once, then at
 //! most once a [`GAP_MS`] (the one-shot timer brings the last), and when the page is hidden
 //! (a reload or a closed tab hides it first); a snapshot like the last kept is not written
