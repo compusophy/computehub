@@ -124,11 +124,13 @@ pub fn cell(view: &View, id: u32, x: f32, y: f32) -> Option<u32> {
     Some(row * u32::from(cols) + col.min(u32::from(cols) - 1)).filter(|c| *c < n)
 }
 
-/// A grid's square in `w` across `cols`: whole device px, 6 to 32 logical px.
-fn side(ts: &TextSystem, w: f32, cols: u16) -> f32 {
+/// A grid's square for `cols` across `w` and `rows` down `tall`: whole device px, 6 to 32
+/// logical px.
+fn side(ts: &TextSystem, (w, cols): (f32, u16), (tall, rows): (f32, usize)) -> f32 {
     let d = ts.dpr();
+    let fit = (w / f32::from(cols)).min(tall / rows.max(1) as f32);
     // Not `clamp`: its panic message would link float formatting into the boot.
-    (w * d / f32::from(cols)).floor().min((32.0 * d).floor()).max((6.0 * d).ceil()) / d
+    (fit * d).floor().min((32.0 * d).floor()).max((6.0 * d).ceil()) / d
 }
 
 /// A Scroll as last drawn: its id, how far down it is, its content's height and its rect.
@@ -174,7 +176,8 @@ pub fn draw(ui: &mut Ui<'_>, nodes: &[Node], texts: &mut Texts, view: &mut View)
     #[rustfmt::skip]
     let mut lay = Lay { t, texts, sizes: Vec::new(), extents: Vec::new(), extra: 0.0, fills: 0,
         slack: Vec::new(), again: false, i: 0, e: 0, y: 0.0, touch, right: r.x + r.w, old,
-        scrolls: Vec::new(), now, reveal: view.reveal, grids: Vec::new() };
+        scrolls: Vec::new(), now, reveal: view.reveal, grids: Vec::new(),
+        tall: inner * 2.0 / 3.0 };
     let ts = ui.text_system();
     let mut h = lay.stack(ts, nodes, w, SPACING, None);
     // Again with the room left shared by the Fills and Scrolls, each also taking what it is
@@ -242,6 +245,8 @@ struct Lay<'t> {
     now: f64,
     reveal: Option<f64>,
     grids: Vec<(u32, RectF, u16, u32)>,
+    /// The most height a grid takes: two thirds of the view's, so what is around it shows too.
+    tall: f32,
 }
 
 impl Lay<'_> {
@@ -372,7 +377,7 @@ impl Lay<'_> {
             Node::Separator => (w, 1.0),
             Node::Grid { cols, cells, .. } => {
                 let rows = cells.len().div_ceil(usize::from(*cols).max(1));
-                (w, rows as f32 * side(ts, w, (*cols).max(1)))
+                (w, rows as f32 * side(ts, (w, (*cols).max(1)), (self.tall, rows)))
             }
         };
         self.sizes[at] = size;
@@ -518,9 +523,11 @@ impl Lay<'_> {
             Node::Separator => ui.fill(RectF { h: ui.px(1.0), ..r }, 0.0, t.border),
             Node::Spacer { .. } => {}
             Node::Grid { id, cols, cells, texts } => {
-                let at = grid(ui, r, *id, (*cols).max(1), (cells, texts));
-                let n = cells.len() as u32;
-                self.grids.extend((*id != 0).then_some((*id, at, (*cols).max(1), n)));
+                // The square measured: the rows share the height.
+                let cols = (*cols).max(1);
+                let side = h / cells.len().div_ceil(usize::from(cols)).max(1) as f32;
+                let at = grid(ui, (r, side), *id, cols, (cells, texts));
+                self.grids.extend((*id != 0).then_some((*id, at, cols, cells.len() as u32)));
             }
         }
     }
@@ -531,13 +538,13 @@ impl Lay<'_> {
 /// for the AI, a mark holding them a row a line. Where the squares are.
 fn grid(
     ui: &mut Ui<'_>,
-    r: RectF,
+    (r, side): (RectF, f32),
     id: u32,
     cols: u16,
     (cells, texts): (&[u8], &[String]),
 ) -> RectF {
     let (t, ts) = (ui.theme(), ui.text_system());
-    let (side, n) = (side(ts, r.w, cols), usize::from(cols));
+    let n = usize::from(cols);
     let x = ts.snap(r.x + (r.w - side * f32::from(cols)) / 2.0);
     let at = RectF::new(x, r.y, side * f32::from(cols), r.h);
     let gap = if side < 10.0 { 0.0 } else { ui.px(1.0) };

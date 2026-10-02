@@ -348,7 +348,8 @@ braces of if, row, col and for):
   row { WIDGETS }   col { WIDGETS }
   if EXPR { WIDGETS } else if EXPR { WIDGETS } else { WIDGETS }
   for i in 0..len(todos) { WIDGETS }   -- i (0 to N-1) is seen by the widgets and their handlers
-  grid 10, board;                  -- a list of ints as squares, 10 a row: 0 empty, 1 to 8 colors
+  grid 10, board;                  -- a list of ints as squares, 10 a row: 0 empty, then colors
+                                      1 red 2 green 3 yellow 4 blue 5 purple 6 cyan 7 silver 8 gray
   grid 10, board { STMTS }         -- a tap (or a drag over squares) runs STMTS; cell = its index
   grid 2, [0, 0], words { STMTS }  -- a list of strings: one written in each square
   Widgets only read state: they call only functions that change nothing (and never random).

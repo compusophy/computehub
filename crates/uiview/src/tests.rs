@@ -554,6 +554,12 @@ fn grids_draw_theme_squares_and_points_find_them() {
     assert!(view.grids.is_empty() && d.hits.is_empty());
     let six = |f: &&&Instance| f.rect[2] == 6.0 && f.color == t.ansi[1];
     assert_eq!(d.of(Kind::Fill).iter().filter(six).count(), 100);
+    // A tall one takes two thirds of the view's height at most, so what is under it shows:
+    // 20 rows in 360 px are 12 px squares (11 and a pixel apart).
+    let tall = Node::Grid { id: 0, cols: 10, cells: vec![1; 200], texts: Vec::new() };
+    let d = draw(&[tall], &mut texts, &mut view, None);
+    let twelve = |f: &&&Instance| f.rect[2] == 11.0 && f.color == t.ansi[1];
+    assert_eq!(d.of(Kind::Fill).iter().filter(twelve).count(), 200);
 }
 
 #[test]
