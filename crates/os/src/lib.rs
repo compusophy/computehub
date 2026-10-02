@@ -15,10 +15,11 @@
 //! through the platform's textarea.
 //!
 //! The meters Activity watches ([`uiwire::stat`]): each frame is counted under its cause (the
-//! person's input, motion, programs, the watcher's own, the grain, else other), the time spent in
-//! events and frames adds up, and while a watcher is set a sample is taken in [`Desktop::flush`]
-//! when its [`stat::Pace`] says, by the one-shot timer at most once a second, and posted to it if
-//! it changed. Nothing samples, wakes or posts on a still desktop.
+//! person's input, motion, programs, the watcher's own, a timer's such as the grain's, else
+//! other), the time spent in events and frames adds up, and while a watcher is set a sample is
+//! taken as the desktop flushes, when its [`stat::Pace`] says (by the one-shot timer, at most
+//! once a second), and posted to it if it changed. Nothing samples, wakes or posts on a still
+//! desktop.
 
 #![forbid(unsafe_code)]
 

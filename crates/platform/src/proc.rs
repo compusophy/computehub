@@ -1,7 +1,7 @@
 //! Program workers: a module Worker per process and its SAB as `kernel::wire`
 //! lays it out (repeated: platform does not depend on the kernel). A worker's
 //! messages come after its ring, drained as a CONS_WRITE; a bell goes no further. Its meters
-//! are read where it keeps them, with no message ([`stat`]).
+//! are read where it keeps them, with no message ([`stats`]).
 
 use std::cell::{Cell, RefMut};
 use std::rc::Rc;
