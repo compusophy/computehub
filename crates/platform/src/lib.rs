@@ -2,8 +2,9 @@
 //!
 //! [`run`] finds `<canvas id="os">` and drives an [`App`]: it feeds it [`Event`]s and asks it for
 //! frames, which [`Renderer::draw`] draws in one instanced WebGL2 call. Both calls get a [`Ctl`]
-//! for text input, fetch, frames, the cursor, `localStorage` and the clocks; what the app asks of
-//! it is applied after the app returns, so no browser call re-enters the app. Natively the crate
+//! for text input, fetch, frames, the cursor, `localStorage` and `sessionStorage`, the clocks
+//! and the page's load timings, random bytes, PBKDF2 and reloading; what the app asks of it is
+//! applied after the app returns, so no browser call re-enters the app. Natively the crate
 //! only compiles, for tests: [`run`] needs a browser.
 //!
 //! Frames are on demand, with no render loop: a redraw or [`Ctl::request_frame`] requests one
@@ -24,7 +25,7 @@ mod render;
 #[cfg(test)]
 mod tests;
 
-pub use ctl::{Ctl, Effect, Load, LocalTime};
+pub use ctl::{Ctl, Effect, Load, LocalTime, Timing};
 pub use nav::{Device, beacon, device};
 pub use render::Renderer;
 
@@ -92,6 +93,8 @@ pub enum Event {
     /// The page was hidden, or is going away (`pagehide`: a page already hidden, or one
     /// whose engine sends no `visibilitychange` then, gets only that); keep what must be kept.
     Hidden,
+    /// Derivation `id` ([`Ctl::derive`]) finished: the 32 bytes, or why there are none.
+    Derived { id: u32, result: Result<Vec<u8>, String> },
 }
 
 /// What an [`App`] did with an [`Event`].
@@ -159,6 +162,7 @@ pub fn run<A: App + 'static>(app: A) -> Result<(), JsValue> {
         frame_fn: handler(me, 0, |s, _, _| request_frame(s)),
         frame_timer: Cell::new(None),
         streams: RefCell::new(Vec::new()),
+        derives: RefCell::new(Vec::new()),
     });
 
     resize(&s);
@@ -219,6 +223,8 @@ struct Shared {
     frame_fn: Function,
     frame_timer: Cell<Option<i32>>,
     streams: RefCell<Vec<io::Stream>>,
+    /// Each PBKDF2 derivation's algorithm, by id, while its key is imported.
+    derives: RefCell<Vec<(u32, js_sys::Object)>>,
 }
 
 /// Which pointer [`Event`] a DOM pointer event becomes.

@@ -1,10 +1,13 @@
 //! [`Ctl`]: what an app asks of the page while it handles an event or draws.
 
+use js_sys::{Function, Reflect, Uint8Array};
+use wasm_bindgen::JsCast;
+
 /// The app's handle on the page, lent to each [`crate::App`] call. Requests queue as [`Effect`]s
 /// and apply in order right after the app returns, still inside the DOM event that caused them
 /// (phones need that user activation to show a keyboard); results come back as events. Reads are
-/// live; natively the clocks read 0 and [`LocalTime::EPOCH`], and storage holds only the handle's
-/// queued writes.
+/// live; natively the clocks read 0 and [`LocalTime::EPOCH`], and storage (local and session)
+/// holds only the handle's queued writes.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Ctl {
     pub(crate) effects: Vec<Effect>,
@@ -29,7 +32,17 @@ pub enum Effect {
     FrameIn(u32),
     Stream { id: u32, url: String, headers: Vec<(&'static str, String)>, body: Vec<u8> },
     Abort(u32),
+    Remove(String),
+    Session { key: String, value: Option<String> },
+    Reload,
+    InputMode(bool),
+    Derive { id: u32, pin: Vec<u8>, salt: [u8; 16], iterations: u32 },
 }
+
+/// A load the browser timed ([`Ctl::timings`]): its URL (empty for the page itself), then its
+/// `startTime` and `responseEnd` (ms from navigation start), `transferSize` and
+/// `encodedBodySize` (bytes); -1 for what the browser does not give.
+pub type Timing = (String, [f64; 4]);
 
 /// The program a Start carries ([`Ctl::start`]): none (homed), its bytes,
 /// or a page-relative URL the worker fetches.
@@ -127,6 +140,21 @@ impl Ctl {
             Effect::Stream { id, url: url.to_owned(), headers, body };
         /// Aborts stream `id`, which then says nothing more.
         abort(id: u32) => Effect::Abort(id);
+        /// Removes `key` from `localStorage`; failures are ignored.
+        storage_remove(key: &str) => Effect::Remove(key.to_owned());
+        /// Stores `value` under `key` in `sessionStorage` (this tab's, which outlives its reloads),
+        /// or removes it (`None`); failures are ignored.
+        session_set(key: &str, value: Option<&str>) =>
+            Effect::Session { key: key.to_owned(), value: value.map(str::to_owned) };
+        /// Reloads the page (`location.reload()`), after what was queued before it.
+        reload() => Effect::Reload;
+        /// Sets the hidden textarea's `inputmode`: `numeric` (a phone's number pad), or none.
+        input_mode(numeric: bool) => Effect::InputMode(numeric);
+        /// Derives 32 bytes from `pin` by PBKDF2-HMAC-SHA-256 with `salt` and `iterations`, through
+        /// WebCrypto: they, or why not (no `crypto.subtle` on an insecure page), arrive as
+        /// [`crate::Event::Derived`] with `id`.
+        derive(id: u32, pin: Vec<u8>, salt: [u8; 16], iterations: u32) =>
+            Effect::Derive { id, pin, salt, iterations };
     }
 
     /// Asks for one more frame; from a frame, exactly one after it.
@@ -149,17 +177,60 @@ impl Ctl {
             || crate::io::storage().is_some_and(|st| st.set_item(key, value).is_ok())
     }
 
-    /// `localStorage[key]`, newest queued write first; `None` when absent or
+    /// `localStorage[key]`, newest queued write (or removal) first; `None` when absent or
     /// storage is unavailable.
     pub fn storage_get(&self, key: &str) -> Option<String> {
         let queued = self.effects.iter().rev().find_map(|e| match e {
-            Effect::Store { key: k, value } if k == key => Some(value.clone()),
+            Effect::Store { key: k, value } if k == key => Some(Some(value.clone())),
+            Effect::Remove(k) if k == key => Some(None),
             _ => None,
         });
         if queued.is_some() || !cfg!(target_arch = "wasm32") {
-            return queued;
+            return queued.flatten();
         }
         crate::io::storage()?.get_item(key).ok().flatten()
+    }
+
+    /// `sessionStorage[key]`, newest queued write first; `None` when absent or unavailable.
+    pub fn session_get(&self, key: &str) -> Option<String> {
+        let queued = self.effects.iter().rev().find_map(|e| match e {
+            Effect::Session { key: k, value } if k == key => Some(value.clone()),
+            _ => None,
+        });
+        if queued.is_some() || !cfg!(target_arch = "wasm32") {
+            return queued.flatten();
+        }
+        crate::io::session()?.get_item(key).ok().flatten()
+    }
+
+    /// The page's loads as the browser timed them: the page itself, then each resource; none
+    /// natively.
+    pub fn timings(&self) -> Vec<Timing> {
+        let mut out = Vec::new();
+        let page = cfg!(target_arch = "wasm32").then(crate::window).flatten();
+        let Some(p) = page.and_then(|w| w.performance()) else { return out };
+        for ty in ["navigation", "resource"] {
+            for e in p.get_entries_by_type(ty).iter() {
+                let get = |k: &str| Reflect::get(&e, &k.into()).unwrap_or_default();
+                let num = |k: &str| get(k).as_f64().unwrap_or(-1.0);
+                let name = if ty == "resource" { get("name").as_string() } else { None };
+                let at = ["startTime", "responseEnd", "transferSize", "encodedBodySize"].map(num);
+                out.push((name.unwrap_or_default(), at));
+            }
+        }
+        out
+    }
+
+    /// Fills `out` from `crypto.getRandomValues`; whether it could (natively it cannot).
+    pub fn random(&self, out: &mut [u8]) -> bool {
+        let page = cfg!(target_arch = "wasm32").then(crate::window).flatten();
+        let Some(w) = page else { return false };
+        let crypto = Reflect::get(&w, &"crypto".into()).unwrap_or_default();
+        let get = Reflect::get(&crypto, &"getRandomValues".into()).ok();
+        let a = Uint8Array::new_with_length(out.len() as u32);
+        let got = get.and_then(|f| f.dyn_into::<Function>().ok()?.call1(&crypto, &a).ok());
+        out.iter_mut().zip(crate::bytes(&a)).for_each(|(o, b)| *o = b);
+        got.is_some()
     }
 
     /// Each worker's meters by pid, read where it keeps them (no message): the ms it ran (its
@@ -198,11 +269,21 @@ impl Ctl {
     /// Whether the page is cross-origin isolated, so workers can share
     /// memory (`crossOriginIsolated`); false natively.
     pub fn isolated(&self) -> bool {
-        cfg!(target_arch = "wasm32")
-            && crate::window().is_some_and(|w| {
-                js_sys::Reflect::get(&w, &"crossOriginIsolated".into()).is_ok_and(|v| v.is_truthy())
-            })
+        window_says("crossOriginIsolated")
     }
+
+    /// Whether the page is a secure context (`isSecureContext`: https, or localhost), as
+    /// WebCrypto's [`Ctl::derive`] needs; false natively.
+    pub fn secure(&self) -> bool {
+        window_says("isSecureContext")
+    }
+}
+
+/// Whether `window[key]` is truthy; false natively.
+fn window_says(key: &str) -> bool {
+    cfg!(target_arch = "wasm32")
+        && crate::window()
+            .is_some_and(|w| Reflect::get(&w, &key.into()).is_ok_and(|v| v.is_truthy()))
 }
 
 /// Whether `url` can only resolve against the page's origin: no scheme (a

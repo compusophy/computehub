@@ -95,7 +95,7 @@ const fn ansi(rgb: [u32; 16]) -> [Rgba; 16] {
     out
 }
 
-/// The default: near-black with violet, cyan and magenta light.
+/// Near-black with violet, cyan and magenta light.
 #[rustfmt::skip]
 const MIDNIGHT: Theme = Theme {
     name: "Midnight", dark: true, base: Rgba::hex(0x07080c), grain: 9,
@@ -159,7 +159,7 @@ const MONO: Theme = Theme {
     icon: IconStyle { ground: Rgba::hex(0x161616), tile: [100, 100], ink: 100, shadow: 0 },
 };
 
-/// The built-in themes: Midnight (the default), Dawn and Mono.
+/// The built-in themes: Midnight, Dawn and Mono (the default).
 pub static THEMES: [Theme; 3] = [MIDNIGHT, DAWN, MONO];
 
 /// The theme named `name`, ignoring ASCII case; else the default, Mono.

@@ -349,6 +349,8 @@ fn measures_draws_and_wraps() {
     assert_eq!(t.wrap("Alt+Shift+1-4", MONO13, 94.0), ["Alt+Shift+", "1-4"]);
     assert_eq!(t.wrap("usr/local-bin", MONO13, 79.0), ["usr/local-", "bin"]);
     assert_eq!(t.wrap("ab --cdefgh", MONO13, 63.0), ["ab", "--cdefgh"]);
+    // Past ASCII is a letter (no Unicode tables): a break after `-` between `é` and `x`.
+    assert_eq!(t.wrap("café-xyzw", MONO13, 47.0), ["café-", "xyzw"]);
     let w = t.measure("Shift+", SANS14);
     assert_eq!(t.wrap("Alt+Shift+Enter", SANS14, w), ["Alt+", "Shift+", "Enter"]);
     let long = "The quick brown fox jumps over the lazy dog. ".repeat(8);

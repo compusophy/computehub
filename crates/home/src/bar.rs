@@ -53,6 +53,12 @@ pub fn at(w: f32, x: f32, y: f32) -> Option<Button> {
     buttons(w).into_iter().find(|b| b.0.contains(x, y)).map(|b| b.1)
 }
 
+/// Where the mark sits: centered in its button, 26 px square (the welcome flies there).
+pub fn mark_rect() -> RectF {
+    let r = buttons(0.0)[0].0;
+    r.inset((r.w - MARK) / 2.0)
+}
+
 /// The bar on a screen `w` wide: its glass, the buttons (a round wash while hovered,
 /// `Some((button, held))`), and the clock once it ticked.
 pub fn draw(
@@ -77,7 +83,20 @@ pub fn draw(
         };
         ui::icon::draw(list, text, square(r, side), glyph, theme.text);
     }
-    let Some(time) = clock else { return };
+    if let Some(time) = clock {
+        draw_clock(list, text, theme, w, time);
+    }
+}
+
+/// The date (dim) and time centered in the bar of a screen `w` wide: the time alone on a phone,
+/// or where the date does not fit. The welcome draws it in the same place.
+pub fn draw_clock(
+    list: &mut DrawList,
+    text: &mut TextSystem,
+    theme: &Theme,
+    w: f32,
+    time: LocalTime,
+) {
     let (date, clock) = (time.date(), time.clock());
     let style = TextStyle::new(FontId::Sans, CLOCK_SIZE, theme.text_dim);
     let (dw, sw, cw) =

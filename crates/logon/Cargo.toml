@@ -1,0 +1,18 @@
+[package]
+name = "compusophy-logon"
+description = "compusophyOS's start: the peaceful welcome a new tab opens on (compusophy's mark coming in, an honest record of the real boot), then logon to a profile, each its own home in the browser, with an optional PIN."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[lib]
+name = "logon"
+
+[dependencies]
+compusophy-gfx.workspace = true
+compusophy-host.workspace = true
+compusophy-home.workspace = true
+compusophy-ui.workspace = true

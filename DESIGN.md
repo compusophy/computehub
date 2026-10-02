@@ -158,6 +158,21 @@ one. Forked crates keep their Apache-2.0 license and note their origin.
 - Bottom to top: the wallpaper (the theme's base color, up to four soft
   glows and grain), the home screen's icons, the windows, the bottom row,
   the top bar, carried icons, menus, tooltips.
+- **Starting**: a new tab opens on the welcome, the boot's own first frame
+  (`logon`; no program, no worker): compusophy's mark comes in once from
+  the center out (618 ms, 365 round fills), the clock sits in the bar's
+  place, and the name follows when its font lands. The mark is art; the
+  record is truth: under them a hairline holds one segment per stage of
+  the real start as the browser timed it (the page, compusophyOS's
+  download, its start to the first frame, the deferred fonts), at its
+  measured times, gaps kept, with a caption (`Loading fonts…`, then
+  `Ready in 412 ms · 218 KB`); a tap opens a card of the stages, the
+  start's own 100 ms budget among them. Nothing is simulated, and waiting
+  draws no frames. A first visit says hello and starts with Start; a
+  return starts with a tap, Enter or Space. Signing in puts /home back and
+  makes the desktop as the mark flies to the bar's and the welcome fades
+  off it (220 ms). A reload of a signed-in tab (its `sessionStorage`) goes
+  straight to the desktop. Welcome no longer opens by itself.
 - **Top bar** (44 px): the mark at the left opens Welcome; the date and
   time sit in the middle; Feedback (a bug) and Settings at the right.
 - **Windows** float in a stack; focus is the top of it. A 40 px titlebar
@@ -243,9 +258,10 @@ one. Forked crates keep their Apache-2.0 license and note their origin.
   (200 ms); dock tiles lift (120 ms), icons and dock tiles slide aside
   (180 ms), themes crossfade (200 ms). Drags and resizes follow the pointer
   exactly.
-- **Themes**: Midnight (the default: near-black `#07080C` with violet, cyan
-  and magenta light), Dawn (warm paper with peach, lilac and sky light) and
-  Mono (black, white and grays, no light). A theme is plain data: backdrop,
+- **Themes**: Midnight (near-black `#07080C` with violet, cyan and magenta
+  light), Dawn (warm paper with peach, lilac and sky light) and Mono
+  (black, white and grays, no light; the default, which a first visit and
+  an unknown name get). A theme is plain data: backdrop,
   surfaces, glass, text ramp, one accent and the terminal's 16 colors;
   nothing draws from a color constant. The choice is kept in
   `localStorage` under `compusophy.theme`.
@@ -329,10 +345,10 @@ tried again as the page hides; a snapshot that does not read back whole is
 set aside and the desktop starts with a fresh /home. Tabs share the one
 snapshot: once a tab keeps its /home, another that read it earlier keeps
 nothing over it (Settings says its changes are not kept), and a reload shows
-the newer files. Putting /home back runs before the first frame, at about
-15 ms a MiB of /home in Chrome, so a home of a few MB spends the first-frame
-budget. `localStorage` holds about 5 MB; IndexedDB or OPFS replace it when
-homes grow past that, and take the restore off the first frame. Preferences
+the newer files. Putting /home back runs at sign-in, after the welcome's
+first frame, at about 15 ms a MiB of /home in Chrome (noted as `home <KB>
+<ms>`). `localStorage` holds about 5 MB; IndexedDB or OPFS replace it when
+homes grow past that. Preferences
 and the theme are kept there too.
 
 ## What is next

@@ -118,6 +118,27 @@ fn ctl_queues_requests_in_order() {
     assert_eq!(Ctl::default().storage_get("theme"), None);
     let neutral = (ctl.monotonic_ms(), ctl.local_time(), ctl.isolated(), ctl.reduced_motion());
     assert_eq!(neutral, (0.0, LocalTime::EPOCH, false, false));
+    // The welcome's: a removal hides a queued write; the tab's session reads back as queued;
+    // natively nothing is timed, random or secure.
+    let mut ctl = Ctl::default();
+    ctl.storage_set("a", "1");
+    ctl.storage_remove("a");
+    ctl.session_set("s", Some("2"));
+    ctl.input_mode(true);
+    ctl.derive(7, b"1234".to_vec(), [9; 16], 100);
+    ctl.session_set("t", None);
+    ctl.reload();
+    let (pin, salt) = (b"1234".to_vec(), [9; 16]);
+    #[rustfmt::skip]
+    let want = [store("a", "1"), Effect::Remove("a".into()),
+        Effect::Session { key: "s".into(), value: Some("2".into()) }, Effect::InputMode(true),
+        Effect::Derive { id: 7, pin, salt, iterations: 100 },
+        Effect::Session { key: "t".into(), value: None }, Effect::Reload];
+    assert_eq!(ctl.effects(), want);
+    let read = (ctl.storage_get("a"), ctl.session_get("s"), ctl.session_get("t"));
+    assert_eq!(read, (None, Some("2".into()), None));
+    let mut bytes = [0; 4];
+    assert_eq!((ctl.timings(), ctl.random(&mut bytes), ctl.secure()), (vec![], false, false));
 }
 
 #[test]

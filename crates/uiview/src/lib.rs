@@ -21,7 +21,7 @@ use std::mem;
 pub use area::Area;
 use gfx::RectF;
 pub use texts::Texts;
-use ui::icon::{Glyph, MARK_HOLE, cos, rings, sin};
+use ui::icon::Glyph;
 use ui::{AppIcon, BUTTON_H, CARD_PAD, FIELD_H, FontId, PAD, RADIUS_SM, Rgba, SPACING, Sense};
 use ui::{TextStyle, TextSystem, Theme, Ui, WidgetId};
 use uiwire::{Event, Node, REVEAL, Request, SIGIL, Style, Variant};
@@ -40,11 +40,8 @@ pub const TOGGLE_H: f32 = 44.0;
 const CAP: f32 = 0.727;
 /// The widest window that is narrow.
 pub const NARROW: f32 = 560.0;
-/// The mark's reveal: band `k` (the center, then each of its seven rings of dots, the last
-/// with the rim) fades in from `STEP * k` ms for `FADE` ms, Fibonacci numbers both: 618 ms.
-const STEP: f64 = 55.0;
-const FADE: f64 = 233.0;
-pub const REVEAL_MS: f64 = 7.0 * STEP + FADE;
+/// The mark's reveal: from the center out, 618 ms ([`ui::icon::mark_dots`]).
+pub use ui::icon::REVEAL_MS;
 
 /// How a window is scrolled: pixels down, and the content's and the view's height as last drawn;
 /// whether a view at the bottom stays there as the content grows (the Assistant's transcript);
@@ -764,28 +761,8 @@ fn mark(ui: &mut Ui<'_>, r: RectF, ms: f64) {
     if ms.is_nan() || ms >= REVEAL_MS {
         return ui.glyph(r, Glyph::Mark, t.text);
     }
-    // The box the glyph fills: a whole number of device pixels, its edges on them.
     let d = ui.text_system().dpr();
-    let side = (r.w.min(r.h) * d).round();
-    let left = ((r.x + r.w / 2.0) * d - side / 2.0).round();
-    let top = ((r.y + r.h / 2.0) * d + side / 2.0).round() - side;
-    let (cx, cy, k) = ((left + side / 2.0) / d, (top + side / 2.0) / d, side / d / 1000.0);
-    // Ring `i` (the center dot first) fades in, smoothstepped, `STEP` after the one inside it.
-    let ink = |i: usize| {
-        let x = ((ms - i as f64 * STEP) / FADE).clamp(0.0, 1.0) as f32;
-        t.text.with_alpha((f32::from(t.text.3) * x * x * (3.0 - 2.0 * x)).round() as u8)
-    };
-    let dot = |ui: &mut Ui<'_>, (x, y): (f32, f32), radius: f32, color: Rgba| {
-        let s = radius * k;
-        ui.fill(RectF::new(x - s, y - s, 2.0 * s, 2.0 * s), s, color);
-    };
-    dot(ui, (cx, cy), MARK_HOLE, ink(0));
-    for (i, (n, at, size)) in rings().enumerate() {
-        for j in 0..n {
-            let a = core::f32::consts::FRAC_PI_2 - core::f32::consts::TAU * j as f32 / n as f32;
-            dot(ui, (cx + at * k * cos(a), cy - at * k * sin(a)), size, ink(i + 1));
-        }
-    }
+    ui::icon::mark_dots(ui.list(), r, d, ms, t.text);
 }
 
 /// The baseline that centers the capitals of `style` in a band `h` tall from `top`.

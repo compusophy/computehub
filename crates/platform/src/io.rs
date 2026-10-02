@@ -3,7 +3,7 @@
 use std::mem::ManuallyDrop;
 use std::rc::Rc;
 
-use js_sys::{Object, Promise, Reflect, Uint8Array};
+use js_sys::{Array, Function, Object, Promise, Reflect, Uint8Array};
 use wasm_bindgen::{JsCast, JsValue, closure::Closure};
 use web_sys::{
     AbortController, CompositionEvent, Document, Event as DomEvent, HtmlTextAreaElement,
@@ -54,6 +54,19 @@ pub(crate) fn apply(s: &Rc<Shared>, effects: Vec<Effect>) {
             Effect::FrameIn(ms) => arm(s, &s.frame_timer, &s.frame_fn, ms),
             Effect::Stream { id, url, headers, body } => stream(s, id, &url, headers, &body),
             Effect::Abort(id) => _ = take(s, id).map(|a| a.abort()),
+            Effect::Remove(key) => _ = storage().map(|st| st.remove_item(&key)),
+            Effect::Session { key, value } => {
+                let st = session();
+                _ = st.map(|st| value.map_or(st.remove_item(&key), |v| st.set_item(&key, &v)));
+            }
+            Effect::Reload => _ = s.window.location().reload(),
+            Effect::InputMode(numeric) => {
+                let _ = match numeric {
+                    true => s.sink.set_attribute("inputmode", "numeric"),
+                    false => s.sink.remove_attribute("inputmode"),
+                };
+            }
+            Effect::Derive { id, pin, salt, iterations } => derive(s, id, &pin, &salt, iterations),
         }
     }
 }
@@ -61,6 +74,11 @@ pub(crate) fn apply(s: &Rc<Shared>, effects: Vec<Effect>) {
 /// `window.localStorage`, or `None` when it is missing or throws.
 pub(crate) fn storage() -> Option<Storage> {
     crate::window()?.local_storage().ok().flatten()
+}
+
+/// `window.sessionStorage`, or `None` when it is missing or throws.
+pub(crate) fn session() -> Option<Storage> {
+    crate::window()?.session_storage().ok().flatten()
 }
 
 fn text_input(s: &Shared, on: bool) {
@@ -111,7 +129,7 @@ fn fetch(s: &Rc<Shared>, id: u32, url: &str) {
         let result = Err(["not a same-origin relative URL: ", url].concat());
         return later(s, Event::Fetched { id, result });
     }
-    settle(s, id, &s.window.fetch_with_str(url), on_response);
+    settle(s, id, &s.window.fetch_with_str(url), (on_response, failed));
 }
 
 /// What runs when a fetch promise settles: `(state, fetch id, value)`.
@@ -123,14 +141,17 @@ fn callback(s: &Rc<Shared>, id: u32, f: Settled) -> Closure<dyn FnMut(JsValue)> 
     Closure::new(move |v| f(&s, id, v))
 }
 
-/// Runs `ok` with what `p` resolves to, or fails fetch `id` with what it
-/// rejects with; only one runs.
-fn settle(s: &Rc<Shared>, id: u32, p: &Promise, ok: Settled) {
-    let err = callback(s, id, |s, id, e| fetched(s, id, Err(js_text(&e))));
-    let ok = callback(s, id, ok);
+/// Runs `ok` with what `p` resolves to, or `err` with what it rejects with; only one runs.
+fn settle(s: &Rc<Shared>, id: u32, p: &Promise, (ok, err): (Settled, Settled)) {
+    let (ok, err) = (callback(s, id, ok), callback(s, id, err));
     let _ = p.then2(&ok, &err);
     ok.forget();
     err.forget();
+}
+
+/// Fails fetch `id` with what its promise rejected with.
+fn failed(s: &Rc<Shared>, id: u32, e: JsValue) {
+    fetched(s, id, Err(js_text(&e)));
 }
 
 /// Reads the body of a 2xx `Response`, else fails the fetch.
@@ -140,11 +161,63 @@ fn on_response(s: &Rc<Shared>, id: u32, v: JsValue) {
         http_error(r.status())
     } else {
         match r.array_buffer() {
-            Ok(body) => return settle(s, id, &body, on_body),
+            Ok(body) => return settle(s, id, &body, (on_body, failed)),
             Err(e) => js_text(&e),
         }
     };
     fetched(s, id, Err(err));
+}
+
+/// `crypto.subtle[f](...args)`'s promise, if the page has it (a secure one) and it did not throw.
+fn subtle(f: &str, args: &Array) -> Option<Promise> {
+    let w = crate::window()?;
+    let subtle = Reflect::get(&Reflect::get(&w, &"crypto".into()).ok()?, &"subtle".into()).ok()?;
+    let f: Function = Reflect::get(&subtle, &f.into()).ok()?.dyn_into().ok()?;
+    f.apply(&subtle, args).ok()?.dyn_into().ok()
+}
+
+/// PBKDF2 ([`crate::Ctl::derive`]): imports the PIN as a key; [`on_key`] derives from it with
+/// the algorithm, which waits in the state's `derives`.
+fn derive(s: &Rc<Shared>, id: u32, pin: &[u8], salt: &[u8], iterations: u32) {
+    let (algo, set) = (Object::new(), |o: &Object, k: &str, v: &JsValue| {
+        _ = Reflect::set(o, &k.into(), v);
+    });
+    set(&algo, "name", &"PBKDF2".into());
+    set(&algo, "hash", &"SHA-256".into());
+    set(&algo, "salt", &Uint8Array::from(salt));
+    set(&algo, "iterations", &iterations.into());
+    let (raw, use_) = (Uint8Array::from(pin), Array::of1(&"deriveBits".into()));
+    let args = Array::of5(&"raw".into(), &raw, &"PBKDF2".into(), &false.into(), &use_);
+    match subtle("importKey", &args) {
+        Some(p) => {
+            s.derives.borrow_mut().push((id, algo));
+            settle(s, id, &p, (on_key, underived));
+        }
+        None => {
+            later(s, Event::Derived { id, result: Err("no crypto.subtle: needs https".into()) })
+        }
+    }
+}
+
+/// The PIN's key: derives 256 bits from it.
+fn on_key(s: &Rc<Shared>, id: u32, key: JsValue) {
+    let mut list = s.derives.borrow_mut();
+    let algo = list.iter().position(|d| d.0 == id).map(|i| list.remove(i).1);
+    drop(list);
+    let args = Array::of3(&algo.unwrap_or_default(), &key, &256.into());
+    match subtle("deriveBits", &args) {
+        Some(p) => settle(s, id, &p, (on_bits, underived)),
+        None => underived(s, id, "deriveBits".into()),
+    }
+}
+
+fn on_bits(s: &Rc<Shared>, id: u32, buf: JsValue) {
+    dispatch(s, Event::Derived { id, result: Ok(bytes(&Uint8Array::new(&buf))) });
+}
+
+fn underived(s: &Rc<Shared>, id: u32, e: JsValue) {
+    s.derives.borrow_mut().retain(|d| d.0 != id);
+    dispatch(s, Event::Derived { id, result: Err(js_text(&e)) });
 }
 
 fn on_body(s: &Rc<Shared>, id: u32, buf: JsValue) {
