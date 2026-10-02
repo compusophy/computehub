@@ -190,8 +190,8 @@ one. Forked crates keep their Apache-2.0 license and note their origin.
   all, kept as they were around it, and an app that takes the focus ends
   the selection. A wide screen and a phone each keep their own arrangement
   (their grids differ in shape; one never arranged shows the apps packed in
-  the other's order); a cell off a screen made smaller (a phone's keyboard)
-  is kept for when it grows back. Kept as `home.order`: `@2`, then
+  their order, new ones last); a cell off a screen made smaller (a phone's
+  keyboard) is kept for when it grows back. Kept as `home.order`: `@2`, then
   `name:wide:narrow` per app, a cell `col.row` (before: the names alone, in
   order, read as that order packed).
 - **Bottom row**: one row of 44 px tiles along the screen's bottom (62 px

@@ -3,8 +3,8 @@
 //! a row. A wide screen's grid (columns down from the top left, as many rows as fit) and a
 //! phone's (rows of four) differ in shape, so each keeps its own arrangement: one the person
 //! never arranged shows the apps packed in their order (the apps' own, or the order kept before
-//! cells were; new ones last). From its first change on (a drop, or a new app there), every
-//! icon there has its cell.
+//! cells were; new ones last). From the first drop there on, every icon there has its cell,
+//! and a new app keeps the first free one it takes.
 //!
 //! Kept as the `home.order` preference ([`format()`]): `@2`, then each app as
 //! `name:wide:narrow`, a cell as `col.row` or empty for none. Before `@2` it held the names
@@ -191,13 +191,15 @@ pub fn resolve(places: &[Place], dims: Dims) -> Vec<usize> {
 }
 
 /// Keeps where `places` show (`spots`, on a grid of `dims`) as their cells in this layout: every
-/// one's if `all`, else but those whose own cell is off this screen (kept for a larger one, as
-/// when a phone's keyboard shortens it).
+/// one's if `all` (a drop); else, in a layout arranged already, but those whose own cell is off
+/// this screen (kept for a larger one, as when a phone's keyboard shortens it), and in one never
+/// arranged, none (it still packs in order, as the screen's size changes).
 pub fn keep(places: &mut [Place], spots: &[usize], dims: Dims, all: bool) {
     let l = dims.layout();
+    let arranged = places.iter().any(|p| p.cells[l].is_some());
     for (p, &s) in places.iter_mut().zip(spots) {
         let off = p.cells[l].is_some_and(|c| dims.pos(c).is_none());
-        if all || !off {
+        if all || arranged && !off {
             p.cells[l] = Some(dims.cell(s));
         }
     }
@@ -211,7 +213,8 @@ pub fn keep(places: &mut [Place], spots: &[usize], dims: Dims, all: bool) {
 /// there to its end, they move back instead; full both ways, on past its end.
 pub fn plan(spots: &[usize], carried: &[usize], lead: usize, to: usize, dims: Dims) -> Vec<usize> {
     let n = spots.len();
-    if !carried.contains(&lead) || carried.iter().any(|&k| k >= n) {
+    // Headed back where they were (as below the grid), nothing moves.
+    if !carried.contains(&lead) || carried.iter().any(|&k| k >= n) || spots[lead] == to {
         return spots.to_vec();
     }
     let targets = group(spots, carried, lead, to, dims);

@@ -734,13 +734,13 @@ fn the_home_screen_shows_every_app_and_the_top_bar_its_buttons() {
     assert!(s.to(STUDIO).redraw && !s.to((STUDIO.0 + 5.0, STUDIO.1)).redraw);
     s.click((57.0, 201.0));
     assert_eq!((s.names(), s.overlay.open), (vec!["welcome"], true));
-    // A new app saved to ~/apps takes the first free cell, with its sigil; every cell is kept.
+    // A new app saved to ~/apps takes the first free cell, with its sigil; the order is kept.
     let mine = [Vfs::HOME, "/apps"].concat();
     s.host.vfs.mkdir_all(&mine).unwrap();
     s.host.vfs.write(&[&mine, "/clock.app"].concat(), b"").unwrap();
     let r = s.input(Input::PointerLeave);
-    let kept = "@2,studio:0.0:,assistant:0.1:,terminal:0.2:,files:0.3:,settings:0.4:,feedback:0.5:";
-    let order = [kept, ",about:1.0:,welcome:1.1:,", &mine, "/clock.app:1.2:"].concat();
+    let kept = "@2,studio::,assistant::,terminal::,files::,settings::,feedback::,about::,welcome::";
+    let order = [kept, ",", &mine, "/clock.app::"].concat();
     assert_eq!(r.effects, [Effect::Pref { key: "home.order".into(), value: order }]);
     assert!(r.redraw && s.labels_home()[8] == "Clock" && s.grid.icons[8].sigil.is_some());
     // The mark shows Welcome; the right buttons Feedback (a bug) and Settings.

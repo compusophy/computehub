@@ -408,6 +408,10 @@ fn icons_stay_in_their_cells_and_the_rest_fill_the_first_free_ones() {
     assert_eq!(q[1].cells[1], Some((3, 1)));
     place::keep(&mut q, &[0, 2, 3, 1], small, true);
     assert_eq!(cells(&q), [Some((0, 0)), Some((1, 0)), Some((1, 1)), Some((0, 1))]);
+    // A layout never arranged keeps none but on a drop: it packs as the screen's size changes.
+    let mut q = [Place::new("a"), Place::new("b")];
+    place::keep(&mut q, &[0, 1], small, false);
+    assert_eq!(q.map(|p| p.cells), [[None; 2]; 2]);
 }
 
 #[test]
@@ -441,7 +445,9 @@ fn drops_land_in_any_cell_those_in_the_way_moving_along_to_the_first_gap() {
     assert_eq!(place::plan(&spots, &[0, 1], 1, 4, d), spots);
     // A group larger than the grid (one past its last row) lands as a run, in order.
     assert_eq!(place::plan(&[0, 12], &[0, 1], 0, 8, d), [8, 9]);
-    // A lead not among the carried, or one past the icons: nothing moves.
+    // Headed home (one past the grid's end, carried below it), a lead not among the carried, or
+    // one past the icons: nothing moves.
+    assert_eq!(place::plan(&[0, 1, 13], &[2], 2, 13, d), [0, 1, 13]);
     assert_eq!(place::plan(&row, &[1], 0, 9, d), row);
     assert_eq!(place::plan(&row, &[9], 9, 9, d), row);
 }
@@ -573,17 +579,16 @@ fn icons_carried_past_their_travel_land_in_any_cell_and_stay() {
     g.drop(true, Some(low), &mut fx);
     assert!(fx.len() == 2 && spot(&g, "studio") == Some(3) && g.below(Some(low)).is_empty());
     // The order as kept before (names alone): unknown names dropped, new apps last, packed;
-    // nothing kept yet. An app new since (a `.app` saved) takes the first free cell, and every
-    // cell is kept.
+    // nothing kept yet. An app new since (a `.app` saved) takes the first free cell, and the
+    // order is kept (a layout never arranged keeps no cells: it packs as the screen changes).
     let mut g = grid(Some("welcome,gone,terminal"));
     let want =
         ["Welcome", "Terminal", "Studio", "Assistant", "Files", "Settings", "Feedback", "About"];
     assert_eq!((labels(&g), &g.spots), (want.to_vec(), &(0..8).collect::<Vec<_>>()));
     let all: Vec<&str> = APPS.iter().copied().chain(["/apps/clock.app"]).collect();
-    assert!(g.list(2, || entries(&all), &mut fx) && labels(&g)[8] == "Clock");
-    let kept = "@2,welcome:0.0:,terminal:0.1:,studio:0.2:,assistant:0.3:,files:0.4:,".to_string()
-        + "settings:0.5:,feedback:1.0:,about:1.1:,/apps/clock.app:1.2:";
-    assert_eq!(fx.last(), Some(&pref(&kept)));
+    assert!(g.list(2, || entries(&all), &mut fx) && (labels(&g)[8], g.spots[8]) == ("Clock", 8));
+    let kept = "@2,welcome::,terminal::,studio::,assistant::,files::,settings::,feedback::,";
+    assert_eq!(fx.last(), Some(&pref(&[kept, "about::,/apps/clock.app::"].concat())));
 }
 
 #[test]
