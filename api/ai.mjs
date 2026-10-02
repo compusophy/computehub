@@ -114,16 +114,19 @@ export default async function handler(req, res) {
   if (!messages.length) return fail(res, 400, 'no messages');
   const model = Object.hasOwn(MODELS, body.model) ? body.model : Object.keys(MODELS)[0];
   const asked = Math.floor(Number(body.max_tokens));
-  // Thinking costs time and tokens: off, unless the program asks for a low effort. (Off hides
-  // GLM 5.3's thinking but may not stop it: a reply can still spend max_tokens before any text.)
-  const low = body.reasoning && body.reasoning.effort === 'low';
+  // Thinking costs time and tokens: off, unless the program asks for a low effort or gives it
+  // a token budget (at most 4,096; GLM 5.3 may think at length even when told off).
+  const r = (body && body.reasoning) || {};
+  const budget = Math.floor(Number(r.max_tokens));
+  const reasoning =
+    r.effort === 'low' ? { effort: 'low' } : budget >= 1 ? { max_tokens: Math.min(budget, 4096) } : { enabled: false };
   const out = {
     model,
     messages,
     stream: true,
     stream_options: { include_usage: true },
     max_tokens: asked >= 1 ? Math.min(asked, MAX_TOKENS) : 4096,
-    reasoning: low ? { effort: 'low' } : { enabled: false },
+    reasoning,
   };
   const t = body.temperature;
   if (typeof t === 'number' && t >= 0 && t <= 2) out.temperature = t;
