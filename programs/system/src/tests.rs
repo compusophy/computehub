@@ -494,7 +494,7 @@ fn the_word_says_busy_drawing_resting_or_still() {
     };
     let said = |w: &str, l: &str| [w.to_string(), l.to_string()];
     assert_eq!(pair(&[], &[], 1000), said("Still", "Nothing is drawing."));
-    let resting = "Only the living grain draws, 8 frames a second. Settings \u{203a} Appearance can still it.";
+    let resting = "Only the living grain draws, 8 frames a second. Settings\u{a0}\u{203a} Appearance can still it.";
     assert_eq!(pair(&[(GRAIN_ON, 1)], &[], 1000), said("Resting", resting));
     // Drawing, by the largest cause, input first; the program that drew the most is named.
     let input = pair(&[(INPUT, 12), (MOTION, 12)], &[], 1000);
@@ -508,7 +508,7 @@ fn the_word_says_busy_drawing_resting_or_still() {
         pair(&[(PROGRAMS, 1)], &[], 1000),
         said("Drawing", "1 frame a second: A program is drawing.")
     );
-    // Samples further apart than 1.5 s give no rate: no number.
+    // Samples further apart than 3 s give no rate: no number.
     assert_eq!(pair(&[(INPUT, 3)], &[], 5000), said("Drawing", "Following you."));
     // Busy: another program used half a core or more.
     let spin: Row = (7, 2, RUNS, "spin 100", 0, Some((990, 1024)));
@@ -565,11 +565,11 @@ fn rows_name_programs_by_command_line_and_say_what_they_do() {
 fn end_comes_only_from_a_program_page() {
     use uiwire::stat::{IDLE, RUNS};
     let rows: [Row; 2] =
-        [(5, 0, IDLE, "assistant", 0, Some((0, 64))), (7, 2, RUNS, "spin", 0, Some((0, 64)))];
+        [(5, 0, IDLE, "assistant", 0, Some((0, 64))), (7, 2, RUNS, "spin 9", 0, Some((0, 64)))];
     let (mut w, _) = activity(&[sample(1000, &[], &rows, 0)]);
     let f = w.click(ROW + 7).pop().unwrap();
     let said = texts(&f.nodes);
-    assert_eq!(said[..4], ["\u{2039} Activity", "spin", "spin", "Working in a Terminal."]);
+    assert_eq!(said[..4], ["\u{2039} Activity", "spin", "spin 9", "Working in a Terminal."]);
     assert!(
         said.contains(&"End spin")
             && said.contains(&"It stops at once, as Ctrl+C would. What it had not saved is lost.")

@@ -17,8 +17,9 @@ pub(crate) const ROW: u32 = 16;
 const KEPT: u64 = 5_000_000;
 /// The storage meter's squares.
 const SQUARES: u64 = 24;
-/// The longest gap between two samples that rates are taken over, in ms.
-const RATE_MS: u32 = 1500;
+/// The longest gap between two samples that rates are taken over, in ms: a busy page's timer may
+/// fire late on the second between looks; a rate never averages over a long silence.
+const RATE_MS: u32 = 3000;
 /// The system apps and Studio's and the Assistant's tiles by name, as the desktop draws them.
 #[rustfmt::skip]
 const TILES: [(&str, &str, Glyph, u32); 7] = [
@@ -43,7 +44,7 @@ const DOT: &str = " \u{b7} ";
 /// or Escape returns). It watches the desktop's meters from its first size
 /// ([`Request::Watch`]): the desktop sends a sample only when something changed, at most once a
 /// second, so a still desktop wakes nothing here; and it draws only what changed. Rates come
-/// from the last two samples, when they are at most 1.5 s apart; what it cannot know reads `—`.
+/// from the last two samples, when they are at most 3 s apart; what it cannot know reads `—`.
 #[derive(Debug, Default)]
 pub struct Activity {
     /// The last two samples, the newer last.
@@ -185,7 +186,7 @@ impl Activity {
         match cur.loud.get(stat::GRAIN_ON) {
             Some(1) => (
                 "Resting",
-                "Only the living grain draws, 8 frames a second. Settings \u{203a} \
+                "Only the living grain draws, 8 frames a second. Settings\u{a0}\u{203a} \
                 Appearance can still it."
                     .into(),
             ),
@@ -214,7 +215,7 @@ impl Activity {
     /// The word, what runs, your files, the AI, a note on the numbers.
     fn list(&self, rows: &[Row<'_>]) -> Vec<Node> {
         let (word, line) = self.word(rows);
-        let mut nodes = vec![space(6), text(Style::Title, word), text(Style::Dim, &line)];
+        let mut nodes = vec![text(Style::Title, word), text(Style::Dim, &line)];
         let Some(cur) = &self.cur else { return nodes };
         nodes.extend([space(14), text(Style::Heading, "Running")]);
         let (glyph, hue) = DESKTOP_TILE;
@@ -236,7 +237,7 @@ impl Activity {
         nodes.extend(storage(cur));
         nodes.extend([space(14), text(Style::Heading, "AI since this tab opened")]);
         nodes.extend(ai(cur));
-        nodes.extend([space(14), text(Style::Small, FOOTER), space(6)]);
+        nodes.extend([space(14), text(Style::Small, FOOTER)]);
         nodes
     }
 
@@ -270,7 +271,10 @@ impl Activity {
     fn page_of(&self, r: &Row<'_>) -> Vec<Node> {
         let mem = [&kb(r.mem), " of memory", DOT, "process ", &r.p.pid.to_string()].concat();
         let mut nodes = vec![back(), space(8), text(Style::Title, &r.name)];
-        nodes.push(text(Style::Mono, &r.p.argv.join(" ")));
+        let cmd = r.p.argv.join(" ");
+        if cmd != r.name {
+            nodes.push(text(Style::Mono, &cmd));
+        }
         nodes.extend([space(8), text(Style::Body, &self.state(r, false)), text(Style::Dim, &mem)]);
         if r.p.state != stat::ENDED {
             let what = match (r.terminal, r.p.window) {
