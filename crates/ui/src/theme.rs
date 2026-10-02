@@ -160,7 +160,7 @@ const MONO: Theme = Theme {
 };
 
 /// The built-in themes: Midnight (the default), Dawn and Mono.
-pub const THEMES: [Theme; 3] = [MIDNIGHT, DAWN, MONO];
+pub static THEMES: [Theme; 3] = [MIDNIGHT, DAWN, MONO];
 
 /// The theme named `name`, ignoring ASCII case; else the default, Mono.
 pub fn theme(name: &str) -> &'static Theme {
