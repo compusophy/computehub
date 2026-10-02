@@ -1,5 +1,6 @@
 mod module;
 mod shared;
+mod snap;
 mod wire;
 
 /// A deterministic xorshift64 for fuzzing; never 0 from a nonzero seed.

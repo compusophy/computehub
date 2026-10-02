@@ -17,6 +17,7 @@
 #![forbid(unsafe_code)]
 
 pub mod ai;
+pub mod home;
 pub mod remote;
 pub mod report;
 
@@ -36,9 +37,8 @@ const DEFERRED: [(u32, FontId, &str); 2] = [
     (u32::MAX, FontId::Mono, "fonts/deferred/JetBrainsMono-Regular.ttf"),
 ];
 
-/// The `localStorage` keys of the theme's name and of `"1"` once /home was saved.
+/// The `localStorage` key of the theme's name.
 pub const THEME_KEY: &str = "compusophy.theme";
-pub const HOME_KEY: &str = "compusophy.home";
 /// The preferences kept as `compusophy.<key>`: the AI model (which the AI hub keeps, see [`ai`]),
 /// the dock's favorites (registry names, comma-separated), `"1"` once Welcome was shown on a
 /// first visit, `"off"` to stop automatic error reports, the home screen's order (as the dock's)
@@ -72,8 +72,9 @@ struct Desktop {
     saved: &'static str,
     ai: ai::Ai,
     wake: f64,
-    /// Notes, feedback and error reports, and the outbox.
+    /// Notes, feedback and error reports, and the outbox; /home as kept.
     report: report::Reports,
+    home: home::Home,
     list: DrawList,
 }
 
@@ -94,14 +95,15 @@ impl Desktop {
     }
 
     /// Hands `input` to the shell, first making it at the first usable size.
-    fn input(&mut self, input: Input, ctl: &Ctl) -> Option<Response> {
+    fn input(&mut self, input: Input, ctl: &mut Ctl) -> Option<Response> {
         if let Some(shell) = &mut self.shell {
             return Some(shell.input(input));
         }
         self.missed_tick |= matches!(input, Input::Tick { .. });
         match input {
             Input::Resize { w, h } if w >= 1.0 && h >= shell::BAR_H + shell::DOCK_CLEAR + 1.0 => {
-                let (text, vfs) = self.parts.take()?;
+                let (text, mut vfs) = self.parts.take()?;
+                self.home.restore(&mut vfs, ctl, &mut self.report);
                 let prefs = prefs(ctl);
                 let shell = Shell::new(w, h, text, vfs, registry(self.ai.clone()), prefs);
                 let shell = self.shell.insert(shell);
@@ -187,14 +189,20 @@ impl Desktop {
         self.shell.as_mut().map(|s| s.kernel(ev))
     }
 
-    /// Pumps AI and the shell's queued effects (twice: each can cause the other), then reports;
-    /// stores a theme.
-    fn flush(&mut self, ctl: &mut Ctl) {
+    /// Keeps /home (at once if `hiding`), pumps AI and the shell's queued effects (twice: each
+    /// can cause the other), then reports; stores a theme.
+    fn flush(&mut self, ctl: &mut Ctl, hiding: bool) {
         let Some(shell) = &mut self.shell else { return };
+        if let Some(ms) = self.home.keep(shell.vfs(), ctl, &mut self.report, hiding) {
+            if arm(&mut self.wake, ctl, ms) {
+                ctl.wake_in(ms);
+            }
+        }
         for _ in 0..2 {
-            let told = self.ai.pump(ctl, shell.kernel_mut());
+            let told = self.ai.pump(ctl, shell.kernel_mut()) | self.home.retell();
             if self.report.retell() | told {
-                shell.set_ai(self.report.status(self.ai.status()));
+                let status = self.report.status(self.ai.status());
+                shell.set_ai(ui::AiStatus { unkept: self.home.unkept, ..status });
             }
             apply(shell.take_effects(), ctl, (&self.ai, &mut self.wake), &mut self.report);
         }
@@ -233,7 +241,7 @@ impl Desktop {
                 ctl.fetch(id, url);
             }
         }
-        self.flush(ctl);
+        self.flush(ctl, false);
     }
 
     /// The slot of the deferred font fetch `id` brings, if still awaited.
@@ -261,8 +269,9 @@ impl Desktop {
 
 impl App for Desktop {
     fn event(&mut self, ev: Event, ctl: &mut Ctl) -> Handled {
+        let hiding = matches!(ev, Event::Hidden);
         let h = self.handle(ev, ctl);
-        self.flush(ctl);
+        self.flush(ctl, hiding);
         h
     }
 
@@ -297,17 +306,22 @@ fn apply(
         match &fx {
             Effect::Feedback { kind, text, context } => report.feedback(kind, text, *context),
             Effect::Pref { key, value } => report.pref(ctl, key, value),
-            Effect::Kernel(K::Wake { ms }) => {
-                let (now, at) = (ctl.monotonic_ms(), ctl.monotonic_ms() + f64::from(*ms));
-                if *wake > now && *wake <= at {
-                    continue;
-                }
-                *wake = at;
-            }
+            Effect::Kernel(K::Wake { ms }) if !arm(wake, ctl, *ms) => continue,
             _ => {}
         }
         effect(fx, ctl, ai);
     }
+}
+
+/// Whether the one-shot timer should be armed for `ms` (`wake`: when it fires): not when it
+/// fires sooner already.
+fn arm(wake: &mut f64, ctl: &Ctl, ms: u32) -> bool {
+    let (now, at) = (ctl.monotonic_ms(), ctl.monotonic_ms() + f64::from(ms));
+    let sooner = *wake > now && *wake <= at;
+    if !sooner {
+        *wake = at;
+    }
+    !sooner
 }
 
 fn effect(fx: Effect, ctl: &mut Ctl, ai: &ai::Ai) {
@@ -320,7 +334,6 @@ fn effect(fx: Effect, ctl: &mut Ctl, ai: &ai::Ai) {
         Effect::Kernel(K::Word { pid, index, value }) => ctl.word(pid, index, value),
         Effect::Kernel(K::Kill { pid }) => ctl.kill(pid),
         Effect::Kernel(K::Wake { ms }) => ctl.wake_in(ms),
-        Effect::Kernel(K::Saved) => ctl.storage_set(HOME_KEY, "1"),
         Effect::Pref { key, value } => pref(&key, &value, ctl, ai),
         // Telemetry took it ([`apply`]): it goes at the next flush, which can say what is open.
         Effect::Feedback { .. } => {}

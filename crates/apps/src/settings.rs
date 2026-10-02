@@ -28,6 +28,9 @@ compusophyOS itself crashes) a short report goes to compusophy: what failed, the
 browser and screen size, the theme, the apps open and the last 50 events, such as \u{201c}ai \
 503\u{201d}. Never your files, your prompts or anything you typed.";
 const TYPED: &str = "Feedback you write always sends: you choose what it says, and when.";
+const FILES: &str = "Your files stay in this browser, on this device: none are sent anywhere.";
+const UNKEPT: &str = "Your files could not be kept: this browser\u{2019}s storage is full or \
+blocked, so changes since are lost when the page reloads.";
 const GRAIN_LABEL: &str = "Living grain";
 const GRAIN_NOTE: &str =
     "The backdrop's grain shifts, slightly. It stays still when your device asks for less motion.";
@@ -51,7 +54,8 @@ const CHECK: &str = "✓";
 /// Settings: Appearance (each of [`THEMES`] as a miniature desktop, the default first; a click
 /// applies it; and the living grain's switch), AI (a note on the free AI, and the models as rows;
 /// a click picks one, which the host stores) and Privacy (the automatic reports switch, what a
-/// report holds, a way to send feedback), by nav column or, narrow, tabs; tall pages scroll.
+/// report holds, where files stay, a way to send feedback), by nav column or, narrow, tabs; tall
+/// pages scroll.
 #[derive(Debug, Default)]
 pub struct Settings {
     /// The page shown, an index into [`PAGES`].
@@ -63,8 +67,9 @@ pub struct Settings {
     /// host last told (it hears a change of ours only from the page, later).
     pub(crate) reports_off: bool,
     told: Option<bool>,
-    /// Whether the grain is still, as [`Cx::grain`] last said.
+    /// Whether the grain is still, as [`Cx::grain`] last said, and whether files go unkept.
     pub(crate) still: bool,
+    unkept: bool,
 }
 
 impl App for Settings {
@@ -90,9 +95,9 @@ impl App for Settings {
 
     fn event(&mut self, ev: AppEvent, cx: &mut Cx<'_>) -> bool {
         let fresh = self.model != cx.ai.model || self.told != Some(cx.ai.reports_off);
-        let fresh = fresh || self.still == cx.grain;
+        let fresh = fresh || self.still == cx.grain || self.unkept != cx.ai.unkept;
         self.model.clone_from(&cx.ai.model);
-        self.still = !cx.grain;
+        (self.still, self.unkept) = (!cx.grain, cx.ai.unkept);
         if self.told != Some(cx.ai.reports_off) {
             (self.told, self.reports_off) = (Some(cx.ai.reports_off), cx.ai.reports_off);
         }
@@ -169,14 +174,18 @@ impl Settings {
         bottom
     }
 
-    /// The Privacy page from the cursor: the reports switch, what a report holds, and a line
-    /// that opens Feedback; returns its bottom.
+    /// The Privacy page from the cursor: the reports switch, what a report holds, where files
+    /// stay (or that they could not be kept), and a line that opens Feedback; returns its bottom.
     fn privacy(&self, ui: &mut Ui<'_>) -> f32 {
         let t = ui.theme();
         ui.heading("Privacy");
         let w = switch_row(ui, SWITCH, REPORT, !self.reports_off);
         ui.wrapped(HOLDS, t.small());
         ui.wrapped(TYPED, t.small());
+        match self.unkept {
+            true => ui.wrapped(UNKEPT, t.small().with_color(t.danger)),
+            false => ui.wrapped(FILES, t.small()),
+        };
         let (x, y) = ui.cursor();
         let link = ui.snapped(RectF::new(x, y + SPACING, w, 44.0));
         let (id, style) = (WidgetId(FEEDBACK), t.body().with_color(t.accent));
