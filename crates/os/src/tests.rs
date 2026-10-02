@@ -121,9 +121,7 @@ fn events_map_to_inputs_and_keys_by_code_or_by_meaning() {
         (resize(8.0, 6.0), Input::Resize { w: 8.0, h: 6.0 }),
         (Event::Tick { time: t }, Input::Tick { time: shell_time }),
     ];
-    for (ev, want) in pairs {
-        assert_eq!(input_of(ev.clone()), Some(want), "{ev:?}");
-    }
+    pairs.into_iter().for_each(|(ev, want)| assert_eq!(input_of(ev.clone()), Some(want), "{ev:?}"));
 }
 
 #[test]
@@ -140,9 +138,7 @@ fn typed_keys_are_left_to_the_textarea_and_key_ups_prevent_only_modifiers() {
     // Named keys, shortcuts, and keys that report nothing.
     let not = "Enter/Enter/ Tab/Tab/ Backspace/Backspace/ ArrowLeft/ArrowLeft/ F5/F5/ \
         ShiftLeft/Shift/s KeyC/c/c KeyB/b/a KeyV/v/m KeyQ/q/ca KeyA// Enter/\r/";
-    for e in not.split(' ') {
-        assert!(!types_text(&key(e, true)), "{e:?}");
-    }
+    not.split(' ').for_each(|e| assert!(!types_text(&key(e, true)), "{e:?}"));
     assert!(!types_text(&Event::Text("a".into())));
     // Key-ups draw nothing; only releasing Alt or Meta is prevented.
     let mut desk = desktop(false);

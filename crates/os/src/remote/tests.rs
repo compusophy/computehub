@@ -145,15 +145,21 @@ fn names_open_studio_and_the_first_size_starts_it() {
     assert!(s.cx(|r, cx| r.frame(2, &f[1..], cx)) && s.r.note == NEWER && s.r.frame.is_none());
     assert!(s.cx(|r, cx| r.frame(2, &f, cx)) && s.r.title() == "Mine");
     assert!(!s.cx(|r, cx| r.frame(2, &f[1..], cx)) && s.r.title() == "Mine");
-    // Activity runs the OS's own program, whatever its marker says; a kill (137) closes it.
+    // Activity runs the OS's own program, whatever its marker says. Its window may watch, and end
+    // a process: Studio's here, whose window a kill (137) closes; Activity's runs on.
     let mut s = Sys::new(false);
     s.r = Remote { trusted: true, ..Remote::new(STUDIO, vec!["activity".into()], &Ai::default()) };
     s.ev(AppEvent::Resized { w: 1.0, h: 1.0 });
     s.k.message(&mut s.fs, 2, &wire::Msg::Ready { version: wire::VERSION }.encode());
     let url = ui::kernel::Load::Url("bin/system.wasm".into());
     assert!(matches!(s.k.take_effects().pop(), Some(K::Start { program, .. }) if program == url));
-    s.k.kill(2, wire::KILLED);
-    assert!(!s.ev(AppEvent::Io) && s.asked == [R::CloseSelf]);
+    let mut studio = Remote::new(STUDIO, vec!["studio".into()], &Ai::default());
+    studio.event(AppEvent::Resized { w: 1.0, h: 1.0 }, &mut Cx::new(&mut s.fs, &mut s.k, 0.0));
+    s.show(vec![], vec![Request::Watch { on: true }, Request::End { pid: 3 }]);
+    s.r.ai.pump(&mut Ctl::default(), &mut s.k);
+    let mut cx = Cx::new(&mut s.fs, &mut s.k, 0.0);
+    assert!(!studio.event(AppEvent::Io, &mut cx) && cx.take_requests() == [R::CloseSelf]);
+    assert!(s.r.ai.0.borrow().watch == Some(2) && s.k.procs() == [(2, "activity".into(), true)]);
     // A missing program says so and none starts; a failed one says why.
     let mut s = Sys::new(false);
     assert!(s.fs.remove(STUDIO, false).is_ok() && s.ev(AppEvent::Resized { w: 1.0, h: 1.0 }));
@@ -218,8 +224,7 @@ fn clicks_keys_and_requests_go_through() {
     assert_eq!(s.events(), [Event::Close]);
     s.k.message(&mut s.fs, 2, &wire::Msg::Exit { status: 0 }.encode());
     s.asked.clear();
-    assert!(!s.ev(AppEvent::Io));
-    assert!(!s.ev(AppEvent::Io) && s.asked == [R::CloseSelf]);
+    assert!([s.ev(AppEvent::Io), s.ev(AppEvent::Io)] == [false; 2] && s.asked == [R::CloseSelf]);
 }
 
 #[test]
@@ -352,13 +357,11 @@ fn ai_requests_stream_back_to_the_program_that_asked() {
     // Counted: 3 asked (not the busy one), 1 failed, 2 with no receipt (cancelled, closed); then
     // a receipt a chunk boundary split, after more than the tail keeps.
     assert_eq!(s.r.ai.0.borrow().counts, [3, 1, 2, 0, 0, 0]);
-    let all = [vec![b'x'; 99], b"\n: receipt in=1200 out=30 microusd=1812\n\n".to_vec()].concat();
+    let b = [vec![b'x'; 99], b"\n: receipt in=1200 out=30 microusd=1812\n\n".to_vec()].concat();
     let mut s = Sys::new(true);
     ask(&mut s, vec![ai(1)]);
     let chunk = |d: &[u8]| platform::Event::Chunk { id: 1, data: d.to_vec() };
     let done = platform::Event::StreamEnd { id: 1, status: 200, error: "".into() };
-    for e in [chunk(&all[..120]), chunk(&all[120..]), done] {
-        s.r.ai.heard(&mut s.k, e);
-    }
+    [chunk(&b[..120]), chunk(&b[120..]), done].into_iter().for_each(|e| s.r.ai.heard(&mut s.k, e));
     assert_eq!(s.r.ai.0.borrow().counts, [1, 0, 0, 1200, 30, 1812]);
 }
