@@ -281,8 +281,8 @@ fn makes_checks_fixes_and_saves() {
     let (id, body) = ai(&frames[n - 1]);
     let (role, fix) = message(&body, 1);
     let want = "You were asked: a counter\n\nYour program did not compile: E0101 at line 3, col 1: \
-                expected `;`, found `}`\n  }\n  ^\nRule: label, input, let and assignments end \
-                with ;, also inside the braces of if, row and col";
+                expected `;`, found `}`\n  }\n  ^\nRule: every widget, let, assignment, call \
+                and return ends with ;, also inside the braces of if, row, col and for";
     assert!(messages(&body) == 2 && role == "user" && fix.starts_with(want), "{fix}");
     let tail = "fix every occurrence.\n\nYour program:\n```app\nrow {\n  label 1\n}\n```\nReply \
                 with the corrected complete program in one app block.";
@@ -401,11 +401,13 @@ fn a_program_that_faults_when_it_first_renders_goes_back_and_is_never_saved() {
         let (role, fix) = message(&body, 1);
         let want = format!(
             "The program now:\n```app\n{}\n```\nChange it: show the average\n\nYour program \
-             faults when it first renders: E0203 at line 3, col 21: ",
+             faults when it runs: E0203 at line 3, col 21: ",
             COUNTER.trim_end()
         );
         assert!(role == "user" && fix.starts_with(&want), "{fix}");
-        assert!(fix.contains("\nRule: guard every / and % so the divisor is never 0.\n"));
+        let rule = "\nRule: guard every / and % so the divisor is never 0.\nIt came while the \
+                    first render.\n";
+        assert!(fix.contains(rule), "{fix}");
     }
     assert!(w.disk["/apps/counter.app"] == COUNTER && !w.disk.contains_key(CORPUS));
 }

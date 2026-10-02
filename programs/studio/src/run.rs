@@ -32,7 +32,7 @@ pub struct Live {
 impl Live {
     /// `src` compiled and started.
     pub fn new(src: &str) -> Live {
-        let app = applang::compile(src).map(|p| App::new(p, Limits::default())).map_err(|d| {
+        let app = applang::compile(src).map(|p| App::new(p, Limits::default(), 1)).map_err(|d| {
             let snip = d.span.and_then(|s| lang::diag::render_snippet(src, s));
             let snip = snip.as_deref().and_then(|s| s.split_once('\n')).map(|(_, s)| s);
             (problem(&d, src), clip(snip.unwrap_or_default(), 4096))
@@ -61,7 +61,7 @@ impl Live {
     }
 
     fn render(&mut self) {
-        let Ok(app) = &self.app else { return };
+        let Ok(app) = &mut self.app else { return };
         match app.render() {
             Ok(nodes) => self.nodes = nodes,
             Err(d) => (self.nodes, self.fault) = (Vec::new(), Some(problem(&d, &self.src))),
@@ -136,6 +136,7 @@ fn wire(nodes: &[A], depth: usize, left: &mut usize, names: &[&str], out: &mut V
             }
             A::Row { .. } => Node::Row { id: 0, gap: 8, children },
             A::Col { .. } => Node::Col { id: 0, gap: 8, children },
+            A::Grid { .. } => Node::Spacer { px: 0 },
         });
         all
     })

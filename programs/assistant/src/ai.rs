@@ -2,7 +2,7 @@
 //! prompt and request body, coded failures, the program in a reply and what is wrong with it (as
 //! the person reads it and as the model fixing it does), file names and the corpus line.
 
-use applang::{App, Class, Limits};
+use applang::Class;
 use uiwire::Style;
 
 use crate::json::quote;
@@ -125,15 +125,24 @@ pub fn free_path(slug: &str, mut exists: impl FnMut(&str) -> bool) -> Option<Str
     (1..1000).map(name).find(|p| !exists(p))
 }
 
-/// What is wrong with `src`, if anything: that it does not compile or faults when it first
-/// renders, as [what it did, what it still does after fixes], the problem as a person reads it
-/// ([`problem`]) and the account a model fixing it gets: the problem with its line and a caret
-/// under it, the rule its code says was broken, and that every occurrence wants fixing.
+/// What is wrong with `src`, if anything: that it does not compile, or faults when it runs
+/// ([`applang::smoke`]: rendered, clicked, ticked, keyed, tapped and typed into), as [what it did,
+/// what it still does after fixes], the problem as a person reads it ([`problem`]) and the
+/// account a model fixing it gets: the problem with its line and a caret under it, the rule its
+/// code says was broken, what was being done when it came and what came before, and that every
+/// occurrence wants fixing.
 pub fn fault(src: &str) -> Option<([&'static str; 2], String, String)> {
-    let (what, d) = match applang::compile(src).map(|p| App::new(p, Limits::default()).render()) {
-        Ok(Ok(_)) => return None,
-        Ok(Err(d)) => (["faults when it first renders", "faulting"], d),
-        Err(d) => (["did not compile", "not compiling"], d),
+    let (what, d, when) = match applang::compile(src) {
+        Err(d) => (["did not compile", "not compiling"], d, String::new()),
+        Ok(p) => {
+            let f = applang::smoke(p, 1).fault?;
+            let before = match f.before.is_empty() {
+                true => String::new(),
+                false => [", after ", &f.before.join(", ")].concat(),
+            };
+            let when = ["\nIt came while ", &f.during, &before, "."].concat();
+            (["faults when it runs", "faulting"], f.diag, when)
+        }
     };
     // "line 3, col 5", then the line and its carets.
     let snip = d.span.and_then(|s| lang::diag::render_snippet(src, s)).unwrap_or_default();
@@ -142,12 +151,13 @@ pub fn fault(src: &str) -> Option<([&'static str; 2], String, String)> {
         .map_or((String::new(), ""), |(at, line)| ([" at ", at].concat(), line));
     let code = d.code.unwrap_or_default();
     let account = format!(
-        "Your program {}: E{code:04}{at}: {}\n{}\nRule: {}\nThe same mistake may be on other \
+        "Your program {}: E{code:04}{at}: {}\n{}\nRule: {}{}\nThe same mistake may be on other \
          lines too: fix every occurrence.",
         what[0],
         clip(&d.message, 1024),
         clip(line, 4096),
-        applang::rule(code)
+        applang::rule(code),
+        clip(&when, 1024)
     );
     Some((what, problem(&d, src), account))
 }
