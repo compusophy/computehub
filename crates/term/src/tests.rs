@@ -428,3 +428,13 @@ fn fuzz() {
     assert!(t.scrollback_len() <= SCROLLBACK);
     (0..t.scrollback_len()).for_each(|i| wide_ok(t.scrollback_row(i)));
 }
+
+#[test]
+fn rotate_is_rotate_left() {
+    for (len, k) in (0..9u8).flat_map(|len| (0..=len).map(move |k| (len, k))) {
+        let (mut a, mut b): (Vec<u8>, Vec<u8>) = ((0..len).collect(), (0..len).collect());
+        rotate(&mut a, k.into());
+        b.rotate_left(k.into());
+        assert_eq!(a, b, "{len} {k}");
+    }
+}

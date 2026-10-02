@@ -116,6 +116,14 @@ fn split_at(line: &mut [Cell], x: usize, blank: Cell) {
     }
 }
 
+/// `s` rotated left by `k` (at most its length), as `rotate_left` does it, by three
+/// reversals: core's rotation, for each type it moves, costs the boot about 0.7 KB.
+fn rotate<T>(s: &mut [T], k: usize) {
+    s[..k].reverse();
+    s[k..].reverse();
+    s.reverse();
+}
+
 /// Appends `line`, trailing blanks trimmed, reusing the oldest row when full.
 fn save_line(scrollback: &mut VecDeque<Vec<Cell>>, line: &[Cell]) {
     let used = line.iter().rposition(|c| *c != Cell::BLANK);
@@ -319,14 +327,15 @@ impl Term {
             }
             self.screen[y].fill(blank);
         }
-        self.screen[top..=bottom].rotate_left(n);
+        rotate(&mut self.screen[top..=bottom], n);
     }
 
     /// Scrolls rows `top..=bottom` down by `n`.
     fn scroll_down(&mut self, top: usize, bottom: usize, n: usize) {
         let n = n.min(bottom + 1 - top);
         let blank = self.blank();
-        self.screen[top..=bottom].rotate_right(n);
+        let rows = &mut self.screen[top..=bottom];
+        rotate(rows, rows.len() - n);
         self.screen[top..top + n].iter_mut().for_each(|line| line.fill(blank));
     }
 
@@ -350,7 +359,8 @@ impl Term {
         let n = n.min(cols - x);
         let line = &mut self.screen[self.cur.y];
         split_at(line, x, blank);
-        line[x..].rotate_right(n);
+        let rest = &mut line[x..];
+        rotate(rest, rest.len() - n);
         line[x..x + n].fill(blank);
         if line[cols - 1].width == 2 {
             line[cols - 1] = blank;
@@ -365,7 +375,7 @@ impl Term {
         let line = &mut self.screen[self.cur.y];
         split_at(line, x, blank);
         split_at(line, x + n, blank);
-        line[x..].rotate_left(n);
+        rotate(&mut line[x..], n);
         line[cols - n..].fill(blank);
         self.cur.wrap = false;
     }
