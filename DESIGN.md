@@ -107,7 +107,7 @@ frame: os → shell::draw → gfx::DrawList → platform::Renderer: one draw cal
 | `vt`, `term` | VT/xterm escape parser; terminal screen model |
 | `guest` | the shell the Terminal runs over the VFS |
 | `apps` | Terminal, Settings |
-| `system` | About, Feedback, Files and Welcome: one wasip1 GUI program (`dist/bin/system.wasm`), off the boot download |
+| `system` | About, Feedback, Files, Welcome and Activity: one wasip1 GUI program (`dist/bin/system.wasm`), off the boot download |
 | `studio` | the applang editor, and `AppHost`, which runs `.app` files |
 | `uiwire`, `uiview` | the remote UI protocol GUI programs speak; the desktop's half, which draws their trees |
 | `host` | the wm plus one app per window, the home screen's apps, windows held by the pointer, the keyboard's squeeze; motion, frame geometry |
@@ -239,9 +239,9 @@ one. Forked crates keep their Apache-2.0 license and note their origin.
   VFS, the page clock, and requests (open or close a window, load the
   fallback fonts, switch the theme). `os` owns the registry: `apps::open`
   makes `terminal` and `settings`; `remote::open` makes the GUI programs'
-  windows: `about`, `feedback`, `files`, `files:<dir>` and `welcome` (the
-  `system` program), `assistant`, `studio`, `studio:<path>` and any `*.app`
-  path.
+  windows: `about`, `feedback`, `files`, `files:<dir>`, `welcome` and
+  `activity` (the `system` program), `assistant`, `studio`, `studio:<path>`
+  and any `*.app` path.
 - **Terminal**: `vt` + `term` + a cell renderer, running the `guest` shell
   over the VFS (`ls`, `cd`, `cat`, `mkdir`, `mv`, `open`, `edit`, `run`,
   `theme`, ...). `term` already speaks xterm, keys and replies included, for
@@ -250,6 +250,19 @@ one. Forked crates keep their Apache-2.0 license and note their origin.
   window. **Welcome** (a program, its mark revealed by the desktop's clock)
   is the first screen; **Settings** picks the theme and
   lists what compusophyOS is made of.
+- **Activity**, the resource monitor: one word for the whole machine (Busy,
+  Drawing and why, Resting while only the grain draws, Still), then what runs
+  (the desktop, each program by its command line, never a title it set) with
+  its share of a core and its memory, /home against the browser's ~5 MB, and
+  the AI since the tab opened (requests, failures, tokens from each stream's
+  `usage`). Its window alone may send `Request::Watch` and `Request::End`
+  (it runs `bin/system.wasm` whatever `/bin/activity` says; the overlay may
+  only read and scroll it). The desktop answers with `Event::Stats`
+  (`uiwire::stat`): the kernel's table (deterministic) and the page's meters
+  (frames by cause, its own time and memory, each worker's busy ms and memory
+  from SAB words 10 to 13, read with no message), posted only when something
+  loud changed, at most once a second. A still desktop samples, wakes and
+  posts nothing, its grain living or not. Programs never write /bin (EROFS).
 - Two tiers:
 
   | | tier 0 (now) | tier 1 (R2) |

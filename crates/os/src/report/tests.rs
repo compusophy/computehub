@@ -186,8 +186,8 @@ fn the_desktop_sends_feedback_and_reports_failures_and_tells_apps() {
     assert!(sent[0].1.contains(r"windows  welcome, terminal, studio\n"), "{sent:?}");
     assert!(sent[0].1.contains("Bug: Dock flickers") && !sent[0].1.contains("diary"));
     // Its answer is the report's, not the AI's; a 503 holds it, and apps hear so.
-    let mut ctl = Ctl::default();
-    desk.event(Event::StreamEnd { id: sent[0].0, status: 503, error: String::new() }, &mut ctl);
+    let end = |id, status| Event::StreamEnd { id, status, error: String::new() };
+    desk.event(end(sent[0].0, 503), &mut Ctl::default());
     assert!(desk.report.outbox().len() == 1 && desk.report.status(Default::default()).held);
     // A worker that fails is noted with its program and reported.
     let mut ctl = Ctl::default();
@@ -201,7 +201,6 @@ fn the_desktop_sends_feedback_and_reports_failures_and_tells_apps() {
     desk.flush(&mut ctl, false);
     let asked = |e: &Fx| matches!(e, Fx::Stream { id: 1, url, .. } if url == crate::ai::URL);
     assert!(ctl.effects().iter().any(asked), "the AI's first stream");
-    let end = |id, status| Event::StreamEnd { id, status, error: String::new() };
     desk.event(end(1, 429), &mut Ctl::default());
     desk.event(end(77, 500), &mut Ctl::default());
     assert_eq!(notes(1), "ai 429\n");

@@ -103,7 +103,7 @@ run: notes.txt: not an .app file
 $ edit notes.txt
 [open studio:~/notes.txt]
 $ apps
-studio  assistant  terminal  files  settings  feedback  about  welcome
+studio  assistant  terminal  files  activity  settings  feedback  about  welcome
 /apps/demo.app
 ~/counter.app
 $ uname -a

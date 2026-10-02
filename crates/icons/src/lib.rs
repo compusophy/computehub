@@ -63,15 +63,17 @@ pub enum Glyph {
     Close,
     /// Feedback in the top bar: a beetle.
     Bug,
+    /// Activity: a level line with one beat (a still desktop is a flat line).
+    Pulse,
 }
 
 impl Glyph {
     /// Every glyph, in order.
     #[rustfmt::skip]
-    pub const ALL: [Glyph; 15] = {
+    pub const ALL: [Glyph; 16] = {
         use Glyph::*;
         [Mark, Apps, Cog, Studio, Assistant, Terminal, Folder, Home, File, Window, Feedback,
-            About, Chevron, Close, Bug]
+            About, Chevron, Close, Bug, Pulse]
     };
 
     /// The function that appends this glyph's contours to its argument.
@@ -93,6 +95,7 @@ impl Glyph {
             Chevron => chevron,
             Close => close,
             Bug => bug,
+            Pulse => pulse,
         }
     }
 }
@@ -371,6 +374,19 @@ fn chevron(o: &mut Outline) {
 fn close(o: &mut Outline) {
     stroke(o, &[(215.0, 215.0), (785.0, 785.0)]);
     stroke(o, &[(215.0, 785.0), (785.0, 215.0)]);
+}
+
+/// One stroke: level, up, down past the level, back to it, level.
+fn pulse(o: &mut Outline) {
+    const BEAT: [(f32, f32); 6] = [
+        (110.0, 480.0),
+        (350.0, 480.0),
+        (440.0, 720.0),
+        (560.0, 270.0),
+        (650.0, 480.0),
+        (890.0, 480.0),
+    ];
+    stroke(o, &BEAT);
 }
 
 /// A beetle from above: an oval shell split down the middle, a round head on it, three legs a

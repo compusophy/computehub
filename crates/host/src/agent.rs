@@ -15,7 +15,8 @@
 //!   [`ui::App::busy`] or [`SETTLE_MS`] passed (a wait: once its time passed), with the scene
 //!   then; the platform's timer is armed for the deadline, and again whenever it fires before it
 //!   (the page keeps the sooner of two). One act at a time; only the overlay may act
-//!   ([`acted::REFUSED`] otherwise) and nothing acts on it. A task ending (the overlay's status
+//!   ([`acted::REFUSED`] otherwise) and nothing acts on it; in Activity, which ends processes,
+//!   it may only scroll ([`ACTIVITY`]). A task ending (the overlay's status
 //!   no longer working, or the person taking over) drops the act settling for it.
 
 use std::mem;
@@ -32,6 +33,9 @@ use crate::{Call, Effect, Host, Response, Win, app_of, content_rect, rectf};
 pub const OVERLAY: WinId = WinId(0);
 /// The overlay's app; opening it summons the overlay ([`Agent::summon`]), never a window.
 pub const ASSISTANT: &str = "assistant";
+/// The app the overlay may read and scroll but never press in: it ends processes, the person's
+/// call alone.
+pub const ACTIVITY: &str = "activity";
 /// How long an act waits for busy windows, and how long its flash shows.
 pub const SETTLE_MS: f64 = 1500.0;
 pub const FLASH_MS: f64 = 600.0;
@@ -232,6 +236,9 @@ impl Host {
             _ => (0, 0),
         };
         let Some(w) = self.target(win) else { return acted::GONE };
+        if !matches!(act, Act::Scroll { .. }) && self.win(w).is_some_and(|x| x.name == ACTIVITY) {
+            return acted::REFUSED;
+        }
         self.apply(Cmd::Focus(w));
         self.settle(out);
         let layout = self.wm.layout();

@@ -4,7 +4,9 @@
 //! frame the window shows a note, or why it failed (a first frame that does not decode: the
 //! program is newer than the desktop). A frame's title is the window's and its requests are
 //! honored (Size in the first only; Focus when the frame holds that Input, Code or Area; Feedback
-//! goes to the page); a clean exit closes the window, and closing it sends [`Event::Close`]. The
+//! goes to the page; Watch and End from Activity's window alone, which runs the OS's own
+//! `bin/system.wasm`, never what a `/bin` file names); a clean exit or a kill (137) closes the
+//! window, and closing it sends [`Event::Close`]. The
 //! window's focus goes to the program as [`Event::Focus`], and a prompt from the everything bar
 //! as [`Event::Ask`], held until it starts. Edited text is owned as uiwire says ([`Texts`]), one
 //! [`Event::Change`] out at a time: the next waits for a frame, or goes before any other event.
@@ -25,7 +27,7 @@
 use std::mem;
 
 use ui::icon::Glyph;
-use ui::kernel::{Spawn, wire::Stdout};
+use ui::kernel::{Program, Spawn, wire};
 use ui::{App, AppEvent, AppIcon, Cx, Key, Mods, Rgba, Ui, WidgetId};
 use uiview::{Play, Texts, View};
 use uiwire::{Event, Frame, Request};
@@ -42,15 +44,18 @@ pub const APP_ICON: AppIcon = AppIcon { glyph: Glyph::Window, hue: Rgba::hex(0xf
 pub const ASSISTANT_ICON: AppIcon = AppIcon { glyph: Glyph::Assistant, hue: Rgba::hex(0xa78bfa) };
 /// A system app as (name, title, icon, size, whether compact).
 pub type SystemApp = (&'static str, &'static str, AppIcon, (f32, f32), bool);
-/// About, Feedback, Files and Welcome: one program, bin/system.wasm, run as the name of its /bin
-/// marker.
+/// About, Feedback, Files, Welcome and Activity: one program, bin/system.wasm, run as the name of
+/// its /bin marker.
 #[rustfmt::skip]
-pub const SYSTEM: [SystemApp; 4] = [
+pub const SYSTEM: [SystemApp; 5] = [
     ("about", "About", icon(Glyph::About, 0xfbbf24), (560.0, 640.0), true),
     ("feedback", "Feedback", icon(Glyph::Bug, 0x34d399), (520.0, 420.0), true),
     ("files", "Files", icon(Glyph::Folder, 0x60a5fa), (640.0, 480.0), false),
     ("welcome", "Welcome", icon(Glyph::Mark, 0xf472b6), (520.0, 768.0), true),
+    ("activity", "Activity", icon(Glyph::Pulse, 0x22d3ee), (440.0, 640.0), true),
 ];
+/// The program Activity runs, whatever /bin holds: its window watches and ends processes.
+const ACTIVITY: &str = "bin/system.wasm";
 /// Studio's size: room for the app beside its prompt.
 const STUDIO_SIZE: Option<(f32, f32)> = Some((880.0, 560.0));
 /// Shown in place of a first frame that does not decode.
@@ -70,6 +75,7 @@ pub fn open(name: &str, ai: &Ai) -> Option<Box<dyn App>> {
         let argv = [prog].into_iter().chain(dir).map(String::from).collect();
         let mut r = Remote::new(&["/bin/", prog].concat(), argv, ai);
         (r.title, r.icon, r.size, r.compact) = (title.into(), icon, Some(size), compact);
+        r.trusted = prog == "activity";
         return Some(Box::new(r));
     }
     let abs = |p: &str| Vfs::normalize("/apps", p).ok().filter(|_| !p.is_empty());
@@ -110,6 +116,8 @@ pub struct Remote {
     argv: Vec<String>,
     pid: Option<u32>,
     ai: Ai,
+    /// Activity's window: it may watch the meters and end processes.
+    trusted: bool,
     /// Why nothing runs (empty while it does), and its last output.
     note: String,
     log: String,
@@ -139,8 +147,12 @@ impl Remote {
 
     fn start(&mut self, cx: &mut Cx<'_>) {
         let (argv, cwd, roots, stdout) =
-            (self.argv.clone(), "/".into(), vec!["/".into()], Stdout::Console);
-        let pid = guest::program(cx.vfs, "/", &self.program)
+            (self.argv.clone(), "/".into(), vec!["/".into()], wire::Stdout::Console);
+        let program = match self.trusted {
+            true => Ok(Program::Url(ACTIVITY.into())),
+            false => guest::program(cx.vfs, "/", &self.program),
+        };
+        let pid = program
             .map_err(|missing| if missing { "not found" } else { "cannot execute" })
             .and_then(|program| {
                 cx.kernel.spawn(Spawn { argv, program, cwd, tty: None, stdout, roots })
@@ -261,7 +273,8 @@ impl Remote {
         edited && self.changed(id, cx)
     }
 
-    /// Output (the last kept for a failure) and the exit: clean closes, failed says why.
+    /// Output (the last kept for a failure) and the exit: clean or killed closes, failed says
+    /// why.
     fn io(&mut self, cx: &mut Cx<'_>) -> bool {
         let Some(pid) = self.pid else { return false };
         let out = cx.kernel.take_output(pid);
@@ -270,7 +283,7 @@ impl Remote {
         }
         let Some(status) = cx.kernel.reap(pid) else { return false };
         (self.pid, _) = (None, self.ai.ask(pid, Request::Close));
-        if status == 0 {
+        if status == 0 || status == wire::KILLED {
             cx.close_self();
             return false;
         }
@@ -296,6 +309,8 @@ impl Remote {
                 Request::Focus { .. } => {}
                 Request::Feedback { kind, text, context } => cx.feedback(&kind, &text, context),
                 r @ (Request::Act { .. } | Request::Status { .. }) => cx.agent(r),
+                // Activity's alone go to the hub, which serves them; from any other, dropped.
+                Request::Watch { .. } | Request::End { .. } if !self.trusted => {}
                 r if self.play.ask(&r) => {}
                 r => self.ai.ask(self.pid.unwrap_or_default(), r),
             }

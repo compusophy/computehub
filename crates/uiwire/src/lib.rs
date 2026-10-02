@@ -20,10 +20,15 @@
 //! is answered by one [`Event::Acted`] once the screen settles, carrying the [`scene`] as it is
 //! then; [`Event::Halt`] says the person took over. A request carries its [`Act`] as the act's
 //! own bytes, so only the overlay links the act's encoder and only the desktop its decoder.
+//!
+//! Activity's window alone may watch the desktop's meters ([`Request::Watch`], answered by
+//! [`Event::Stats`] in the [`stat`] format) and end a process ([`Request::End`]); the desktop
+//! drops both from any other window.
 
 #![forbid(unsafe_code)]
 
 pub mod client;
+pub mod stat;
 #[cfg(test)]
 mod tests;
 
@@ -282,6 +287,12 @@ pub enum Request {
     /// Whether plain keys (arrows, letters, digits, space) come as [`Event::Key`] while no text
     /// field of the window has the keyboard.
     Keys { on: bool },
+    /// Activity's window only: send [`Event::Stats`] when something loud changes, at most once a
+    /// second (`false` stops). Dropped from any other window.
+    Watch { on: bool },
+    /// Activity's window only: end process `pid` now (status 137, as a kill). Dropped from any
+    /// other window.
+    End { pid: u32 },
 }
 
 /// Something that happened in the window, host to program.
@@ -322,6 +333,8 @@ pub enum Event {
     Tick { ms: u32 },
     /// Square `cell` of Grid `id` was pressed, or dragged onto (or across).
     Tap { id: u32, cell: u32 },
+    /// The desktop's meters now ([`Request::Watch`]): [`stat::Stats`] bytes.
+    Stats { data: Vec<u8> },
 }
 
 /// The public `encode` and `decode` of each message, from its `put` and `get`.
@@ -567,6 +580,8 @@ impl Request {
             Self::Status { working } => o.u8(9).u8((*working).into()),
             Self::Timer { ms } => o.u8(10).u32(*ms),
             Self::Keys { on } => o.u8(11).u8((*on).into()),
+            Self::Watch { on } => o.u8(12).u8((*on).into()),
+            Self::End { pid } => o.u8(13).u32(*pid),
         }
     }
 
@@ -586,6 +601,8 @@ impl Request {
             9 => Self::Status { working: r.bool()? },
             10 => Self::Timer { ms: r.u32()? },
             11 => Self::Keys { on: r.bool()? },
+            12 => Self::Watch { on: r.bool()? },
+            13 => Self::End { pid: r.u32()? },
             _ => return None,
         })
     }
@@ -650,6 +667,7 @@ impl Event {
             Self::Halt => o.u8(13),
             Self::Tick { ms } => o.u8(14).u32(*ms),
             Self::Tap { id, cell } => o.u8(15).u32(*id).u32(*cell),
+            Self::Stats { data } => o.u8(16).bytes(data),
         }
     }
 
@@ -680,6 +698,7 @@ impl Event {
             13 => Self::Halt,
             14 => Self::Tick { ms: r.u32()? },
             15 => Self::Tap { id: r.u32()?, cell: r.u32()? },
+            16 => Self::Stats { data: r.bytes()?.to_vec() },
             _ => return None,
         })
     }

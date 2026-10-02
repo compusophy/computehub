@@ -271,8 +271,7 @@ fn fonts_load_in_groups_and_frames_come_only_while_something_moves() {
     let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/fonts/lazy/");
     let font = std::fs::read(format!("{dir}symbols-a.ttf")).expect("lazy font");
     // The second failed first: nothing is added until the first arrives.
-    let fallbacks =
-        |d: &mut Desktop| d.shell.as_mut().expect("created").text_mut().fallback_count();
+    let fallbacks = |d: &mut Desktop| d.shell.as_mut().expect("made").text_mut().fallback_count();
     assert_eq!(send(&mut desk, fetched(b, Err("HTTP 404".into()))).1, vec![]);
     assert_eq!(fallbacks(&mut desk), 0);
     assert_eq!(send(&mut desk, fetched(a, Ok(font))), ((true, false), vec![]));
@@ -353,7 +352,7 @@ fn programs_reach_the_kernel_and_its_effects_the_page() {
     // /bin holds each applet's marker; kernel events before the shell are dropped.
     let mut desk = fresh();
     let vfs = &desk.parts.as_ref().expect("unused").1;
-    assert_eq!(vfs.list("/bin").map(|l| l.len()), Ok(15));
+    assert_eq!(vfs.list("/bin").map(|l| l.len()), Ok(16));
     assert_eq!(vfs.read("/bin/selftest").unwrap(), b"#!wasm bin/toolbox.wasm\n");
     assert_eq!(vfs.read("/bin/assistant").unwrap(), b"#!wasm bin/assistant.wasm\n");
     assert_eq!(vfs.read("/bin/files").unwrap(), b"#!wasm bin/system.wasm\n");
@@ -403,7 +402,7 @@ fn programs_reach_the_kernel_and_its_effects_the_page() {
 }
 
 #[test]
-fn home_is_kept_at_once_then_by_the_timer_and_never_over_another_tabs() {
+fn home_and_the_meters_keep_to_the_one_shot_timer() {
     // At once, then by the one-shot timer, armed again if it fires early (here every wake does:
     // the page clock reads 0); hiding keeps it at once. Once another tab kept its own: never.
     let mut desk = desktop(true);
@@ -416,4 +415,15 @@ fn home_is_kept_at_once_then_by_the_timer_and_never_over_another_tabs() {
     run(&mut desk, "touch c");
     desk.event(Event::Hidden, &mut ctl);
     assert!(desk.home.unkept && run(&mut desk, "touch d").is_empty());
+    // A watcher (Activity's process; hello's here) hears the meters at once, in its read of its
+    // events, and the timer is (already) armed for a look a second on; nothing more is due yet.
+    desk.shell.as_mut().expect("made").kernel_mut().set_isolated(true);
+    run(&mut desk, "hello");
+    (desk.ai.0.borrow_mut().watch, desk.ai.0.borrow_mut().fresh) = (Some(2), true);
+    let read = |d: &mut Desktop| send(d, Event::Proc { pid: 2, msg: vec![0x21, 0, 0, 1, 0] }).1;
+    let (fx, stats) = (read(&mut desk), |d: &Vec<u8>| d.get(5..).and_then(stat::Stats::decode));
+    let s = fx.iter().find_map(|f| if let Fx::Reply { data, .. } = f { stats(data) } else { None });
+    assert!(s.is_some_and(|s| s.loud.len() == stat::LOUD && s.quiet.len() == stat::QUIET));
+    assert_eq!((desk.pace.wait(0), desk.wake), (Some(1000), 1001.0));
+    assert!(read(&mut desk).iter().all(|f| !matches!(f, Fx::Reply { .. } | Fx::Wake(_))));
 }

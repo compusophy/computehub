@@ -1,8 +1,9 @@
 //! Program workers: a module Worker per process and its SAB as `kernel::wire`
 //! lays it out (repeated: platform does not depend on the kernel). A worker's
-//! messages come after its ring, drained as a CONS_WRITE; a bell goes no further.
+//! messages come after its ring, drained as a CONS_WRITE; a bell goes no further. Its meters
+//! are read where it keeps them, with no message ([`stat`]).
 
-use std::cell::RefMut;
+use std::cell::{Cell, RefMut};
 use std::rc::Rc;
 
 use js_sys::{Array, Atomics, Int32Array, Reflect, SharedArrayBuffer, Uint8Array};
@@ -18,6 +19,7 @@ macro_rules! consts {
 // The payload and the ring (after 16 words), the word indexes, the ops.
 consts!(u32: PAYLOAD_AT = 64, RING_AT = 65_600, RING_BYTES = 65_536);
 consts!(u32: STATE = 0, ERRNO = 1, LEN = 2, HEAD = 7, TAIL = 8, BELL = 9);
+consts!(u32: RUN = 10, BUSY = 11, SINCE = 12, PAGES = 13);
 consts!(u8: CONS_BELL = 0x10, CONS_WRITE = 0x11, HOME_STATE = 0x18, EXIT = 0x1F);
 
 /// A worker; unless homed, its SAB as words and bytes and TAIL (main's alone).
@@ -87,6 +89,29 @@ fn drain(s: &Shared, pid: u32) -> Option<Vec<u8>> {
         set(words, TAIL, head as i32);
     }
     Some(out)
+}
+
+/// Every worker's meters ([`crate::Ctl::proc_stats`]), from its SAB words.
+pub(crate) fn stats() -> Vec<(u32, [u32; 3])> {
+    let mut out = Vec::new();
+    let s = crate::SHARED.try_with(Cell::get).ok().flatten();
+    if let Some((s, perf)) = s.and_then(|s| Some((s, s.window.performance()?))) {
+        let now = (perf.time_origin() + perf.now()) as u64 as u32;
+        for p in s.procs.borrow().iter() {
+            if let Some((w, ..)) = &p.sab {
+                let w = |i| Atomics::load(w, i).unwrap_or(0) as u32;
+                out.push((p.pid, meters([w(RUN), w(BUSY), w(SINCE), w(PAGES)], now)));
+            }
+        }
+    }
+    out
+}
+
+/// The meters from words RUN, BUSY, SINCE and PAGES at `now` (ms, wrapping): BUSY plus the run
+/// so far (none if `now` reads before SINCE: another thread's clock), PAGES in KB, RUN.
+pub(crate) fn meters([run, busy, since, pages]: [u32; 4], now: u32) -> [u32; 3] {
+    let ran = if run == 1 { (now.wrapping_sub(since) as i32).max(0) as u32 } else { 0 };
+    [busy.wrapping_add(ran), pages.wrapping_mul(64), run]
 }
 
 /// `Atomics.store` and `notify` of word `i`.

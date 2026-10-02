@@ -230,6 +230,55 @@ fn output_exits_kills_and_failures_wake_the_owner_and_reap_gives_each_status_onc
     assert_eq!([a, b, c, d].map(|pid| k.reap(pid)), [Some(130), Some(126), Some(126), Some(127)]);
 }
 
+/// The table `k` appends for `watcher`.
+fn listed(k: &Kernel, watcher: u32) -> Vec<u8> {
+    let mut out = vec![7];
+    k.table(watcher, &mut out);
+    out.split_off(1)
+}
+
+#[test]
+fn the_table_lists_each_process_for_a_watcher() {
+    // Files in window 5, a long command line in the overlay (window 0), and the watcher.
+    let table = || {
+        let (mut k, mut fs) = (kernel(), Vfs::new());
+        let gui =
+            run(&mut k, &mut fs, Spawn { argv: vec!["files".into(), "/tmp".into()], ..hello() });
+        k.set_owner(0);
+        let argv = ["spin", "1", &"\u{e9}".repeat(77), "22"].map(String::from).into();
+        let spin = run(&mut k, &mut fs, Spawn { argv, ..hello() });
+        let watcher = run(&mut k, &mut fs, hello());
+        // Only DRAWs taken count; a read of events makes it idle.
+        for m in
+            [&[wire::DRAW, 1][..], &vec![wire::DRAW; MAX_FRAME + 2], &[wire::EVENTS, 9, 0, 0, 0]]
+        {
+            k.message(&mut fs, gui, m);
+        }
+        k.message(&mut fs, watcher, &[wire::DRAW]);
+        let before = listed(&k, watcher);
+        k.message(&mut fs, spin, &Msg::Exit { status: 0 }.encode());
+        (k, [gui, spin, watcher], before)
+    };
+    let (mut k, [gui, spin, watcher], before) = table();
+    let row = |w: Writer, (pid, window, state, argv, draws): (u32, u32, u8, &[&str], u32)| {
+        let w = w.u32(pid).u32(window).u8(state).u16(argv.len() as u16);
+        argv.iter().fold(w, |w, a| w.u32(a.len() as u32).bytes(a.as_bytes())).u16(1).u32(draws)
+    };
+    // The words while their bytes fit in 160: 154 of e-acutes after "spin" and "1" do, "22" not.
+    let long = "\u{e9}".repeat(77);
+    let words = ["spin", "1", long.as_str()];
+    let (files, spun) = ((gui, 5, 0, &["files", "/tmp"][..], 1), (spin, 0, 1, &words[..], 0));
+    assert_eq!(before, row(row(Writer::default().u16(2), files), spun).done());
+    // Ended (2) until reaped; with no watcher, every process.
+    let ended = (spin, 0, 2, &words[..], 0);
+    let all = row(row(row(Writer::default().u16(3), files), ended), (watcher, 0, 1, &["hello"], 1));
+    assert_eq!(listed(&k, 0), all.done());
+    let one = row(Writer::default().u16(1), files).done();
+    assert_eq!((k.reap(spin), listed(&k, watcher)), (Some(0), one));
+    // The same messages give the same table.
+    assert_eq!(table().2, before);
+}
+
 #[test]
 fn spawn_refuses_past_its_limits_and_a_closed_window_ends_its_processes() {
     assert_eq!(Kernel::new().spawn(hello()), Err(NOT_ISOLATED));

@@ -79,7 +79,7 @@ programs/    wasm32-wasip1 programs (dist/bin/), the app language they share
   applang-syntax/ applang/    tier 0 app language: front end, runtime
   studio/    Studio: make apps by describing them; runs `.app` files
   assistant/ the Assistant: the overlay AI using the desktop
-  system/    About, Feedback, Files, Welcome (one multicall program)
+  system/    About, Feedback, Files, Welcome, Activity (one program)
   toolbox/   test programs (one multicall binary)
 assets/fonts/  the fonts (see Fonts below)
 api/           server functions (Vercel, Node): ai.mjs, feedback.mjs

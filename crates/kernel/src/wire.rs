@@ -3,11 +3,15 @@
 //! path is [`EILSEQ`] in the worker); `rest` is every remaining byte. A bad message decodes to
 //! `None` (answered with [`EINVAL`]), never a panic.
 //!
-//! A process's SAB: 16 i32 words ([`STATE`] to [`BELL`], the rest 0), the reply
+//! A process's SAB: 16 i32 words ([`STATE`] to [`PAGES`], the rest 0), the reply
 //! payload at [`PAYLOAD_AT`], the console ring at [`RING_AT`]. A reply: payload,
 //! LEN, ERRNO, STATE = 1 and notify; the worker stores STATE = 0 before its next
 //! request. COLS, ROWS: the window; INPUT: [`INPUT_READY`], [`INPUT_EOF`]; SLEEP:
 //! never written; HEAD, TAIL: console bytes, wrapping; BELL: 1 while a CONS_BELL flies.
+//! The worker's meters, which main reads and never writes: RUN 1 from the program's start
+//! but while it waits (each `Atomics.wait`); BUSY its ms running up to its last wait, wrapping;
+//! SINCE when it last began to run (`timeOrigin + now()` ms, wrapping); PAGES its wasm memory
+//! (the guest's and its own) in 64 KiB pages, as of its last wait.
 
 use vfs::VfsError;
 
@@ -21,7 +25,7 @@ consts! {
     u32: HOME_PID = 1, MEM_PAGES = 4_096;
     u32: SAB_BYTES = 64 + 65_536 + 65_536, PAYLOAD_AT = 64, RING_AT = 65_600, RING_BYTES = 65_536;
     u32: STATE = 0, ERRNO = 1, LEN = 2, COLS = 3, ROWS = 4, INPUT = 5, SLEEP = 6, HEAD = 7;
-    u32: TAIL = 8, BELL = 9;
+    u32: TAIL = 8, BELL = 9, RUN = 10, BUSY = 11, SINCE = 12, PAGES = 13;
     i32: INPUT_READY = 1, INPUT_EOF = 2;
     u8: READY = 0x00, OPEN = 0x01, READ = 0x02, WRITE = 0x03, LIST = 0x04, MKDIR = 0x05;
     u8: REMOVE = 0x06, RENAME = 0x07, SETLEN = 0x08, CONS_BELL = 0x10, CONS_WRITE = 0x11;

@@ -25,6 +25,8 @@ use wire::Msg;
 pub const NOT_ISOLATED: &str = "programs need a cross-origin isolated page (COOP/COEP headers)";
 /// The most bytes in one DRAW frame, and in the events queued for a process.
 pub const MAX_FRAME: usize = 1 << 20;
+/// The most bytes of a command line [`Kernel::table`] tells: its words while they fit.
+pub const MAX_CMD: usize = 160;
 
 /// A program's bytes: a VFS path (read at READY), or a page-relative URL
 /// (`[A-Za-z0-9._/-]+`, no `..`; the shell checks) fetched as `"../" + url`.
@@ -82,19 +84,27 @@ pub enum Effect {
     Draw { pid: u32, frame: Vec<u8> },
 }
 
-/// A process: its owner window, Start and program until READY, valid roots,
-/// status once ended, untaken output, queued events, a waiting read's `max`.
+/// A process: its owner window, argv, Start and program until READY, valid roots, status once
+/// ended, untaken output, queued events, a waiting read's `max`, DRAWs taken.
 #[derive(Debug, Default)]
 struct Process {
     pid: u32,
     owner: u32,
-    argv0: String,
+    argv: Vec<String>,
     start: Option<(Vec<u8>, Program)>,
     roots: Vec<String>,
     status: Option<i32>,
     out: Vec<u8>,
     events: Vec<Vec<u8>>,
     waiting: Option<u32>,
+    draws: u32,
+}
+
+impl Process {
+    /// argv\[0\], or nothing.
+    fn name(&self) -> &str {
+        self.argv.first().map_or("", String::as_str)
+    }
 }
 
 /// The shared half: a deterministic state machine whose asks
@@ -134,16 +144,16 @@ impl Kernel {
             return Err("too many programs are running");
         }
         let Spawn { argv, program, cwd, tty, stdout, roots } = s;
-        let (pid, argv0) = (self.last_pid.max(wire::HOME_PID) + 1, argv.first().cloned());
+        let pid = self.last_pid.max(wire::HOME_PID) + 1;
         let (role, env) = (wire::Role::Process, vec![]);
         let st = wire::Start { role, pid, tty, stdout, cwd, roots, argv, env };
         let msg = st.encode();
         if msg.len() > wire::MAX_START {
             return Err("argument list too long");
         }
-        let (owner, argv0, start) = (self.owner, argv0.unwrap_or_default(), Some((msg, program)));
-        let roots = st.roots;
-        self.procs.push(Process { pid, owner, argv0, start, roots, ..Process::default() });
+        let (owner, start, wire::Start { roots, argv, .. }) =
+            (self.owner, Some((msg, program)), st);
+        self.procs.push(Process { pid, owner, argv, start, roots, ..Process::default() });
         self.last_pid = pid;
         // No COLS/ROWS words yet: until step 3's live /dev/winsize the worker
         // reads its size from the Start, and the words cost boot bytes.
@@ -160,6 +170,7 @@ impl Kernel {
         let Some(i) = self.find(pid, true) else { return };
         let reply = match *msg {
             [wire::DRAW, ref frame @ ..] if frame.len() <= MAX_FRAME => {
+                self.procs[i].draws = self.procs[i].draws.wrapping_add(1);
                 self.effects.push(Effect::Draw { pid, frame: frame.to_vec() });
                 Ok(Vec::new())
             }
@@ -236,7 +247,32 @@ impl Kernel {
 
     /// Every process not yet reaped, in pid order: pid, argv\[0\], whether it still runs.
     pub fn procs(&self) -> Vec<(u32, String, bool)> {
-        self.procs.iter().map(|p| (p.pid, p.argv0.clone(), p.status.is_none())).collect()
+        self.procs.iter().map(|p| (p.pid, p.name().into(), p.status.is_none())).collect()
+    }
+
+    /// Appends the process table as a watcher reads it (`uiwire::stat`), the watcher `except`
+    /// left out: a u16 count, then per process in pid order its pid, owner window, state (0 waits
+    /// for an event, 1 runs, 2 ended), argv's words while their bytes fit in [`MAX_CMD`] (a u16
+    /// count, each a u32 length and UTF-8) and counts (one: its DRAWs).
+    pub fn table(&self, except: u32, out: &mut Vec<u8>) {
+        let rows = || self.procs.iter().filter(|p| p.pid != except);
+        out.extend_from_slice(&(rows().count() as u16).to_le_bytes());
+        for p in rows() {
+            let state = if p.status.is_some() { 2 } else { u8::from(p.waiting.is_none()) };
+            let (mut room, mut k) = (MAX_CMD, 0);
+            while let Some(n) = p.argv.get(k).map(String::len).filter(|&n| n <= room) {
+                (room, k) = (room - n, k + 1);
+            }
+            out.extend_from_slice(&p.pid.to_le_bytes());
+            out.extend_from_slice(&p.owner.to_le_bytes());
+            out.extend_from_slice(&[state, k as u8, (k >> 8) as u8]);
+            for a in p.argv.iter().take(k) {
+                out.extend_from_slice(&(a.len() as u32).to_le_bytes());
+                out.extend_from_slice(a.as_bytes());
+            }
+            out.extend_from_slice(&[1, 0]);
+            out.extend_from_slice(&p.draws.to_le_bytes());
+        }
     }
 
     /// The window `owner` closed: its processes end (137, never reaped) and are forgotten.
@@ -301,7 +337,7 @@ impl Kernel {
             Program::Vfs(path) => match vfs.read(&path) {
                 Ok(bytes) => Load::Bytes(bytes.to_vec()),
                 Err(_) => {
-                    p.out.extend_from_slice(p.argv0.as_bytes());
+                    p.out.extend_from_slice(p.argv.first().map_or(&[][..], |a| a.as_bytes()));
                     p.out.extend_from_slice(b": not found\n");
                     return self.end(i, wire::NOT_FOUND);
                 }

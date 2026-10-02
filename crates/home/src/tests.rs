@@ -356,7 +356,7 @@ fn icons_carried_past_their_travel_land_in_the_persons_order() {
     // Dropped: there it stays, and the order is kept.
     g.drop(true, Some(mid(3)), &mut fx);
     assert_eq!(labels(&g)[..4], ["Assistant", "Terminal", "Files", "Studio"]);
-    let order = "assistant,terminal,files,studio,settings,feedback,about,welcome";
+    let order = "assistant,terminal,files,studio,activity,settings,feedback,about,welcome";
     assert_eq!(fx, [Effect::Pref { key: "home.order".into(), value: order.into() }]);
     // Escape, or the pointer leaving (a drop that keeps nothing), puts it back: it slides back
     // from where it showed, and nothing changes.
@@ -379,12 +379,12 @@ fn icons_carried_past_their_travel_land_in_the_persons_order() {
     // The order comes from the page: unknown names dropped, new apps last, nothing kept yet. An
     // app new since (a `.app` saved) shows up last, and the order is kept.
     let mut g = grid(Some("welcome,gone,terminal"));
-    let want =
-        ["Welcome", "Terminal", "Studio", "Assistant", "Files", "Settings", "Feedback", "About"];
-    assert_eq!(labels(&g), want);
+    let want = ["Welcome", "Terminal", "Studio", "Assistant", "Files", "Activity", "Settings"];
+    assert_eq!(labels(&g), [&want[..], &["Feedback", "About"]].concat());
     let all: Vec<&str> = APPS.iter().copied().chain(["/apps/clock.app"]).collect();
-    assert!(g.list(2, || entries(&all), &mut fx) && labels(&g)[8] == "Clock");
-    let order = "welcome,terminal,studio,assistant,files,settings,feedback,about,/apps/clock.app";
+    assert!(g.list(2, || entries(&all), &mut fx) && labels(&g)[9] == "Clock");
+    let order =
+        "welcome,terminal,studio,assistant,files,activity,settings,feedback,about,/apps/clock.app";
     assert_eq!(fx.last(), Some(&Effect::Pref { key: "home.order".into(), value: order.into() }));
 }
 
@@ -417,9 +417,8 @@ fn a_box_selects_icons_which_open_and_move_together_and_a_finger_picks_one_up() 
     assert_eq!(g.carry.as_ref().map(|c| c.icons.clone()), Some(vec![0, 1]));
     g.carry_to(Some(mid(5)));
     g.drop(true, Some(mid(5)), &mut fx);
-    let order =
-        ["Terminal", "Files", "Settings", "Feedback", "About", "Studio", "Assistant", "Welcome"];
-    assert_eq!(labels(&g), order);
+    let order = ["Terminal", "Files", "Activity", "Settings", "Feedback", "Studio", "Assistant"];
+    assert_eq!(labels(&g), [&order[..], &["About", "Welcome"]].concat());
     // Carried, the one pressed shows where the pointer holds it, two of the rest behind it.
     let mut g = grid(None);
     g.selected = ["studio", "assistant", "terminal", "files"].map(String::from).into();

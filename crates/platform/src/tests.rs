@@ -1,6 +1,6 @@
 use super::ctl::is_relative_url;
 use super::io::{http_error, inserts_text};
-use super::proc::{RING_AT, RING_BYTES, ring_spans};
+use super::proc::{RING_AT, RING_BYTES, meters, ring_spans};
 use super::render::{ATTRIBS, MIN_CAPACITY, backing_size, band_bytes, clear_rgb, grow_capacity};
 use super::*;
 use gfx::{INSTANCE_BYTES, Rgba};
@@ -214,4 +214,14 @@ fn small_helpers() {
     // leap second) still give a short, positive wait.
     let waits = [(0, 0), (59, 999), (30, 500), (60, 5000)].map(|(s, ms)| ms_to_next_minute(s, ms));
     assert_eq!(waits, [60_010, 11, 29_510, 11]);
+}
+
+#[test]
+fn a_workers_meters_count_its_run_so_far() {
+    // Waiting: BUSY as it left it, PAGES in KB. Running since 1,000: the 500 ms so far too.
+    assert_eq!(meters([0, 70, 1000, 3], 1500), [70, 192, 0]);
+    assert_eq!(meters([1, 70, 1000, 3], 1500), [570, 192, 1]);
+    // The clock wraps; another thread's clock a hair behind SINCE adds nothing.
+    assert_eq!(meters([1, u32::MAX, u32::MAX - 9, 0], 10), [19, 0, 1]);
+    assert_eq!(meters([1, 5, 1000, 0], 999), [5, 0, 1]);
 }
