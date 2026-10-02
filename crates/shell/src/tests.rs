@@ -472,9 +472,16 @@ fn kept_tiles_move_along_the_dock_by_a_mouse_or_a_held_finger() {
         assert_eq!(s.labels().len(), if menu { 2 } else { 0 });
         s.k(Escape, "");
     }
+    // An icon carried onto the row opens a gap under the pointer: dropped, its app is kept
+    // there, and the icon goes back to its place (the home screen's order as it was).
+    s.to(cell(4));
+    s.down(cell(4));
+    s.to(s.tile_at(1));
+    let got = (s.dock.strip.gap, s.up(s.tile_at(1)).effects);
+    assert_eq!(got, ((1, 1), pref("studio,settings,files,terminal")));
     // A click, carrying nothing, opens it.
     s.click(s.tile_at(0));
-    assert_eq!((shown(&s), s.names()), ("studio,files,terminal".into(), vec!["studio"]));
+    assert_eq!((shown(&s), s.names()), ("studio,settings,files,terminal".into(), vec!["studio"]));
 }
 
 #[test]

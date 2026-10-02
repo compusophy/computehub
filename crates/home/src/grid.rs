@@ -1,7 +1,8 @@
 //! The home screen's grid as it behaves (where cells are and how an icon draws: [`icons`]):
 //! every app, listed in the person's order and the order kept as it changes ([`icons::PREF`]);
-//! icons carried to a new place (a mouse's once it travels 4 px, a finger's once held, then 8 px);
-//! the selection box; Enter and Escape for them; each icon sliding to its cell.
+//! icons carried to a new place (a mouse's once it travels 4 px, a finger's once held, then 8 px)
+//! or below the grid, onto the bottom row, which keeps their apps (they go back); the selection
+//! box; Enter and Escape for them; each icon sliding to its cell.
 
 use std::mem;
 
@@ -55,6 +56,11 @@ impl Carry {
     /// Where a finger held them, if it picked them up and lifts unmoved: their menu opens there.
     pub fn held(&self) -> Option<(f32, f32)> {
         (self.touch && self.lifted && !self.moved).then_some(self.from)
+    }
+
+    /// The slot they were picked up from, among the rest.
+    pub fn home(&self) -> usize {
+        (0..self.lead).filter(|k| !self.icons.contains(k)).count()
     }
 }
 
@@ -185,28 +191,46 @@ impl Grid {
         Some(Carry { icons: picked, lead: i, from: at, off, touch, lifted, moved: false, slot })
     }
 
+    /// Whether `at` lies below the grid: over the bottom row, which keeps carried icons' apps
+    /// (the icons go back).
+    fn beneath(&self, at: Option<(f32, f32)>) -> bool {
+        at.is_some_and(|at| at.1 >= self.area.y + self.area.h)
+    }
+
+    /// The apps of the icons carried (and moved) below the grid, the pointer at `at`.
+    pub fn below(&self, at: Option<(f32, f32)>) -> Vec<String> {
+        let c = self.carry.as_ref().filter(|c| c.moved && self.beneath(at));
+        let icons = c.map_or(&[][..], |c| &c.icons[..]).iter().filter_map(|&i| self.icons.get(i));
+        icons.map(|e| e.name.clone()).collect()
+    }
+
     /// The pointer moved to `at`: carried icons follow it once it traveled far enough, and the
-    /// slot under them opens. Whether they just started to move (a press is no click then).
+    /// slot under them opens (below the grid, the one they came from). Whether they just
+    /// started to move (a press is no click then).
     pub fn carry_to(&mut self, at: Option<(f32, f32)>) -> bool {
+        let beneath = self.beneath(at);
         let (Some(at), Some(c)) = (at, &mut self.carry) else { return false };
         let start = c.travel(at);
         if c.moved {
             let r = icons::cell(0, self.area, self.narrow);
             let center = (at.0 - c.off.0 + r.w / 2.0, at.1 - c.off.1 + r.h / 2.0);
-            c.slot = icons::slot(self.icons.len() - c.icons.len(), self.area, self.narrow, center);
+            let rest = self.icons.len() - c.icons.len();
+            c.slot =
+                if beneath { c.home() } else { icons::slot(rest, self.area, self.narrow, center) };
         }
         start
     }
 
     /// Puts carried icons down: where they are headed if `keep` and they moved (keeping the
-    /// order if it changed, its preference to `fx`), else back; each slides there from where it
-    /// showed with the pointer at `at`.
+    /// order if it changed, its preference to `fx`), else (or below the grid) back; each slides
+    /// there from where it showed with the pointer at `at`.
     pub fn drop(&mut self, keep: bool, at: Option<(f32, f32)>, fx: &mut Vec<Effect>) {
         for (i, r) in self.carried(at) {
             if let Some(t) = self.cells.get_mut(i) {
                 *t = Tween::new(Vis::at(r));
             }
         }
+        let keep = keep && !self.beneath(at);
         let Some(c) = self.carry.take() else { return };
         let order = icons::moved(self.icons.len(), &c.icons, c.slot);
         if keep && c.moved && order.iter().enumerate().any(|(k, &i)| k != i) {

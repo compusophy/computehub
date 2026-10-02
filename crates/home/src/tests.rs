@@ -136,11 +136,15 @@ fn the_overlay_sits_above_the_assistant_a_card_a_sheet_or_a_pill() {
     let s = Strip::new(2, 1, (1280.0, 800.0));
     assert_eq!(s.overlay((1280.0, 800.0), 44.0, false), RectF::new(710.0, 258.0, 560.0, 480.0));
     assert_eq!(s.overlay((1280.0, 800.0), 44.0, true), RectF::new(850.0, 686.0, 420.0, 52.0));
-    // A short screen keeps it under the bar; a narrow one a sheet inside its gutters.
+    // A short screen keeps it under the bar; a narrow one a sheet (or pill) out to the row's
+    // edges: its first tile's and the Assistant's.
     assert_eq!(Strip::new(0, 0, (1280.0, 250.0)).overlay((1280.0, 250.0), 44.0, false).y, 52.0);
     let phone = Strip::new(1, 3, (390.0, 844.0));
-    assert_eq!(phone.overlay((390.0, 844.0), 44.0, false), RectF::new(16.0, 360.0, 358.0, 422.0));
-    assert_eq!(phone.overlay((390.0, 844.0), 44.0, true), RectF::new(16.0, 730.0, 358.0, 52.0));
+    let edges = (phone.xs[0], phone.assistant.x + phone.assistant.w);
+    assert_eq!(phone.overlay((390.0, 844.0), 44.0, false), RectF::new(10.0, 360.0, 370.0, 422.0));
+    assert_eq!(phone.overlay((390.0, 844.0), 44.0, true), RectF::new(10.0, 730.0, 370.0, 52.0));
+    assert_eq!(edges, (10.0, 380.0));
+    assert_eq!(Strip::new(0, 0, (0.0, 0.0)).overlay((0.0, 0.0), 44.0, false).w, 0.0);
 }
 
 #[test]
@@ -167,7 +171,7 @@ fn the_dock_is_the_persons_own_its_kept_tiles_carried_to_a_new_order() {
     // Kept a, x (which the registry does not know: it does not show) and b; then one running.
     // Only a kept tile carries: a mouse's once it travels 4 px, to the slot under it.
     let (mut d, mut fx, size) = (Dock::new(Some("a,x,b")), Vec::new(), (1280.0, 800.0));
-    d.layout(vec![0, 2], 3, size);
+    d.layout(vec![0, 2], 3, size, (&[], 0.0));
     let at = |i: usize| (32.0 + 52.0 * i as f32, 768.0);
     assert!(d.pick(2, at(2), false).is_none());
     d.carry = d.pick(0, at(0), false);
@@ -179,7 +183,7 @@ fn the_dock_is_the_persons_own_its_kept_tiles_carried_to_a_new_order() {
     assert_eq!(d.favs, names(&["x", "b", "a"]));
     assert_eq!(fx, [Effect::Pref { key: "dock".into(), value: "x,b,a".into() }]);
     // Put back (Escape, the pointer gone), or down where it was: nothing changes.
-    d.layout(vec![1, 2], 3, size);
+    d.layout(vec![1, 2], 3, size, (&[], 0.0));
     for (keep, to) in [(false, 0), (true, 1)] {
         d.carry = d.pick(1, at(1), false);
         d.carry_to(Some(at(to)));
@@ -191,7 +195,7 @@ fn the_dock_is_the_persons_own_its_kept_tiles_carried_to_a_new_order() {
     d.carry = d.pick(1, at(1), true);
     assert_eq!(d.carry.as_ref().and_then(|c| c.held()), Some(at(1)));
     assert!(!d.carry_to(Some((at(1).0 - 7.0, 768.0))) && d.carry_to(Some(at(0))));
-    d.layout(vec![1], 1, size);
+    d.layout(vec![1], 1, size, (&[], 0.0));
     assert!(d.carry.is_none());
     // Kept or not by the menus, the preference following.
     d.keep("c", true, &mut fx);
@@ -199,6 +203,32 @@ fn the_dock_is_the_persons_own_its_kept_tiles_carried_to_a_new_order() {
     d.keep("assistant", true, &mut fx);
     let pref = |v: &str| Effect::Pref { key: "dock".into(), value: v.into() };
     assert_eq!(fx[1..], [pref("x,b,a,c"), pref("b,a,c")]);
+}
+
+#[test]
+fn icons_carried_onto_the_row_open_a_gap_where_the_dock_keeps_their_apps() {
+    let names = |s: &[&str]| s.iter().map(|n| n.to_string()).collect::<Vec<_>>();
+    // Kept a, x (unknown: it does not show) and b, then one running. Files, a and the Assistant
+    // carried over b: one gap opens there (never for the Assistant, nor for one kept), b and the
+    // running one moving over; the gap is no tile's.
+    let (mut d, mut fx, size) = (Dock::new(Some("a,x,b")), Vec::new(), (1280.0, 800.0));
+    d.layout(vec![0, 2], 3, size, (&names(&["files", "a", "assistant"]), 84.0));
+    assert_eq!((&d.incoming[..], d.strip.gap), (&names(&["files"])[..], (1, 1)));
+    let xs = [0, 1, 2].map(|i| d.strip.tile(i).x);
+    assert_eq!((xs, d.strip.sep), ([10.0, 114.0, 175.0], Some(166.0)));
+    assert_eq!([84.0, 130.0].map(|x| d.strip.at(x, 760.0)), [None, Some(Spot::Tile(1))]);
+    // Dropped: kept there, before b (x stays where it was).
+    d.take_in(&mut fx);
+    assert_eq!(fx, [Effect::Pref { key: "dock".into(), value: "a,x,files,b".into() }]);
+    // Past the kept tiles (over a running one, or the Assistant) the gap follows them, as wide
+    // as the apps carried in; with none, no gap, and nothing is kept.
+    d.layout(vec![0, 3], 3, size, (&names(&["c", "d"]), 1250.0));
+    assert_eq!(d.strip.gap, (2, 2));
+    d.take_in(&mut fx);
+    assert_eq!(d.favs, names(&["a", "x", "files", "b", "c", "d"]));
+    d.layout(vec![0, 3], 3, size, (&[], 84.0));
+    d.take_in(&mut fx);
+    assert!(d.strip.gap == (0, 0) && d.incoming.is_empty() && fx.len() == 2);
 }
 
 #[test]
@@ -406,6 +436,15 @@ fn icons_carried_past_their_travel_land_in_the_persons_order() {
     g.carry_to(Some(near));
     g.drop(true, Some(near), &mut fx);
     assert!(fx.len() == 1 && labels(&g)[1] == "Terminal");
+    // Carried below the grid (over the bottom row), it heads back to its place, its app offered
+    // to the dock; dropped there, the order stays.
+    let low = (300.0, 760.0);
+    g.press(Press::Icon(1), mid(1), false);
+    assert!(g.carry_to(Some(low)) && g.below(Some(mid(3))).is_empty());
+    let got = (g.carry.as_ref().map(|c| c.slot), g.below(Some(low)));
+    assert_eq!(got, (Some(1), vec!["terminal".to_string()]));
+    g.drop(true, Some(low), &mut fx);
+    assert!(fx.len() == 1 && labels(&g)[1] == "Terminal" && g.below(Some(low)).is_empty());
     // The order comes from the page: unknown names dropped, new apps last, nothing kept yet. An
     // app new since (a `.app` saved) shows up last, and the order is kept.
     let mut g = grid(Some("welcome,gone,terminal"));

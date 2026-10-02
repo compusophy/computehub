@@ -284,12 +284,14 @@ fn inks(list: &DrawList) -> Vec<Rgba> {
 }
 
 /// Checks that every glyph of `list` is in a readable ink of `t` (never the faint one), text on
-/// the accent, or an app icon's ink, and every shape lies on device pixels.
+/// the accent, or an app icon's ink (the theme previews' Assistant: each theme's own), and every
+/// shape lies on device pixels.
 fn refined(list: &DrawList, t: &Theme, dpr: f32, what: &str) {
     use kit::*;
     let icons = [TERMINAL, SETTINGS];
     let mut ok = vec![t.text, t.text_dim, t.accent, t.accent_text];
     ok.extend(icons.map(|i| t.icon_colors(i.hue)[2]));
+    ok.extend(THEMES.iter().map(|th| th.icon_colors(th.accent)[2]));
     inks(list).iter().for_each(|i| assert!(ok.contains(i), "{what} in {}: ink {i:?}", t.name));
     let on = |v: f32| ((v * dpr) - (v * dpr).round()).abs() < 1e-3;
     let kinds = [Kind::Fill, Kind::Border, Kind::Gradient].map(|k| k as u8 as f32);
@@ -366,9 +368,11 @@ fn settings_switches_pages_and_themes_the_default_first() {
         let rings: Vec<_> = of(&list, Kind::Border).filter(ring).collect();
         assert_eq!(rings.len(), 1, "{}", theme.name);
         assert_eq!(rings[0].rect, [card.x - 3.0, card.y - 3.0, card.w + 6.0, card.h + 6.0]);
-        // Each miniature shows its own theme's light, whatever the current.
+        // Each miniature shows its own theme's light, whatever the current, and its Assistant's
+        // sparkle in its own ink.
         let lit = |t: &Theme| t.glows.iter().filter(|g| g.color.3 > 0).count();
         assert_eq!(of(&list, Kind::Glow).count(), THEMES.iter().map(lit).sum::<usize>());
+        assert!(THEMES.iter().all(|t| inks(&list).contains(&t.icon_colors(t.accent)[2])));
     }
     // Three across, then fewer as the window narrows.
     let mut rows = |s: &mut Sim<Settings>, w| {

@@ -35,8 +35,12 @@ impl Shell {
         self.grid.press(on, at, touch);
     }
 
-    /// Puts carried icons down (`keep`: where they are headed).
+    /// Puts carried icons down (`keep`: where they are headed): over the bottom row, the dock
+    /// keeps their apps where its gap shows, and they go back to their places.
     pub(crate) fn drop_icons(&mut self, keep: bool) {
+        if keep {
+            self.dock.take_in(&mut self.pending);
+        }
         self.grid.drop(keep, self.pointer, &mut self.pending);
     }
 

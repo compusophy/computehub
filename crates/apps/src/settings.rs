@@ -411,13 +411,12 @@ fn miniature(ui: &mut Ui<'_>, p: RectF, th: &Theme, under: gfx::Rgba) {
     let button = ui.snapped(at);
     ui.fill(button, bh / 2.0, th.accent);
     ui.border(win, 4.0, line, th.border);
-    // The Assistant's tile in the bottom-right corner, on the accent's hue, a dot of its ink.
+    // The Assistant's tile in the bottom-right corner, on the accent's hue: its sparkle in ink.
     let (side, edge) = ((12.0 * u).round().max(6.0), (0.05 * p.h).round());
     let at = RectF::new(p.x + p.w - side - edge, p.y + p.h - side - edge, side, side);
     let (tile, [plate, _, ink]) = (ui.snapped(at), th.icon_colors(th.accent));
     ui.fill(tile, (side / 4.0).round(), plate);
-    let dot = ui.snapped(tile.inset((side * 0.36).round()));
-    ui.fill(dot, dot.w / 2.0, ink);
+    ui.glyph(tile.inset(side * 0.2), Glyph::Assistant, ink);
     ui.pop_clip();
     let k = ui.px((radius * 0.5).ceil());
     ui.border(p.inset(-k), radius + k, k, under);

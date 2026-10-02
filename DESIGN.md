@@ -191,24 +191,26 @@ one. Forked crates keep their Apache-2.0 license and note their origin.
   sparkle on its hue, as on the home grid); its hit reaches out to the
   corner. It opens and hides the Assistant (Alt+Space too; its menu asks
   it), which is never a window: the overlay, a card above the tile, its
-  right edge the tile's (a sheet on a phone), that uses the desktop for the
-  person. A finger's tap leaves the keyboard down until its field is
-  tapped. A dot under the tile while the overlay shows (the accent's while
-  it has the keys). While it works the overlay is a pill, one line of what
-  it does and Stop, and the dot beats; each act flashes what it touched,
-  and the person's own press, key or wheel stops it. A program that failed
-  starts again at the next summon. Later it listens.
+  right edge the tile's (a sheet on a phone, its edges the row's), that
+  uses the desktop for the person. A finger's tap leaves the keyboard down
+  until its field is tapped. A dot under the tile while the overlay shows
+  (the accent's while it has the keys). While it works the overlay is a
+  pill, one line of what it does and Stop, and the dot beats; each act
+  flashes what it touched, and the person's own press, key or wheel stops
+  it. A program that failed starts again at the next summon. Later it
+  listens.
 - **Dock**: the person's own, left-aligned from the bottom-left corner:
-  nothing in it at first ("Add to dock" from any app's menu, "Remove from
-  dock" from its tile's), then the other running apps, so a phone can still
-  switch windows, past a hairline; a dot under each running one (the
-  accent's while it has the keys), a lift and a tooltip on hover. Kept
-  tiles move as icons do: a mouse drags one past 4 px, a finger held on
-  one picks it up (moved 8 px it drags; lifted unmoved, its menu); the
-  others slide aside and the order is kept (`dock`). Tiles shrink evenly
-  to fit beside the Assistant (8 apps get 34 px on a 411 px phone; never
-  off the screen). A click opens, focuses or minimizes; windows minimize
-  into their tile.
+  nothing in it at first ("Add to dock" from any app's menu, or its icon
+  dragged onto the row, which opens a gap under the pointer, the icon
+  going back to its place; "Remove from dock" from its tile's), then the
+  other running apps, so a phone can still switch windows, past a
+  hairline; a dot under each running one (the accent's while it has the
+  keys), a lift and a tooltip on hover. Kept tiles move as icons do: a
+  mouse drags one past 4 px, a finger held on one picks it up (moved 8 px
+  it drags; lifted unmoved, its menu); the others slide aside and the
+  order is kept (`dock`). Tiles shrink evenly to fit beside the Assistant
+  (8 apps get 34 px on a 411 px phone; never off the screen). A click
+  opens, focuses or minimizes; windows minimize into their tile.
 - **Keys** (`mod` is Alt or Meta, without Ctrl):
 
   | keys | action |

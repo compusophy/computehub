@@ -4,8 +4,9 @@
 //! corner, alone, the Assistant's tile, as the home grid shows it, which shows and hides the
 //! overlay ([`Strip::overlay`], anchored to it). A kept tile moves as a home screen icon does
 //! (a mouse drags it past 4 px; a finger held on it picks it up, then drags it past 8 px, or
-//! lifted unmoved opens its menu). On a narrow screen the dock's tiles shrink evenly to fit
-//! beside the Assistant. The work area leaves the row free ([`ROW`]).
+//! lifted unmoved opens its menu); icons carried onto the row open a gap under the pointer,
+//! where the dock keeps their apps when they drop. On a narrow screen the dock's tiles shrink
+//! evenly to fit beside the Assistant. The work area leaves the row free ([`ROW`]).
 
 use gfx::{DrawList, RectF};
 use host::paint::{faded, px};
@@ -46,12 +47,16 @@ pub fn favorites(stored: Option<&str>) -> Vec<String> {
     favs
 }
 
-/// Adds `name` to the dock (`keep`, last) or removes it; whether `favs` changed. An empty name,
-/// one with a comma, or the Assistant is never added.
+/// Whether the dock may keep `name`: never an empty name, one with a comma, or the Assistant.
+fn fits(name: &str) -> bool {
+    !name.is_empty() && !name.contains(',') && name != ASSISTANT
+}
+
+/// Adds `name` to the dock (`keep`, last) or removes it; whether `favs` changed. One that does
+/// not fit is never added.
 pub fn pin(favs: &mut Vec<String>, name: &str, keep: bool) -> bool {
-    let fit = !name.is_empty() && !name.contains(',') && name != ASSISTANT;
     match (favs.iter().position(|f| f == name), keep) {
-        (None, true) if fit => favs.push(name.to_string()),
+        (None, true) if fits(name) => favs.push(name.to_string()),
         (Some(i), false) => _ = favs.remove(i),
         _ => return false,
     }
@@ -99,8 +104,8 @@ pub enum Spot {
 }
 
 /// Where the row's parts sit: its top, the Assistant's tile, the dock's tiles' side and top,
-/// each one's left edge (favorites first), and where the hairline between the groups is while
-/// both show.
+/// each place's left edge (favorites first), where the hairline between the groups is while
+/// both show, and a gap among the places (its first, how many) that no tile takes.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Strip {
     pub top: f32,
@@ -109,6 +114,7 @@ pub struct Strip {
     pub y: f32,
     pub xs: Vec<f32>,
     pub sep: Option<f32>,
+    pub gap: (usize, usize),
 }
 
 impl Strip {
@@ -127,49 +133,51 @@ impl Strip {
         let past = |i: usize| if i >= favs { extra } else { 0.0 };
         let xs: Vec<f32> = (0..n).map(|i| MARGIN + i as f32 * (tile + SPACE) + past(i)).collect();
         let sep = xs.get(favs).filter(|_| both).map(|x| x - (SEP + 1.0) / 2.0);
-        Strip { top, assistant, tile, y, xs, sep }
+        Strip { top, assistant, tile, y, xs, sep, gap: (0, 0) }
     }
 
     /// Where the overlay (the Assistant over the desktop) shows on a `w` x `h` screen whose top
-    /// `bar` px are the bar's: above the Assistant, a card [`CARD_W`] wide at most and 60% of
-    /// the screen tall at most, its right edge the Assistant's (a phone's: a sheet across but
-    /// its 16 px gutters, half the screen tall at most); while it works (`pill`), [`PILL_H`]
-    /// tall and [`PILL_W`] wide at most. On whole px.
+    /// `bar` px are the bar's: above the Assistant, its right edge the Assistant's, a card
+    /// [`CARD_W`] wide at most and 60% of the screen tall at most (a phone's: a sheet out to
+    /// the row's first tile, half the screen tall at most); while it works (`pill`), [`PILL_H`]
+    /// tall and [`PILL_W`] wide at most. Inside 16 px gutters (a phone's: the row's own). On
+    /// whole px.
     pub fn overlay(&self, (w, h): (f32, f32), bar: f32, pill: bool) -> RectF {
         let (bottom, narrow) = (self.assistant.y - GAP, crate::narrow(w));
-        let ow = (w - 2.0 * GUTTER).min(match (pill, narrow) {
+        let right = self.assistant.x + self.assistant.w;
+        let ow = (right - if narrow { MARGIN } else { GUTTER }).min(match (pill, narrow) {
             (true, _) => PILL_W,
             (false, true) => w,
             (false, false) => CARD_W,
         });
         let oh = if pill { PILL_H } else { h * if narrow { 0.5 } else { 0.6 } };
-        let oh = oh.min(bottom - bar - GAP).max(0.0);
-        let right = if narrow { (w + ow) / 2.0 } else { self.assistant.x + self.assistant.w };
-        let x = (right - ow).max(GUTTER);
-        RectF::new(x.round(), (bottom - oh).round(), ow.round(), oh.round())
+        let (ow, oh) = (ow.max(0.0), oh.min(bottom - bar - GAP).max(0.0));
+        RectF::new((right - ow).round(), (bottom - oh).round(), ow.round(), oh.round())
     }
 
-    /// Tile `i`'s rect (past the last, the Assistant's).
+    /// Tile `i`'s rect, past the gap (past the last, the Assistant's).
     pub fn tile(&self, i: usize) -> RectF {
         let at = |&x: &f32| RectF::new(x, self.y, self.tile, self.tile);
-        self.xs.get(i).map_or(self.assistant, at)
+        let (g, k) = self.gap;
+        self.xs.get(if i < g { i } else { i + k }).map_or(self.assistant, at)
     }
 
     /// What is at `(x, y)`: in the row, the Assistant out to the screen's corner, a tile with
-    /// half the space beside it.
+    /// half the space beside it (in the gap, none).
     pub fn at(&self, x: f32, y: f32) -> Option<Spot> {
-        let half = SPACE / 2.0;
+        let ((g, k), half) = (self.gap, SPACE / 2.0);
         if y < self.top {
             return None;
         }
         if x >= self.assistant.x - half {
             return Some(Spot::Assistant);
         }
-        let tile = self.xs.iter().position(|&s| x >= s - half && x < s + self.tile + half);
-        tile.map(Spot::Tile)
+        let place = self.xs.iter().position(|&s| x >= s - half && x < s + self.tile + half);
+        let tile = place.filter(|&p| p < g || p >= g + k);
+        tile.map(|p| Spot::Tile(if p < g { p } else { p - k }))
     }
 
-    /// The slot among `kept` tiles for one carried with its middle at `x`.
+    /// The slot among `kept` places for a tile carried with its middle at `x`.
     pub fn slot(&self, x: f32, kept: usize) -> usize {
         // `as` saturates: NaN and what is left of the first are 0.
         let i = ((x - MARGIN + SPACE / 2.0) / (self.tile + SPACE)) as usize;
@@ -204,15 +212,17 @@ pub fn shift<T>(items: &mut [T], from: usize, to: usize) {
 }
 
 /// The dock as it behaves: the person's favorites (kept as [`PREF`]), the places in them of
-/// those that show (the registry knows them), where the row's parts sit, and a kept tile
-/// pressed or carried, as a home screen icon is ([`Carry`]: its place among those shown, and
-/// its slot).
+/// those that show (the registry knows them), where the row's parts sit, a kept tile pressed
+/// or carried, as a home screen icon is ([`Carry`]: its place among those shown, and its
+/// slot), and the apps whose icons are carried in over the row that it would keep (its gap
+/// open for them).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Dock {
     pub favs: Vec<String>,
     pub kept: Vec<usize>,
     pub strip: Strip,
     pub carry: Option<Carry>,
+    pub incoming: Vec<String>,
 }
 
 impl Dock {
@@ -222,12 +232,32 @@ impl Dock {
     }
 
     /// Lays the row out on a `size` screen for `n` tiles, first the favorites at `kept` (their
-    /// places in the favorites, as they show), then the other running apps. A tile carried that
-    /// is no longer kept is put down.
-    pub fn layout(&mut self, kept: Vec<usize>, n: usize, size: (f32, f32)) {
-        self.strip = Strip::new(kept.len(), n.saturating_sub(kept.len()), size);
+    /// places in the favorites, as they show), then the other running apps. Apps carried in
+    /// (`over`: their names, and the pointer's x) that it would keep (none kept already) open a
+    /// gap as wide as they are among the kept tiles, at the slot under the pointer. A tile
+    /// carried that is no longer kept is put down.
+    pub fn layout(&mut self, kept: Vec<usize>, n: usize, size: (f32, f32), over: (&[String], f32)) {
+        let favs = &self.favs;
+        self.incoming = over.0.iter().filter(|a| fits(a) && !favs.contains(a)).cloned().collect();
+        let k = self.incoming.len();
+        self.strip = Strip::new(kept.len() + k, n.saturating_sub(kept.len()), size);
+        if k > 0 {
+            self.strip.gap = (self.strip.slot(over.1, kept.len() + 1), k);
+        }
         self.carry = self.carry.take().filter(|c| c.lead < kept.len());
         self.kept = kept;
+    }
+
+    /// Keeps the apps carried in, if any, where their gap shows (the preference to `fx`).
+    pub fn take_in(&mut self, fx: &mut Vec<Effect>) {
+        if self.incoming.is_empty() {
+            return;
+        }
+        let at = self.kept.get(self.strip.gap.0).map_or(self.favs.len(), |&f| f);
+        for (k, name) in std::mem::take(&mut self.incoming).into_iter().enumerate() {
+            self.favs.insert(at + k, name);
+        }
+        self.save(fx);
     }
 
     /// Where the tile carried goes, from its place to its slot: the tiles show so ([`shift`]).

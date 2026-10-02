@@ -19,7 +19,8 @@
 //! after frames saw the time pass, is a tap. A finger that travels over a window's content
 //! scrolls it as the wheel does, and flings it on when it lifts moving. Icons move: a mouse drags
 //! one past 4 px; a finger held on one for 500 ms picks it up, then moving it 8 px drags it, and
-//! lifting it unmoved opens its menu instead; a tile kept on the dock moves so along it. A mouse
+//! lifting it unmoved opens its menu instead; a tile kept on the dock moves so along it, and an
+//! icon dropped on the bottom row puts its app on the dock and goes back to its place. A mouse
 //! dragged on the bare desktop draws a box that selects the icons it touches; dragging a
 //! selected icon carries them all. Bindings, pointer rules and motion are those of `DESIGN.md`.
 //! While anything moves (or a held finger waits to long-press), [`Shell::draw`] asks for the
@@ -410,7 +411,9 @@ impl Shell {
         let favs = &self.dock.favs;
         let kept: Vec<usize> =
             self.tiles.iter().map_while(|d| favs.iter().position(|f| *f == d.0)).collect();
-        self.dock.layout(kept, self.tiles.len(), self.size);
+        // Icons carried onto the row open a gap there for their apps.
+        let (over, x) = (self.grid.below(self.pointer), self.pointer.map_or(0.0, |p| p.0));
+        self.dock.layout(kept, self.tiles.len(), self.size, (&over, x));
         // A tile carried shows where it would land.
         if let Some((from, to)) = self.dock.moving() {
             home::dock::shift(&mut self.tiles, from, to);
