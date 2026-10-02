@@ -1,20 +1,23 @@
 //! The worker's side of its SAB (requests, console ring and doorbell, waits;
-//! Atomics.wait never refuses in a worker), clocks, randomness, guest memory.
+//! Atomics.wait never refuses in a worker; the meters around each wait), clocks, randomness,
+//! guest memory.
 
 use js_sys::{ArrayBuffer, Atomics, Int32Array, SharedArrayBuffer, Uint8Array, WebAssembly};
-use kernel::wire::{BELL, COLS, CONS_BELL, EFAULT, ERRNO, HEAD, INPUT, LEN, MAX_PAYLOAD};
-use kernel::wire::{PAYLOAD_AT, RING_AT, RING_BYTES, ROWS, SLEEP, STATE, TAIL};
+use kernel::wire::{BELL, BUSY, COLS, CONS_BELL, EFAULT, ERRNO, HEAD, INPUT, LEN, MAX_PAYLOAD};
+use kernel::wire::{PAGES, PAYLOAD_AT, RING_AT, RING_BYTES, ROWS, RUN, SINCE, SLEEP, STATE, TAIL};
 use wasi::{Host, Mem};
 use wasm_bindgen::{JsCast, UnwrapThrowExt};
 use web_sys::{Crypto, Performance};
 
-/// A process's [`Host`]: its SAB as words and bytes, its spawn tty size, clocks.
+/// A process's [`Host`]: its SAB as words and bytes, its spawn tty size, clocks; the guest's
+/// memory once linked, which its meters count.
 pub struct Js {
     words: Int32Array,
     bytes: Uint8Array,
     tty: (u16, u16),
     perf: Performance,
     crypto: Crypto,
+    pub mem: Option<WebAssembly::Memory>,
 }
 
 /// Where `len` more bytes go in a ring holding `head - tail`: `(at, first, n)`,
@@ -30,16 +33,49 @@ impl Js {
         let scope = crate::scope();
         let (perf, crypto) = (scope.performance().unwrap_throw(), scope.crypto().unwrap_throw());
         let (words, bytes) = (Int32Array::new(sab), Uint8Array::new(sab));
-        Js { words, bytes, tty: tty.unwrap_or_default(), perf, crypto }
+        Js { words, bytes, tty: tty.unwrap_or_default(), perf, crypto, mem: None }
     }
 
     fn load(&self, i: u32) -> i32 {
         Atomics::load(&self.words, i).unwrap_or(0)
     }
 
-    /// Sleeps while word `i` holds `v`, for at most `ms`.
+    fn store(&self, i: u32, v: u32) {
+        let _ = Atomics::store(&self.words, i, v as i32);
+    }
+
+    /// `timeOrigin + now()` in ms, wrapping: the clock the page reads the meters by.
+    fn ms(&self) -> u32 {
+        (self.perf.time_origin() + self.perf.now()) as u64 as u32
+    }
+
+    /// The program begins to run (its compile too): RUN 1 from now.
+    pub fn run(&self) {
+        self.store(SINCE, self.ms());
+        self.store(RUN, 1);
+    }
+
+    /// PAGES: the memory now, the guest's (once linked) and the worker's own.
+    pub fn pages(&self) {
+        let guest = self
+            .mem
+            .as_ref()
+            .map_or(0, |m| m.buffer().unchecked_ref::<ArrayBuffer>().byte_length());
+        self.store(PAGES, (guest >> 16) + own_pages());
+    }
+
+    /// Sleeps while word `i` holds `v`, for at most `ms`; the meters say it waits meanwhile: BUSY
+    /// gains the run that ends, PAGES is the memory now, RUN is 0 until it wakes. RUN goes to 0
+    /// before BUSY grows, and main reads BUSY before RUN: a look between the two misses the run
+    /// that ends (the next look has it), never counts it twice.
     fn sleep(&self, i: u32, v: i32, ms: f64) {
+        let ran = self.ms().wrapping_sub(self.load(SINCE) as u32);
+        let ran = if self.load(RUN) == 1 { ran } else { 0 };
+        self.store(RUN, 0);
+        self.store(BUSY, (self.load(BUSY) as u32).wrapping_add(ran));
+        self.pages();
         let _ = Atomics::wait_with_timeout(&self.words, i, v, ms);
+        self.run();
     }
 }
 
@@ -100,6 +136,14 @@ impl Host for Js {
         let live = |i, spawned| Some(self.load(i) as u16).filter(|v| *v > 0).unwrap_or(spawned);
         (live(COLS, self.tty.0), live(ROWS, self.tty.1))
     }
+}
+
+/// The worker's own memory in 64 KiB pages (none natively).
+fn own_pages() -> u32 {
+    #[cfg(target_arch = "wasm32")]
+    return core::arch::wasm32::memory_size::<0>() as u32;
+    #[cfg(not(target_arch = "wasm32"))]
+    0
 }
 
 /// Guest memory: a fresh view per access (`grow` detaches), checked first.

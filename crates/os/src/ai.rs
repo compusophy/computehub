@@ -3,13 +3,21 @@
 //! back: to the program as [`Event::AiData`]s ([`CHUNK`] at most), then an [`Event::AiEnd`]. The
 //! one setting, the model (one of [`MODELS`]), lives in `localStorage` ([`MODEL`]); programs hear
 //! it as [`Event::Config`] (after their first Resize, again on each change), apps as [`AiStatus`].
+//!
+//! The hub also keeps what Activity reads ([`uiwire::stat`]): the process watching (the newest
+//! [`Request::Watch`]), and since the tab opened the requests, the failed (an HTTP status not
+//! 2xx, or none), those that ended with no receipt (cut off, cancelled) and what the receipts
+//! said: the server ends a stream with one, `: receipt in=<n> out=<n> microusd=<n>` (an SSE
+//! comment, which readers skip), its tokens in and out and its cost, read from the stream's last
+//! [`TAIL`] bytes (whole, wherever chunks split it).
 
 use std::cell::RefCell;
 use std::mem;
 use std::rc::Rc;
 
 use platform::{Ctl, Event as Heard};
-use ui::{AiStatus, kernel::Kernel};
+use ui::AiStatus;
+use ui::kernel::{Kernel, wire::KILLED};
 use uiwire::{Event, Request};
 
 /// The same-origin endpoint every request goes to.
@@ -20,21 +28,27 @@ pub const MODEL: &str = "compusophy.ai.model";
 pub const MODELS: [&str; 2] = ["zai/glm-5.3", "zai/glm-5.3-flash"];
 pub const DEFAULT_MODEL: &str = MODELS[0];
 pub const CHUNK: usize = 32 << 10;
+/// The bytes of a stream kept for its receipt, its last line.
+pub const TAIL: usize = 64;
 
 /// The page's AI state, shared (clones are one) by the desktop and its program windows.
 #[derive(Clone, Default)]
 pub struct Ai(pub(crate) Rc<RefCell<Hub>>);
 
-/// The model (an index of [`MODELS`]), the asks, requests in flight (stream id, pid, id; two a
-/// process), the last stream id, who to tell the settings and whether to.
+/// The model (an index of [`MODELS`]), the asks, requests in flight (stream id, pid, id, its last
+/// bytes; two a process), the last stream id, who to tell the settings and whether to; the
+/// watcher and whether it is new, and the counts from [`uiwire::stat::ASKED`] on.
 #[derive(Default)]
 pub(crate) struct Hub {
     model: usize,
     asks: Vec<(u32, Request)>,
-    live: Vec<(u32, u32, u32)>,
+    live: Vec<(u32, u32, u32, Vec<u8>)>,
     last: u32,
     told: Vec<u32>,
     retell: bool,
+    pub(crate) watch: Option<u32>,
+    pub(crate) fresh: bool,
+    pub(crate) counts: [u32; 6],
 }
 
 impl Hub {
@@ -54,7 +68,8 @@ impl Hub {
             return end(k, pid, id, 0, "busy");
         }
         self.last += 1;
-        self.live.push((self.last, pid, id));
+        self.counts[0] = self.counts[0].wrapping_add(1);
+        self.live.push((self.last, pid, id, Vec::new()));
         let json = vec![("Content-Type", "application/json".into())];
         ctl.stream(self.last, URL, json, body.into());
     }
@@ -91,7 +106,8 @@ impl Ai {
         self.0.borrow().config()
     }
 
-    /// Process `pid` asks for `r`, for [`Ai::pump`]: Ai, AiCancel, or Close (done: abort all).
+    /// Process `pid` asks for `r`, for [`Ai::pump`]: Ai, AiCancel, Close (done: abort all), and
+    /// from Activity's window alone, Watch (the newest watcher wins) and End.
     pub fn ask(&self, pid: u32, r: Request) {
         self.0.borrow_mut().asks.push((pid, r));
     }
@@ -101,11 +117,21 @@ impl Ai {
         let h = &mut *self.0.borrow_mut();
         let (Heard::Chunk { id: sid, .. } | Heard::StreamEnd { id: sid, .. }) = ev else { return };
         let Some(i) = h.live.iter().position(|l| l.0 == sid) else { return };
-        let (_, pid, id) = h.live[i];
+        let (pid, id) = (h.live[i].1, h.live[i].2);
         if let Heard::StreamEnd { status, error, .. } = ev {
-            h.live.remove(i);
+            let (tail, c) = (h.live.remove(i).3, &mut h.counts);
+            match uiwire::stat::receipt(&tail) {
+                _ if status / 100 != 2 => c[1] = c[1].wrapping_add(1),
+                Some(r) => (3..6).for_each(|i| c[i] = c[i].wrapping_add(r[i - 3])),
+                None => c[2] = c[2].wrapping_add(1),
+            }
             end(k, pid, id, status, &error);
         } else if let Heard::Chunk { data, .. } = ev {
+            let tail = &mut h.live[i].3;
+            tail.extend_from_slice(&data);
+            if let Some(cut) = tail.len().checked_sub(TAIL) {
+                *tail = tail[cut..].to_vec();
+            }
             let data = data.chunks(CHUNK).map(|d| Event::AiData { id, data: d.to_vec() });
             data.for_each(|ev| k.post_event(pid, &ev.encode()));
         }
@@ -123,12 +149,25 @@ impl Ai {
                     continue;
                 }
                 Request::AiCancel { id } => Some(id),
+                Request::Watch { on } => {
+                    h.watch = if on { Some(pid) } else { h.watch.filter(|&w| w != pid) };
+                    h.fresh |= on;
+                    continue;
+                }
+                Request::End { pid } => {
+                    k.kill(pid, KILLED);
+                    continue;
+                }
                 _ => None,
             };
             h.told.retain(|&p| p != pid || cancel.is_some());
-            let gone = |l: &(u32, u32, u32)| l.1 == pid && cancel.is_none_or(|c| c == l.2);
+            if cancel.is_none() && h.watch == Some(pid) {
+                h.watch = None;
+            }
+            let gone = |l: &(u32, u32, u32, Vec<u8>)| l.1 == pid && cancel.is_none_or(|c| c == l.2);
             while let Some(i) = h.live.iter().position(gone) {
-                let (sid, _, id) = h.live.remove(i);
+                let (sid, _, id, _) = h.live.remove(i);
+                h.counts[2] = h.counts[2].wrapping_add(1);
                 ctl.abort(sid);
                 cancel.into_iter().for_each(|_| end(k, pid, id, 0, "cancelled"));
             }

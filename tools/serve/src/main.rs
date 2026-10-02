@@ -121,7 +121,7 @@ fn resolve(root: &Path, target: &str) -> Option<PathBuf> {
 }
 
 /// The mock's answer to a chat request `body`: chat.completion.chunk lines, a
-/// usage chunk and `[DONE]`. With tools, [`agent`]'s step. When the last message's
+/// usage chunk, `[DONE]` and the [`receipt`]. With tools, [`agent`]'s step. When the last message's
 /// content (else the body) says "app", a sentence and a fenced `app` block of
 /// Studio's counter, a line a chunk; else "Hello from the mock model.", a word a chunk.
 fn sse(body: &str) -> String {
@@ -143,9 +143,16 @@ fn sse(body: &str) -> String {
         out +=
             &format!("{head}\"choices\":[{{\"index\":0,\"delta\":{{\"content\":\"{p}\"}}}}]}}\n\n");
     }
-    let usage =
-        format!("\"prompt_tokens\":{},\"completion_tokens\":{}", body.len() / 4, pieces.len());
+    let (i, o) = (body.len() / 4, pieces.len());
+    let usage = format!("\"prompt_tokens\":{i},\"completion_tokens\":{o}");
     out + &format!("{head}\"choices\":[],\"usage\":{{{usage}}}}}\n\ndata: [DONE]\n\n")
+        + &receipt(i, o)
+}
+
+/// The receipt the site's function ends a stream with: tokens in and out, and their cost in
+/// millionths of a dollar at the default model's list price ($1.40 and $4.40 a million).
+fn receipt(i: usize, o: usize) -> String {
+    format!("\n: receipt in={i} out={o} microusd={}\n\n", (i * 14 + o * 44) / 10)
 }
 
 /// The scripted agent's next step for a request with tools, read off the raw JSON `body` (its
@@ -199,6 +206,7 @@ fn agent(body: &str) -> String {
     }
     out + r#"data: {"id":"mock","choices":[],"usage":{"prompt_tokens":1000,"completion_tokens":20}}"#
         + "\n\ndata: [DONE]\n\n"
+        + &receipt(1000, 20)
 }
 
 fn mime(path: &Path) -> &'static str {
@@ -240,7 +248,9 @@ fn the_mock_streams_hello_or_an_app() {
     let hi = sse(r#"[{"role":"system","content":"apps"},{"role":"user","content":"hi"}]"#);
     let lines: Vec<&str> = hi.split_terminator("\n\n").collect();
     assert!(lines[0].ends_with(r#""choices":[{"index":0,"delta":{"content":"Hello "}}]}"#));
-    assert!(lines.len() == 7 && lines[5].contains(r#""usage":{"#) && lines[6] == "data: [DONE]");
+    assert!(lines.len() == 8 && lines[5].contains(r#""usage":{"#) && lines[6] == "data: [DONE]");
+    // The receipt last, as the site's function ends a stream: the usage's tokens, priced.
+    assert_eq!(lines[7], "\n: receipt in=16 out=5 microusd=44");
     let app = sse(r#"[{"role":"user","content":"a counter app"}]"#);
     assert!(app.contains(r#":"```app\n"}"#) && app.contains(r#":"label \"Counter\";\n"}"#));
 }
@@ -277,7 +287,8 @@ fn the_mock_agent_turns_error_reports_off_a_step_at_a_time() {
         &ask.replace("reports\"}", "reports\"},{\"role\":\"tool\",\"content\":\"Screen 1x1\"}"),
     );
     assert!(
-        done.contains(r#"{"content":"Error reports are off."}"#) && done.ends_with("[DONE]\n\n")
+        done.contains(r#"{"content":"Error reports are off."}"#)
+            && done.ends_with("[DONE]\n\n\n: receipt in=1000 out=20 microusd=1488\n\n")
     );
     let other = agent(r#"{"tools":[],"messages":[{"content":"hi"}]}"#);
     assert!(other.contains("ask me to turn error reports off"));

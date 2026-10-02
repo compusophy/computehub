@@ -105,7 +105,7 @@ $ edit notes.txt
 $ edit counter.app
 [open studio:~/counter.app]
 $ apps
-studio  assistant  terminal  files  editor  settings  feedback  about  welcome
+studio  assistant  terminal  files  editor  activity  settings  feedback  about  welcome
 /apps/demo.app
 ~/counter.app
 $ uname -a

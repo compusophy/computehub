@@ -253,7 +253,7 @@ fn malformations_fail() {
     assert!(key(8, 15, 'x' as u32).is_some());
     assert!(key(0, 0, 0).is_none() && key(9, 0, 0).is_none());
     assert!(key(1, 16, 0).is_none() && key(1, 0, 0xD800).is_none());
-    assert!(Event::decode(&[16]).is_none() && Request::decode(&[12, 0, 0, 0, 0]).is_none());
+    assert!(Event::decode(&[17]).is_none() && Request::decode(&[14, 0, 0, 0, 0]).is_none());
     assert!(Event::decode(&[11, 2]).is_none() && Event::decode(&[11, 1]).is_some());
 }
 
@@ -457,4 +457,122 @@ fn client_reads_events_and_writes_frames() {
     // A sink that takes 8 bytes of the frame.
     let mut small = Client::new(io::empty(), Cursor::new([0; 8]));
     assert_eq!(small.show(&sample()).unwrap_err().kind(), ErrorKind::WriteZero);
+}
+
+/// A sample of a desktop running Files (idle, window 3) and spin (in a Terminal, window 2).
+fn stats() -> stat::Stats {
+    use stat::*;
+    let argv = |s: &str| s.split(' ').map(String::from).collect();
+    let files = Proc { pid: 4, window: 3, state: IDLE, argv: argv("files ~"), counts: vec![9] };
+    let spin = Proc { pid: 6, window: 2, state: RUNS, argv: argv("spin 9\u{e9}"), counts: vec![0] };
+    let meters = vec![(4, vec![120, 2048]), (6, vec![u32::MAX, 1024])];
+    let (loud, quiet) = ((0..LOUD as u32).collect(), vec![1, 2, 3, 4_000, 18_000]);
+    Stats { at: 70_000, loud, procs: vec![files, spin], meters, quiet, own: vec![12, 9_000] }
+}
+
+#[test]
+fn watch_end_and_stats_keep_their_codes() {
+    let (watch, end) = (Request::Watch { on: true }, Request::End { pid: 0x0102_0304 });
+    for r in [&watch, &Request::Watch { on: false }, &end] {
+        strict(r, Request::encode, Request::decode);
+    }
+    let ev = Event::Stats { data: stats().encode() };
+    strict(&ev, Event::encode, Event::decode);
+    assert_eq!((watch.encode(), end.encode()), (vec![12, 1], vec![13, 4, 3, 2, 1]));
+    assert_eq!(Event::Stats { data: vec![7] }.encode(), [16, 1, 0, 0, 0, 7]);
+    assert!(Request::decode(&[12, 2]).is_none());
+}
+
+#[test]
+fn stats_round_trip_and_decode_strictly() {
+    use stat::*;
+    let s = stats();
+    strict(&s, Stats::encode, Stats::decode);
+    strict(&Stats::default(), Stats::encode, Stats::decode);
+    assert_eq!((s.meters_of(6), s.meters_of(5)), (&[u32::MAX, 1024][..], &[][..]));
+    // The layout: version, at, the loud counts, the table's rows.
+    let b = s.encode();
+    assert_eq!(b[..9], [VERSION, 0x70, 0x11, 1, 0, LOUD as u8, 0, 0, 0]);
+    let table = 5 + 2 + 4 * LOUD;
+    assert_eq!(b[table..table + 6], [2, 0, 4, 0, 0, 0]);
+    // Another version, a state past ENDED, a word not UTF-8, more words than it has, fewer rows
+    // than it has.
+    let row = table + 2;
+    for (at, to) in [(0, 2), (row + 8, 3), (row + 15, 0xFF), (row + 9, 9), (table, 1)] {
+        assert!(Stats::decode(&set(b.clone(), at, to)).is_none(), "{at} = {to}");
+    }
+    // Counts past the bytes left; a row with counts this reader does not know keeps them.
+    let lie = Stats { loud: vec![0; 3], ..Stats::default() }.encode();
+    assert!(Stats::decode(&set(lie, 5, 4)).is_none());
+    let mut more = s.clone();
+    more.procs[0].counts = vec![9, 7, 7];
+    assert_eq!(Stats::decode(&more.encode()).unwrap().procs[0].counts[DRAWS], 9);
+}
+
+#[test]
+fn pace_is_silent_at_rest_and_samples_at_most_once_a_second() {
+    use stat::{GAP_MS, Pace};
+    let mut p = Pace::default();
+    // Unstirred: nothing due, no wake, however long.
+    assert!(!p.due(0) && !p.due(1 << 40) && p.wait(5).is_none());
+    // Stirs at 0, 300 and 900: one sample at 0, a wake for 1,000.
+    p.stir = true;
+    assert!(p.due(0) && p.took(0, 1, false));
+    for t in [300, 900] {
+        p.stir = true;
+        assert_eq!((p.due(t), p.wait(t)), (false, Some((GAP_MS - t) as u32)));
+    }
+    // The change is posted, then once more as it rests (unchanged), then nothing.
+    assert!(p.due(1000) && p.took(1000, 2, false));
+    assert_eq!(p.wait(1000), Some(1000));
+    assert!(p.due(2000) && p.took(2000, 2, false));
+    assert!(!p.due(9000) && p.wait(9000).is_none());
+    // What differs only in quiet parts hashes alike: a stirred look posts nothing.
+    let quiet = stat::hash(b"loud");
+    let mut p = Pace::default();
+    p.stir = true;
+    p.took(0, quiet, false);
+    p.took(1000, quiet, false);
+    p.stir = true;
+    assert!(p.due(2000) && !p.took(2000, quiet, false) && p.wait(2000).is_none());
+}
+
+#[test]
+fn pace_follows_a_hot_process_and_a_new_watcher_at_once() {
+    use stat::Pace;
+    let mut p = Pace::default();
+    p.stir = true;
+    assert!(p.took(0, 5, true));
+    // Hot: one a second with no stir, posted while its time moves, until it stops running.
+    for (t, h) in [(1000, 6), (2000, 7)] {
+        assert!(p.due(t) && p.took(t, h, true) && p.wait(t) == Some(1000));
+    }
+    assert!(p.due(3000) && p.took(3000, 8, false)); // Ended: changed, cold.
+    assert!(p.due(4000) && p.took(4000, 8, false) && !p.due(5000)); // Once more, then rest.
+    // A new watcher hears at once, though a sample was just taken and nothing changed.
+    p.fresh = true;
+    assert!(p.due(4001) && p.took(4001, 8, false) && p.wait(4001) == Some(1000));
+    assert_ne!(stat::hash(b"a"), stat::hash(b"b"));
+    assert_eq!(stat::hash(b""), 0xcbf2_9ce4_8422_2325);
+}
+
+#[test]
+fn a_receipt_is_read_whole_from_the_end_of_a_stream() {
+    use stat::receipt;
+    let end = b"data: [DONE]\n\n\n: receipt in=1200 out=30 microusd=1812\n\n";
+    assert_eq!(receipt(end), Some([1200, 30, 1812]));
+    // The last one counts, of up to 9 digits each. Cut short, garbled, out of order, with more
+    // words, or only quoted inside data: none.
+    let two = [&b"\n: receipt in=1 out=1 microusd=1\n"[..], &end[..]].concat();
+    assert_eq!(receipt(&two), Some([1200, 30, 1812]));
+    let big = b"\n: receipt in=999999999 out=0 microusd=0";
+    assert_eq!(receipt(big), Some([999_999_999, 0, 0]));
+    #[rustfmt::skip]
+    let bad: [&[u8]; 8] = [&end[..end.len() - 12], b"\n: receipt in=1 out=2 microusd=3 x",
+        b"\n: receipt in=1", b"\n: receipt in=1000000000 out=0 microusd=0",
+        b"\n: receipt in= out=1 microusd=1", b"\n: receipt out=1 in=1 microusd=1",
+        b"\n: receipt in=-1 out=1 microusd=1", b"data: {\"x\":\": receipt in=1 out=1 microusd=1\"}"];
+    for b in bad {
+        assert_eq!(receipt(b), None, "{:?}", String::from_utf8_lossy(b));
+    }
 }
