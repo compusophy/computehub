@@ -6,11 +6,11 @@ use lang::{Diag, Span};
 
 use crate::codes;
 
-/// A token kind; `Int` carries its value.
+/// A token kind; `Int` carries its value, at most 2^63 (the least int's magnitude).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[rustfmt::skip]
 pub(crate) enum TokKind {
-    Int(i64), Ident, Str, True, False,
+    Int(u64), Ident, Str, True, False,
     State, Label, Button, Input, Row, Col, Let, If, Else, Repeat, Fn, For, In, Return,
     Plus, Minus, Star, Slash, Percent, Bang, BangEq, Assign, EqEq, PlusEq, MinusEq,
     Lt, LtEq, Gt, GtEq, AndAnd, OrOr, LParen, RParen, LBrace, RBrace, Semi,
@@ -177,8 +177,8 @@ pub(crate) fn unescape(quoted: &str) -> String {
     out
 }
 
-/// Decimal with `_` separators. A digit run running into ident chars
-/// (`123abc`) is one malformed literal, never two tokens.
+/// Decimal with `_` separators, up to 2^63: the parser takes that only after a `-`. A digit
+/// run running into ident chars (`123abc`) is one malformed literal, never two tokens.
 fn int_literal(cur: &mut Cursor<'_>, start: usize, digits: Span) -> Result<TokKind, Diag> {
     if cur.peek().is_some_and(ident_start) {
         cur.eat_while(ident_cont);
@@ -186,7 +186,7 @@ fn int_literal(cur: &mut Cursor<'_>, start: usize, digits: Span) -> Result<TokKi
         return Err(Diag::at_code(codes::BAD_INT, msg, cur.span_from(start)));
     }
     let text: String = cur.text(digits).chars().filter(|&c| c != '_').collect();
-    text.parse().map(Int).map_err(|_| {
+    text.parse().ok().filter(|&v: &u64| v <= 1 << 63).map(Int).ok_or_else(|| {
         let msg = format!("integer literal out of range (max {})", i64::MAX);
         Diag::at_code(codes::BAD_INT, msg, cur.span_from(start))
     })

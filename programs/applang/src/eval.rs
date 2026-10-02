@@ -2,7 +2,9 @@
 //! nothing (the checker allows it no assignment, list change, `random` or call to a function
 //! that does). Handling is atomic: a handler runs on a copy of the state, committed only on a
 //! clean finish. The faults left are checked arithmetic, indexes, list and string bounds,
-//! grids, `random`'s bound, call depth and fuel.
+//! grids, `random`'s bound, call depth and fuel. Fuel pays for bytes too: every value a run
+//! makes or copies costs a step per item and per [`BYTES_A_STEP`] bytes of text, paid before it
+//! is made, so a run's memory and time are bounded by its fuel.
 
 use std::mem;
 
@@ -16,6 +18,8 @@ use crate::{Limits, Node, Program, codes};
 const MAX_CALLS: u32 = 32;
 /// The most columns a grid has.
 pub(crate) const MAX_COLS: i64 = 100;
+/// The bytes of text a step copies: an event's fuel makes at most 64 MB, a render's 12.8 MB.
+pub(crate) const BYTES_A_STEP: usize = 64;
 
 /// An applang runtime value.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -59,6 +63,16 @@ impl Value {
         }
     }
 
+    /// The steps a copy of it costs: one per item of a list, and one per [`BYTES_A_STEP`] bytes
+    /// of its text.
+    pub(crate) fn cost(&self) -> u64 {
+        match self {
+            Value::Str(s) => text(s.len()),
+            Value::List(items) => items.iter().map(|v| 1 + v.cost()).sum(),
+            _ => 0,
+        }
+    }
+
     pub(crate) fn of(lit: &Lit) -> Value {
         match lit {
             Lit::Int(v) => Value::Int(*v),
@@ -94,6 +108,11 @@ pub(crate) enum Flow {
 fn int(v: Value) -> i64 {
     let Value::Int(n) = v else { unreachable!("checked: an int") };
     n
+}
+
+/// The steps `n` bytes of text cost.
+fn text(n: usize) -> u64 {
+    (n / BYTES_A_STEP) as u64
 }
 
 fn fault(code: u16, msg: impl Into<String>, sp: Span) -> Diag {
@@ -136,10 +155,25 @@ impl<'a> Run<'a> {
         }
     }
 
+    /// A copy of `v`'s value, paid for first.
+    fn read(&mut self, v: &Var) -> Result<Value, Diag> {
+        let cost = self.slot(v).cost();
+        self.burn(cost, v.span)?;
+        Ok(self.slot(v).clone())
+    }
+
     /// List `v`'s items.
     fn items(&mut self, v: &Var) -> &mut Vec<Value> {
         let Value::List(items) = self.slot_mut(v) else { unreachable!("checked: a list") };
         items
+    }
+
+    /// A copy of item `i` of list `v`, paid for first, or a fault at `sp`.
+    fn item(&mut self, v: &Var, i: i64, sp: Span) -> Result<Value, Diag> {
+        let i = self.index(v, i, false, sp)?;
+        let cost = self.items(v)[i].cost();
+        self.burn(cost, sp)?;
+        Ok(self.items(v)[i].clone())
     }
 
     /// The index `i` of list `v` (`end`: one past the last too), or a fault at `sp`.
@@ -168,18 +202,14 @@ impl<'a> Run<'a> {
         match e {
             Expr::Int(v, _) => Ok(Value::Int(*v)),
             Expr::Bool(b, _) => Ok(Value::Bool(*b)),
-            Expr::Str(s, _) => Ok(Value::Str(s.clone())),
-            Expr::Var(v) => {
-                let value = self.slot(v).clone();
-                if let Value::List(items) = &value {
-                    self.burn(items.len() as u64, v.span)?;
-                }
-                Ok(value)
+            Expr::Str(s, sp) => {
+                self.burn(text(s.len()), *sp)?;
+                Ok(Value::Str(s.clone()))
             }
+            Expr::Var(v) => self.read(v),
             Expr::Index(v, i, sp) => {
                 let i = int(self.expr(i)?);
-                let i = self.index(v, i, false, *sp)?;
-                Ok(self.items(v)[i].clone())
+                self.item(v, i, *sp)
             }
             Expr::Call(c) => Ok(self.call(c)?.unwrap_or_else(|| unreachable!("checked: a value"))),
             Expr::List(items, sp) => {
@@ -194,7 +224,8 @@ impl<'a> Run<'a> {
                     return Err(fault(codes::NEGATIVE_REPEAT, msg, *sp));
                 }
                 self.fits(usize::try_from(n).unwrap_or(usize::MAX), *sp)?;
-                self.burn(n as u64, *sp)?;
+                // Every item a copy, paid for before the list is made.
+                self.burn((n as u64).saturating_mul(1 + item.cost()), *sp)?;
                 Ok(Value::List(vec![item; n as usize]))
             }
             Expr::Unary(op, inner, sp) => match (op, self.expr(inner)?) {
@@ -232,6 +263,7 @@ impl<'a> Run<'a> {
                 let msg = format!("string would be {len} bytes; the limit is {max}");
                 return Err(fault(codes::STR_TOO_LONG, msg, sp));
             }
+            self.burn(text(len), sp)?;
             return Ok(Value::Str(a + &b));
         }
         let (Value::Int(a), Value::Int(b)) = (&lv, &rv) else {
@@ -302,11 +334,16 @@ impl<'a> Run<'a> {
         let arg = |r: &mut Self, k: usize| r.expr(&c.args[k]);
         let v = match b {
             Builtin::Len => match &c.args[0] {
-                Expr::Var(v) => match self.slot(v) {
-                    Value::List(items) => items.len() as i64,
-                    Value::Str(s) => s.chars().count() as i64,
-                    _ => unreachable!("checked: a list or string"),
-                },
+                // Counted in place: a list's length is known, a string's chars are read.
+                Expr::Var(v) => {
+                    let (n, cost) = match self.slot(v) {
+                        Value::List(items) => (items.len(), 0),
+                        Value::Str(s) => (s.chars().count(), text(s.len())),
+                        _ => unreachable!("checked: a list or string"),
+                    };
+                    self.burn(cost, sp)?;
+                    n as i64
+                }
                 e => match self.expr(e)? {
                     Value::List(items) => items.len() as i64,
                     v => v.to_string().chars().count() as i64,
@@ -391,9 +428,19 @@ impl<'a> Run<'a> {
                 let v = self.expr(value)?;
                 *self.slot_mut(target) = v;
             }
-            Stmt::SetIndex { target, index, value, span } => {
+            Stmt::SetIndex { target, index, op, value, span } => {
                 let i = int(self.expr(index)?);
-                let v = self.expr(value)?;
+                let v = match op {
+                    None => self.expr(value)?,
+                    // The index ran once; the item is read before `value` runs, as `x += v`
+                    // reads x first.
+                    Some(op) => {
+                        let old = self.item(target, i, *span)?;
+                        let v = self.expr(value)?;
+                        self.binary(*op, old, v, *span)?
+                    }
+                };
+                // `value` may have changed the list's length: check the index again.
                 let i = self.index(target, i, false, *span)?;
                 self.items(target)[i] = v;
             }

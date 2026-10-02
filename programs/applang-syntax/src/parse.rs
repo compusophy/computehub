@@ -12,6 +12,9 @@ use crate::lex::{TokKind, Token, lex, unescape};
 
 /// The most items a list holds.
 pub const MAX_ITEMS: usize = 4096;
+/// The most bytes all state takes together, as [`Lit::bytes`] counts them: declared, saved or
+/// committed by an event.
+pub const MAX_STATE_BYTES: usize = 256 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[rustfmt::skip]
@@ -124,7 +127,9 @@ impl Expr {
 pub enum Stmt {
     Let { name: String, value: Expr, span: Span },
     Assign { target: Var, value: Expr, span: Span },
-    SetIndex { target: Var, index: Expr, value: Expr, span: Span },
+    /// `xs[i] = v`, or with `op` `xs[i] += v` (`-=`): the index runs once, the item is read
+    /// before `v` runs.
+    SetIndex { target: Var, index: Expr, op: Option<BinOp>, value: Expr, span: Span },
     If { arms: Vec<(Expr, Vec<Stmt>)>, els: Vec<Stmt>, span: Span },
     Repeat { count: Expr, body: Vec<Stmt>, span: Span },
     For { var: String, from: Expr, to: Expr, body: Vec<Stmt>, span: Span },
@@ -161,11 +166,26 @@ impl Lit {
             Lit::List(t, _) => *t,
         }
     }
+
+    /// The bytes it takes in the state, as the runtime counts its values: 8 a scalar, a string
+    /// its own (at least 8), a list 8 and its items'.
+    pub fn bytes(&self) -> usize {
+        match self {
+            Lit::Str(s) => s.len().max(8),
+            Lit::List(_, items) => 8 + items.iter().map(Lit::bytes).sum::<usize>(),
+            _ => 8,
+        }
+    }
 }
 
+/// A state. Once checked, `fixed` says a list's length never changes from its declared one (no
+/// push, insert, remove or clear of it, and only lists of that length assigned to it), so a
+/// saved one of another length was an older program's.
 #[derive(Debug)]
 #[rustfmt::skip]
-pub struct StateDecl { pub name: String, pub name_span: Span, pub init: Lit, pub saved: bool }
+pub struct StateDecl {
+    pub name: String, pub name_span: Span, pub init: Lit, pub saved: bool, pub fixed: bool,
+}
 
 /// A function: no result type is a procedure (it may change state); `pure` once checked says
 /// it changes nothing, so a render may call it.
@@ -380,11 +400,11 @@ fn state_decl(src: &str, t: &mut Toks<'_>) -> PResult<StateDecl> {
     expect(src, t, TokKind::Assign, "`=`")?;
     let init = literal(src, t, true)?;
     expect(src, t, TokKind::Semi, "`;`")?;
-    Ok(StateDecl { name, name_span, init, saved })
+    Ok(StateDecl { name, name_span, init, saved, fixed: false })
 }
 
 /// An int (perhaps negative), bool or string literal; with `list`, also a list of one of them:
-/// `[1, 2]` or `[0; 200]`.
+/// `[1, 2]`, or `[0; 200]` filling no more than all state may hold.
 fn literal(src: &str, t: &mut Toks<'_>, list: bool) -> PResult<Lit> {
     let open = *t.peek();
     if list && t.eat(|x| x.kind == TokKind::LBracket).is_some() {
@@ -399,6 +419,15 @@ fn literal(src: &str, t: &mut Toks<'_>, list: bool) -> PResult<Lit> {
             if count > MAX_ITEMS {
                 let msg = format!("a list holds at most {MAX_ITEMS} items");
                 return Err(PErr(Diag::at_code(codes::LIST_FULL, msg, n.span)));
+            }
+            // Measured before it is filled: a line of source never becomes megabytes.
+            let bytes = first.bytes().saturating_mul(count).saturating_add(8);
+            if bytes > MAX_STATE_BYTES {
+                let msg = format!(
+                    "this list would take {bytes} bytes; all state holds at most {MAX_STATE_BYTES}"
+                );
+                let sp = Span::new(open.span.start, n.span.end);
+                return Err(PErr(Diag::at_code(codes::STATE_TOO_BIG, msg, sp)));
             }
             t.advance();
             items = vec![first.clone(); count];
@@ -430,7 +459,7 @@ fn literal(src: &str, t: &mut Toks<'_>, list: bool) -> PResult<Lit> {
     let tok = *t.peek();
     #[rustfmt::skip]
     let lit = match (tok.kind, neg) {
-        (TokKind::Int(v), _) => Lit::Int(if neg { -v } else { v }),
+        (TokKind::Int(v), _) => Lit::Int(int(v, neg, tok.span)?),
         (TokKind::True, false) => Lit::Bool(true),
         (TokKind::False, false) => Lit::Bool(false),
         (TokKind::Str, false) => Lit::Str(unescape(text(src, tok.span))),
@@ -438,6 +467,16 @@ fn literal(src: &str, t: &mut Toks<'_>, list: bool) -> PResult<Lit> {
     };
     t.advance();
     Ok(lit)
+}
+
+/// An int token's value `v`, negated (`neg`) or not: 2^63 is an int only negated, so the least
+/// int a state saves reads back.
+fn int(v: u64, neg: bool, sp: Span) -> PResult<i64> {
+    let n = if neg { 0i64.checked_sub_unsigned(v) } else { i64::try_from(v).ok() };
+    n.ok_or_else(|| {
+        let msg = format!("integer literal out of range (max {})", i64::MAX);
+        PErr(Diag::at_code(codes::BAD_INT, msg, sp))
+    })
 }
 
 fn ty(src: &str, t: &mut Toks<'_>) -> PResult<Type> {
@@ -622,14 +661,20 @@ fn stmt(src: &str, t: &mut Toks<'_>) -> PResult<Stmt> {
                     TokKind::LBracket => {
                         t.advance();
                         let index = expr(src, t)?;
-                        let end = expect(src, t, TokKind::RBracket, "`]`")?.end;
-                        let read =
-                            || Expr::Index(target.clone(), Box::new(index.clone()), span(end));
-                        let value = assigned(src, t, read)?;
-                        Ok(Stmt::SetIndex { target, index, value, span: semi(t)? })
+                        expect(src, t, TokKind::RBracket, "`]`")?;
+                        let op = assign_op(src, t)?;
+                        let value = expr(src, t)?;
+                        Ok(Stmt::SetIndex { target, index, op, value, span: semi(t)? })
                     }
                     _ => {
-                        let value = assigned(src, t, || Expr::Var(target.clone()))?;
+                        let op = assign_op(src, t)?;
+                        let mut value = expr(src, t)?;
+                        // `x += v` is `x = x + v`: reading a name runs nothing, so it may repeat.
+                        if let Some(op) = op {
+                            let sp = Span::new(tok.span.start, value.span().end);
+                            let x = Box::new(Expr::Var(target.clone()));
+                            value = Expr::Binary(op, x, Box::new(value), sp);
+                        }
                         Ok(Stmt::Assign { target, value, span: semi(t)? })
                     }
                 }
@@ -665,8 +710,8 @@ fn stmt(src: &str, t: &mut Toks<'_>) -> PResult<Stmt> {
 /// An unresolved slot.
 const NONE: Slot = Slot::Local(u32::MAX);
 
-/// What an assignment stores: `= v`, or `+= v` / `-= v` as the target `read` plus or minus `v`.
-fn assigned(src: &str, t: &mut Toks<'_>, read: impl Fn() -> Expr) -> PResult<Expr> {
+/// An assignment's operator: none for `=`, the one `+=` or `-=` applies.
+fn assign_op(src: &str, t: &mut Toks<'_>) -> PResult<Option<BinOp>> {
     let op = match t.peek().kind {
         TokKind::Assign => None,
         TokKind::PlusEq => Some(BinOp::Add),
@@ -674,15 +719,7 @@ fn assigned(src: &str, t: &mut Toks<'_>, read: impl Fn() -> Expr) -> PResult<Exp
         _ => return Err(unexpected(src, t.peek(), "`=` (or `+=`, `-=`)")),
     };
     t.advance();
-    let value = expr(src, t)?;
-    Ok(match op {
-        None => value,
-        Some(op) => {
-            let lhs = read();
-            let span = Span::new(lhs.span().start, value.span().end);
-            Expr::Binary(op, Box::new(lhs), Box::new(value), span)
-        }
-    })
+    Ok(op)
 }
 
 /// Binary operators by precedence, loosest first.
@@ -752,7 +789,7 @@ fn primary(src: &str, t: &mut Toks<'_>) -> PResult<Expr> {
     let tok = *t.advance();
     let sp = tok.span;
     Ok(match tok.kind {
-        TokKind::Int(v) => Expr::Int(v, sp),
+        TokKind::Int(v) => Expr::Int(int(v, false, sp)?, sp),
         TokKind::True | TokKind::False => Expr::Bool(tok.kind == TokKind::True, sp),
         TokKind::Str => Expr::Str(unescape(text(src, sp)), sp),
         TokKind::Ident => {

@@ -1,13 +1,14 @@
-//! The static checker: every name resolves (to a state's or a local's slot, written into the
-//! tree), every expression has one type, a function calls only functions above it (so calls
-//! never recurse), a function with a result ends in `return`, and what draws changes nothing.
-//! Unguarded recursion is safe: the parser bounds AST depth.
+//! The static checker: the declared states fit in the state limit, every name resolves (to a
+//! state's or a local's slot, written into the tree), every expression has one type, a function
+//! calls only functions above it (so calls never recurse; handlers and widgets call any), a
+//! function with a result ends in `return`, what draws changes nothing, and which state lists
+//! keep their length. Unguarded recursion is safe: the parser bounds AST depth.
 
 use lang::{Diag, Span};
 
 use crate::codes;
-use crate::parse::{BUILTINS, BinOp, Builtin, Call, Expr, Program, Slot, Stmt, Target, Type};
-use crate::parse::{UnOp, Var, Widget};
+use crate::parse::{BUILTINS, BinOp, Builtin, Call, Expr, Lit, MAX_STATE_BYTES, Program, Slot};
+use crate::parse::{Stmt, Target, Type, UnOp, Var, Widget};
 
 /// The keys an `on key` handler may name, besides a letter or digit.
 pub const KEYS: [&str; 7] = ["left", "right", "up", "down", "space", "enter", "escape"];
@@ -18,27 +19,29 @@ const BUILTIN: [Builtin; 10] = [
     Builtin::Push, Builtin::Insert, Builtin::Remove, Builtin::Clear,
 ];
 
-/// A checked function as calls see it: name, parameter types, result, where it ends, whether
-/// it changes nothing.
+/// A checked function as calls see it: name, parameter types, result, whether it changes
+/// nothing.
 struct Sig {
     name: String,
     params: Vec<Type>,
     ret: Option<Type>,
-    end: usize,
     pure: bool,
 }
 
-/// What code is checked against: the states, the functions checked so far (and every
-/// function's name), the frame's locals, the result a `return` gives (in a function), whether
-/// it may change nothing (a render or an interval), and whether it changed state.
+/// What code is checked against: the states (and their declared lengths, 0 for a scalar), the
+/// functions it may call (in a function, those above it), every function's name, the frame's
+/// locals, the result a `return` gives (in a function), whether it may change nothing (a render
+/// or an interval), whether it changed state, and which states' lengths it may change.
 struct Ck<'a> {
     states: &'a [(String, Type)],
+    lens: &'a [usize],
     sigs: &'a [Sig],
     names: &'a [String],
     locals: Vec<(String, Type)>,
     ret: Option<Option<Type>>,
     pure: bool,
     changes: bool,
+    resized: Vec<bool>,
 }
 
 fn mismatch(msg: String, sp: Span) -> Diag {
@@ -51,17 +54,25 @@ fn dup(name: &str, sp: Span) -> Diag {
 
 /// Checks `p`, resolving its names in place.
 pub(crate) fn check(p: &mut Program) -> Result<(), Diag> {
-    let mut states: Vec<(String, Type)> = Vec::new();
+    let (mut states, mut lens, mut total) = (Vec::new(), Vec::new(), 0);
     for s in &p.states {
         if states.iter().any(|(n, _)| *n == s.name) {
             return Err(dup(&s.name, s.name_span));
         }
+        total += s.init.bytes();
+        if total > MAX_STATE_BYTES {
+            let msg = format!(
+                "the states take {total} bytes by here; all state holds at most {MAX_STATE_BYTES}"
+            );
+            return Err(Diag::at_code(codes::STATE_TOO_BIG, msg, s.name_span));
+        }
         states.push((s.name.clone(), s.init.ty()));
+        lens.push(if let Lit::List(_, items) = &s.init { items.len() } else { 0 });
     }
     let names: Vec<String> = p.fns.iter().map(|f| f.name.clone()).collect();
-    let mut sigs: Vec<Sig> = Vec::new();
+    let (mut sigs, mut resized) = (Vec::new(), vec![false; states.len()]);
     for f in &mut p.fns {
-        if sigs.iter().any(|s| s.name == f.name) || BUILTINS.contains(&f.name.as_str()) {
+        if sigs.iter().any(|s: &Sig| s.name == f.name) || BUILTINS.contains(&f.name.as_str()) {
             let msg = format!("`{}` is declared twice (or is built in)", f.name);
             return Err(Diag::at_code(codes::DUP_STATE, msg, f.name_span));
         }
@@ -70,15 +81,18 @@ pub(crate) fn check(p: &mut Program) -> Result<(), Diag> {
                 return Err(dup(n, f.name_span));
             }
         }
+        // Only the functions above it: so no call recurses.
         let (sigs_now, locals) = (&sigs[..], f.params.clone());
         let mut ck = Ck {
             states: &states,
+            lens: &lens,
             sigs: sigs_now,
             names: &names,
             locals,
             ret: None,
             pure: false,
             changes: false,
+            resized,
         };
         ck.ret = Some(f.ret);
         ck.block(&mut f.body)?;
@@ -86,19 +100,20 @@ pub(crate) fn check(p: &mut Program) -> Result<(), Diag> {
             let msg = format!("`{}` must end in `return` (on every path)", f.name);
             return Err(Diag::at_code(codes::MISSING_RETURN, msg, f.name_span));
         }
-        f.pure = !ck.changes;
+        (f.pure, resized) = (!ck.changes, ck.resized);
         let params = f.params.iter().map(|p| p.1).collect();
-        let sig = Sig { name: f.name.clone(), params, ret: f.ret, end: f.span.end, pure: f.pure };
-        sigs.push(sig);
+        sigs.push(Sig { name: f.name.clone(), params, ret: f.ret, pure: f.pure });
     }
     let mut ck = Ck {
         states: &states,
+        lens: &lens,
         sigs: &sigs,
         names: &names,
         locals: Vec::new(),
         ret: None,
         pure: true,
         changes: false,
+        resized,
     };
     for e in &mut p.everys {
         ck.pure = true;
@@ -118,7 +133,23 @@ pub(crate) fn check(p: &mut Program) -> Result<(), Diag> {
         }
         ck.handler(&mut k.body, false)?;
     }
-    p.widgets.iter_mut().try_for_each(|w| ck.widget(w))
+    p.widgets.iter_mut().try_for_each(|w| ck.widget(w))?;
+    for (s, resized) in p.states.iter_mut().zip(ck.resized) {
+        s.fixed = !resized;
+    }
+    Ok(())
+}
+
+/// The length a list expression surely has: a literal's, or a fill's by a literal count.
+fn length(e: &Expr) -> Option<usize> {
+    match e {
+        Expr::List(items, _) => Some(items.len()),
+        Expr::Fill(_, count, _) => match **count {
+            Expr::Int(n, _) => usize::try_from(n).ok(),
+            _ => None,
+        },
+        _ => None,
+    }
 }
 
 /// Whether `stmts` ends in `return` on every path: a return, or an if chain with an else whose
@@ -220,12 +251,28 @@ impl Ck<'_> {
             Stmt::Assign { target, value, .. } => {
                 let want = self.place(target)?;
                 self.expect(value, want, &format!("`{}`", target.name))?;
+                // A state list given a list of another (or no sure) length changes its length.
+                if let (Slot::State(i), Some(_)) = (target.slot, want.elem()) {
+                    let i = i as usize;
+                    self.resized[i] |= length(value) != Some(self.lens[i]);
+                }
             }
-            Stmt::SetIndex { target, index, value, .. } => {
+            Stmt::SetIndex { target, index, op, value, span } => {
                 let elem = self.list(target)?;
                 self.place(target)?;
                 self.expect(index, Type::Int, "an index")?;
-                self.expect(value, elem, &format!("an item of `{}`", target.name))?;
+                let what = format!("an item of `{}`", target.name);
+                match op {
+                    None => self.expect(value, elem, &what)?,
+                    // `xs[i] += v` stores `xs[i] + v`.
+                    Some(op) => {
+                        let got = combine(*op, elem, self.expr(value)?, *span)?;
+                        if got != elem {
+                            let msg = format!("{what} must be {}, got {}", elem.name(), got.name());
+                            return Err(mismatch(msg, *span));
+                        }
+                    }
+                }
             }
             Stmt::If { arms, els, .. } => {
                 for (cond, body) in arms {
@@ -318,7 +365,6 @@ impl Ck<'_> {
     }
 
     fn expr(&mut self, e: &mut Expr) -> Result<Type, Diag> {
-        use BinOp::*;
         use Type::*;
         match e {
             Expr::Int(..) => Ok(Int),
@@ -355,21 +401,7 @@ impl Ck<'_> {
             },
             Expr::Binary(op, l, r, sp) => {
                 let (lt, rt) = (self.expr(l)?, self.expr(r)?);
-                let lists = lt.elem().is_some() || rt.elem().is_some();
-                match (*op, lt, rt) {
-                    _ if lists => {}
-                    // `+` adds ints; with a string operand it concatenates the other's display.
-                    (Add, Int, Int) => return Ok(Int),
-                    (Add, Str, _) | (Add, _, Str) => return Ok(Str),
-                    (Sub | Mul | Div | Rem, Int, Int) => return Ok(Int),
-                    (Lt | Le | Gt | Ge, Int, Int) => return Ok(Bool),
-                    // Equality is same-type only: `1 == "1"` is a bug, not `false`.
-                    (Eq | Ne, a, b) if a == b => return Ok(Bool),
-                    (And | Or, Bool, Bool) => return Ok(Bool),
-                    _ => {}
-                }
-                let (o, l, r) = (op.sym(), lt.name(), rt.name());
-                Err(mismatch(format!("`{o}` cannot combine {l} and {r}"), *sp))
+                combine(*op, lt, rt, *sp)
             }
         }
     }
@@ -382,11 +414,12 @@ impl Ck<'_> {
                 self.builtin(BUILTIN[i], c)?
             }
             None => {
+                // In a function, `sigs` holds only the functions above it.
                 let found = self.sigs.iter().enumerate().find(|(_, s)| s.name == c.name);
-                let Some((i, sig)) = found.filter(|(_, s)| s.end <= c.span.start) else {
+                let Some((i, sig)) = found else {
                     if self.names.contains(&c.name) {
                         let msg = format!(
-                            "`{}` is not defined above this call: a function calls only \
+                            "`{}` is not defined above this function: a function calls only \
                              functions defined above it (no recursion)",
                             c.name
                         );
@@ -451,8 +484,9 @@ impl Ck<'_> {
                     return Err(mismatch(msg, c.span));
                 };
                 let elem = self.list(v)?;
-                if matches!(v.slot, Slot::State(_)) {
+                if let Slot::State(i) = v.slot {
                     self.impure(&format!("`{}` of a state", c.name), c.span)?;
+                    self.resized[i as usize] = true;
                 }
                 for (a, t) in rest.iter_mut().zip(&after(elem)[b as usize - 6]) {
                     self.expect(a, *t, &format!("an argument of `{}`", c.name))?;
@@ -470,6 +504,27 @@ impl Ck<'_> {
         let msg = format!("`{}` takes {n} arguments, not {}", c.name, c.args.len());
         Err(Diag::at_code(codes::ARITY, msg, c.span))
     }
+}
+
+/// The type `op` gives operands of types `lt` and `rt`, or a mismatch at `sp`.
+fn combine(op: BinOp, lt: Type, rt: Type, sp: Span) -> Result<Type, Diag> {
+    use BinOp::*;
+    use Type::*;
+    let lists = lt.elem().is_some() || rt.elem().is_some();
+    match (op, lt, rt) {
+        _ if lists => {}
+        // `+` adds ints; with a string operand it concatenates the other's display.
+        (Add, Int, Int) => return Ok(Int),
+        (Add, Str, _) | (Add, _, Str) => return Ok(Str),
+        (Sub | Mul | Div | Rem, Int, Int) => return Ok(Int),
+        (Lt | Le | Gt | Ge, Int, Int) => return Ok(Bool),
+        // Equality is same-type only: `1 == "1"` is a bug, not `false`.
+        (Eq | Ne, a, b) if a == b => return Ok(Bool),
+        (And | Or, Bool, Bool) => return Ok(Bool),
+        _ => {}
+    }
+    let (o, l, r) = (op.sym(), lt.name(), rt.name());
+    Err(mismatch(format!("`{o}` cannot combine {l} and {r}"), sp))
 }
 
 fn unknown(name: &str, sp: Span) -> Diag {

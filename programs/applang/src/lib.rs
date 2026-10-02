@@ -45,14 +45,15 @@ pub use eval::Value;
 pub use lang::{Diag, Span};
 pub use smoke::{Fault, Smoke, TICKS, smoke};
 
-use applang_syntax::ast::Stmt;
+use applang_syntax::ast::{Lit, Stmt};
 use eval::{Render, Run, Shown, State};
 
 /// Hard resource limits for one [`App`]: guarantees, not hints.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Limits {
     /// Steps per event: one per statement, expression node, widget, loop iteration and item a
-    /// list operation moves.
+    /// list operation moves or copies, and one per 64 bytes of text a value copies (so fuel
+    /// bounds memory too).
     pub fuel: u64,
     /// Steps per render.
     pub render_fuel: u64,
@@ -75,7 +76,7 @@ impl Default for Limits {
             fuel: 1_000_000,
             render_fuel: 200_000,
             max_str_bytes: 4 * 1024,
-            max_state_bytes: 256 * 1024,
+            max_state_bytes: applang_syntax::ast::MAX_STATE_BYTES,
             max_render_bytes: 256 * 1024,
             max_items: applang_syntax::ast::MAX_ITEMS,
         }
@@ -125,7 +126,7 @@ impl App {
     /// Starts `program` at its declared initial state; `seed` (recorded: [`App::seed`]) is
     /// where `random` starts.
     pub fn new(program: Program, limits: Limits, seed: u64) -> App {
-        let vals = program.states().iter().map(|s| Value::of(&s.init)).collect();
+        let vals = inits(&program);
         // xorshift never leaves 0, so 0 is a fixed other seed.
         let state = State { vals, seed: if seed == 0 { 0x9E37_79B9_7F4A_7C15 } else { seed } };
         let acc = vec![0; program.everys().len()];
@@ -159,13 +160,14 @@ impl App {
         done.map(|()| nodes)
     }
 
-    /// Handles one event atomically: on `Err` the state is exactly as it was. Whether a handler
-    /// ran (a tick with no `every` due, a key no `on key` names: none).
+    /// Handles one event atomically: on `Err` the state is exactly as it was, and so is how far
+    /// each `every` is into its interval (a faulted tick's time comes again with the next).
+    /// Whether a handler ran (a tick with no `every` due, a key no `on key` names: none).
     pub fn handle(&mut self, event: &Event) -> Result<bool, Diag> {
         let lim = self.limits;
-        let mut next = self.state.clone();
+        let (mut next, mut acc) = (self.state.clone(), self.acc.clone());
         let mut run = Run::new(&self.program, &mut next, &lim, lim.fuel);
-        let ran = dispatch(&mut run, &self.shown, &mut self.acc, event);
+        let ran = dispatch(&mut run, &self.shown, &mut acc, event);
         self.steps = lim.fuel - run.fuel.remaining();
         let ran = ran?;
         let total: usize = next.vals.iter().map(Value::bytes).sum();
@@ -173,7 +175,7 @@ impl App {
             let msg = format!("state totals {total} bytes; the limit is {}", lim.max_state_bytes);
             return Err(Diag::new_code(codes::STATE_TOO_BIG, msg));
         }
-        self.state = next;
+        (self.state, self.acc) = (next, acc);
         Ok(ran)
     }
 
@@ -185,6 +187,11 @@ impl App {
     /// How often it wants a [`Event::Tick`]: its shortest `every` interval now, in ms (0: no
     /// timer runs); one that faults counts as 100, so its tick shows the fault.
     pub fn timer(&mut self) -> u32 {
+        self.intervals().into_iter().min().unwrap_or(0)
+    }
+
+    /// The intervals of the `every` blocks that run now, in ms (one that faults: 100).
+    pub(crate) fn intervals(&mut self) -> Vec<u32> {
         let lim = self.limits;
         let mut run = Run::new(&self.program, &mut self.state, &lim, lim.render_fuel);
         let every = self.program.everys().iter().filter_map(|e| match run.expr(&e.interval) {
@@ -192,7 +199,7 @@ impl App {
             Ok(_) => None,
             Err(_) => Some(100),
         });
-        every.min().unwrap_or(0)
+        every.collect()
     }
 
     /// Whether it has `on key` handlers.
@@ -217,24 +224,60 @@ impl App {
         out
     }
 
-    /// Takes back saved states from [`App::saved`]'s lines: a name it no longer saves is
-    /// skipped; one whose type changed is dropped, and so are lines that do not read or would
-    /// pass the state limit, each with a note saying so.
+    /// Takes back saved states from [`App::saved`]'s lines, line by line: a name it no longer
+    /// saves is skipped; one whose type changed is dropped, and so is a fixed list (see
+    /// [`applang_syntax::ast::StateDecl`]) whose length changed, and a line that does not read,
+    /// each with a note saying so; all are, with a note, if they would pass the state limit, or
+    /// if it faults when it shows them but not afresh (so no saved state leaves an app that
+    /// cannot even show itself).
     pub fn restore(&mut self, text: &str) -> Vec<String> {
-        let lines = match applang_syntax::literals(text) {
-            Ok(lines) => lines,
-            Err(d) => return vec![format!("the saved state did not read ({d}); it starts afresh")],
-        };
-        let (mut notes, before) = (Vec::new(), self.state.vals.clone());
-        for (name, lit) in lines {
-            let states = self.program.states();
-            let Some(i) = states.iter().position(|s| s.saved && s.name == name) else { continue };
-            let want = states[i].init.ty();
-            if lit.ty() != want {
-                notes.push(format!("dropped the saved `{name}`: it is {} now", want.name()));
-                continue;
+        let before = self.state.vals.clone();
+        let mut notes = self.take_back(text);
+        let shows = if self.state.vals == before { Ok(Vec::new()) } else { self.render() };
+        if let Err(d) = shows {
+            let kept = std::mem::replace(&mut self.state.vals, before);
+            match self.render() {
+                Ok(_) => notes.push(format!(
+                    "the saved state faults when it shows ({}); it starts afresh",
+                    said(&d)
+                )),
+                Err(_) => self.state.vals = kept,
             }
-            self.state.vals[i] = Value::of(&lit);
+        }
+        notes
+    }
+
+    /// [`App::restore`] but for its last check: the saved states back, whatever shows.
+    pub(crate) fn take_back(&mut self, text: &str) -> Vec<String> {
+        let (mut notes, before) = (Vec::new(), self.state.vals.clone());
+        for (n, line) in text.lines().enumerate() {
+            let lines = match applang_syntax::literals(line) {
+                Ok(lines) => lines,
+                Err(d) => {
+                    let n = n + 1;
+                    notes.push(format!("dropped saved line {n}: it did not read ({})", said(&d)));
+                    continue;
+                }
+            };
+            for (name, lit) in lines {
+                let states = self.program.states();
+                let Some(i) = states.iter().position(|s| s.saved && s.name == name) else {
+                    continue;
+                };
+                let (init, fixed) = (&states[i].init, states[i].fixed);
+                let len = |l: &Lit| if let Lit::List(_, items) = l { items.len() } else { 0 };
+                if lit.ty() != init.ty() {
+                    notes.push(format!(
+                        "dropped the saved `{name}`: it is {} now",
+                        init.ty().name()
+                    ));
+                } else if fixed && len(&lit) != len(init) {
+                    let n = len(init);
+                    notes.push(format!("dropped the saved `{name}`: it holds {n} items now"));
+                } else {
+                    self.state.vals[i] = Value::of(&lit);
+                }
+            }
         }
         if self.state.vals.iter().map(Value::bytes).sum::<usize>() > self.limits.max_state_bytes {
             self.state.vals = before;
@@ -242,6 +285,24 @@ impl App {
         }
         notes
     }
+
+    /// Closed and opened again: its states afresh and its `every` blocks at their start, then
+    /// `saved` ([`App::saved`]'s lines) taken back; the notes [`App::take_back`] gives.
+    pub(crate) fn reopen(&mut self, saved: &str) -> Vec<String> {
+        self.state.vals = inits(&self.program);
+        self.acc.iter_mut().for_each(|a| *a = 0);
+        self.take_back(saved)
+    }
+}
+
+/// The program's states as declared.
+fn inits(p: &Program) -> Vec<Value> {
+    p.states().iter().map(|s| Value::of(&s.init)).collect()
+}
+
+/// `d` for a note: its code and message (a note has no source to point into).
+fn said(d: &Diag) -> String {
+    format!("E{:04} {}", d.code.unwrap_or_default(), d.message)
 }
 
 /// Runs `event` on `run`'s state: a shown handler (with what it sees), the `on key` handlers
@@ -335,12 +396,15 @@ list of one of them):
   state n = 0;   state name = \"\";   state on = false;
   state board = [0; 200];   state words = [\"a\", \"b\"];   state todos = [\"\"; 0];
   saved state best = 0;     -- kept when the app is closed and opened again
-FUNCTIONS (a function calls only functions defined ABOVE it: no recursion; parameters and
-results are int, bool or string; a function with a result ends in return):
+FUNCTIONS (a function calls only functions defined ABOVE it: no recursion; handlers and
+widgets call any; parameters and results are int, bool or string; a function with a result
+ends in return):
   fn at(x: int, y: int) -> int { return y * 10 + x; }
   fn reset() { score = 0; }   -- no result: it may change state
 HANDLERS (top level):
-  every 500 { STMTS }   every speed { STMTS }   -- each N ms while it shows; N <= 0 pauses
+  every 500 { STMTS }   every speed { STMTS }   -- each N ms while it shows; N <= 0 pauses:
+                                                   make N 0 while nothing moves (before Start,
+                                                   paused, game over), so the app rests
   on key \"left\" { STMTS }   -- \"left\" \"right\" \"up\" \"down\" \"space\" \"enter\" \"escape\", \"a\"..\"z\", \"0\"..\"9\"
 WIDGETS (drawn top to bottom; EVERY widget ends with ; or its { } block, also inside the
 braces of if, row, col and for):
@@ -350,6 +414,7 @@ braces of if, row, col and for):
   for i in 0..len(todos) { WIDGETS }   -- i (0 to N-1) is seen by the widgets and their handlers
   grid 10, board;                  -- a list of ints as squares, 10 a row: 0 empty, then colors
                                       1 red 2 green 3 yellow 4 blue 5 purple 6 cyan 7 silver 8 gray
+                                      (7 and 8 look alike on a light theme: tell things apart by 1-6)
   grid 10, board { STMTS }         -- a tap (or a drag over squares) runs STMTS; cell = its index
   grid 2, [0, 0], words { STMTS }  -- a list of strings: one written in each square
   Widgets only read state: they call only functions that change nothing (and never random).
@@ -388,7 +453,7 @@ pub fn rule(code: u16) -> &'static str {
         codes::NEGATIVE_REPEAT => "repeat counts and list lengths are never negative.",
         codes::FUEL_EXHAUSTED => {
             "do less in one event (1,000,000 steps) or render (200,000): keep tables in lists, \
-             loop less, never redo work each tick."
+             loop less, copy long text and lists less, never redo work each tick."
         }
         codes::STR_TOO_LONG => "keep each string under 4 KiB.",
         codes::STATE_TOO_BIG => "keep all state under 256 KiB.",
@@ -424,7 +489,8 @@ pub fn rule(code: u16) -> &'static str {
              and only a function with -> TYPE returns a value."
         }
         codes::CALL_BELOW => {
-            "define each function above every call to it; a function never calls itself."
+            "define each function above every function that calls it; a function never calls \
+             itself."
         }
         codes::IMPURE_RENDER => {
             "widgets and every intervals only read: change state (and call random) in handlers."

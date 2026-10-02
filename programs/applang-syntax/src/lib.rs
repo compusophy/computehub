@@ -26,13 +26,13 @@ pub use parse::{Program, literals};
 
 /// The parsed tree, read-only, for the `applang` runtime.
 pub mod ast {
-    pub use crate::parse::{BUILTINS, MAX_ITEMS};
+    pub use crate::parse::{BUILTINS, MAX_ITEMS, MAX_STATE_BYTES};
     pub use crate::parse::{BinOp, Builtin, Call, Every, Expr, FnDecl, Handler, Lit, OnKey};
     pub use crate::parse::{Slot, StateDecl, Stmt, Target, Type, UnOp, Var, Widget};
 }
 
 /// Stable diagnostic codes: lex `E00xx`, parse `E01xx`, runtime `E02xx`, check
-/// `E03xx`. `STATE_TOO_BIG` and `BAD_EVENT` have no span (no source text).
+/// `E03xx`. `BAD_EVENT`, and `STATE_TOO_BIG` at commit, have no span (no source text).
 pub mod codes {
     pub const UNEXPECTED_CHAR: u16 = 1;
     pub const UNTERMINATED_COMMENT: u16 = 2;
@@ -54,7 +54,8 @@ pub mod codes {
     pub const FUEL_EXHAUSTED: u16 = 206;
     /// A string value past `Limits::max_str_bytes`.
     pub const STR_TOO_LONG: u16 = 211;
-    /// State past `Limits::max_state_bytes` at commit.
+    /// State past `Limits::max_state_bytes` at commit, or declared past
+    /// [`crate::ast::MAX_STATE_BYTES`].
     pub const STATE_TOO_BIG: u16 = 212;
     /// A host event that no widget or state matches.
     pub const BAD_EVENT: u16 = 213;
@@ -79,7 +80,7 @@ pub mod codes {
     /// A name that is no declared state or visible local.
     pub const UNKNOWN_NAME: u16 = 302;
     pub const TYPE_MISMATCH: u16 = 303;
-    /// A call to a function defined below it (or to itself).
+    /// A function's call to a function defined below it (or to itself).
     pub const CALL_BELOW: u16 = 304;
     /// A function with a result that does not end in `return`.
     pub const MISSING_RETURN: u16 = 305;
