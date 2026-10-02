@@ -650,17 +650,19 @@ fn a_finger_held_still_long_presses_and_only_a_menu_ends_its_press() {
     assert!(!s.grid.carry.as_ref().unwrap().moved);
     s.to((STUDIO.0, STUDIO.1 + 192.0));
     s.up((STUDIO.0, STUDIO.1 + 192.0));
-    assert!(s.menu.is_none() && s.labels_home()[..3] == ["Assistant", "Terminal", "Studio"]);
+    assert!(s.menu.is_none() && s.labels_home()[..3] == ["Assistant", "Studio", "Terminal"]);
     s.push((600.0, 640.0), 0, true);
     s.to((400.0, 500.0));
     assert!(s.grid.lasso.is_none() && s.up((400.0, 500.0)).gesture);
-    // A finger that drifted 9 px while it waited drags only 8 px past where it picked one up.
+    // A finger that drifted 9 px while it waited (on the Assistant's icon; Studio's cell, left
+    // empty, is the desktop's) drags only 8 px past where it picked one up.
     s.set_now(13_000.0);
-    s.push(STUDIO, 0, true);
-    s.to((STUDIO.0 + 9.0, STUDIO.1));
+    assert_eq!(s.hit(STUDIO.0, STUDIO.1), Some(Target::Desktop));
+    s.push((57.0, 201.0), 0, true);
+    s.to((66.0, 201.0));
     s.held(13_600.0);
-    s.to((STUDIO.0 + 16.0, STUDIO.1));
-    s.up((STUDIO.0 + 16.0, STUDIO.1));
+    s.to((73.0, 201.0));
+    s.up((73.0, 201.0));
     assert_eq!(s.labels(), ["Open"]);
     // Held on the Assistant's tile: its menu, which is then what the finger is on (no tooltip).
     s.k(Escape, "");
@@ -732,14 +734,13 @@ fn the_home_screen_shows_every_app_and_the_top_bar_its_buttons() {
     assert!(s.to(STUDIO).redraw && !s.to((STUDIO.0 + 5.0, STUDIO.1)).redraw);
     s.click((57.0, 201.0));
     assert_eq!((s.names(), s.overlay.open), (vec!["welcome"], true));
-    // A new app saved to ~/apps shows up last, with its sigil, and stays last: the order is kept.
+    // A new app saved to ~/apps takes the first free cell, with its sigil; every cell is kept.
     let mine = [Vfs::HOME, "/apps"].concat();
     s.host.vfs.mkdir_all(&mine).unwrap();
     s.host.vfs.write(&[&mine, "/clock.app"].concat(), b"").unwrap();
     let r = s.input(Input::PointerLeave);
-    let order = "studio,assistant,terminal,files,settings,feedback,about,welcome,".to_string()
-        + &mine
-        + "/clock.app";
+    let kept = "@2,studio:0.0:,assistant:0.1:,terminal:0.2:,files:0.3:,settings:0.4:,feedback:0.5:";
+    let order = [kept, ",about:1.0:,welcome:1.1:,", &mine, "/clock.app:1.2:"].concat();
     assert_eq!(r.effects, [Effect::Pref { key: "home.order".into(), value: order }]);
     assert!(r.redraw && s.labels_home()[8] == "Clock" && s.grid.icons[8].sigil.is_some());
     // The mark shows Welcome; the right buttons Feedback (a bug) and Settings.
@@ -759,9 +760,9 @@ fn cell(i: usize) -> (f32, f32) {
 
 #[test]
 fn icons_move_and_open_by_the_pointer_and_the_keys() {
-    // The grid's ways (`home::grid`) wired: a mouse carries an icon (grabbing, the slot under it
-    // bare) and drops it, the order kept, nothing opened; the pointer leaving or Escape puts it
-    // back.
+    // The grid's ways (`home::grid`) wired: a mouse carries an icon (grabbing, the cell under it
+    // bare) and drops it there, its own left empty, every cell kept, nothing opened; the pointer
+    // leaving or Escape puts it back.
     let (mut s, log) = desk();
     s.to(cell(0));
     s.down(cell(0));
@@ -769,14 +770,12 @@ fn icons_move_and_open_by_the_pointer_and_the_keys() {
     assert!(
         r.cursor == Some(Cursor::Grabbing) && s.hit(cell(3).0, cell(3).1) == Some(Target::Desktop)
     );
-    let order = "assistant,terminal,files,studio,settings,feedback,about,welcome";
-    assert_eq!(
-        s.up(cell(3)).effects,
-        [Effect::Pref { key: "home.order".into(), value: order.into() }]
-    );
+    let kept = "@2,assistant:0.1:,terminal:0.2:,studio:0.3:,files:0.4:,settings:0.5:,feedback:1.0:";
+    let order = [kept, ",about:1.1:,welcome:1.2:"].concat();
+    assert_eq!(s.up(cell(3)).effects, [Effect::Pref { key: "home.order".into(), value: order }]);
     assert!(s.names() == ["welcome"] && log.take().iter().all(|e| !matches!(e.1, E::Click(_))));
     for cancel in [Input::PointerLeave, Input::Key { key: Escape, mods: Mods::default() }] {
-        s.down(cell(0));
+        s.down(cell(1));
         s.to(cell(6));
         assert!(
             s.input(cancel).redraw && s.up(cell(6)).effects.is_empty() && s.grid.carry.is_none()

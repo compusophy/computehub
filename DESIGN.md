@@ -174,17 +174,26 @@ one. Forked crates keep their Apache-2.0 license and note their origin.
   window state replays and hashes.
 - **Home screen**: every app is an icon behind the windows (Studio,
   Assistant, Terminal, Files, Settings, Feedback, About, Welcome, then each
-  `~/apps/*.app`, newest last), down the columns from the top left on a
-  wide screen, in rows of four on a phone; there is no other list. A
-  `.app` file's icon is its sigil, sacred geometry made from its name. A
-  click opens; a mouse dragged 4 px carries an icon, and the others slide
-  aside; a finger held 500 ms picks one up: moved 8 px from there it drags,
-  lifted unmoved it opens the icon's menu. A finger held anywhere else opens
-  the menu there, if there is one; where there is none (an app's widget) it
-  is still a tap when it lifts. A mouse dragged on the bare desktop draws a
-  box that selects the icons it touches; Enter opens them, dragging one
-  carries them all, and an app that takes the focus ends the selection. The
-  order is kept (`home.order`).
+  `~/apps/*.app`), each in a cell of a grid: down the columns from the top
+  left on a wide screen, in rows of four on a phone; there is no other
+  list. A `.app` file's icon is its sigil, sacred geometry made from its
+  name. A click opens; a mouse dragged 4 px carries an icon; a finger held
+  500 ms picks one up: moved 8 px from there it drags, lifted unmoved it
+  opens the icon's menu. A carried icon lands in any cell, as on a phone:
+  on an empty one nothing else moves (the cell it left stays empty); over
+  another icon, that one and those after it, up to the first empty cell,
+  slide a cell on to make room (on a grid full to its end, back). A new app
+  takes the first free cell. A finger held anywhere else opens the menu
+  there, if there is one; where there is none (an app's widget) it is still
+  a tap when it lifts. A mouse dragged on the bare desktop draws a box that
+  selects the icons it touches; Enter opens them, dragging one carries them
+  all, kept as they were around it, and an app that takes the focus ends
+  the selection. A wide screen and a phone each keep their own arrangement
+  (their grids differ in shape; one never arranged shows the apps packed in
+  the other's order); a cell off a screen made smaller (a phone's keyboard)
+  is kept for when it grows back. Kept as `home.order`: `@2`, then
+  `name:wide:narrow` per app, a cell `col.row` (before: the names alone, in
+  order, read as that order packed).
 - **Bottom row**: one row of 44 px tiles along the screen's bottom (62 px
   with its margins), always there, so the work area never changes with it.
   No shelf, no button: tiles on the wallpaper, as the home grid's are.
