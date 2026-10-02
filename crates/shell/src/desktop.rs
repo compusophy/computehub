@@ -134,7 +134,8 @@ impl Shell {
     /// Button 0 down (a finger's if `touch`): closes a menu pressed outside (and does nothing
     /// else), arms a button, follows a finger, presses on the home screen, focuses a window,
     /// grabs it (not on a narrow screen), toggles maximize on a double click, or presses into
-    /// content (a finger's press waits to be a tap: a scroll is no press).
+    /// content (a finger's press waits to be a tap: a scroll is no press; but on a
+    /// [`Sense::Pad`] it presses at once, and the finger drags it, never scrolling).
     pub(crate) fn press(&mut self, touch: bool, out: &mut Response) {
         let ((x, y), now) = (self.pointer.unwrap_or_default(), self.host.now_ms);
         let hit = self.hit(x, y);
@@ -179,10 +180,17 @@ impl Shell {
                 let (c, theme) = (content_rect(r), self.host.theme.at(now));
                 let state = ui::UiState { focused: true, now_ms: now, ..ui::UiState::default() };
                 self.host.fresh_hits(win, c, &theme, state);
-                let id = self.widget_at(win, x, y).map(|h| h.id);
+                let hit = self.widget_at(win, x, y);
+                let (id, pad) = (hit.map(|h| h.id), hit.is_some_and(|h| h.sense == Sense::Pad));
                 self.app_press = id.map(|id| (win, id));
                 let down = AppEvent::PointerDown { x: x - c.x, y: y - c.y, id };
-                match touch {
+                if let Some(t) = self.touch.as_mut().filter(|_| pad) {
+                    // A finger on a pad scrolls nothing and long-presses nothing.
+                    let mut finger = home::touch::Touch::new((x, y), now, false);
+                    finger.done = true;
+                    *t = (finger, Scroll::None);
+                }
+                match touch && !pad {
                     true => self.down = Some((win, down)),
                     false => self.press_into(win, down, out),
                 }
@@ -199,10 +207,11 @@ impl Shell {
         self.grab = Some(grab);
     }
 
-    /// A mouse held down on a window's content moved: its app hears where to.
+    /// A mouse held down on a window's content, or a finger on a pad, moved: its app hears where
+    /// to.
     pub(crate) fn drag_app(&mut self, out: &mut Response) {
-        let (Some((win, _)), Some((x, y)), None) = (self.app_press, self.pointer, self.touch)
-        else {
+        let pad = self.touch.is_none_or(|t| t.1 == Scroll::None);
+        let (Some((win, _)), Some((x, y)), true) = (self.app_press, self.pointer, pad) else {
             return;
         };
         if let Some(c) = self.placement(win).map(|p| content_rect(rectf(p.rect))) {

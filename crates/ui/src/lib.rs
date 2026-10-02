@@ -104,6 +104,11 @@ pub mod sem {
     /// Squares to tap by number; the value is "N columns, M rows", a row of their colors' digits
     /// a line, then a line "K: text" for each square K with a text.
     pub const GRID: u8 = 10;
+    /// A picture to tap by point; the value is "W x H units", then a line a shape: its name,
+    /// a text's text in quotes, its numbers and its color (rect x y w h, circle x y r, ring
+    /// x y r width, line x1 y1 x2 y2 width, text x y size, sprite x y side, uncolored), 64 at
+    /// most and then "and N more".
+    pub const CANVAS: u8 = 11;
     pub const SELECTED: u8 = 1;
     pub const CHECKED: u8 = 2;
     pub const FOCUSED: u8 = 4;

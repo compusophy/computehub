@@ -125,7 +125,8 @@ one. Forked crates keep their Apache-2.0 license and note their origin.
 
 - One WebGL2 context and, normally, one instanced draw call per frame.
   Every instance is a quad: fills, borders, soft shadows, icons, glyphs,
-  linear gradients, elliptical glows and film grain. Rounded corners and
+  linear gradients, elliptical glows, film grain and lines (segments with
+  round ends, which canvases draw). Rounded corners and
   shadows come from signed distances in the fragment shader; smooth ramps
   are dithered, so there is no banding and there are no textures but the
   glyph atlas.
@@ -287,7 +288,15 @@ one. Forked crates keep their Apache-2.0 license and note their origin.
   AI, checks each reply and fixes it by edits, showing what moves (thinking,
   writing 48 lines, fixing line 43, testing); `studio::AppHost` runs a `.app`
   in its own window. Its prompt asks every app for its icon line (one card,
-  and one in each example), which a change keeps. **Editor** writes plain text, a new note in `~/notes`;
+  and one in each example), which a change keeps.
+  Made apps draw: `canvas W, H, scene();` is a picture
+  of square units (y down, scaled to fit) that `scene` draws with rect,
+  circle, ring, line, text and sprite in the theme's 12 colors, sent as
+  uiwire's `Node::Canvas` (a display list, never pixels); only what a
+  canvas calls draws, and it changes nothing, so a render stays pure. A
+  canvas's handler sees the tap's `x` and `y`. Grids and canvases are
+  boards: they take the room the window's other widgets leave, and with a
+  handler they are pads. **Editor** writes plain text, a new note in `~/notes`;
   Files and the Terminal's `edit` open files in it (a `.app` in Studio).
   **Welcome** (a program, its mark revealed by the desktop's clock)
   is the first screen; **Settings** picks the theme and
@@ -330,6 +339,10 @@ one. Forked crates keep their Apache-2.0 license and note their origin.
   covers typing, dead keys, IME composition, paste and phone keyboards, so
   `os` leaves the key-downs that type unprevented. On phones a tap that
   releases on the focused window brings the keyboard back.
+- A finger's press into an app waits to be a tap (a finger that travels
+  scrolls the window instead), but on a pad (`ui::Sense::Pad`: a canvas or
+  grid an app plays) it presses at once and drags, as a mouse does: a
+  paddle follows the finger, and the window never scrolls from there.
 - Browsers keep Ctrl+W, Ctrl+T and Ctrl+N in a tab; an installed app's
   window, or fullscreen with Keyboard Lock, gets them.
 

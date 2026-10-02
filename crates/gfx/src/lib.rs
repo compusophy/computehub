@@ -108,6 +108,9 @@ pub enum Kind {
     /// Film grain fixed to the screen: per pixel, white or black noise from
     /// seed `p0`, up to the color's alpha.
     Grain = 7,
+    /// A segment `p0` wide with round ends across the rect, its bounding box grown by `p0 / 2`:
+    /// from the top-left to the bottom-right, or with `p1` 1 from the bottom-left to the top-right.
+    Line = 8,
 }
 
 /// Vector icons in the rect's centered square, of side `s = min(w, h)`.
@@ -292,6 +295,22 @@ impl DrawList {
         self.push(r, 0.0, Kind::Grain, [seed, 0.0], [color, CLEAR], [0.0; 4]);
     }
 
+    /// A segment from `a` to `b`, `width` px wide with round ends (none if `width <= 0`; a dot
+    /// if `a` is `b`): [`Kind::Line`] over its bounding box grown by half the width.
+    pub fn line(&mut self, a: (f32, f32), b: (f32, f32), width: f32, color: Rgba) {
+        let (x, y, h) = (a.0.min(b.0), a.1.min(b.1), width / 2.0);
+        let r = RectF::new(x - h, y - h, (a.0 - b.0).abs() + width, (a.1 - b.1).abs() + width);
+        self.segment(r, width, (b.0 - a.0) * (b.1 - a.1) < 0.0, color);
+    }
+
+    /// [`Kind::Line`] in `r`, `width` px wide, rising (`up`) or falling left to right.
+    pub fn segment(&mut self, r: RectF, width: f32, up: bool, color: Rgba) {
+        if width > 0.0 {
+            let p = [width, f32::from(u8::from(up))];
+            self.push(r, 0.0, Kind::Line, p, [color, CLEAR], [0.0; 4]);
+        }
+    }
+
     /// The [`Atlas`] pixel rect `uv` (skipped if empty) drawn into `dst`.
     pub fn glyph(&mut self, dst: RectF, uv: RectF, color: Rgba) {
         if uv.w > 0.0 && uv.h > 0.0 {
@@ -343,7 +362,7 @@ impl DrawList {
         let length = !matches!(kind, Kind::Gradient | Kind::Grain);
         let (p0, p1) = if length { (p0.max(0.0), p1.max(0.0)) } else { (p0, p1) };
         // How far past the rect it draws, by kind: a shadow its blur + 1, a glyph or glow 0.
-        let reach = [1.0, 1.0, p0 + 1.0, 1.0, 0.0, 1.0, 0.0, 1.0][kind as usize];
+        let reach = [1.0, 1.0, p0 + 1.0, 1.0, 0.0, 1.0, 0.0, 1.0, 1.0][kind as usize];
         let seen = r.inset(-reach).intersect(clip);
         let empty = r.w <= 0.0 || r.h <= 0.0 || seen.w <= 0.0 || seen.h <= 0.0;
         if !finite || empty || (color.3 == 0 && color2.3 == 0) {

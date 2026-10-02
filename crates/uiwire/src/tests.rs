@@ -375,10 +375,78 @@ fn grids_timers_ticks_keys_and_taps_round_trip_strictly() {
     assert!(Node::decode(&set(small.encode(), 5, 1)).is_none());
 }
 
+fn draw(shape: Shape, color: u8, at: [i16; 5], text: &str) -> Draw {
+    Draw { shape, color, at, text: text.into() }
+}
+
+/// A canvas with a handler and every shape, and one without either.
+fn canvases() -> [Node; 2] {
+    let draws = vec![
+        draw(Shape::Rect, 1, [0, 0, 160, 8, 0], ""),
+        draw(Shape::Circle, 3, [-5, 200, 2, 0, 0], ""),
+        draw(Shape::Ring, 4, [150, 150, 30, 8, 0], ""),
+        draw(Shape::Line, 10, [100, 8, -100, 291, 3], ""),
+        draw(Shape::Text, 11, [80, 4, 6, 0, 0], "Score 7 \u{e9}"),
+        draw(Shape::Sprite, 0, [8, 12, 2, 0, 0], "..5..\n.555."),
+    ];
+    let tap = Node::Canvas { id: 1 << 30, w: 300, h: 300, draws };
+    [tap, Node::Canvas { id: 0, w: 1, h: MAX_SIDE, draws: Vec::new() }]
+}
+
+#[test]
+fn canvases_round_trip_every_shape_and_decode_strictly() {
+    let canvases = canvases();
+    canvases.iter().for_each(|c| strict(c, Node::encode, Node::decode));
+    let frame = Frame { nodes: vec![col(canvases.to_vec())], ..Frame::default() };
+    assert_eq!(frame.encode_checked(), Some(frame.encode()));
+    let Node::Canvas { draws, .. } = &canvases[0] else { unreachable!() };
+    assert_eq!(draws.iter().map(Draw::ink).collect::<Vec<_>>(), [1, 1, 1, 1, 10, 5]);
+    // Its code after the last; its size, its draws' count, and each draw's shape, color and
+    // slots, then a string for a Text or a Sprite only.
+    let line = draw(Shape::Line, 9, [1, -2, 3, 4, 5], "");
+    let one =
+        Node::Canvas { id: 2, w: 3, h: 4, draws: vec![line, draw(Shape::Text, 0, [0; 5], "")] };
+    let at = |v: [i16; 5]| v.iter().flat_map(|v| v.to_le_bytes()).collect::<Vec<u8>>();
+    let head = [21, 2, 0, 0, 0, 0, 0, 3, 0, 4, 0, 2, 0, 0, 0];
+    let want = [&head[..], &[3, 9], &at([1, -2, 3, 4, 5]), &[4, 0], &at([0; 5]), &[0; 4]].concat();
+    assert_eq!(one.encode(), want);
+    // No shape 6, a count past what the bytes hold, nor a child.
+    assert!(Node::decode(&set(one.encode(), 15, 6)).is_none());
+    assert!(Node::decode(&set(one.encode(), 14, 1)).is_none());
+    assert!(Node::decode(&set(one.encode(), 5, 1)).is_none());
+    // As many ink as a canvas holds, and one more.
+    let sprite = |n| draw(Shape::Sprite, 0, [0, 0, 1, 0, 0], &"7".repeat(n));
+    let full = Node::Canvas { id: 0, w: 9, h: 9, draws: vec![sprite(MAX_INK - 1)] };
+    strict(&full, Node::encode, Node::decode);
+    // A side of 0 or past the most, a color past 11, a sprite's color, a slot past those its
+    // shape uses, a negative size, a text on a Rect, a Text of two lines, too much ink: neither
+    // checked nor decoded as they are.
+    let canvas = |w, h, d: Draw| Node::Canvas { id: 1, w, h, draws: vec![d] };
+    let rect = |color, at| draw(Shape::Rect, color, at, "");
+    let bad = [
+        canvas(0, 9, rect(1, [0; 5])),
+        canvas(9, MAX_SIDE + 1, rect(1, [0; 5])),
+        canvas(9, 9, rect(12, [0; 5])),
+        canvas(9, 9, draw(Shape::Sprite, 1, [0; 5], "1")),
+        canvas(9, 9, rect(1, [0, 0, 1, 1, 1])),
+        canvas(9, 9, draw(Shape::Circle, 1, [0, 0, 0, 1, 0], "")),
+        canvas(9, 9, rect(1, [0, 0, -1, 1, 0])),
+        canvas(9, 9, draw(Shape::Line, 1, [0, 0, 1, 1, -3], "")),
+        canvas(9, 9, draw(Shape::Rect, 1, [0; 5], "x")),
+        canvas(9, 9, draw(Shape::Text, 1, [0; 5], "a\nb")),
+        canvas(9, 9, sprite(MAX_INK)),
+    ];
+    for c in bad {
+        let frame = Frame { nodes: vec![c.clone()], ..Frame::default() };
+        let back = Node::decode(&c.encode());
+        assert!(back != Some(c.clone()) && frame.encode_checked().is_none(), "{c:?}");
+    }
+}
+
 #[test]
 fn fuzzed_decodes_never_panic_and_stay_canonical() {
     let mut corpus = vec![sample().encode(), Frame::default().encode(), scene().encode()];
-    corpus.extend(grids().iter().map(Node::encode));
+    corpus.extend(grids().iter().chain(&canvases()).map(Node::encode));
     corpus.extend([Request::Timer { ms: 7 }.encode(), Event::Tap { id: 1, cell: 2 }.encode()]);
     let (requests, acted) = agent();
     corpus.extend(requests.iter().map(Request::encode).chain(acted.iter().map(Event::encode)));

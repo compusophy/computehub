@@ -84,8 +84,31 @@ fn kinds_and_params() {
     assert_eq!((items[9].rect, items[10].rect), ([0.0, 6.0, 10.0, 10.0], [0.0, -2.0, 10.0, 10.0]));
     assert_eq!((items[9].radius, items[6].radius, items[7].radius), (2.0, 2.0, 0.0));
     let kinds = [Kind::Fill, Kind::Border, Kind::Shadow, Kind::Icon, Kind::Glyph, Kind::Gradient];
-    let ids: Vec<u8> = kinds.iter().chain(&[Kind::Glow, Kind::Grain]).map(|&k| k as u8).collect();
-    assert_eq!(ids, [0, 1, 2, 3, 4, 5, 6, 7]);
+    let more = [Kind::Glow, Kind::Grain, Kind::Line];
+    let ids: Vec<u8> = kinds.iter().chain(&more).map(|&k| k as u8).collect();
+    assert_eq!(ids, [0, 1, 2, 3, 4, 5, 6, 7, 8]);
+}
+
+#[test]
+fn lines_cover_their_ends_grown_by_half_their_width() {
+    let mut list = DrawList::new();
+    list.line((10.0, 20.0), (30.0, 25.0), 4.0, WHITE);
+    list.line((30.0, 20.0), (10.0, 25.0), 2.0, WHITE);
+    list.line((5.0, 5.0), (5.0, 5.0), 3.0, WHITE);
+    list.line((0.0, 0.0), (9.0, 9.0), 0.0, WHITE);
+    let got: Vec<_> = list.instances().iter().map(|i| (i.rect, i.kind, i.p0, i.p1)).collect();
+    let want = [
+        // Falling left to right; rising (either way it is given); a dot; none 0 wide.
+        ([8.0, 18.0, 24.0, 9.0], 8.0, 4.0, 0.0),
+        ([9.0, 19.0, 22.0, 7.0], 8.0, 2.0, 1.0),
+        ([3.5, 3.5, 3.0, 3.0], 8.0, 3.0, 0.0),
+    ];
+    assert_eq!(got, want);
+    list.segment(OK, 2.0, true, Rgba(1, 2, 3, 4));
+    let mut out = Vec::new();
+    list.encode_into(&mut out);
+    let last = [le(&[0.0, 0.0, 10.0, 10.0, 0.0, 8.0, 2.0, 1.0]), vec![1, 2, 3, 4]].concat();
+    assert_eq!(out[3 * INSTANCE_BYTES..3 * INSTANCE_BYTES + 36], last[..]);
 }
 
 #[test]
@@ -239,7 +262,7 @@ fn shaders_name_the_contract() {
     }
     let frag = "precision highp int;|out vec4 fragColor;|uniform sampler2D u_atlas;|\
         uniform vec2 u_atlas_size;|v_color2|floatBitsToUint(v_params.z)|gl_FragCoord";
-    let kinds = (1..8).map(|k| format!("kind == {k}"));
+    let kinds = (1..9).map(|k| format!("kind == {k}"));
     for name in frag.split('|').map(String::from).chain(kinds) {
         assert!(fs.contains(&name), "fragment shader lacks {name}");
     }

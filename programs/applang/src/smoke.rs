@@ -3,13 +3,17 @@
 //! shows once (each as it shows by then, by its text: an earlier click may have moved or hidden
 //! it), then lets [`TICKS`] ticks pass (each the program's shortest interval, every [`SLOW`]th
 //! its longest, so a slow `every` runs too): every 5th it presses the next key the program
-//! handles, every 7th taps a square of a grid that has a handler, every 11th clicks a button,
-//! every 13th types "12", "hello" or "" in each input, re-rendering after each event. Then, if
-//! it saves state, it is closed and opened again with what it saved, as a person comes back to
-//! it: it renders, each button it shows is clicked once and [`AGAIN`] ticks pass. It stops at
-//! the first fault, or after [`BUDGET`] steps in all, and says what it saw.
+//! handles, every 7th taps a square of a grid or a unit of a canvas that has a handler, every
+//! 11th clicks a button, every 13th types "12", "hello" or "" in each input, re-rendering after
+//! each event. Then, if it saves state, it is closed and opened again with what it saved, as a
+//! person comes back to it: it renders, each button it shows is clicked once and [`AGAIN`]
+//! ticks pass. It stops at the first fault, or after [`BUDGET`] steps in all, and says what it
+//! saw. Canvases that showed, none of whose shapes ever reached inside one, are a fault at the
+//! end (`OFF_CANVAS`): a picture drawn in the window's pixels, not the canvas's units.
 
-use crate::{App, Diag, Event, Limits, Node, Program, codes};
+use applang_syntax::ast::Widget;
+
+use crate::{App, Diag, Draw, Event, Limits, Node, Program, Shape, Span, codes};
 
 /// The ticks a smoke test lets pass, and the most steps it spends.
 pub const TICKS: u32 = 300;
@@ -54,7 +58,7 @@ pub fn smoke(program: Program, seed: u64) -> Smoke {
 /// what its file of saved states holds), whatever they show ("": none).
 pub fn smoke_from(program: Program, seed: u64, saved: &str) -> Smoke {
     let keys: Vec<String> = program.keys().iter().map(|k| k.key.clone()).collect();
-    let timed = !program.everys().is_empty();
+    let (timed, canvas) = (!program.everys().is_empty(), first_canvas(program.widgets()));
     let mut app = App::new(program, Limits::default(), seed);
     if !saved.is_empty() {
         app.take_back(saved);
@@ -84,10 +88,14 @@ pub fn smoke_from(program: Program, seed: u64, saved: &str) -> Smoke {
             events.push((Event::Key { name: name.clone() }, quoted("key ", &name)));
         }
         if n % 7 == 0 {
-            let grids = grids(&t.last);
-            if let Some(&(id, len)) = grids.get(t.pick(grids.len())) {
-                let cell = t.pick(len) as u32;
-                events.push((Event::Tap { id, cell }, format!("tapping square {cell}")));
+            let boards = boards(&t.last);
+            if let Some(&(id, len, w)) = boards.get(t.pick(boards.len())) {
+                let cell = t.pick(len as usize) as u32;
+                let what = match w {
+                    0 => format!("tapping square {cell}"),
+                    w => format!("tapping the canvas at x {}, y {}", cell % w, cell / w),
+                };
+                events.push((Event::Tap { id, cell }, what));
             }
         }
         if n % 11 == 0 {
@@ -116,6 +124,16 @@ pub fn smoke_from(program: Program, seed: u64, saved: &str) -> Smoke {
     if !saved.is_empty() && !t.reopen(&saved) {
         return t.out;
     }
+    if let (Some((w, h)), false, Some(at)) = (t.canvas, t.inside, canvas) {
+        let msg = format!(
+            "nothing it drew reached inside its canvas of {w} x {h} units: draw at x from 0 to {} \
+             and y from 0 to {}, in the canvas's own units, not the window's pixels",
+            w - 1,
+            h - 1
+        );
+        t.fault(Diag::at_code(codes::OFF_CANVAS, msg, at), "the whole smoke test".into());
+        return t.out;
+    }
     if timed && !changed {
         t.out.warnings.push(format!("{TICKS} ticks never changed what it shows"));
     }
@@ -127,7 +145,8 @@ pub fn smoke_from(program: Program, seed: u64, saved: &str) -> Smoke {
 }
 
 /// A smoke test under way: the app, what it showed last, the events so far, its own xorshift
-/// for picks, and the report.
+/// for picks, the report, the first canvas shown (its size) and whether a shape ever reached
+/// inside a canvas.
 #[derive(Default)]
 struct Tester {
     app: Option<App>,
@@ -135,6 +154,8 @@ struct Tester {
     log: Vec<String>,
     rng: u64,
     out: Smoke,
+    canvas: Option<(u16, u16)>,
+    inside: bool,
 }
 
 impl Tester {
@@ -209,6 +230,12 @@ impl Tester {
         self.spend(what);
         match r {
             Ok(nodes) => {
+                walk(&nodes, &mut |n| {
+                    if let Node::Canvas { w, h, draws, .. } = n {
+                        self.canvas.get_or_insert((*w, *h));
+                        self.inside |= draws.iter().any(|d| reaches(d, *w, *h));
+                    }
+                });
                 self.last.clone_from(&nodes);
                 Some(nodes)
             }
@@ -255,15 +282,55 @@ fn buttons(nodes: &[Node]) -> Vec<(u32, String)> {
     out
 }
 
-/// Every (id, squares) of `nodes`' grids that have a handler.
-fn grids(nodes: &[Node]) -> Vec<(u32, usize)> {
+/// Every (id, squares, a canvas's width or 0) of `nodes`' grids and canvases that have a handler.
+fn boards(nodes: &[Node]) -> Vec<(u32, u32, u32)> {
     let mut out = Vec::new();
-    walk(nodes, &mut |n| {
-        if let Node::Grid { id: Some(id), cells, .. } = n {
-            out.extend((!cells.is_empty()).then_some((*id, cells.len())));
+    walk(nodes, &mut |n| match n {
+        Node::Grid { id: Some(id), cells, .. } if !cells.is_empty() => {
+            out.push((*id, cells.len() as u32, 0));
         }
+        Node::Canvas { id: Some(id), w, h, .. } => {
+            out.push((*id, u32::from(*w) * u32::from(*h), u32::from(*w)));
+        }
+        _ => {}
     });
     out
+}
+
+/// Whether `d` reaches inside a canvas `w` x `h` (some of it, as near as its shape is known: a
+/// text's chars as wide as it is tall).
+fn reaches(d: &Draw, w: u16, h: u16) -> bool {
+    let [x, y, a, b, c] = d.at.map(i64::from);
+    let (rows, cols) = (d.text.lines().count() as i64, d.text.lines().map(|l| l.chars().count()));
+    let cols = cols.max().unwrap_or(0) as i64;
+    let (x0, y0, x1, y1) = match d.shape {
+        Shape::Rect => (x, y, x + a, y + b),
+        Shape::Circle | Shape::Ring if a > 0 && (d.shape == Shape::Circle || b > 0) => {
+            (x - a, y - a, x + a + 1, y + a + 1)
+        }
+        Shape::Line if c > 0 => {
+            (x.min(a) - c / 2, y.min(b) - c / 2, x.max(a) + c / 2 + 1, y.max(b) + c / 2 + 1)
+        }
+        Shape::Text if a > 0 && cols > 0 => {
+            (x - cols * a / 2, y - a / 2, x + cols * a / 2 + 1, y + a / 2 + 1)
+        }
+        Shape::Sprite if d.ink() > 1 => (x, y, x + cols * a, y + rows * a),
+        _ => return false,
+    };
+    x0 < i64::from(w) && x1 > 0 && y0 < i64::from(h) && y1 > 0 && x0 < x1 && y0 < y1
+}
+
+/// Where the first canvas of `ws` is, if it has one.
+fn first_canvas(ws: &[Widget]) -> Option<Span> {
+    ws.iter().find_map(|w| match w {
+        Widget::Canvas { span, .. } => Some(*span),
+        Widget::Row { children, .. } | Widget::Col { children, .. } => first_canvas(children),
+        Widget::For { body, .. } => first_canvas(body),
+        Widget::If { arms, els, .. } => {
+            arms.iter().find_map(|a| first_canvas(&a.1)).or_else(|| first_canvas(els))
+        }
+        _ => None,
+    })
 }
 
 /// The states `nodes`' inputs edit.

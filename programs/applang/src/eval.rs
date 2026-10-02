@@ -1,18 +1,20 @@
 //! The runtime: a fueled tree walk over a checked tree whose names are slots. Rendering changes
 //! nothing (the checker allows it no assignment, list change, `random` or call to a function
-//! that does). Handling is atomic: a handler runs on a copy of the state, committed only on a
-//! clean finish. The faults left are checked arithmetic, indexes, list and string bounds,
-//! grids, `random`'s bound, call depth and fuel. Fuel pays for bytes too: every value a run
+//! that does; only a canvas's call draws, into [`Run::draws`]). Handling is atomic: a handler
+//! runs on a copy of the state, committed only on a clean finish. The faults left are checked
+//! arithmetic, indexes, list and string bounds, grids, canvases and their shapes, `random`'s
+//! bound, call depth and fuel. Fuel pays for bytes too: every value a run
 //! makes or copies costs a step per item and per [`BYTES_A_STEP`] bytes of text, paid before it
 //! is made, so a run's memory and time are bounded by its fuel.
 
 use std::mem;
 
-use applang_syntax::ast::{BinOp, Builtin, Call, Expr, Lit, Slot, Stmt, Target, UnOp, Var, Widget};
+use applang_syntax::ast::{BinOp, Builtin, Call, Expr, Lit, SHAPES, Slot, Stmt, Target, UnOp};
+use applang_syntax::ast::{Var, Widget};
 use fuel::Fuel;
 use lang::{Diag, Span};
 
-use crate::{Limits, Node, Program, codes};
+use crate::{Draw, Limits, Node, Program, Shape, codes};
 
 /// The deepest calls nest; with the parser's depth cap, a bounded stack.
 const MAX_CALLS: u32 = 32;
@@ -20,6 +22,29 @@ const MAX_CALLS: u32 = 32;
 pub(crate) const MAX_COLS: i64 = 100;
 /// The bytes of text a step copies: an event's fuel makes at most 64 MB, a render's 12.8 MB.
 pub(crate) const BYTES_A_STEP: usize = 64;
+/// The most units a canvas has a side.
+pub(crate) const MAX_SIDE: i64 = 1024;
+/// A thousand times the sine of each degree from 0 to 90, rounded.
+#[rustfmt::skip]
+const SINE: [u16; 91] = [
+    0, 17, 35, 52, 70, 87, 105, 122, 139, 156, 174, 191, 208, 225, 242, 259, 276, 292, 309, 326,
+    342, 358, 375, 391, 407, 423, 438, 454, 469, 485, 500, 515, 530, 545, 559, 574, 588, 602, 616,
+    629, 643, 656, 669, 682, 695, 707, 719, 731, 743, 755, 766, 777, 788, 799, 809, 819, 829, 839,
+    848, 857, 866, 875, 883, 891, 899, 906, 914, 921, 927, 934, 940, 946, 951, 956, 961, 966, 970,
+    974, 978, 982, 985, 988, 990, 993, 995, 996, 998, 999, 999, 1000, 1000,
+];
+
+/// A thousand times the sine of `deg` degrees, rounded: total, any int is an angle.
+fn sine(deg: i64) -> i64 {
+    let d = deg.rem_euclid(360);
+    let (q, sign) = match d {
+        0..=90 => (d, 1),
+        91..=180 => (180 - d, 1),
+        181..=270 => (d - 180, -1),
+        _ => (360 - d, -1),
+    };
+    sign * i64::from(SINE[q as usize])
+}
 
 /// An applang runtime value.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -90,12 +115,13 @@ pub(crate) struct State {
     pub seed: u64,
 }
 
-/// A handler a render showed: its id, the squares of its grid (none: a button's) and the loop
-/// variables it sees.
+/// A handler a render showed: its id, the squares of its grid or the units of its canvas (none:
+/// a button's), a canvas's width (0: none) and the loop variables it sees.
 #[derive(Debug, Clone)]
 pub(crate) struct Shown {
     pub id: u32,
     pub cells: Option<u32>,
+    pub cols: u32,
     pub captured: Vec<Value>,
 }
 
@@ -120,7 +146,7 @@ fn fault(code: u16, msg: impl Into<String>, sp: Span) -> Diag {
 }
 
 /// One run of code: the program, a tank of fuel, the state, the locals (the current call's
-/// from `base`) and how deep calls nest.
+/// from `base`), how deep calls nest, the shapes a canvas's call drew and the ink left.
 pub(crate) struct Run<'a> {
     pub p: &'a Program,
     pub fuel: Fuel,
@@ -129,11 +155,14 @@ pub(crate) struct Run<'a> {
     base: usize,
     depth: u32,
     pub lim: &'a Limits,
+    pub draws: Vec<Draw>,
+    pub ink: usize,
 }
 
 impl<'a> Run<'a> {
     pub fn new(p: &'a Program, st: &'a mut State, lim: &'a Limits, fuel: u64) -> Run<'a> {
-        Run { p, fuel: Fuel::new(fuel), st, locals: Vec::new(), base: 0, depth: 0, lim }
+        let (locals, draws, ink) = (Vec::new(), Vec::new(), lim.max_ink);
+        Run { p, fuel: Fuel::new(fuel), st, locals, base: 0, depth: 0, lim, draws, ink }
     }
 
     /// Burns `n` units, or faults at `sp`.
@@ -400,8 +429,83 @@ impl<'a> Run<'a> {
                 self.items(list()).clear();
                 return Ok(None);
             }
+            Builtin::Sin => sine(int(arg(self, 0)?)),
+            Builtin::Cos => sine(int(arg(self, 0)?).rem_euclid(360) + 90),
+            Builtin::Rect
+            | Builtin::Circle
+            | Builtin::Ring
+            | Builtin::Line
+            | Builtin::Text
+            | Builtin::Sprite => {
+                self.draw(b, c)?;
+                return Ok(None);
+            }
         };
         Ok(Some(Value::Int(v)))
+    }
+
+    /// Draws shape `b` as call `c` gives it (the checker lets only a canvas's call draw): each
+    /// number within an i16 and each size never negative, its color 0 to 11, a text one line,
+    /// and its ink within what the render has left; else a fault at the call.
+    fn draw(&mut self, b: Builtin, c: &Call) -> Result<(), Diag> {
+        let (k, sp) = (b as usize - Builtin::Rect as usize, c.span);
+        let bad = |msg: String| Err(fault(codes::BAD_DRAW, msg, sp));
+        let vals = c.args.iter().map(|a| self.expr(a)).collect::<Result<Vec<_>, _>>()?;
+        // The thing first (a text's value, a sprite's rows), then the numbers and the color.
+        let (words, first) = match &vals[0] {
+            _ if b == Builtin::Text => (vals[0].to_string(), 1),
+            Value::List(rows) if b == Builtin::Sprite => {
+                let rows: Vec<String> = rows.iter().map(Value::to_string).collect();
+                if rows.iter().any(|r| r.contains('\n')) {
+                    return bad("a sprite's row is one line: it has a line break".into());
+                }
+                (rows.join("\n"), 1)
+            }
+            _ => (String::new(), 0),
+        };
+        if b == Builtin::Text && words.contains('\n') {
+            return bad("`text` draws one line: its value has a line break".into());
+        }
+        let names = SHAPES[k].split(", ").skip(first);
+        let (mut at, mut color) = ([0i16; 5], 0);
+        for (i, (v, name)) in vals[first..].iter().map(|v| int(v.clone())).zip(names).enumerate() {
+            if name == "color" {
+                if !(0..=11).contains(&v) {
+                    return bad(format!("`{}`'s color is {v}: colors are 0 to 11", c.name));
+                }
+                color = v as u8;
+                continue;
+            }
+            let size = matches!(name, "w" | "h" | "r" | "width" | "size" | "side");
+            match i16::try_from(v) {
+                Ok(n) if !size || n >= 0 => at[i] = n,
+                Ok(_) => {
+                    return bad(format!("`{}`'s {name} is {v}: a size is never negative", c.name));
+                }
+                Err(_) => {
+                    return bad(format!(
+                        "`{}`'s {name} is {v}: a drawing's numbers are -32,768 to 32,767 (drop \
+                         what flies far off)",
+                        c.name
+                    ));
+                }
+            }
+        }
+        let shapes = [Shape::Rect, Shape::Circle, Shape::Ring, Shape::Line, Shape::Text];
+        let shape = shapes.get(k).copied().unwrap_or(Shape::Sprite);
+        let d = Draw { shape, color, at, text: words };
+        let Some(left) = self.ink.checked_sub(d.ink()) else {
+            let msg = format!(
+                "one render draws at most {} ink (a shape is 1, a text 1 more a character, a \
+                 sprite 1 more a square): draw less at once",
+                self.lim.max_ink
+            );
+            return bad(msg);
+        };
+        self.burn(text(d.text.len()), sp)?;
+        self.ink = left;
+        self.draws.push(d);
+        Ok(())
     }
 
     pub fn block(&mut self, stmts: &[Stmt]) -> Result<Flow, Diag> {
@@ -507,10 +611,11 @@ impl Render<'_> {
         Ok(())
     }
 
-    /// Notes handler `id` shown with what it sees; its instance number.
-    fn show(&mut self, id: u32, cells: Option<u32>) -> u32 {
+    /// Notes handler `id` shown with what it sees (the `cells` of a grid or canvas, a canvas's
+    /// `cols`); its instance number.
+    fn show(&mut self, id: u32, cells: Option<u32>, cols: u32) -> u32 {
         let captured = self.run.locals.clone();
-        self.shown.push(Shown { id, cells, captured });
+        self.shown.push(Shown { id, cells, cols, captured });
         self.shown.len() as u32 - 1
     }
 
@@ -530,7 +635,7 @@ impl Render<'_> {
             Widget::Button { text, handler, .. } => {
                 let text = self.run.expr(text)?.to_string();
                 self.spend(text.len(), sp)?;
-                out.push(Node::Button { text, id: self.show(handler.id, None) });
+                out.push(Node::Button { text, id: self.show(handler.id, None, 0) });
             }
             Widget::Input { state, .. } => {
                 let Value::Str(value) = self.run.slot(state).clone() else {
@@ -569,8 +674,23 @@ impl Render<'_> {
                 let node = self.grid(cols, cells, texts.as_ref(), sp)?;
                 let (cols, cells, texts) = node;
                 let n = cells.len() as u32;
-                let id = handler.as_ref().map(|h| self.show(h.id, Some(n)));
+                let id = handler.as_ref().map(|h| self.show(h.id, Some(n), 0));
                 out.push(Node::Grid { id, cols, cells, texts });
+            }
+            Widget::Canvas { w, h, scene, handler, .. } => {
+                let (w, h) = (int(self.run.expr(w)?), int(self.run.expr(h)?));
+                if !(1..=MAX_SIDE).contains(&w) || !(1..=MAX_SIDE).contains(&h) {
+                    let msg = format!("a canvas is 1 to 1,024 units a side, not {w} x {h}");
+                    return Err(fault(codes::BAD_DRAW, msg, sp));
+                }
+                self.run.draws.clear();
+                self.run.call(scene)?;
+                let draws = mem::take(&mut self.run.draws);
+                // A draw's 12 bytes and its text.
+                self.spend(draws.iter().map(|d| 12 + d.text.len()).sum(), sp)?;
+                let (cells, cols) = ((w * h) as u32, w as u32);
+                let id = handler.as_ref().map(|h| self.show(h.id, Some(cells), cols));
+                out.push(Node::Canvas { id, w: w as u16, h: h as u16, draws });
             }
         }
         Ok(())
@@ -613,11 +733,16 @@ impl Render<'_> {
     }
 }
 
-/// The handler with id `id`: its statements, and whether a grid's (it sees `cell`).
+/// The handler with id `id`: its statements, and whether a grid's or a canvas's (it sees
+/// where it was tapped).
 pub(crate) fn handler(ws: &[Widget], id: u32) -> Option<(&[Stmt], bool)> {
     ws.iter().find_map(|w| match w {
         Widget::Button { handler: h, .. } if h.id == id => Some((&h.body[..], false)),
-        Widget::Grid { handler: Some(h), .. } if h.id == id => Some((&h.body[..], true)),
+        Widget::Grid { handler: Some(h), .. } | Widget::Canvas { handler: Some(h), .. }
+            if h.id == id =>
+        {
+            Some((&h.body[..], true))
+        }
         Widget::Row { children, .. }
         | Widget::Col { children, .. }
         | Widget::For { body: children, .. } => handler(children, id),

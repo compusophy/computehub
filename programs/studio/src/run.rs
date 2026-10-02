@@ -4,6 +4,7 @@
 use crate::{Disk, View, file_name, text};
 use applang::{App, Limits, Node as A};
 use coder::ai::{clip, problem, shown, state_path};
+use uiwire::Shape::{Circle, Line, Rect, Ring, Sprite, Text};
 use uiwire::{Event, Frame, Key, MAX_DEPTH, Node, Request, Style, Variant, mods};
 
 /// The app's buttons and grids are this plus applang's ids, its inputs [`INPUT`] plus their
@@ -311,6 +312,17 @@ fn wire(nodes: &[A], depth: usize, left: &mut usize, names: &[&str], out: &mut V
             A::Grid { id, cols, cells, texts } => {
                 let (cells, texts) = (cells.clone(), texts.clone());
                 Node::Grid { id: id.map_or(0, app), cols: *cols, cells, texts }
+            }
+            // The same shapes, in the same order and units: uiwire's Draw by its fields.
+            A::Canvas { id, w, h, draws } => {
+                let draw = |d: &applang::Draw| uiwire::Draw {
+                    shape: [Rect, Circle, Ring, Line, Text, Sprite][d.shape as usize],
+                    color: d.color,
+                    at: d.at,
+                    text: d.text.clone(),
+                };
+                let draws = draws.iter().map(draw).collect();
+                Node::Canvas { id: id.map_or(0, app), w: *w, h: *h, draws }
             }
         });
         all

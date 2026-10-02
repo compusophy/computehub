@@ -66,11 +66,13 @@ pub struct Limits {
     pub max_render_bytes: usize,
     /// Items in any one list.
     pub max_items: usize,
+    /// Ink one render draws on its canvases ([`Draw::ink`]).
+    pub max_ink: usize,
 }
 
 impl Default for Limits {
     /// 1,000,000 steps an event and 200,000 a render, 4 KiB strings, 256 KiB of state and of
-    /// render text, 4,096 items a list.
+    /// render text, 4,096 items a list and 4,096 ink a render.
     fn default() -> Self {
         Limits {
             fuel: 1_000_000,
@@ -79,14 +81,16 @@ impl Default for Limits {
             max_state_bytes: applang_syntax::ast::MAX_STATE_BYTES,
             max_render_bytes: 256 * 1024,
             max_items: applang_syntax::ast::MAX_ITEMS,
+            max_ink: 4096,
         }
     }
 }
 
-/// One rendered widget. A Button's `id` (and a Grid's, when it has a handler) is its place among
-/// the handlers this render showed: what a click or tap reports. `Input::state` is what a text
-/// change names. A grid's squares are 0 (empty) to 8, `cols` a row, its texts one per square
-/// or none.
+/// One rendered widget. A Button's `id` (and a Grid's or a Canvas's, when it has a handler) is
+/// its place among the handlers this render showed: what a click or tap reports. `Input::state`
+/// is what a text change names. A grid's squares are 0 (empty) to 8, `cols` a row, its texts
+/// one per square or none. A canvas is `w` x `h` units (1 to 1,024 each) and the shapes its
+/// call drew, in order.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Node {
     Label { text: String },
@@ -95,11 +99,48 @@ pub enum Node {
     Row { children: Vec<Node> },
     Col { children: Vec<Node> },
     Grid { id: Option<u32>, cols: u16, cells: Vec<u8>, texts: Vec<String> },
+    Canvas { id: Option<u32>, w: u16, h: u16, draws: Vec<Draw> },
 }
 
-/// One host event. A click or tap names a handler of the last render; input text is clipped to
-/// `max_str_bytes` at a char boundary; a tick says how many ms passed; a key is one of
-/// [`applang_syntax::KEYS`], a letter or a digit.
+/// What a [`Draw`] draws: the card's six shapes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Shape {
+    Rect,
+    Circle,
+    Ring,
+    Line,
+    Text,
+    Sprite,
+}
+
+/// One shape a canvas's call drew, in its units: `at` the numbers its call gave, as the card
+/// lists them (x, y, then w and h, r, width, size or side; the rest 0), its `color` (0 to 11; 0 for
+/// a sprite), a text's text or a sprite's rows (a line each). As uiwire's Draw, which Studio
+/// sends it as.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Draw {
+    pub shape: Shape,
+    pub color: u8,
+    pub at: [i16; 5],
+    pub text: String,
+}
+
+impl Draw {
+    /// Its ink: 1, and 1 more for each char of a text and each painted square (digit) of a
+    /// sprite.
+    pub fn ink(&self) -> usize {
+        1 + match self.shape {
+            Shape::Text => self.text.chars().count(),
+            Shape::Sprite => self.text.bytes().filter(u8::is_ascii_digit).count(),
+            _ => 0,
+        }
+    }
+}
+
+/// One host event. A click or tap names a handler of the last render (a tap's `cell` a grid's
+/// square, or a canvas's unit `y * w + x`); input text is clipped to `max_str_bytes` at a char
+/// boundary; a tick says how many ms passed; a key is one of [`applang_syntax::KEYS`], a letter
+/// or a digit.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Event {
     Click { id: u32 },
@@ -325,13 +366,21 @@ fn dispatch(
                 return Err(bad(format!("no handler {}", s.id)));
             };
             run.locals.clone_from(&s.captured);
-            match (event, s.cells) {
-                (Event::Click { .. }, None) => {}
-                (Event::Tap { cell, .. }, Some(n)) if *cell < n => {
+            match (event, s.cells, i64::from(s.cols)) {
+                (Event::Click { .. }, None, _) => {}
+                (Event::Tap { cell, .. }, Some(n), 0) if *cell < n => {
                     run.locals.push(Value::Int(i64::from(*cell)));
                 }
+                // A canvas's handler sees where: x and y.
+                (Event::Tap { cell, .. }, Some(n), w) if *cell < n => {
+                    let cell = i64::from(*cell);
+                    run.locals.extend([Value::Int(cell % w), Value::Int(cell / w)]);
+                }
                 _ => {
-                    let msg = format!("{id} is a button clicked or a grid tapped on a square");
+                    let msg = format!(
+                        "{id} is a button clicked, or a grid or a canvas tapped on a square or \
+                         unit of it"
+                    );
                     return Err(bad(msg));
                 }
             }
@@ -380,11 +429,13 @@ fn dispatch(
     Ok(true)
 }
 
-/// Example programs as a reply gives them, for a prompt to show (both are tested: they compile
-/// and pass [`smoke`]): what was asked, then the program.
-pub const SHOTS: [(&str, &str); 2] = [
+/// Example programs as a reply gives them, for a prompt to show (each is tested: they compile
+/// and pass [`smoke`]): what was asked, then the program. A grid's game, an app of widgets and
+/// a canvas's game.
+pub const SHOTS: [(&str, &str); 3] = [
     ("make snake", include_str!("../shots/snake.app")),
     ("make a todo list I can check off", include_str!("../shots/todo.app")),
+    ("make a game where I catch falling stars", include_str!("../shots/catch.app")),
 ];
 
 /// The compact, prompt-embeddable language card: hand a generator this.
@@ -418,7 +469,25 @@ braces of if, row, col and for):
                                       (7 and 8 look alike on a light theme: tell things apart by 1-6)
   grid 10, board { STMTS }         -- a tap (or a drag over squares) runs STMTS; cell = its index
   grid 2, [0, 0], words { STMTS }  -- a list of strings: one written in each square
+  canvas 160, 120, scene();        -- a picture (below)
   Widgets only read state: they call only functions that change nothing (and never random).
+CANVAS (a picture W units wide and H tall, 1 to 1,024, scaled to fit the window; x runs right
+and y down from 0, 0 at the top left):
+  canvas 160, 120, scene();           -- scene() draws it anew whenever the app shows
+  canvas 160, 120, scene() { STMTS }  -- a tap or drag on it runs STMTS; x, y = where, in its
+                                         units (so no state or loop variable is called x or y)
+DRAWING (only in the function a canvas calls and the functions it calls, which change nothing;
+later shapes cover earlier ones; the thing first, then where, then how big, the color last):
+  fn scene() { rect(0, 0, 160, 8, 4); circle(bx, by, 3, 3); text(score, 80, 4, 6, 9); }
+  rect(x, y, w, h, color);   circle(x, y, r, color);   ring(x, y, r, width, color);
+  line(x1, y1, x2, y2, width, color);   text(VALUE, x, y, size, color);  -- one line, centered
+  sprite([\"..3..\", \".333.\", \"33333\"], x, y, side);  -- each char a square side units wide:
+                                                       0-9 that color, any other shows through
+  colors: 0 the canvas, 1 red 2 green 3 yellow 4 blue 5 purple 6 cyan 7 silver 8 gray
+          9 ink 10 dim ink 11 accent
+  A grid suits boards of squares and painting; a canvas things that move freely, marks, hands,
+  pictures and charts. every 33 is about 30 steps a second. A phone has no keys: let a tap or
+  a drag on the canvas steer (follow x).
 STATEMENTS (each ends with ; or its { } block; let works in any block):
   let x = EXPR;   x = EXPR;   x += EXPR;   xs[i] = EXPR;   f(a, b);   return EXPR;   return;
   if EXPR { } else if EXPR { } else { }   for i in A..B { }   repeat N { }
@@ -427,10 +496,13 @@ EXPRESSIONS: 42  true  \"text\" (escapes \\\" \\\\ \\n)  names  xs[i]  f(a, b)  
   - !   * / %   + -   < <= > >=   == !=   &&  ||    (/ and % round toward zero)
   + with a string on either side joins text: \"score \" + n
   len(xs)  len(s)  min(a, b)  max(a, b)  abs(a)  random(n) (0 to n-1)  parse(s, d) (int, else d)
+  sin(d)  cos(d)  (1000 times the sine and cosine of d degrees: sin(90) is 1000, cos(90) is 0)
   No ?: operator: write a function, fn mark(on: bool) -> string { if on { return \"x\"; } return \"\"; }
 FAULTS: overflow, divide by zero, an index outside its list, a list past 4,096 items, a grid
-square past 8, past 1,000,000 steps in one event or 200,000 in one render. There is no while,
-no recursion, no float, no clock to read: time comes only from every.";
+square past 8, a canvas color past 11, a negative size, a shape's number past 32,767 either
+way, more than 4,096 shapes, sprite squares and text characters in one render, past 1,000,000
+steps in one event or 200,000 in one render. There is no while, no recursion, no float, no
+clock to read: time comes only from every.";
 
 /// The rule a diagnostic's code says was broken, in a line, for a model fixing its program:
 /// every code a program can earn; "" for the host's own (a bad event).
@@ -474,32 +546,51 @@ pub fn rule(code: u16) -> &'static str {
         codes::CALLS_TOO_DEEP => "call functions at most 32 deep.",
         codes::SHOWS_NOTHING => {
             "after its states, functions and handlers an app has its widgets (label, button, \
-             input, row, col, if, for, grid), and some show from the start."
+             input, row, col, if, for, grid, canvas), and some show from the start."
+        }
+        codes::BAD_DRAW => {
+            "a canvas is 1 to 1,024 units a side; colors are 0 to 11, sizes never negative, a \
+             text one line, every number of a shape within -32,768 to 32,767 (drop what flies \
+             far off), and one render draws at most 4,096 shapes, sprite squares and text \
+             characters."
+        }
+        codes::OFF_CANVAS => {
+            "draw inside the canvas: x from 0 to its width - 1 and y from 0 to its height - 1, \
+             in its own units, not the window's pixels."
         }
         codes::DUP_STATE => {
-            "declare each state, function and parameter once; built-ins keep \
-                             their names."
+            "declare each state, function and parameter once; built-ins keep their names (beside \
+             a canvas, rect, circle, ring, line, text, sprite, sin and cos too), and a canvas's \
+             handler names the tap x and y."
         }
         codes::UNKNOWN_NAME => {
             "use only declared states, the lets of enclosing blocks, parameters, loop variables, \
-             cell in a grid's handler, the built-ins and functions defined above."
+             cell in a grid's handler, x and y in a canvas's, the built-ins and functions \
+             defined above."
         }
         codes::TYPE_MISMATCH => {
             "types never convert: compare like with like, conditions are bool, input binds a \
              string state, + with a string joins text, lists are not shown or compared whole, \
-             and only a function with -> TYPE returns a value."
+             text shows an int, bool or string, sprite takes a list of strings, and only a \
+             function with -> TYPE returns a value."
         }
         codes::CALL_BELOW => {
             "define each function above every function that calls it; a function never calls \
              itself."
         }
         codes::IMPURE_RENDER => {
-            "widgets and every intervals only read: change state (and call random) in handlers."
+            "widgets, every intervals and functions that draw only read: change state (and call \
+             random) in handlers."
         }
         codes::BAD_KEY => {
             "on key names left, right, up, down, space, enter, escape, a to z or 0 to 9."
         }
         codes::ARITY => "call each function with exactly its parameters.",
+        codes::DRAW_OUTSIDE => {
+            "rect, circle, ring, line, text and sprite draw only in the function a canvas calls \
+             (canvas 160, 120, scene();) and the functions it calls; handlers change state, and \
+             the canvas shows it."
+        }
         _ => "",
     }
 }
