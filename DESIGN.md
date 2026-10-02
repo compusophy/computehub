@@ -376,7 +376,7 @@ and the theme are kept there too.
   Alt+Q, Alt+arrows and Alt+Backquote before a terminal sees them
   (readline's Alt+F still arrives). A way through for apps that want them
   waits on the Super key question.
-- **The boot budget** (224 KB since 2026-10-02, about 29 KB of headroom)
+- **The boot budget** (224 KB since 2026-10-02, about 26 KB of headroom)
   pays for what must draw the first frame. Everything else should be a
   program, fetched when it first runs (Studio and applang already are;
   Settings and the Terminal could be).
