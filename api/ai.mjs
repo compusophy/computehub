@@ -1,6 +1,6 @@
 // POST /api/ai: the free AI. Takes an OpenAI-style chat-completions body and sends the Vercel AI
 // Gateway a new one built from it (an allowed model, its text messages, bounded output,
-// reasoning off unless it asks for a low effort, a temperature; nothing else it sent goes on), with this project's own
+// bounded reasoning (see below), a temperature; nothing else it sent goes on), with this project's own
 // credentials (its OIDC token, or AI_GATEWAY_API_KEY when set), and streams the answer back, so
 // no visitor needs a key and the browser never holds one.
 //
@@ -114,12 +114,17 @@ export default async function handler(req, res) {
   if (!messages.length) return fail(res, 400, 'no messages');
   const model = Object.hasOwn(MODELS, body.model) ? body.model : Object.keys(MODELS)[0];
   const asked = Math.floor(Number(body.max_tokens));
-  // Thinking costs time and tokens: off, unless the program asks for a low effort or gives it
-  // a token budget (at most 4,096; GLM 5.3 may think at length even when told off).
+  // Thinking costs time and tokens. GLM 5.3 thinks at length even when told off (unseen, up to
+  // the whole output: measured, 8,192 tokens and no program), so by default it gets a budget of
+  // 1,024 tokens, which bounds it (measured: 1,037). A program may ask for a low effort, a
+  // budget of its own (at most 4,096), or none at all ({ enabled: false }).
   const r = (body && body.reasoning) || {};
   const budget = Math.floor(Number(r.max_tokens));
   const reasoning =
-    r.effort === 'low' ? { effort: 'low' } : budget >= 1 ? { max_tokens: Math.min(budget, 4096) } : { enabled: false };
+    r.effort === 'low' ? { effort: 'low' }
+    : budget >= 1 ? { max_tokens: Math.min(budget, 4096) }
+    : r.enabled === false ? { enabled: false }
+    : { max_tokens: 1024 };
   const out = {
     model,
     messages,

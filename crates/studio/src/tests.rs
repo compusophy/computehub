@@ -260,7 +260,7 @@ fn makes_checks_fixes_and_saves() {
         [s("model"), s("max_tokens"), s("temperature")],
         [Some("m/x"), Some("8192"), Some("0.3")]
     );
-    // No reasoning field: the free AI turns thinking off (asked for, it took the whole room).
+    // No reasoning field: the free AI bounds thinking (asked for, it took the whole room).
     assert_eq!((body.get("reasoning"), body.get("stream")), (None, Some(&Json::Bool(true))));
     let (role, system) = message(&body, 0);
     assert!(role == "system" && system.contains(applang::REFERENCE) && system.contains("```app\n"));

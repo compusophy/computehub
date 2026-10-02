@@ -4,7 +4,7 @@
 //! problem (its line, a caret, the rule broken) and the program; a reply that ran out of room asks
 //! for the same app shorter, and one without a program asks again: at most [`RETRIES`] times
 //! (then E0906, or E0907 out of room). Never with an empty or cut-off reply as context, and never
-//! asking for reasoning (asked for, it took the whole room). One that runs is saved, run and added
+//! asking for reasoning (the free AI bounds it to 1,024 tokens). One that runs is saved, run and added
 //! to the corpus, unless the code was edited meanwhile; what its first comment says is said for it.
 
 use crate::{Disk, Studio};
@@ -29,9 +29,9 @@ const SYSTEM: [&str; 2] = [
      Reply with the complete program in one fenced block whose info string is app, and nothing \
      else; after its first comment, a label naming the app. ",
 ];
-/// Room for a whole program, steady output, and no reasoning field: the free AI then asks for
-/// thinking off (asked for at a low effort, it took all 8,192 tokens and left none for the
-/// program). GLM 5.3 may still think unseen, so a reply out of room asks for less.
+/// Room for a whole program, steady output, and no reasoning field: the free AI then gives the
+/// model a thinking budget of 1,024 tokens (asked for at a low effort, or turned off, GLM 5.3
+/// took all 8,192 and left none for the program).
 const OPTIONS: &str = ",\"max_tokens\":8192,\"temperature\":0.3";
 /// A fix's last line, and the retry after a reply without a program.
 const AGAIN: &str = "Reply with the corrected complete program in one app block.";
