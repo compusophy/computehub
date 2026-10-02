@@ -2,7 +2,8 @@
 //! makes. One of the file's leading comments reads `// icon:` and then shapes on a 24 x 24 grid
 //! (x right, y down, whole numbers), each a word and its numbers:
 //!
-//! - `line x y x y ..`: a stroke through 2 to 12 points; `loop x y ..`: a closed one, 3 to 12;
+//! - `line x y x y ..`: a stroke through 2 to 12 points; `loop x y ..`: a closed one, 3 to 12
+//!   (as is a line that ends where it began);
 //! - `fill x y ..`: a solid polygon of 3 to 12 points;
 //! - `ring x y r`: a circle's stroke; `dot x y r`: a disc;
 //! - `arc x y r from to`: a circle's stroke clockwise from clock angle `from` to `to` (degrees,
@@ -15,10 +16,10 @@
 //!
 //! The line chooses only geometry; the OS draws it in the house style: every stroke the glyphs'
 //! one weight ([`crate::STROKE`]), each side of a line or loop butt-ended with a disc of that
-//! weight on its corners (so any angle joins round and none can spike), in the theme's ink on
-//! the plate of the name's hue. Grid `(x, y)` lands at `(20 + 40x, 980 - 40y)` in the glyphs'
-//! 1000-unit box and a radius `r` at `40r`, so the usual 2..22 spans 100..900, as the system
-//! glyphs do.
+//! weight on its corners and where two lines' ends meet (so any angle joins round and none can
+//! spike), in the theme's ink on the plate of the name's hue. Grid `(x, y)` lands at
+//! `(20 + 40x, 980 - 40y)` in the glyphs' 1000-unit box and a radius `r` at `40r`, so the usual
+//! 2..22 spans 100..900, as the system glyphs do.
 //!
 //! Spaces, commas, semicolons and tabs separate. A line reads whole or not at all: anything
 //! else is an [`IconError`] (coded E0931 to E0937, at the byte it is about), and the tile shows
@@ -125,6 +126,16 @@ pub fn read(file: &[u8]) -> Option<Made> {
     Made::parse(header(file)?).ok()
 }
 
+/// Whether the line or loop `kind` through `v` is closed, and its points: one that ends where it
+/// began is the loop through the rest.
+fn shut(kind: u16, v: &[u16]) -> (bool, &[u16]) {
+    let n = v.len().saturating_sub(2);
+    match v.get(..2) == v.get(n..) {
+        true => (true, v.get(..n).unwrap_or(v)),
+        false => (kind == LOOP, v),
+    }
+}
+
 fn sep(b: u8) -> bool {
     matches!(b, b' ' | b',' | b';' | b'\t')
 }
@@ -225,27 +236,50 @@ impl Made {
         self.hash
     }
 
+    /// Each shape: its word's index and its numbers.
+    fn shapes(&self) -> impl Iterator<Item = (u16, &[u16])> {
+        let mut rest = &self.code[..usize::from(self.len)];
+        core::iter::from_fn(move || {
+            let (&head, more) = rest.split_first()?;
+            let (v, next) = more.split_at(usize::from(head >> 8).min(more.len()));
+            rest = next;
+            Some((head & 0xff, v))
+        })
+    }
+
     /// Its contours in the glyphs' 1000 x 1000 box (y up), replacing `o`'s.
     pub fn outline(&self, o: &mut Outline) {
         o.clear();
         let u = 40.0f32;
-        let mut rest = &self.code[..usize::from(self.len)];
-        while let Some((&head, more)) = rest.split_first() {
-            let (kind, n) = (head & 0xff, usize::from(head >> 8).min(more.len()));
-            let (v, next) = more.split_at(n);
-            rest = next;
-            let at = |q: &[u16]| (20.0 + f32::from(q[0]) * u, 980.0 - f32::from(q[1]) * u);
+        let at = |q: &[u16]| (20.0 + f32::from(q[0]) * u, 980.0 - f32::from(q[1]) * u);
+        // The open lines' ends, in order: where two meet they join round, as corners do.
+        let mut ends = Vec::new();
+        for (_, v) in self.shapes().filter(|s| s.0 == LINE && !shut(s.0, s.1).0) {
+            ends.extend([v.get(..2), v.get(v.len().saturating_sub(2)..)]);
+        }
+        let mut k = 0;
+        for (kind, v) in self.shapes() {
             let pts = v.chunks_exact(2).map(at);
             match kind {
                 LINE | LOOP => {
                     // Each side butt-ended (a repeated point none), a disc on each corner.
-                    let (closed, last) = (kind == LOOP, n / 2);
+                    let (closed, v) = shut(kind, v);
+                    let last = v.len() / 2;
                     let mut prev = if closed { v.rchunks_exact(2).next().map(at) } else { None };
-                    for (j, b) in pts.enumerate() {
+                    for (j, q) in v.chunks_exact(2).enumerate() {
+                        let b = at(q);
                         if let Some(a) = prev.filter(|&a| a != b) {
                             stroke(o, &[a, b]);
                         }
-                        if closed || j > 0 && j + 1 < last {
+                        // An end met by another line's: its disc, once.
+                        let end = !closed && (j == 0 || j + 1 == last);
+                        let met = end && {
+                            let (before, after) = ends.split_at(k.min(ends.len()));
+                            k += 1;
+                            let e = Some(q);
+                            !before.contains(&e) && after.iter().skip(1).any(|x| *x == e)
+                        };
+                        if !end || met {
                             circle(o, b, H, true);
                         }
                         prev = Some(b);

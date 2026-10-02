@@ -253,6 +253,34 @@ fn made_icons_stay_on_their_plate() {
 }
 
 #[test]
+fn lines_join_round_where_they_meet() {
+    // Models' boxes: a line back to its start, and four lines corner to corner, are the loop;
+    // a peak of two lines is the one line through it. Each join drawn once (no darker rim).
+    #[rustfmt::skip]
+    let same = [
+        ("loop 4 20 4 4 20 4 20 20", "line 4 20 4 4 20 4 20 20 4 20"),
+        ("loop 4 20 4 4 20 4 20 20", "loop 4 20 4 4 20 4 20 20 4 20"),
+        ("loop 4 4 20 4 20 20 4 20", "line 4 4 20 4 line 20 4 20 20 line 20 20 4 20 line 4 20 4 4"),
+        ("loop 4 4 20 4 20 20 4 20", "line 4 4 20 4 line 4 4 4 20 line 4 20 20 20 line 20 4 20 20"),
+        ("line 8 16 12 8 16 12", "line 8 16 12 8 line 12 8 16 12"),
+        ("line 8 16 12 8 16 12 ring 12 12 9", "line 12 8 16 12 ring 12 12 9 line 8 16 12 8"),
+    ];
+    // Ends that meet no other end stay butt.
+    let apart = [
+        ("line 4 20 4 4 20 4 20 20 4 20", "line 4 20 4 4 20 4 20 20 4 21"),
+        ("line 8 16 12 8 16 12", "line 8 16 12 8 line 12 9 16 12"),
+    ];
+    for px in [19, 30, 59, 90] {
+        for (a, b) in same {
+            assert_eq!(drawn(&made(a), px).data, drawn(&made(b), px).data, "{b} at {px}");
+        }
+        for (a, b) in apart {
+            assert!(drawn(&made(a), px).data != drawn(&made(b), px).data, "{b} at {px}");
+        }
+    }
+}
+
+#[test]
 fn a_made_x_has_the_close_glyphs_weight() {
     let mut o = Vec::new();
     glyph(Glyph::Close, &mut o);

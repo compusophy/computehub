@@ -32,8 +32,10 @@ pub const ICON: &str = "Under that comment, its icon on one line: // icon: then 
                         through 2 to 12 points), loop x y .. (closed), fill x y .. (solid), ring \
                         x y r, dot x y r, arc x y r from to (degrees clockwise from the top). It \
                         shows at 19 px: draw the one thing the app is, large and centered, in at \
-                        most 6 shapes, no part under 4 across (tic-tac-toe: an X and an O). A \
-                        change keeps it unless the app becomes another. For example, for ";
+                        most 6 shapes, no part under 4 across; never a whole board or screen, \
+                        whose parts would be specks (tic-tac-toe is an X and an O: line 2 7 10 \
+                        15 line 10 7 2 15 ring 17 11 4). A change keeps it unless the app becomes \
+                        another. For example, for ";
 /// What a make asks for after a reply that ran out of room before its program ended.
 pub const SHORTER: &str = "Your reply ran out of room before the program ended. Write the same \
                            app, shorter: under 100 lines, extras left out (named after \
