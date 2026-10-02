@@ -118,6 +118,11 @@ impl Home {
 }
 
 impl Home {
+    /// The bytes of /home as last kept (its snapshot's).
+    pub fn kept_len(&self) -> usize {
+        self.kept.len()
+    }
+
     /// Whether apps should hear [`Home::unkept`] again: it changed since they last did.
     pub fn retell(&mut self) -> bool {
         std::mem::replace(&mut self.told, self.unkept) != self.unkept

@@ -168,9 +168,15 @@ pub fn run<A: App + 'static>(app: A) -> Result<(), JsValue> {
     mark(&s.window, "first-frame");
     install(&s)?;
     watch_dpr(&s);
-    // The callbacks hold only `Weak`s: this keeps the state for the page's life.
-    core::mem::forget(s);
+    // The callbacks hold only `Weak`s: this keeps the state for the page's life, where Ctl's
+    // live reads find it.
+    let _ = SHARED.try_with(|c| c.set(Some(Box::leak(Box::new(s)))));
     Ok(())
+}
+
+thread_local! {
+    /// The page's state for [`Ctl`]'s live reads of it (a worker's meters); set by [`run`].
+    static SHARED: Cell<Option<&'static Rc<Shared>>> = const { Cell::new(None) };
 }
 
 /// What the callbacks share. Borrows of `app` and `renderer` end within a

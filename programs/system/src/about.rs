@@ -29,7 +29,7 @@ pub(crate) const STACK: [(&str, &str); 30] = [
     ("platform", "The browser boundary: canvas, WebGL2, input"),
     ("shell", "The desktop: top bar, windows, keys"), ("home", "The home screen, dock and touch"),
     ("host", "Windows and the apps in them"), ("wm", "Window manager; deterministic"),
-    ("apps", "Settings, Terminal"), ("system", "About, Editor, Feedback, Files, Welcome"),
+    ("apps", "Settings, Terminal"), ("system", "About, Editor, Feedback, Files, Welcome, Activity"),
     ("ui", "Widgets, themes and the App trait"), ("icons", "The mark and the vector icons"),
     ("text", "Fonts and glyphs on the atlas"), ("font", "TrueType reader and rasterizer"),
     ("gfx", "Draw lists and the WebGL2 shaders"), ("vfs", "In-memory filesystem; deterministic"),

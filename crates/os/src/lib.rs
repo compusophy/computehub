@@ -13,8 +13,17 @@
 //! leaves bold as Regular and mono cells empty); lazy (symbol fallbacks the shell fetches). A
 //! key-down that types text is never prevented while text input is on: text reaches apps only
 //! through the platform's textarea.
+//!
+//! The meters Activity watches ([`uiwire::stat`]): each frame is counted under its cause (the
+//! person's input, motion, programs, the watcher's own, a timer's such as the grain's, else
+//! other), the time spent in events and frames adds up, and while a watcher is set a sample is
+//! taken as the desktop flushes, when its [`stat::Pace`] says (by the one-shot timer, at most
+//! once a second), and posted to it if it changed. Nothing samples, wakes or posts on a still
+//! desktop.
 
 #![forbid(unsafe_code)]
+
+use std::mem;
 
 pub mod ai;
 pub mod home;
@@ -26,6 +35,7 @@ use platform::{App, Ctl, Event, Handled, Renderer};
 use shell::{Effect, Input, KernelIn, Key, LocalTime, Mods, Registry, Response, Shell};
 use ui::kernel::{self, Effect as K};
 use ui::{FontId, TextSystem};
+use uiwire::stat;
 use vfs::Vfs;
 use wasm_bindgen::prelude::*;
 
@@ -76,7 +86,23 @@ struct Desktop {
     report: report::Reports,
     home: home::Home,
     list: DrawList,
+    /// Why the next frame is drawn (bit `i` the cause frames are counted under at `i`: input,
+    /// motion, programs, the watcher's own, a timer's (the grain's, an app's); none, other), the
+    /// frames by cause, the ms spent in events and frames, the watcher as last seen, and when to
+    /// sample the meters.
+    why: u8,
+    watcher: Option<u32>,
+    frames: [u32; 6],
+    busy: f64,
+    pace: stat::Pace,
 }
+
+/// The bits of [`Desktop::why`].
+const INPUT: u8 = 1;
+const MOTION: u8 = 2;
+const PROGRAMS: u8 = 4;
+const SELF: u8 = 8;
+const TIMER: u8 = 16;
 
 impl Desktop {
     fn new() -> Result<Desktop, String> {
@@ -193,9 +219,10 @@ impl Desktop {
         self.shell.as_mut().map(|s| s.kernel(ev))
     }
 
-    /// Keeps /home (at once if `hiding`), pumps AI and the shell's queued effects (twice: each
-    /// can cause the other), then reports; stores a theme.
+    /// Keeps /home (at once if `hiding`), samples the meters, pumps AI and the shell's queued
+    /// effects (twice: each can cause the other), then reports; stores a theme.
     fn flush(&mut self, ctl: &mut Ctl, hiding: bool) {
+        self.meter(ctl);
         let Some(shell) = &mut self.shell else { return };
         if let Some(ms) = self.home.keep(shell.vfs(), ctl, &mut self.report, hiding) {
             if arm(&mut self.wake, ctl, ms) {
@@ -218,6 +245,55 @@ impl Desktop {
         }
     }
 
+    /// With a watcher, samples the meters if due and posts the sample if it changed (before
+    /// the effects are applied, so the answer leaves now); arms the timer while one will be due.
+    fn meter(&mut self, ctl: &mut Ctl) {
+        let (watch, h) = {
+            let h = &mut *self.ai.0.borrow_mut();
+            self.pace.fresh |= mem::take(&mut h.fresh);
+            (h.watch, h.counts)
+        };
+        self.watcher = watch;
+        let (Some(shell), Some(watcher)) = (&mut self.shell, watch) else { return };
+        let now = ctl.monotonic_ms() as u64;
+        if self.pace.due(now) {
+            let (f, home, grain) = (self.frames, &self.home, shell.grain_in().is_some());
+            let k = shell.kernel_mut();
+            // As uiwire's Event::Stats: its code, the sample's length (set last), the sample.
+            let mut v = vec![16, 0, 0, 0, 0, stat::VERSION];
+            v.extend_from_slice(&(now as u32).to_le_bytes());
+            let (kept, unkept) = (home.kept_len() as u32, home.unkept.into());
+            let mut loud = [f[0], f[1], f[2], grain.into(), kept, unkept, 0, 0, 0, 0, 0, 0];
+            loud[stat::ASKED..].copy_from_slice(&h);
+            words(&mut v, &loud);
+            k.table(watcher, &mut v);
+            // The other workers' meters (whether one runs: hot); the watcher's are quiet.
+            let stats = ctl.proc_stats();
+            let others = stats.iter().filter(|m| m.0 != watcher);
+            v.extend_from_slice(&(others.clone().count() as u16).to_le_bytes());
+            let mut hot = false;
+            for &(pid, [busy, kb, run]) in others {
+                v.extend_from_slice(&pid.to_le_bytes());
+                words(&mut v, &[busy, kb]);
+                hot |= run == 1;
+            }
+            let loud = stat::hash(&v[10..]);
+            words(&mut v, &[f[3], f[4], f[5], (self.busy * 1000.0) as u64 as u32, desktop_kb()]);
+            let own = stats.iter().find(|m| m.0 == watcher);
+            words(&mut v, own.map_or(&[][..], |m| &m.1[..2]));
+            let n = (v.len() - 5) as u32;
+            v[1..5].copy_from_slice(&n.to_le_bytes());
+            if self.pace.took(now, loud, hot) {
+                k.post_event(watcher, &v);
+            }
+        }
+        if let Some(ms) = self.pace.wait(now).map(|ms| ms + 1) {
+            if arm(&mut self.wake, ctl, ms) {
+                ctl.wake_in(ms);
+            }
+        }
+    }
+
     /// Draws into the draw list; the clear color.
     fn paint(&mut self, dpr: f32, ctl: &Ctl) -> Rgba {
         let Some(shell) = &mut self.shell else {
@@ -236,8 +312,14 @@ impl Desktop {
     /// the shell queued.
     fn drawn(&mut self, ctl: &mut Ctl) {
         match self.shell.as_ref().and_then(Shell::frame_in) {
-            Some(0) => ctl.request_frame(),
-            Some(ms) => ctl.frame_in(ms),
+            Some(0) => {
+                ctl.request_frame();
+                self.why |= MOTION;
+            }
+            Some(ms) => {
+                ctl.frame_in(ms);
+                self.why |= TIMER;
+            }
             None => {}
         }
         if self.deferred.is_none() {
@@ -273,20 +355,55 @@ impl Desktop {
 }
 
 impl App for Desktop {
+    /// The event's cause (the person's input, a program, the watcher's own) is the next frame's
+    /// if it redraws; all but the watcher's own stir the meters.
     fn event(&mut self, ev: Event, ctl: &mut Ctl) -> Handled {
-        let hiding = matches!(ev, Event::Hidden);
+        let (t, hiding) = (ctl.monotonic_ms(), matches!(ev, Event::Hidden));
+        let bit = match ev {
+            Event::Key { .. } | Event::Text(_) | Event::Wheel { .. } => INPUT,
+            Event::PointerMove { .. } | Event::PointerDown { .. } => INPUT,
+            Event::PointerUp { .. } | Event::PointerLeave => INPUT,
+            Event::Proc { pid, .. } if Some(pid) == self.watcher => SELF,
+            Event::Proc { .. } | Event::ProcError { .. } | Event::Wake => PROGRAMS,
+            _ => 0,
+        };
+        self.pace.stir |= bit != SELF;
         let h = self.handle(ev, ctl);
+        self.why |= if h.redraw { bit } else { 0 };
         self.flush(ctl, hiding);
+        self.busy += ctl.monotonic_ms() - t;
         h
     }
 
+    /// Counts the frame under its first cause; the watcher's own and a timer's stir nothing (an
+    /// app's timer stirs by what its program then draws).
     fn frame(&mut self, r: &mut Renderer, ctl: &mut Ctl) {
+        let t = ctl.monotonic_ms();
+        let cause = (self.why.trailing_zeros() as usize).min(5);
+        self.frames[cause] = self.frames[cause].wrapping_add(1);
+        self.pace.stir |= !matches!(cause, 3 | 4);
+        self.why = 0;
         let bg = self.paint(r.dpr(), ctl);
         if let Some(text) = text_of(&mut self.shell, &mut self.parts) {
             r.draw(&self.list, bg, text.atlas_mut());
         }
         self.drawn(ctl);
+        self.busy += ctl.monotonic_ms() - t;
     }
+}
+
+/// `n` as [`stat`] writes counts: a u16 count, then each u32.
+fn words(v: &mut Vec<u8>, n: &[u32]) {
+    v.extend_from_slice(&(n.len() as u16).to_le_bytes());
+    n.iter().for_each(|n| v.extend_from_slice(&n.to_le_bytes()));
+}
+
+/// The desktop's wasm memory in KB (none natively).
+fn desktop_kb() -> u32 {
+    #[cfg(target_arch = "wasm32")]
+    return core::arch::wasm32::memory_size::<0>() as u32 * 64;
+    #[cfg(not(target_arch = "wasm32"))]
+    0
 }
 
 type Parts = Option<(TextSystem, Vfs)>;

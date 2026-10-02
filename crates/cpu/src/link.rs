@@ -53,13 +53,21 @@ fn then(p: &Promise, f: impl FnMut(JsValue) + 'static) {
     no.forget();
 }
 
-/// Runs the program `bytes`; EXIT 0 when `_start` returns, 134 on a trap.
+/// Runs the program `bytes` (its meters say it runs from here, its compile too, and its memory
+/// from its link: a program that never waits reports that); EXIT 0 when `_start` returns, 134 on
+/// a trap.
 pub fn run(bytes: &[u8]) {
+    with(|c| c.js.run());
     let (main, mem) = match load(bytes) {
         Ok(linked) => linked,
         Err(why) => return fail(CANNOT_EXECUTE, &["cannot execute: ", &why].concat()),
     };
-    match with(|c| Proc::new(&c.start, &mut c.js).map(|p| c.run = Some((p, GuestMem(mem))))) {
+    let linked = |c: &mut crate::Cpu| {
+        c.js.mem = Some(mem.clone());
+        c.js.pages();
+        Proc::new(&c.start, &mut c.js).map(|p| c.run = Some((p, GuestMem(mem))))
+    };
+    match with(linked) {
         Some(Ok(())) => match main.call0(&JsValue::UNDEFINED) {
             Ok(_) => exit(0, ""),
             Err(e) => exit(TRAPPED, &["trap: ", &text(&e), "\n"].concat()),

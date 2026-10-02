@@ -4,6 +4,7 @@ use uiwire::{Event, Frame, Key, Node, REVEAL, Request, SIGIL, Style, Variant, mo
 use vfs::Vfs;
 
 use super::*;
+use crate::activity::{BACK, DESKTOP, END, FILES, ROW, bytes, dollars, percent, tokens};
 use crate::feedback::{AREA, BOX, GO, KIND, MAX, NEAR, THANKS};
 use crate::files::{CRUMB, ENTRY, LIST, MAX_ROWS, UP, size};
 
@@ -717,4 +718,255 @@ fn editor_keeps_unsaved_text_when_it_closes_and_says_what_went_wrong() {
     assert!(l.fs.is_file(&[&notes, "/ab.txt"].concat()));
     // The other apps pass over such an event.
     assert!(Win::new("about").feed(vec![vec![99]]).is_empty());
+}
+
+/// A process as a sample lists it: pid, window, state, argv, DRAWs; then its meters (ms busy,
+/// KB), if it has them.
+type Row = (u32, u32, u8, &'static str, u32, Option<(u32, u32)>);
+
+/// The desktop's sample at `at` ms: `loud` counts by index (the rest 0), the processes, the
+/// desktop's µs, and Activity's own meters (12 ms, 9,000 KB).
+fn sample(at: u32, loud: &[(usize, u32)], rows: &[Row], us: u32) -> Event {
+    use uiwire::stat::{LOUD, Proc, Stats};
+    let mut counts = vec![0; LOUD];
+    loud.iter().for_each(|&(i, n)| counts[i] = n);
+    let argv = |s: &str| s.split(' ').map(String::from).collect();
+    let proc =
+        |r: &Row| Proc { pid: r.0, window: r.1, state: r.2, argv: argv(r.3), counts: vec![r.4] };
+    let meters = rows.iter().filter_map(|r| r.5.map(|(b, kb)| (r.0, vec![b, kb]))).collect();
+    let (procs, quiet) = (rows.iter().map(proc).collect(), vec![1, 2, 3, us, 18_000]);
+    let s = Stats { at, loud: counts, procs, meters, quiet, own: vec![12, 9_000] };
+    Event::Stats { data: s.encode() }
+}
+
+/// Activity at its first size, then `samples`: the last frame.
+fn activity(samples: &[Event]) -> (Win, Frame) {
+    let mut w = Win::new("activity");
+    let mut all = vec![resize(440)];
+    all.extend_from_slice(samples);
+    let f = w.last(&all);
+    (w, f)
+}
+
+/// The word and the line under it.
+fn word(f: &Frame) -> [&str; 2] {
+    let said = texts(&f.nodes);
+    [said[0], said[1]]
+}
+
+#[test]
+fn activity_watches_from_its_first_size_and_draws_only_what_changes() {
+    let mut w = Win::new("activity");
+    let f = w.last(&[resize(440)]);
+    assert_eq!(
+        (f.title.as_str(), f.requests.clone()),
+        ("Activity", vec![Request::Watch { on: true }])
+    );
+    assert_eq!(word(&f), ["Measuring", "Asking the desktop."]);
+    // On a desktop it watches whatever has the focus: a monitor beside a busy window.
+    assert!(w.send(&[resize(600), Event::Focus { on: false }]).is_empty());
+    // The first sample lists what runs; rates come with the second, a second later.
+    let still = |at| sample(at, &[], &[], 0);
+    let f = w.last(&[still(1000)]);
+    assert_eq!(word(&f)[0], "Measuring");
+    assert!(texts(&f.nodes).contains(&"The desktop\nthe home screen and windows \u{b7} 18 MB"));
+    assert_eq!(word(&w.last(&[still(2000)])), ["Still", "Nothing is drawing."]);
+    // The same again: nothing it shows changed, so no frame.
+    assert!(w.send(&[still(3000), still(4000)]).is_empty());
+    assert!(w.send(&[Event::Stats { data: vec![9] }]).is_empty(), "a sample that does not decode");
+}
+
+#[test]
+fn on_a_phone_focus_pauses_and_resumes_the_watch() {
+    use uiwire::stat::RUNS;
+    // Narrower than on a desktop, it fills a phone's screen: shown exactly while focused.
+    let mut w = Win::new("activity");
+    assert_eq!(w.last(&[resize(409)]).requests, [Request::Watch { on: true }]);
+    let spin = |busy| -> Row { (7, 2, RUNS, "spin", 0, Some((busy, 64))) };
+    let f = w.last(&[sample(1000, &[], &[spin(0)], 0), sample(2000, &[], &[spin(990)], 0)]);
+    assert_eq!(word(&f)[0], "Busy");
+    let paused = w.last(&[Event::Focus { on: false }]);
+    assert_eq!((paused.requests, paused.nodes), (vec![Request::Watch { on: false }], f.nodes));
+    assert!(w.send(&[Event::Focus { on: false }]).is_empty());
+    // Back: watching again; no rate spans the pause, so the first look only lists (here what it
+    // listed: no frame).
+    let back = w.last(&[Event::Focus { on: true }]);
+    assert_eq!(
+        (&back.requests[..], word(&back)[0]),
+        (&[Request::Watch { on: true }][..], "Measuring")
+    );
+    assert!(w.send(&[sample(60_000, &[], &[spin(1990)], 0)]).is_empty());
+    let f = w.last(&[sample(61_000, &[], &[spin(2980)], 0)]);
+    assert_eq!(word(&f), ["Busy", "spin is using 99% of a core."]);
+    // Made wide (a phone turned), it watches whatever has the focus.
+    w.send(&[Event::Focus { on: false }, resize(600)]);
+    assert!(w.send(&[Event::Focus { on: false }, Event::Focus { on: true }]).is_empty());
+}
+
+#[test]
+fn the_word_says_busy_drawing_resting_or_still() {
+    use uiwire::stat::{GRAIN_ON, IDLE, INPUT, MOTION, PROGRAMS, RUNS};
+    let pair = |loud: &[(usize, u32)], rows: &[Row], gap: u32| {
+        let none: Vec<Row> =
+            rows.iter().map(|r| (r.0, r.1, r.2, r.3, 0, r.5.map(|m| (0, m.1)))).collect();
+        let f = activity(&[sample(1000, &[], &none, 0), sample(1000 + gap, loud, rows, 0)]).1;
+        word(&f).map(String::from)
+    };
+    let said = |w: &str, l: &str| [w.to_string(), l.to_string()];
+    assert_eq!(pair(&[], &[], 1000), said("Still", "Nothing is drawing."));
+    let resting = "Only the living grain draws, 8 frames a second. Settings\u{a0}\u{203a} Appearance can still it.";
+    assert_eq!(pair(&[(GRAIN_ON, 1)], &[], 1000), said("Resting", resting));
+    // Drawing, by the largest cause, input first; the program that drew the most is named.
+    let input = pair(&[(INPUT, 12), (MOTION, 12)], &[], 1000);
+    assert_eq!(input, said("Drawing", "12 frames a second, following you."));
+    let moving = pair(&[(MOTION, 60), (PROGRAMS, 4)], &[], 1000);
+    assert_eq!(moving, said("Drawing", "60 frames a second: something is moving."));
+    let snake: Row = (6, 4, IDLE, "studio run /apps/snake.app", 10, Some((3, 900)));
+    let drawn = pair(&[(PROGRAMS, 5)], &[snake], 500);
+    assert_eq!(drawn, said("Drawing", "10 frames a second: snake.app is drawing."));
+    assert_eq!(
+        pair(&[(PROGRAMS, 1)], &[], 1000),
+        said("Drawing", "1 frame a second: A program is drawing.")
+    );
+    // Samples further apart than 3 s give no rate: no number.
+    assert_eq!(pair(&[(INPUT, 3)], &[], 5000), said("Drawing", "Following you."));
+    // Busy: another program used half a core or more.
+    let spin: Row = (7, 2, RUNS, "spin 100", 0, Some((990, 1024)));
+    let busy = pair(&[(INPUT, 3)], &[spin, (8, 2, RUNS, "bench", 0, Some((600, 64)))], 1000);
+    assert_eq!(busy, said("Busy", "spin is using 99% of a core. And 1 more."));
+}
+
+#[test]
+fn rows_name_programs_by_command_line_and_say_what_they_do() {
+    use uiwire::stat::{ENDED, IDLE, RUNS};
+    #[rustfmt::skip]
+    let rows: [Row; 6] = [(4, 3, IDLE, "files ~", 0, Some((2, 2048))),
+        (5, 0, IDLE, "/bin/assistant", 0, Some((0, 3072))),
+        (6, 9, IDLE, "studio run /apps/snake.app", 9, Some((5, 900))),
+        (7, 2, RUNS, "spin 100", 0, Some((500, 1024))), (8, 2, RUNS, "nap 5", 0, None),
+        (9, 6, ENDED, "studio edit ~/notes.txt", 0, None)];
+    let first: Vec<Row> =
+        rows.iter().map(|r| (r.0, r.1, r.2, r.3, 0, r.5.map(|m| (0, m.1)))).collect();
+    let (_, f) = activity(&[sample(1000, &[], &first, 0), sample(2000, &[], &rows, 20_000)]);
+    let entries: Vec<&str> = texts(&f.nodes).into_iter().filter(|t| t.contains('\n')).collect();
+    let dot = " \u{b7} ";
+    let want = [
+        format!("The desktop\nthe home screen and windows{dot}18 MB"),
+        format!("Files\nidle{dot}2.1 MB"),
+        format!("Assistant\nidle{dot}3.1 MB"),
+        format!("snake.app\ndrawing 9 a second{dot}922 KB"),
+        format!("spin\nin Terminal{dot}working{dot}1.0 MB"),
+        format!("nap\nin Terminal{dot}working{dot}\u{2014}"),
+        format!("Studio: notes.txt\nended{dot}\u{2014}"),
+        format!("Activity\nthis window{dot}9.2 MB"),
+    ];
+    assert_eq!(entries[..8], want.iter().map(String::as_str).collect::<Vec<_>>()[..]);
+    // Their tiles, a share of a core at the right, and which rows open a page.
+    let rows: Vec<_> = all(&f.nodes)
+        .into_iter()
+        .filter_map(|n| match n {
+            Node::Entry { id, glyph, hue, detail, more, .. } => {
+                Some((*id, *glyph, *hue, detail.as_str(), *more))
+            }
+            _ => None,
+        })
+        .collect();
+    let seed = "snake.app"
+        .bytes()
+        .fold(2_166_136_261u32, |h, b| (h ^ u32::from(b)).wrapping_mul(16_777_619));
+    assert_eq!(rows[0], (DESKTOP, icons::Glyph::Mark as u8, 0x94a3b8, "2%", true));
+    assert_eq!(rows[3], (ROW + 6, SIGIL, seed, "<1%", true));
+    assert_eq!(rows[4], (ROW + 7, icons::Glyph::Terminal as u8, 0x2dd4bf, "50%", true));
+    assert_eq!((rows[7].0, rows[7].1, rows[7].4), (0, icons::Glyph::Pulse as u8, false));
+    assert_eq!(rows[8], (FILES, icons::Glyph::Folder as u8, 0x60a5fa, "", true));
+}
+
+#[test]
+fn end_comes_only_from_a_program_page() {
+    use uiwire::stat::{IDLE, RUNS};
+    let rows: [Row; 2] =
+        [(5, 0, IDLE, "assistant", 0, Some((0, 64))), (7, 2, RUNS, "spin 9", 0, Some((0, 64)))];
+    let (mut w, _) = activity(&[sample(1000, &[], &rows, 0)]);
+    let f = w.click(ROW + 7).pop().unwrap();
+    let said = texts(&f.nodes);
+    assert_eq!(said[..4], ["\u{2039} Running", "spin", "spin 9", "Running in a Terminal."]);
+    assert!(
+        said.contains(&"End spin")
+            && said.contains(&"It stops at once, as Ctrl+C would. What it had not saved is lost.")
+    );
+    // Escape and Back return to the list; Activity's own row and the files open no page.
+    assert_eq!(
+        word(&w.last(&[Event::Key { id: 0, key: Key::Escape, mods: 0, ch: '\0' }]))[0],
+        "Measuring"
+    );
+    assert!(w.click(ROW).is_empty() && w.click(0).is_empty());
+    assert_eq!(w.click(FILES).pop().unwrap().requests, [Request::Open { name: "files".into() }]);
+    // A command line that only says the name is not repeated.
+    let page = texts(&w.click(ROW + 5).pop().unwrap().nodes).join("|");
+    assert!(page.starts_with("\u{2039} Running|Assistant|Idle"), "{page}");
+    assert!(page.contains("|Ends the Assistant now. It starts again when you call it."));
+    assert_eq!(word(&w.click(BACK).pop().unwrap())[0], "Measuring");
+    // The desktop's page has no End; End asks once and the row leaves until the desktop agrees.
+    let desk = w.click(DESKTOP).pop().unwrap();
+    assert!(!ids(&desk.nodes).contains(&END) && texts(&desk.nodes)[1] == "The desktop");
+    assert!(w.click(END).is_empty(), "nothing to end on the desktop's page");
+    w.click(ROW + 7);
+    let f = w.click(END).pop().unwrap();
+    assert_eq!(f.requests, [Request::End { pid: 7 }]);
+    assert!(!ids(&f.nodes).contains(&(ROW + 7)) && w.click(END).is_empty());
+    // Still listed: still left out; gone: a page for it shows the list.
+    assert!(
+        w.send(&[sample(2000, &[], &rows, 0)]).iter().all(|f| !ids(&f.nodes).contains(&(ROW + 7)))
+    );
+    w.send(&[sample(3000, &[], &rows[..1], 0)]);
+    assert!(w.click(ROW + 7).iter().all(|f| texts(&f.nodes)[0] != "\u{2039} Running"));
+}
+
+#[test]
+fn files_ai_and_numbers_read_as_people_say_them() {
+    use uiwire::stat::{ASKED, FAILED, HOME, MICROUSD, TOKENS_IN, TOKENS_OUT, UNKEPT, UNMETERED};
+    assert_eq!(
+        [740, 212_000, 999_999, 1_300_000, 18_400_000].map(bytes),
+        ["740 B", "212 KB", "1.0 MB", "1.3 MB", "18 MB"]
+    );
+    assert_eq!(
+        [None, Some(5), Some(120), Some(1000)].map(percent),
+        ["\u{2014}", "<1%", "12%", "100%"]
+    );
+    assert_eq!([940, 12_400, 1_234_567].map(tokens), ["940", "12.4k", "1.2M"]);
+    let squares = |f: &Frame| {
+        all(&f.nodes).into_iter().find_map(|n| match n {
+            Node::Grid { cells, .. } => Some(cells.clone()),
+            _ => None,
+        })
+    };
+    let (_, f) = activity(&[sample(1000, &[(HOME, 212_000)], &[], 0)]);
+    let said = texts(&f.nodes);
+    assert!(
+        said.contains(&"Your files\n212 KB of about 5 MB") && said.contains(&"No requests yet.")
+    );
+    assert_eq!(squares(&f), Some([vec![2; 2], vec![0; 22]].concat()));
+    // Nearly full: yellow; unkept: red, and why.
+    let (_, f) = activity(&[sample(1000, &[(HOME, 4_200_000)], &[], 0)]);
+    assert_eq!(squares(&f).map(|s| (s[20], s[21])), Some((3, 0)));
+    let (_, f) = activity(&[sample(1000, &[(HOME, 9), (UNKEPT, 1)], &[], 0)]);
+    assert_eq!(squares(&f).map(|s| s[0]), Some(1));
+    assert!(texts(&f.nodes).contains(
+        &"This browser refused to keep your files. Changes since then are lost at reload."
+    ));
+    // The AI by its receipts: requests, tokens, cost; what failed, what had no receipt.
+    #[rustfmt::skip]
+    let ai = [(ASKED, 14), (TOKENS_IN, 11_460), (TOKENS_OUT, 940), (MICROUSD, 19_400), (FAILED, 2),
+        (UNMETERED, 1)];
+    let said = texts(&activity(&[sample(1000, &ai, &[], 0)]).1.nodes).join("|");
+    let line =
+        "14 requests \u{b7} 12.4k tokens \u{b7} about $0.02|2 failed|1 answer had no receipt";
+    assert!(said.contains(line), "{said}");
+    let one = [(ASKED, 1), (UNMETERED, 3)];
+    let said = texts(&activity(&[sample(1000, &one, &[], 0)]).1.nodes).join("|");
+    assert!(said.contains("|1 request|3 answers had no receipt|"), "{said}");
+    assert_eq!(
+        [1, 4_999, 5_000, 19_400, 1_254_999].map(dollars),
+        ["under $0.01", "under $0.01", "about $0.01", "about $0.02", "about $1.25"]
+    );
 }

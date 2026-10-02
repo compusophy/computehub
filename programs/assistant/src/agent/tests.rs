@@ -494,8 +494,17 @@ fn the_person_takes_over_answers_questions_and_feedback_waits_for_a_yes() {
         args: r#"{"ref":"e2","text":"hi"}"#.into(),
     };
     assert!(a.prepare(&t, &typed).unwrap_err().starts_with("E0916: refused: Feedback"));
+    // So does a press in Activity, which ends programs; a scroll there only reads.
+    t.scene.wins[0].app = "activity".into();
+    let click = Call { name: "click".into(), args: r#"{"ref":"e2"}"#.into(), ..typed.clone() };
+    let refused = a.prepare(&t, &click).unwrap_err();
+    assert_eq!(refused, "E0916: refused: Activity ends programs; ask_user first");
+    let look =
+        Call { name: "scroll".into(), args: r#"{"window":"w1","amount":90}"#.into(), ..click };
+    assert!(matches!(a.prepare(&t, &look), Ok((Act::Scroll { win: 1, id: 0, dy: 90 }, ..))));
     t.approved = true;
     assert!(matches!(a.prepare(&t, &typed), Ok((Act::Type { win: 1, .. }, ..))));
+    t.scene.wins[0].app = "feedback".into();
     // A scroll names its window: an element of another window is not one of its.
     t.scene.wins.push(page(2, false));
     t.shown = render(&t.scene, &mut a.refs, 1).1;

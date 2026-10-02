@@ -254,6 +254,12 @@ export default async function handler(req, res) {
   res.on('close', () => res.writableFinished || abort.abort());
   let [up, tail] = [null, ''];
   const [seen, utf8] = [{ events: 0, chars: 0, line: '' }, new TextDecoder()];
+  // The last usage the stream reported: tokens in and out, and its own cost (NaN if not said).
+  const used = () => {
+    const usage = tail.slice(tail.lastIndexOf('"usage"'));
+    const num = (k) => Number((new RegExp(`"${k}":\\s*([\\d.]+)`).exec(usage) || [])[1]);
+    return [num('prompt_tokens'), num('completion_tokens'), num('cost')];
+  };
   try {
     for (const { wait, ...gateway } of TRIES) {
       if (wait) await new Promise((done) => setTimeout(done, wait));
@@ -279,6 +285,13 @@ export default async function handler(req, res) {
       streamed(seen, text);
       tail = (tail + text).slice(-4096);
     }
+    // The receipt, the stream's last line (an SSE comment, which readers skip): its tokens and
+    // what it cost in millionths of a dollar, which the desktop adds up for Activity.
+    const [i, o, cost] = used();
+    if (up.ok && i >= 0 && o >= 0) {
+      const microusd = Math.round(cost >= 0 ? cost * 1e6 : i * priceIn + o * priceOut);
+      res.write(`\n: receipt in=${i} out=${o} microusd=${microusd}\n\n`);
+    }
     res.end();
   } catch {
     // Never reached (or only refused), it cost nothing.
@@ -287,9 +300,7 @@ export default async function handler(req, res) {
     // Cut off mid-answer: say so, on a line of its own, so it never reads as a whole answer.
     res.end('\n\ndata: {"error":{"message":"the answer was cut off"}}\n\n');
   }
-  const usage = tail.slice(tail.lastIndexOf('"usage"'));
-  const num = (k) => Number((new RegExp(`"${k}":\\s*([\\d.]+)`).exec(usage) || [])[1]);
-  const [i, o, cost] = [num('prompt_tokens'), num('completion_tokens'), num('cost')];
+  const [i, o, cost] = used();
   if (cost >= 0) entry.usd = cost;
   else if (i >= 0 && o >= 0) entry.usd = (i * priceIn + o * priceOut) / 1e6;
   else if (up && up.ok) {
