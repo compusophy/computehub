@@ -200,7 +200,8 @@ fn resumed(src: &str, saved: &str) -> Option<(applang::Diag, String, String)> {
     if saved.trim().is_empty() || app.saved().is_empty() {
         return None;
     }
-    app.restore(saved);
+    // As kept, whatever shows: restore would start afresh where they fault, hiding the fault.
+    app.take_back(saved);
     let mut kept = String::new();
     for (s, (name, v)) in app.program().states().iter().zip(app.state()) {
         if let (true, Value::List(items)) = (s.saved, v) {

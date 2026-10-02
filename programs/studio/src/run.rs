@@ -134,7 +134,9 @@ impl Live {
         let Ok(app) = &mut self.app else { return false };
         let text = (!self.state.is_empty()).then(|| disk.read(&self.state).ok()).flatten();
         let Some(text) = text.filter(|text| *text != self.kept) else { return false };
-        let notes = app.restore(&text);
+        // As kept, whatever shows: where they fault, `new` starts it afresh keeping nothing over
+        // them (restore would start afresh too, but then keep over them).
+        let notes = app.take_back(&text);
         self.fault = (!notes.is_empty()).then(|| notes.join("; "));
         (self.saved, self.kept) = (app.saved(), text);
         true

@@ -247,8 +247,9 @@ impl App {
         notes
     }
 
-    /// [`App::restore`] but for its last check: the saved states back, whatever shows.
-    pub(crate) fn take_back(&mut self, text: &str) -> Vec<String> {
+    /// [`App::restore`] but for its last check: the saved states back, whatever shows (so a
+    /// maker can see whether a program runs from what its app kept).
+    pub fn take_back(&mut self, text: &str) -> Vec<String> {
         let (mut notes, before) = (Vec::new(), self.state.vals.clone());
         for (n, line) in text.lines().enumerate() {
             let lines = match applang_syntax::literals(line) {

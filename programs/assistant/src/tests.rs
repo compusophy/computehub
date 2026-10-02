@@ -79,9 +79,10 @@ fn json_reads_and_quotes() {
 #[test]
 fn programs_run_from_the_states_they_keep_and_never_start_on_another_apps() {
     // Fine afresh, but a list kept at its old length makes a click fault: said with the states
-    // it started from, and what a fix must keep to.
+    // it started from, and what a fix must keep to. (This list can grow, so applang keeps it at
+    // any length; one whose length never changes comes back afresh instead.)
     let src = "saved state xs = [0; 8];\nlabel \"n \" + len(xs);\n\
-               button \"Clear\" { for i in 0..8 { xs[i] = 0; } }\n";
+               button \"Clear\" { for i in 0..8 { xs[i] = 0; } }\nbutton \"More\" { push(xs, 0); }\n";
     for kept in ["", "xs = [0; 8];", "ys = 1;\n"] {
         assert!(fault(src, kept).is_none(), "{kept}");
     }
