@@ -65,13 +65,15 @@ impl Js {
     }
 
     /// Sleeps while word `i` holds `v`, for at most `ms`; the meters say it waits meanwhile: BUSY
-    /// gains the run that ends, PAGES is the memory now, RUN is 0 until it wakes.
+    /// gains the run that ends, PAGES is the memory now, RUN is 0 until it wakes. RUN goes to 0
+    /// before BUSY grows, and main reads BUSY before RUN: a look between the two misses the run
+    /// that ends (the next look has it), never counts it twice.
     fn sleep(&self, i: u32, v: i32, ms: f64) {
         let ran = self.ms().wrapping_sub(self.load(SINCE) as u32);
         let ran = if self.load(RUN) == 1 { ran } else { 0 };
+        self.store(RUN, 0);
         self.store(BUSY, (self.load(BUSY) as u32).wrapping_add(ran));
         self.pages();
-        self.store(RUN, 0);
         let _ = Atomics::wait_with_timeout(&self.words, i, v, ms);
         self.run();
     }

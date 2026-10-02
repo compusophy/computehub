@@ -99,8 +99,10 @@ pub(crate) fn stats() -> Vec<(u32, [u32; 3])> {
         let now = (perf.time_origin() + perf.now()) as u64 as u32;
         for p in s.procs.borrow().iter() {
             if let Some((w, ..)) = &p.sab {
+                // BUSY before RUN (the worker clears RUN first): a run is never counted twice.
                 let w = |i| Atomics::load(w, i).unwrap_or(0) as u32;
-                out.push((p.pid, meters([w(RUN), w(BUSY), w(SINCE), w(PAGES)], now)));
+                let busy = w(BUSY);
+                out.push((p.pid, meters([w(RUN), busy, w(SINCE), w(PAGES)], now)));
             }
         }
     }
