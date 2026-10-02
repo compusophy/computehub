@@ -1,6 +1,6 @@
 //! The compusophyOS app host, no browser: the [`wm::Wm`] and one [`ui::App`] per window, the
-//! apps of the home screen ([`Host::home`]), and the pure parts the shell builds on ([`motion`],
-//! [`frame`], [`paint`]).
+//! apps of the home screen ([`Host::home`]), windows held by the pointer ([`grab`]), and the pure
+//! parts the shell builds on ([`motion`], [`frame`], [`paint`]).
 //!
 //! Where a window opens ([`Host::open`]): on a narrow work area (under [`NARROW`] px) maximized,
 //! as every window there stays; else a [`ui::App::compact`] app at its preferred size, centered,
@@ -19,6 +19,7 @@
 
 pub mod agent;
 pub mod frame;
+pub mod grab;
 pub mod motion;
 pub mod paint;
 
@@ -31,6 +32,10 @@ use motion::Themes;
 use ui::{AiStatus, AppEvent, AppIcon, Cx, Key, Mods, Request, TextSystem, Theme, Ui, UiState};
 use vfs::Vfs;
 use wm::{Cmd, Outcome, Rect, Snap, State, WinId, Wm};
+
+/// The screen before a keyboard shortened it; each free window then, its rect then, and where
+/// the last squeeze left it.
+type Kept = ((f32, f32), Vec<(WinId, Rect, Rect)>);
 
 /// Makes the app for a window by name (`"terminal"`, a `.app` path, ...).
 pub type Registry = Box<dyn Fn(&str) -> Option<Box<dyn ui::App>>>;
@@ -190,8 +195,13 @@ pub struct Host {
     /// The windows maximized only because the work area is narrow, with their snap and normal
     /// rect from before, put back when it widens.
     forced: Vec<(WinId, Option<Snap>, Rect)>,
+    /// What a keyboard squeezed, to put back when it goes.
+    kept: Option<Kept>,
     /// The overlay's acts and status, and what the shell shows of it.
     pub agent: agent::Agent,
+    /// The work area once the dock shows (the shell sets it): a window opening while it is
+    /// another shrinks the work area to it first, so the window opens where it stays.
+    pub docked: Option<Rect>,
 }
 
 impl Host {
@@ -202,7 +212,7 @@ impl Host {
         let (ai, forced) = (AiStatus::default(), Vec::new());
         Host { generation: vfs.generation(), kernel: Kernel::new(), wm, text, vfs, registry, wins,
             now_ms, theme, themes, fonts, focus, icons, ai, grain: true, forced,
-            agent: Default::default() }
+            agent: Default::default(), docked: None, kept: None }
     }
 
     pub fn wm(&self) -> &Wm {
@@ -257,6 +267,41 @@ impl Host {
         self.wm.focused().filter(|&w| self.live(w))
     }
 
+    /// The screen went from `from` to `to`, its work area now `area`. A keyboard that shortens
+    /// the page (the width kept, while the person is `typing`) squeezes the free windows only
+    /// until the page is that tall again: they come back then, but for those the person moved or
+    /// resized meanwhile, which stay where they put them.
+    pub fn resize(&mut self, (from, to): ((f32, f32), (f32, f32)), area: Rect, typing: bool) {
+        let free = |p: &wm::Placement| p.state == State::Normal && p.snap.is_none();
+        if self.kept.is_none() && typing && to.0 == from.0 && to.1 < from.1 {
+            let wins = self.wm.layout().into_iter().filter(free).map(|p| (p.win, p.rect, p.rect));
+            self.kept = Some((from, wins.collect()));
+        }
+        // Each kept window must still be free and where the last squeeze left it.
+        let layout = self.wm.layout();
+        let left = |&(win, _, at): &(WinId, Rect, Rect)| {
+            layout.iter().any(|p| p.win == win && free(p) && p.rect == at)
+        };
+        if let Some((_, wins)) = &mut self.kept {
+            wins.retain(left);
+        }
+        self.apply(Cmd::SetArea(area));
+        let Some((full, mut wins)) = self.kept.take() else { return };
+        if to.0 != full.0 || to.1 < full.1 {
+            // Still short, it waits (noting where each window is now); a new width (a phone
+            // turned) forgets them.
+            let layout = self.wm.layout();
+            for w in &mut wins {
+                w.2 = layout.iter().find(|p| p.win == w.0).map_or(w.2, |p| p.rect);
+            }
+            self.kept = (to.0 == full.0).then_some((full, wins));
+            return;
+        }
+        for (win, rect, _) in wins {
+            self.apply(Cmd::Resize { win, rect });
+        }
+    }
+
     /// Whether the work area is a phone's: every window maximized, none moved.
     pub fn narrow(&self) -> bool {
         self.wm.area().w < NARROW
@@ -270,6 +315,9 @@ impl Host {
             return;
         }
         let Some(app) = (self.registry)(name) else { return };
+        if let Some(a) = self.docked.filter(|&a| a != self.wm.area()) {
+            self.apply(Cmd::SetArea(a));
+        }
         let (a, alone, compact) = (self.wm.area(), self.wm.layout().is_empty(), app.compact());
         let preferred = app.preferred_size().and_then(window_size).filter(|_| compact);
         let size = size.or(preferred).unwrap_or((a.w * 85 / 100, a.h * 85 / 100));
@@ -419,7 +467,10 @@ impl Host {
         match ev {
             KernelIn::Msg { pid, msg } => self.kernel.message(&mut self.vfs, pid, &msg),
             KernelIn::Error { pid } => self.kernel.failed(pid),
-            KernelIn::Wake | KernelIn::Hidden => self.kernel.wake(),
+            KernelIn::Wake | KernelIn::Hidden => {
+                self.kernel.wake();
+                self.woken();
+            }
         }
         self.pump(out);
     }

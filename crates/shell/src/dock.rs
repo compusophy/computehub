@@ -1,5 +1,5 @@
-//! The bottom strip (see `home::dock`): the AI button, the dock's wings of favorites and other
-//! running apps, and their tooltips.
+//! The bottom strip (see `home::dock`): the AI button, the dock above it (favorites, then the
+//! other running apps), and their tooltips.
 
 use gfx::{DrawList, RectF};
 use home::dock::{Look, Spot};
@@ -35,7 +35,7 @@ impl Shell {
         })
     }
 
-    /// The wings, their tiles lifted while hovered over a dot under each running app, and the AI
+    /// The dock, its tiles lifted while hovered over a dot under each running app, and the AI
     /// button (washed while hovered).
     pub(crate) fn draw_dock(&mut self, list: &mut DrawList, theme: &Theme) {
         let (focused, now) = (self.host.wm().focused(), self.host.now_ms);
@@ -55,8 +55,8 @@ impl Shell {
         self.strip.draw_button(list, &mut self.host.text, theme, button);
     }
 
-    /// The hovered tile's name (or the AI button's, the Assistant) above the strip, fading in
-    /// with the lift.
+    /// The hovered tile's name above the dock, or the AI button's (the Assistant) beside it,
+    /// fading in with the lift.
     pub(crate) fn draw_tooltip(&mut self, list: &mut DrawList, theme: &Theme, now: f64) {
         let (t, a, label) = match self.hover {
             Some(Target::Dock(i)) if i < self.dock.len() => {
@@ -68,14 +68,19 @@ impl Shell {
             }
             _ => return,
         };
-        let (top, sw) = (self.size.1 - home::dock::BOTTOM - home::dock::H, self.size.0);
+        let (beside, sw) = (self.hover == Some(Target::Ai), self.size.0);
         let text = &mut self.host.text;
         let line = px(text, 1.0);
         let style = TextStyle::new(FontId::Sans, 12.0, faded(theme.text, a));
         let tw = text.measure(&label, style);
         let w = (tw + 20.0).round();
-        let x = (t.x + (t.w - w) / 2.0).round().min(sw - w - 4.0).max(4.0);
-        let pill = RectF::new(x, top - TIP_GAP - TIP_H, w, TIP_H);
+        let pill = match beside {
+            true => RectF::new(t.x + t.w + TIP_GAP, t.y + ((t.h - TIP_H) / 2.0).round(), w, TIP_H),
+            false => {
+                let x = (t.x + (t.w - w) / 2.0).round().min(sw - w - 4.0).max(4.0);
+                RectF::new(x, self.strip.top() - TIP_GAP - TIP_H, w, TIP_H)
+            }
+        };
         list.shadow_offset(pill, 8.0, 12.0, 4.0, faded(theme.shadow, a / 2.0));
         list.fill(pill, 8.0, faded(theme.surface, a));
         list.border(pill, 8.0, line, faded(theme.border, a));

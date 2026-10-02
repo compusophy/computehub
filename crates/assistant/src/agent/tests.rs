@@ -138,6 +138,16 @@ fn reply(text: &str, call: Option<(&str, &str)>) -> String {
     out + "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":1200,\"completion_tokens\":30}}\n\ndata: [DONE]\n\n"
 }
 
+/// A reply calling each of `calls` (name and arguments), whole, by index.
+fn many(calls: &[(&str, String)]) -> String {
+    let call = |(i, (name, args)): (usize, &(&str, String))| {
+        let f = format!("{{\"name\":\"{name}\",\"arguments\":{}}}", quote(args));
+        format!("{{\"index\":{i},\"id\":\"c{i}\",\"type\":\"function\",\"function\":{f}}}")
+    };
+    let all: Vec<String> = calls.iter().enumerate().map(call).collect();
+    sse(&format!("{{\"tool_calls\":[{}]}}", all.join(","))) + "data: [DONE]\n\n"
+}
+
 /// The messages of a request body as (role, content).
 fn messages(body: &Json) -> Vec<(String, String)> {
     let m = |i| body.get("messages")?.at(i);
@@ -379,6 +389,21 @@ fn failures_go_back_coded_and_three_end_the_task() {
         "{} {said}",
         d.bodies.len()
     );
+    // A task that would carry more messages than the free AI takes: E0921, never sent. Each
+    // reply here calls 7 tools, 3 of them acts, and no two failures follow each other.
+    let (mut d, mut a) = (desk(), Agent::default());
+    ask(&mut a, "dither");
+    let n = Rc::new(RefCell::new(0));
+    d.run(&mut a, &|_| {
+        *n.borrow_mut() += 1;
+        let k = *n.borrow();
+        let bad = ("click", r#"{"ref":"e999"}"#.to_string());
+        let wait = |j: u32| ("wait", format!("{{\"ms\":{}}}", k * 10 + j));
+        many(&[bad.clone(), wait(1), bad.clone(), wait(2), bad.clone(), wait(3), bad])
+    });
+    let most = d.bodies.iter().map(|b| messages(b).len()).max();
+    assert_eq!((d.bodies.len(), most), (8, Some(58)));
+    assert!(shown(&mut a).contains("E0921 the task grew too long for the AI"));
     // The same call on the same screen a third time: no progress, E0924.
     let (mut d, mut a) = (desk(), Agent::default());
     ask(&mut a, "wait in place");
@@ -412,7 +437,8 @@ fn the_person_takes_over_answers_questions_and_feedback_waits_for_a_yes() {
         .unwrap();
     a.event(&Event::Halt);
     let f = a.frame();
-    assert_eq!(f.requests, [Request::AiCancel { id }, Request::Status { working: false }]);
+    let (cancel, idle) = (Request::AiCancel { id }, Request::Status { working: false });
+    assert_eq!(f.requests, [Request::Focus { id: a.input_id() }, cancel, idle]);
     assert!(shown(&mut a).contains("Stopped: you took over."));
     // Typing into Feedback waits for the person's yes, asked; then it goes.
     let (mut d, mut a) = (desk(), Agent::default());
@@ -442,6 +468,18 @@ fn the_person_takes_over_answers_questions_and_feedback_waits_for_a_yes() {
     assert!(a.prepare(&t, &typed).unwrap_err().starts_with("E0916: refused: Feedback"));
     t.approved = true;
     assert!(matches!(a.prepare(&t, &typed), Ok((Act::Type { win: 1, .. }, ..))));
+    // A scroll names its window: an element of another window is not one of its.
+    t.scene.wins.push(page(2, false));
+    t.shown = render(&t.scene, &mut a.refs, 1).1;
+    let e = t.shown.iter().find(|e| e.win == 2).unwrap().clone();
+    let scroll = |w: u32| Call {
+        id: "s".into(),
+        name: "scroll".into(),
+        args: format!("{{\"window\":\"w{w}\",\"ref\":\"e{}\",\"amount\":100}}", e.n),
+    };
+    assert_eq!(a.prepare(&t, &scroll(1)).unwrap_err(), format!("E0918: e{} is not in w1", e.n));
+    let act = Act::Scroll { win: 2, id: e.id, dy: 100 };
+    assert!(matches!(a.prepare(&t, &scroll(2)), Ok((got, ..)) if got == act));
     // ask_user: the question shows, the overlay is the person's again; their answer goes back.
     ask(&mut a, "send feedback");
     let calls = Rc::new(RefCell::new(0));
@@ -464,19 +502,21 @@ fn the_person_takes_over_answers_questions_and_feedback_waits_for_a_yes() {
 
 #[test]
 fn the_pill_keys_receipts_and_ai_errors() {
-    // In the pill: one line of what it does, and Stop.
+    // Idle, the card, however short (a phone on its side, its keyboard up): the prompt is there.
     let mut a = Agent::default();
-    assert!(a.event(&Event::Resize { w: 420, h: 72 }));
+    assert!(a.event(&Event::Resize { w: 560, h: 90 }));
+    let prompt = |f: &Frame| matches!(f.nodes.last(), Some(Node::Row { children, .. }) if matches!(children[0], Node::Input { .. }));
+    assert!(prompt(&a.frame()));
+    // Working, the pill, whatever its size: one line of what it does, and Stop.
     ask(&mut a, "go");
+    assert!(!a.event(&Event::Resize { w: 560, h: 480 }));
     let f = a.frame();
     let line =
         Node::Text { id: 0, style: Style::Body, text: "Looking at the screen\u{2026}".into() };
     let stop = Node::Button { id: STOP, variant: Variant::Normal, label: "Stop".into() };
     assert_eq!(f.nodes, [Node::Row { id: 0, gap: 12, children: vec![line, stop] }]);
-    // The card again: the prompt has the keys. An AI error ends the task, coded, with Retry;
+    // An AI error ends the task, coded, with Retry: the card again, its prompt with the keys.
     // Retry asks again.
-    a.event(&Event::Resize { w: 560, h: 480 });
-    assert_eq!(a.frame().requests, [Request::Focus { id: a.input_id() }]);
     let look = f
         .requests
         .iter()
@@ -497,6 +537,7 @@ fn the_pill_keys_receipts_and_ai_errors() {
         .unwrap();
     a.event(&Event::AiEnd { id, status: 429, error: "".into() });
     let f = a.frame();
+    assert!(prompt(&f) && f.requests.contains(&Request::Focus { id: a.input_id() }));
     assert!(f.nodes.contains(&Node::Button {
         id: RETRY,
         variant: Variant::Chip,

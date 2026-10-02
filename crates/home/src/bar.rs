@@ -1,0 +1,94 @@
+//! The top bar: compusophy's mark at the left (Welcome), the date and time in the middle (the
+//! time alone on a phone, or where the date does not fit), Feedback (a bug) and Settings at the
+//! right.
+
+use gfx::{DrawList, RectF};
+use host::LocalTime;
+use host::paint::{cap_baseline, px};
+use ui::icon::Glyph;
+use ui::{FontId, TextStyle, TextSystem, Theme};
+
+/// The bar's height.
+pub const H: f32 = 44.0;
+/// A button's side (its hit box), its distance from the screen's edge, the mark's and the other
+/// glyphs' sides, the hover wash's diameter, the clock's size.
+const BTN: f32 = 44.0;
+const EDGE: f32 = 5.0;
+const MARK: f32 = 26.0;
+const GLYPH: f32 = 20.0;
+const WASH: f32 = 34.0;
+const CLOCK_SIZE: f32 = 13.0;
+
+/// The bar's buttons: the mark, Feedback and Settings.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Button {
+    Mark,
+    Feedback,
+    Settings,
+}
+
+impl Button {
+    /// The app it shows: Welcome, Feedback or Settings.
+    pub fn app(self) -> &'static str {
+        match self {
+            Button::Mark => "welcome",
+            Button::Feedback => "feedback",
+            Button::Settings => "settings",
+        }
+    }
+}
+
+/// Where the buttons sit on a screen `w` wide.
+pub fn buttons(w: f32) -> [(RectF, Button); 3] {
+    let at = |x: f32| RectF::new(x, 0.0, BTN, BTN);
+    [
+        (at(EDGE), Button::Mark),
+        (at(w - EDGE - 2.0 * BTN), Button::Feedback),
+        (at(w - EDGE - BTN), Button::Settings),
+    ]
+}
+
+/// The button at `(x, y)` on a screen `w` wide, if any.
+pub fn at(w: f32, x: f32, y: f32) -> Option<Button> {
+    buttons(w).into_iter().find(|b| b.0.contains(x, y)).map(|b| b.1)
+}
+
+/// The bar on a screen `w` wide: its glass, the buttons (a round wash while hovered,
+/// `Some((button, held))`), and the clock once it ticked.
+pub fn draw(
+    list: &mut DrawList,
+    text: &mut TextSystem,
+    theme: &Theme,
+    w: f32,
+    (hover, clock): (Option<(Button, bool)>, Option<LocalTime>),
+) {
+    let line = px(text, 1.0);
+    list.fill(RectF::new(0.0, 0.0, w, H), 0.0, theme.glass);
+    list.fill(RectF::new(0.0, H - line, w, line), 0.0, theme.border);
+    let square = |r: RectF, side: f32| r.inset((r.w - side) / 2.0);
+    for (r, b) in buttons(w) {
+        if let Some((_, held)) = hover.filter(|h| h.0 == b) {
+            list.fill(square(r, WASH), WASH / 2.0, theme.wash(held));
+        }
+        let (side, glyph) = match b {
+            Button::Mark => (MARK, Glyph::Mark),
+            Button::Feedback => (GLYPH, Glyph::Bug),
+            Button::Settings => (GLYPH, Glyph::Cog),
+        };
+        ui::icon::draw(list, text, square(r, side), glyph, theme.text);
+    }
+    let Some(time) = clock else { return };
+    let (date, clock) = (time.date(), time.clock());
+    let style = TextStyle::new(FontId::Sans, CLOCK_SIZE, theme.text_dim);
+    let (dw, sw, cw) =
+        (text.measure(&date, style), text.measure("  ", style), text.measure(&clock, style));
+    let base = cap_baseline(text, 0.0, H, CLOCK_SIZE);
+    let x = text.snap((w - dw - sw - cw) / 2.0);
+    let x = if !crate::narrow(w) && dw + sw + cw <= w - 2.0 * (EDGE + 2.0 * BTN + 13.0) {
+        text.draw_text(list, x, base, &date, style);
+        x + dw + sw
+    } else {
+        text.snap((w - cw) / 2.0)
+    };
+    text.draw_text(list, x, base, &clock, style.with_color(theme.text));
+}

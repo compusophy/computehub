@@ -20,7 +20,7 @@ pub(crate) const APPS: [(&str, &str, &str, Glyph, u32); 7] = [
     ("files", "Files", "your home folder", Glyph::Folder, 0x60a5fa),
     ("settings", "Settings", "themes, AI, privacy", Glyph::Cog, 0x94a3b8),
     ("about", "About", "what this is", Glyph::About, 0xfbbf24),
-    ("feedback", "Feedback", "tell compusophy what to fix", Glyph::Feedback, 0x34d399),
+    ("feedback", "Feedback", "tell compusophy what to fix", Glyph::Bug, 0x34d399),
 ];
 /// The column's widest, and the mark's largest side.
 const MAX_W: u16 = 466;

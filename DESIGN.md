@@ -91,9 +91,9 @@ frame: os → shell::draw → gfx::DrawList → platform::Renderer: one draw cal
 | `system` | About, Feedback, Files and Welcome: one wasip1 GUI program (`dist/bin/system.wasm`), off the boot download |
 | `studio` | the applang editor, and `AppHost`, which runs `.app` files |
 | `uiwire`, `uiview` | the remote UI protocol GUI programs speak; the desktop's half, which draws their trees |
-| `host` | the wm plus one app per window, the home screen's apps; motion, frame geometry |
-| `home` | the home grid in the person's order, the AI button and the dock's wings, menus, touch |
-| `shell` | the desktop around `host`: bar, home screen, chrome, keys |
+| `host` | the wm plus one app per window, the home screen's apps, windows held by the pointer, the keyboard's squeeze; motion, frame geometry |
+| `home` | the top bar, the home grid in the person's order (icons carried, the selection box), the AI button and the dock above it, menus, touch |
+| `shell` | the desktop around `host`: chrome, keys, the overlay; wires the home screen to the pointer |
 | `platform` | the browser boundary: canvas, WebGL2, input, textarea, fetch, storage, cursor |
 | `os` | the wasm entry: fonts, VFS, the app registry, theme storage, event glue |
 | `tools/serve` | dev-only static server for `dist/`, never shipped |
@@ -165,20 +165,27 @@ one. Forked crates keep their Apache-2.0 license and note their origin.
   box that selects the icons it touches; Enter opens them, dragging one
   carries them all, and an app that takes the focus ends the selection. The
   order is kept (`home.order`).
-- **AI button**: bottom center, where the early iPad's home button was, a
-  round of glass with the ring and dot (a phone's full dock slides it aside
-  just enough to keep every tile on the screen). It opens and hides the
-  Assistant (Alt+Space too; its menu asks it), which is never a window: the
-  overlay, a card above the button (a sheet on a phone) that uses the
-  desktop for the person. While it works it is a pill, one line of what it
-  does and Stop, and a dot runs round the button; each act flashes what it
-  touched, and the person's own press, key or wheel stops it. Later it listens.
-- **Dock**: two glass wings beside the AI button: the favorites to its left
-  (none at first; "Add to dock" from any app's menu), the other running
-  apps to its right, a dot under each running one and a tooltip on hover.
-  Tiles shrink to fit beside the button down to 32 px, a finger's.
-  A click opens, focuses or minimizes; windows minimize into their tile.
-  The strip's place never changes, so neither does the work area.
+- **AI button**: always at the bottom center, where the early iPad's home
+  button was, 13 px above the screen's edge: a 64 px round of glass with the
+  ring and dot (1/φ² of its side). It opens and hides the Assistant
+  (Alt+Space too; its menu asks it), which is never a window: the overlay, a
+  card above the strip (a sheet on a phone) that uses the desktop for the
+  person. A finger's tap leaves the keyboard down until its field is tapped.
+  While it works it is a pill, one line of what it does and Stop, and a dot
+  runs round the button; each act flashes what it touched, and the person's
+  own press, key or wheel stops it. A program that failed starts again at
+  the next summon. Later it listens.
+- **Dock**: one centered glass shelf in its own row 8 px above the AI
+  button, there only while it holds an app: the favorites first (none at
+  first; "Add to dock" from any app's menu), then the other running apps, a
+  hairline between the groups, a dot under each running one (the accent's
+  when focused), a lift and a tooltip on hover. Tiles are 44 px and shrink
+  evenly to fit between 13 px margins (9 apps still get 31 px on a 390 px
+  phone; never off the screen). A click opens, focuses or minimizes; windows minimize into
+  their tile. The work area leaves the button's row, and the dock's while it
+  shows: a window opening while it hides gives it its row first, so nothing
+  jumps; the last one gone, the work area grows back. Icons lay out as if it
+  never showed.
 - **Keys** (`mod` is Alt or Meta, without Ctrl):
 
   | keys | action |

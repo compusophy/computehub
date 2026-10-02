@@ -9,12 +9,14 @@
 //!   however many came before. The last [`MEMORY`] tasks go along as plain prompts and answers.
 //! - **Recovery.** A failure goes back to the model as its coded result. Two in a row add a hint
 //!   and ask it to think a little; three in a row, or the same call on the same screen three
-//!   times (E0924), end the task, as do [`MAX_STEPS`] model calls or [`MAX_ACTS`] acts (E0921), an
-//!   AI error (E0901 to E0905, with Retry), Stop, and the person taking over ([`Event::Halt`]).
+//!   times (E0924), end the task, as do [`MAX_STEPS`] model calls or [`MAX_ACTS`] acts, or a
+//!   request past the free AI's [`MAX_MESSAGES`] or [`MAX_BODY`] (E0921; the memory goes first),
+//!   an AI error (E0901 to E0905, with Retry), Stop, and the person taking over ([`Event::Halt`]).
 //! - **Guard.** Acts into Feedback (the one app that sends what it holds off the device) wait for
 //!   the person's yes through `ask_user`.
-//! - **Shown.** While it works it says so ([`Request::Status`]): the desktop makes it a pill, one
-//!   line of what it does and Stop. Each task ends with its receipt: steps and tokens.
+//! - **Shown.** While it works it says so ([`Request::Status`]): the desktop makes it a pill, and
+//!   it draws one, one line of what it does and Stop, whatever its size. Each task ends with its
+//!   receipt: steps and tokens.
 
 use std::io::{self, ErrorKind, Read, Write};
 
@@ -31,11 +33,11 @@ use crate::look::{Elem, Refs, render};
 pub const MAX_STEPS: u32 = 20;
 pub const MAX_ACTS: u32 = 30;
 pub const MEMORY: usize = 4;
+/// The most messages a request carries, as the free AI's proxy takes them (`api/ai.mjs`).
+pub const MAX_MESSAGES: usize = 64;
 const MAX_PROMPT: usize = 16 << 10;
 const MAX_TYPED: usize = 4000;
 const MAX_TURNS: usize = 16;
-/// A window this short or shorter is the pill: one line.
-const PILL: u16 = 100;
 const SEND: u32 = 1;
 const STOP: u32 = 2;
 const RETRY: u32 = 3;
@@ -78,7 +80,7 @@ pub struct Agent {
     memory: Vec<(String, String)>,
     task: Option<Task>,
     refs: Refs,
-    /// Whether the window is the pill; the prompt to ask again after an AI error.
+    /// Whether the last frame was the pill; the prompt to ask again after an AI error.
     pill: bool,
     retry: Option<String>,
     last_id: u32,
@@ -137,15 +139,8 @@ impl Agent {
         let input = self.input_id();
         let wait = self.task.as_mut().map(|t| &mut t.wait);
         match (ev, wait) {
-            (Event::Resize { h, .. }, _) => {
-                let pill = *h <= PILL;
-                let changed = std::mem::replace(&mut self.pill, pill) != pill;
-                // Back from the pill, the prompt has the keys again.
-                if changed && !pill {
-                    self.requests.push(Request::Focus { id: self.input_id() });
-                }
-                return changed || !self.framed;
-            }
+            // Its size is the desktop's to lay out: only the first frame waits for it.
+            (Event::Resize { .. }, _) => return !self.framed,
             (Event::Config { model }, _) => self.model.clone_from(model),
             (Event::Change { id, text, .. }, _) if *id == input => {
                 self.input = clip(text, MAX_PROMPT);
@@ -285,7 +280,7 @@ impl Agent {
             return self.end(Style::Error, why);
         }
         let body = self.body(t);
-        if body.len() > MAX_BODY {
+        if body.len() > MAX_BODY || own(t) > MAX_MESSAGES {
             return self.end(Style::Error, "E0921 the task grew too long for the AI".into());
         }
         let id = self.next_id();
@@ -300,7 +295,9 @@ impl Agent {
         let msg =
             |role: &str, text: &str| format!("{{\"role\":\"{role}\",\"content\":{}}}", quote(text));
         let mut m = vec![msg("system", SYSTEM)];
-        for (prompt, answer) in &self.memory {
+        // The memory, as much as the free AI's count of messages leaves room for.
+        let keep = (MAX_MESSAGES.saturating_sub(own(t)) / 2).min(self.memory.len());
+        for (prompt, answer) in &self.memory[self.memory.len() - keep..] {
             m.extend([msg("user", prompt), msg("assistant", answer)]);
         }
         let first = if t.steps.is_empty() { t.screen.as_str() } else { "(screen omitted)" };
@@ -538,8 +535,9 @@ impl Agent {
             "scroll" => {
                 let w = win(&need("window")?)?;
                 guard(w.id)?;
-                let id = match get("ref") {
-                    Some(r) => elem(&r)?.id,
+                let id = match get("ref").map(|r| elem(&r).map(|e| (r, e))).transpose()? {
+                    Some((_, e)) if e.win == w.id => e.id,
+                    Some((r, _)) => return Err(format!("E0918: {r} is not in w{}", w.id)),
                     None => 0,
                 };
                 let dy = num(&c.args, "amount")
@@ -631,14 +629,16 @@ impl Agent {
         }
     }
 
-    /// The window now, with the requests since the last frame: the pill while it works in one,
-    /// else the transcript, then the prompt with Send (Stop while it works).
+    /// The window now, with the requests since the last frame: the pill while it works, else the
+    /// transcript, then the prompt with Send.
     pub fn frame(&mut self) -> Frame {
         let text = |style, text: &str| Node::Text { id: 0, style, text: text.into() };
         let button = |id, variant, label: &str| Node::Button { id, variant, label: label.into() };
         let working = self.task.as_ref().is_some_and(|t| !matches!(t.wait, Wait::User));
+        // Back from the pill, the prompt has the keys again.
+        let back = std::mem::replace(&mut self.pill, working) && !working;
         let mut nodes = Vec::new();
-        if self.pill {
+        if working {
             let line = text(Style::Body, &clip(&self.doing(), 64));
             let stop = button(STOP, Variant::Normal, "Stop");
             nodes.push(Node::Row { id: 0, gap: 12, children: vec![line, stop] });
@@ -649,12 +649,9 @@ impl Agent {
                     "Ask anything, or say what to do: \u{201c}turn off error reports\u{201d}",
                 ));
             }
-            for (i, t) in self.turns.iter().enumerate() {
+            for t in &self.turns {
                 nodes.push(text(Style::Subheading, &t.prompt));
                 nodes.extend(t.lines.iter().map(|(style, line)| text(*style, line)));
-                if working && i + 1 == self.turns.len() {
-                    nodes.push(text(Style::Dim, &self.doing()));
-                }
             }
             if self.retry.is_some() && self.task.is_none() {
                 nodes.push(button(RETRY, Variant::Chip, "Retry"));
@@ -662,13 +659,10 @@ impl Agent {
             nodes.push(Node::Fill { id: 0, children: Vec::new() });
             let placeholder = "Ask, or say what to do".into();
             let input = Node::Input { id: self.input_id(), value: self.input.clone(), placeholder };
-            let action = match working {
-                true => button(STOP, Variant::Normal, "Stop"),
-                false => button(SEND, Variant::Primary, "Send"),
-            };
-            nodes.push(Node::Row { id: 0, gap: 8, children: vec![input, action] });
+            let send = button(SEND, Variant::Primary, "Send");
+            nodes.push(Node::Row { id: 0, gap: 8, children: vec![input, send] });
         }
-        let first = (!std::mem::replace(&mut self.framed, true))
+        let first = (!std::mem::replace(&mut self.framed, true) || back)
             .then_some(Request::Focus { id: self.input_id() });
         let requests = first.into_iter().chain(std::mem::take(&mut self.requests)).collect();
         Frame { seq: 0, title: "Assistant".into(), requests, nodes }
@@ -774,6 +768,12 @@ pub fn key(spec: &str) -> Option<(String, u8)> {
         _ => return None,
     };
     Some((code, bits))
+}
+
+/// The messages task `t` itself makes a request carry: the system prompt, the task's, and each
+/// step's reply and results.
+fn own(t: &Task) -> usize {
+    2 + t.steps.iter().map(|s| 1 + s.results.len()).sum::<usize>()
 }
 
 /// Tokens as a receipt says them: `940`, `9.4k`.

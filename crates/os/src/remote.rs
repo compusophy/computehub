@@ -38,7 +38,7 @@ pub type SystemApp = (&'static str, &'static str, AppIcon, (f32, f32), bool);
 #[rustfmt::skip]
 pub const SYSTEM: [SystemApp; 4] = [
     ("about", "About", icon(Glyph::About, 0xfbbf24), (560.0, 640.0), true),
-    ("feedback", "Feedback", icon(Glyph::Feedback, 0x34d399), (520.0, 420.0), true),
+    ("feedback", "Feedback", icon(Glyph::Bug, 0x34d399), (520.0, 420.0), true),
     ("files", "Files", icon(Glyph::Folder, 0x60a5fa), (640.0, 480.0), false),
     ("welcome", "Welcome", icon(Glyph::Mark, 0xf472b6), (520.0, 768.0), true),
 ];
@@ -302,6 +302,10 @@ impl App for Remote {
 
     fn busy(&self) -> bool {
         self.pid.is_some() && (self.frame.is_none() || self.asked)
+    }
+
+    fn ended(&self) -> bool {
+        self.pid.is_none() && !self.note.is_empty()
     }
 
     fn event(&mut self, ev: AppEvent, cx: &mut Cx<'_>) -> bool {

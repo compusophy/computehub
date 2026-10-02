@@ -1,9 +1,12 @@
 //! The compusophyOS home screen, no browser: the parts of the desktop around and behind the
 //! windows, which the shell wires to its input and draws in the frame's [`ui::Theme`].
 //!
+//! - [`bar`]: the top bar, its buttons and clock;
 //! - [`icons`]: every app as an icon in a grid behind the windows, in the person's order;
-//! - [`dock`]: the bottom strip, the AI button between the dock's two wings (the person's
-//!   favorites, kept as the `dock` preference, and the other running apps);
+//! - [`grid`]: the grid as it behaves: listed, carried to a new place, selected by a box;
+//! - [`dock`]: the bottom strip, the AI button at the bottom center and above it, while it holds
+//!   any, the dock (the person's favorites, kept as the `dock` preference, then the others
+//!   running);
 //! - [`menu`]: context menus, for right clicks and long presses;
 //! - [`touch`]: a finger scrolling what it holds, flinging it on, or long-pressing.
 //!
@@ -12,7 +15,9 @@
 
 #![forbid(unsafe_code)]
 
+pub mod bar;
 pub mod dock;
+pub mod grid;
 pub mod icons;
 pub mod menu;
 pub mod touch;
@@ -20,8 +25,8 @@ pub mod touch;
 use gfx::{DrawList, RectF};
 use ui::{AppIcon, TextSystem, Theme};
 
-/// What the work area leaves free at the bottom: the strip, the space under it and the gap above.
-pub const CLEAR: f32 = dock::BOTTOM + dock::H + dock::GAP;
+/// What the work area leaves free at the bottom at least: the AI button's row ([`dock::clear`]).
+pub const CLEAR: f32 = dock::BOTTOM + dock::BUTTON + dock::GAP;
 
 /// Whether a screen `w` wide is a phone's.
 pub fn narrow(w: f32) -> bool {

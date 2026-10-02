@@ -3,15 +3,18 @@
 //!
 //! - **Eyes.** [`Host::scene`] draws each shown window again at rest into a recording list and
 //!   keeps its hits, the text it shows (clipped) and its widgets' marks, with the wm's facts, the
-//!   theme and the home screen's apps. An idle desktop pays nothing for it.
+//!   theme and the home screen's apps; the whole at most [`SCENE`] bytes as sent, so an answer
+//!   always reaches the overlay. An idle desktop pays nothing for it.
 //! - **Hands.** An [`Act`] goes the way a person's pointer and keys go: a click raises the window,
 //!   tells it its focus, then presses and releases the widget's middle (`PointerDown`, then
 //!   `Click` for a button); a window verb is the title bar's control; opening an app is the home
 //!   screen's tile. Each act flashes what it touched ([`Agent::flash`]).
 //! - **Settling.** An act is answered by one [`Event::Acted`] once no window is
 //!   [`ui::App::busy`] or [`SETTLE_MS`] passed (a wait: once its time passed), with the scene
-//!   then; the platform's timer is armed for the deadline. One act at a time; only the overlay
-//!   may act ([`acted::REFUSED`] otherwise) and nothing acts on it.
+//!   then; the platform's timer is armed for the deadline, and again whenever it fires before it
+//!   (the page keeps the sooner of two). One act at a time; only the overlay may act
+//!   ([`acted::REFUSED`] otherwise) and nothing acts on it. A task ending (the overlay's status
+//!   no longer working, or the person taking over) drops the act settling for it.
 
 use std::mem;
 
@@ -30,10 +33,14 @@ pub const ASSISTANT: &str = "assistant";
 /// How long an act waits for busy windows, and how long its flash shows.
 pub const SETTLE_MS: f64 = 1500.0;
 pub const FLASH_MS: f64 = 600.0;
-/// What a window's scene keeps at most: hits (and marks), runs, bytes of text.
+/// What a window's scene keeps at most: hits (and marks), runs, bytes of text; a title's and a
+/// mark's value's bytes; and the whole scene's, as sent.
 const HITS: usize = 300;
 const RUNS: usize = 400;
 const TEXT: usize = 16 << 10;
+const NAME: usize = 256;
+const VALUE: usize = 512;
+pub const SCENE: usize = 64 << 10;
 
 /// The act settling: its id and code, its deadline, whether only the deadline ends it (a
 /// wait), and whether the timer is armed for it.
@@ -65,8 +72,12 @@ pub struct Agent {
 }
 
 impl Host {
-    /// Makes the overlay's app if it does not run; whether it runs.
+    /// Makes the overlay's app if it does not run, or again if what it ran failed; whether it
+    /// runs.
     pub fn open_overlay(&mut self) -> bool {
+        if self.win(OVERLAY).is_some_and(|w| w.app.ended()) {
+            self.drop_overlay();
+        }
         if self.win(OVERLAY).is_none() {
             let Some(app) = (self.registry)(ASSISTANT) else { return false };
             let (name, hits, sizes) = (ASSISTANT.to_string(), Vec::new(), [None; 2]);
@@ -86,9 +97,10 @@ impl Host {
         }
     }
 
-    /// The person took over: a working overlay hears [`Event::Halt`].
+    /// The person took over: a working overlay hears [`Event::Halt`], its act settling dropped.
     pub fn halt(&mut self, out: &mut Response) {
         if mem::take(&mut self.agent.working) {
+            self.agent.pending = None;
             self.deliver(OVERLAY, AppEvent::Agent(Event::Halt), out);
         }
     }
@@ -110,7 +122,11 @@ impl Host {
                 let act = Act::decode(&act).unwrap_or(Act::Theme { name: String::new() });
                 self.agent.acts.push((win, id, act));
             }
-            Request::Status { working } if win == OVERLAY => self.agent.working = working,
+            Request::Status { working } if win == OVERLAY => {
+                self.agent.working = working;
+                // The task is over: so is the act it waited for.
+                self.agent.pending = self.agent.pending.take().filter(|_| working);
+            }
             _ => {}
         }
     }
@@ -149,6 +165,14 @@ impl Host {
             out.effects.push(Effect::Kernel(kernel::Effect::Wake { ms }));
         }
         self.agent.stepping = false;
+    }
+
+    /// The platform's timer fired, perhaps a sooner one in place of the act's (the page keeps
+    /// the sooner of two): the act's deadline is asked for again.
+    pub(crate) fn woken(&mut self) {
+        if let Some(p) = &mut self.agent.pending {
+            p.armed = false;
+        }
     }
 
     /// Tells window `win` act `id` settled with `code` and the screen `scene`.
@@ -284,6 +308,11 @@ impl Host {
     pub fn scene(&mut self) -> Scene {
         let (now, layout) = (self.now_ms, self.wm.layout());
         let theme = self.theme.at(now);
+        let name = self.theme.current().name.to_string();
+        // The bytes left as sent: the head, the apps, then each window while it fits.
+        let mut room = SCENE - 20 - name.len();
+        let fit = |a: &&String| take(&mut room, 4 + a.len());
+        let apps: Vec<String> = self.agent.apps.iter().take_while(fit).cloned().collect();
         let mut wins = Vec::new();
         for p in layout.iter().rev() {
             let c = content_rect(rectf(p.rect));
@@ -297,39 +326,58 @@ impl Host {
                 _ => state::FREE,
             };
             let mut w = self.swin(p.win, rectf(p.rect), st);
+            if !take(&mut room, 33 + w.app.len() + w.title.len()) {
+                break;
+            }
             let hits = self.win(p.win).map_or(&[][..], |x| &x.hits);
             let hit =
                 |h: &ui::Hit| scene::Hit { id: h.id.0, sense: h.sense as u8, rect: px(h.rect) };
-            w.hits = hits.iter().take(HITS).map(hit).collect();
-            let mark = |m: gfx::Mark| scene::Mark {
-                id: m.id,
-                role: m.role,
-                flags: m.flags,
-                value: m.value,
+            let fit = |_: &&ui::Hit| take(&mut room, 13);
+            w.hits = hits.iter().take(HITS).take_while(fit).map(hit).collect();
+            let mark = |m: gfx::Mark| {
+                let (id, role, flags, value) = (m.id, m.role, m.flags, clip(m.value, VALUE));
+                scene::Mark { id, role, flags, value }
             };
-            w.marks = sem.marks.into_iter().take(HITS).map(mark).collect();
-            let mut room = TEXT;
-            let fits = |r: &gfx::Run| room.checked_sub(r.text.len()).map(|n| room = n).is_some();
+            let fit = |m: &scene::Mark| take(&mut room, 10 + m.value.len());
+            w.marks = sem.marks.into_iter().take(HITS).map(mark).take_while(fit).collect();
+            let mut text = TEXT;
+            let fit =
+                |r: &gfx::Run| take(&mut text, r.text.len()) && take(&mut room, 12 + r.text.len());
             let run = |r: gfx::Run| scene::Run { rect: px(r.rect), text: r.text };
-            w.runs = sem.runs.into_iter().take(RUNS).take_while(fits).map(run).collect();
+            w.runs = sem.runs.into_iter().take(RUNS).take_while(fit).map(run).collect();
             wins.push(w);
         }
         for (id, _) in self.wm.windows().into_iter().filter(|w| w.1 == State::Minimized) {
             let r = self.wm.normal_rect(id).map_or(RectF::default(), rectf);
-            wins.push(self.swin(id, r, state::MIN));
+            let w = self.swin(id, r, state::MIN);
+            if take(&mut room, 33 + w.app.len() + w.title.len()) {
+                wins.push(w);
+            }
         }
-        let ((w, h), theme) = (self.agent.screen, self.theme.current().name.to_string());
-        let focus = self.focused_app().map_or(0, |w| w.0);
-        Scene { w: w as u16, h: h as u16, theme, focus, apps: self.agent.apps.clone(), wins }
+        let ((w, h), focus) = (self.agent.screen, self.focused_app().map_or(0, |w| w.0));
+        Scene { w: w as u16, h: h as u16, theme: name, focus, apps, wins }
     }
 
     /// A scene's window `id` at `r` in `state`, with its app and title.
     fn swin(&self, id: WinId, r: RectF, state: u8) -> scene::Win {
         let w = self.win(id);
         let app = w.map_or("", |w| app_of(&w.name)).to_string();
-        let title = w.map(|w| w.app.title()).unwrap_or_default();
+        let title = clip(w.map(|w| w.app.title()).unwrap_or_default(), NAME);
+        let app = clip(app, NAME);
         scene::Win { id: id.0, app, title, rect: px(r), state, ..scene::Win::default() }
     }
+}
+
+/// Takes `n` bytes of `room`, if it holds them.
+fn take(room: &mut usize, n: usize) -> bool {
+    room.checked_sub(n).map(|r| *room = r).is_some()
+}
+
+/// `s` cut to `max` bytes at most, on a char boundary.
+fn clip(mut s: String, max: usize) -> String {
+    let end = (0..=max.min(s.len())).rev().find(|&i| s.is_char_boundary(i)).unwrap_or(0);
+    s.truncate(end);
+    s
 }
 
 /// `r` in whole logical px, as the scene has rects (`as` saturates).

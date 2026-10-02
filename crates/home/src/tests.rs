@@ -1,7 +1,9 @@
 use gfx::{DrawList, Kind, RectF, Rgba};
-use ui::{AppIcon, Key, THEMES, TextSystem};
+use host::{Effect, Entry};
+use ui::{AppIcon, Key, Mods, THEMES, TextSystem};
 
 use super::dock::{Look, Spot, Strip, favorites, pin};
+use super::grid::{APPS, Grid, Press};
 use super::icons;
 use super::menu::{Item, Menu};
 use super::touch::{Fling, Touch, decay};
@@ -68,7 +70,7 @@ fn fingers_scroll_past_eight_px_long_press_when_still_and_fling_on() {
 }
 
 #[test]
-fn the_strip_centers_the_ai_button_between_the_docks_wings() {
+fn the_strip_centers_the_ai_button_and_the_dock_above_it_only_while_it_holds_any() {
     let names = |s: &[&str]| s.iter().map(|n| n.to_string()).collect::<Vec<_>>();
     assert_eq!(
         (favorites(None), favorites(Some("terminal,,studio,terminal"))),
@@ -82,41 +84,59 @@ fn the_strip_centers_the_ai_button_between_the_docks_wings() {
         (super::joined(&names(&["a", "b,c", "d"])), super::names("d,,a,d")),
         ("a,d".into(), names(&["d", "a"]))
     );
-    // Two favorites to the left of the button, one running app to its right.
-    let s = Strip::new(2, 1, (1280.0, 800.0));
-    assert_eq!((s.button, s.tile), (RectF::new(612.0, 727.0, 56.0, 56.0), 44.0));
+    // Nothing kept, nothing running: the button alone, 64 px at the bottom center, 13 px above
+    // the screen's bottom; no dock at all, nothing to hit but the button.
+    let alone = Strip::new(0, 0, (1280.0, 800.0));
     assert_eq!(
-        s.wings,
-        [RectF::new(487.0, 723.0, 112.0, 64.0), RectF::new(681.0, 723.0, 60.0, 64.0)]
+        (alone.button, alone.shelf.w, alone.top()),
+        (RectF::new(608.0, 723.0, 64.0, 64.0), 0.0, 723.0)
     );
     assert_eq!(
+        [alone.at(640.0, 755.0), alone.at(640.0, 700.0), alone.at(560.0, 755.0)],
+        [Some(Spot::Button), None, None]
+    );
+    let (mut list, mut text, t) = (DrawList::new(), text(), &THEMES[0]);
+    alone.draw(&mut list, &mut text, t, &[]);
+    assert!(list.instances().is_empty());
+    // Two favorites, then one running app: one shelf centered above the button (8 px between),
+    // a hairline between the groups; a tile takes half the space beside it.
+    let s = Strip::new(2, 1, (1280.0, 800.0));
+    assert_eq!((s.button, s.tile, s.top()), (alone.button, 44.0, 651.0));
+    assert_eq!((s.shelf, s.sep), (RectF::new(554.0, 651.0, 173.0, 64.0), Some(666.0)));
+    assert_eq!(
         (&s.xs[..], s.tile(2)),
-        (&[495.0, 547.0, 689.0][..], RectF::new(689.0, 731.0, 44.0, 44.0))
+        (&[562.0, 614.0, 675.0][..], RectF::new(675.0, 659.0, 44.0, 44.0))
     );
     let at = |x, y| s.at(x, y);
     assert_eq!(
-        [at(640.0, 750.0), at(500.0, 740.0), at(543.0, 740.0), at(489.0, 740.0), at(700.0, 700.0)],
-        [Some(Spot::Button), Some(Spot::Tile(0)), Some(Spot::Tile(1)), Some(Spot::Wing), None]
+        [at(640.0, 755.0), at(570.0, 670.0), at(612.0, 670.0), at(556.0, 670.0), at(666.0, 670.0)],
+        [
+            Some(Spot::Button),
+            Some(Spot::Tile(0)),
+            Some(Spot::Tile(1)),
+            Some(Spot::Shelf),
+            Some(Spot::Shelf)
+        ]
     );
-    // None at all: the button alone, where it always is; no wing to hit.
-    let alone = Strip::new(0, 0, (1280.0, 800.0));
-    assert_eq!((alone.button, alone.wings[0].w, alone.wings[1].w), (s.button, 0.0, 0.0));
-    assert_eq!((alone.at(560.0, 750.0), alone.at(720.0, 750.0)), (None, None));
-    // A phone shrinks the tiles until the fuller wing fits beside the button, to a finger's 32 px;
-    // a fuller dock slides the button aside, and only one too long even so shrinks further:
-    // every tile stays on the screen.
+    assert_eq!((at(700.0, 645.0), at(640.0, 719.0), s.tile(3)), (None, None, s.button));
+    // A phone: the button centered and 64 px still; tiles shrink evenly to fit 8 apps or more
+    // between 13 px margins, never off the screen.
     let phone = Strip::new(1, 3, (390.0, 844.0));
-    let right = phone.wings[1];
-    assert_eq!((phone.tile, phone.button.x, right.x + right.w), (39.0, 167.0, 385.0));
-    for (favs, others, tile, x) in [(4, 0, 32.0, 186.0), (8, 0, 29.0, 322.0), (0, 9, 25.0, 11.0)] {
+    assert_eq!((phone.button, phone.tile), (RectF::new(163.0, 767.0, 64.0, 64.0), 44.0));
+    assert_eq!(phone.shelf, RectF::new(83.0, 695.0, 225.0, 64.0));
+    for (favs, others, tile) in
+        [(0, 8, 36.0), (4, 4, 35.0), (0, 9, 31.0), (6, 6, 20.0), (20, 0, 9.0)]
+    {
         let s = Strip::new(favs, others, (390.0, 844.0));
-        assert_eq!((s.tile, s.button.x, s.xs.len()), (tile, x, favs + others));
-        assert!(s.xs.iter().all(|&x| x >= 13.0 && x + s.tile <= 377.0), "{favs} {others}");
+        assert_eq!((s.tile, s.xs.len(), s.button.x), (tile, favs + others, 163.0));
+        let (l, r) = (s.shelf.x, s.shelf.x + s.shelf.w);
+        assert!(l >= 13.0 && r <= 377.0 && (l + r - 390.0).abs() <= 1.0, "{favs} {others}");
+        assert!(s.xs.iter().all(|&x| x >= l && x + s.tile <= r), "{favs} {others}");
     }
-    assert_eq!(Strip::new(4, 4, (390.0, 844.0)).button.x, 167.0);
-    // Drawn: the wings and tiles, the focused app's dot in the accent, the others' dim; the
-    // button's glass, washed while held.
-    let (mut list, mut text, t) = (DrawList::new(), text(), &THEMES[0]);
+    // The work area leaves the button's row, and the dock's while it shows.
+    assert_eq!((super::dock::clear(false), super::dock::clear(true)), (85.0, 157.0));
+    // Drawn: the shelf and tiles, the hairline, the focused app's dot in the accent, the others'
+    // dim; the button's glass, washed while held.
     let look = |running, focused| Look {
         icon: AppIcon::default(),
         sigil: None,
@@ -126,27 +146,28 @@ fn the_strip_centers_the_ai_button_between_the_docks_wings() {
     };
     s.draw(&mut list, &mut text, t, &[look(true, true), look(true, false), look(false, false)]);
     assert!(fills(&list, t.accent) && fills(&list, t.text_dim) && fills(&list, t.glass));
+    assert!(fills(&list, t.border));
     s.draw_button(&mut list, &mut text, t, Some(true));
     assert!(fills(&list, t.wash(true)));
 }
 
 #[test]
-fn the_overlay_sits_above_the_ai_button_a_card_a_sheet_or_a_pill() {
-    // Wide: a card 560 px wide at most, 60% of the screen tall at most, centered on the button;
-    // working, a pill 52 px tall, 420 px wide at most.
-    let s = Strip::new(2, 1, (1280.0, 800.0));
-    assert_eq!(s.overlay((1280.0, 800.0), 44.0, false), RectF::new(360.0, 239.0, 560.0, 480.0));
-    assert_eq!(s.overlay((1280.0, 800.0), 44.0, true), RectF::new(430.0, 667.0, 420.0, 52.0));
+fn the_overlay_sits_above_the_strip_a_card_a_sheet_or_a_pill() {
+    // Wide: a card 560 px wide at most, 60% of the screen tall at most, centered above the
+    // button (or the dock, while it shows); working, a pill 52 px tall, 420 px wide at most.
+    let (s, alone) = (Strip::new(2, 1, (1280.0, 800.0)), Strip::new(0, 0, (1280.0, 800.0)));
+    assert_eq!(s.overlay((1280.0, 800.0), 44.0, false), RectF::new(360.0, 163.0, 560.0, 480.0));
+    assert_eq!(s.overlay((1280.0, 800.0), 44.0, true), RectF::new(430.0, 591.0, 420.0, 52.0));
+    assert_eq!(alone.overlay((1280.0, 800.0), 44.0, false), RectF::new(360.0, 235.0, 560.0, 480.0));
+    assert_eq!(alone.overlay((1280.0, 800.0), 44.0, true), RectF::new(430.0, 663.0, 420.0, 52.0));
     // A short screen keeps it under the bar; a narrow one inside its gutters.
     assert_eq!(Strip::new(2, 1, (1280.0, 300.0)).overlay((1280.0, 300.0), 44.0, false).y, 52.0);
     let phone = Strip::new(1, 3, (390.0, 844.0));
     let sheet = phone.overlay((390.0, 844.0), 44.0, false);
-    assert_eq!(sheet, RectF::new(16.0, 341.0, 358.0, 422.0));
-    assert_eq!(phone.overlay((390.0, 844.0), 44.0, true), RectF::new(16.0, 711.0, 358.0, 52.0));
-    // A button slid aside: the sheet stays on the screen.
-    let aside = Strip::new(0, 9, (390.0, 844.0));
-    let r = aside.overlay((390.0, 844.0), 44.0, true);
-    assert!(r.x >= 16.0 && r.x + r.w <= 374.0 && r.y + r.h < aside.button.y);
+    assert_eq!(sheet, RectF::new(16.0, 265.0, 358.0, 422.0));
+    assert_eq!(phone.overlay((390.0, 844.0), 44.0, true), RectF::new(16.0, 635.0, 358.0, 52.0));
+    let bare = Strip::new(0, 0, (390.0, 844.0)).overlay((390.0, 844.0), 44.0, false);
+    assert_eq!(bare, RectF::new(16.0, 337.0, 358.0, 422.0));
 }
 
 #[test]
@@ -181,6 +202,30 @@ fn menus_open_on_screen_and_follow_the_keys() {
     let (mut list, t) = (DrawList::new(), &THEMES[2]);
     m.draw(&mut list, &mut text, t, false);
     assert!(fills(&list, t.wash(false)));
+}
+
+#[test]
+fn the_bar_holds_the_mark_feedback_settings_and_the_clock() {
+    use super::bar::{self, Button};
+    // The mark at the left, Feedback and Settings at the right, each 44 px; each shows its app.
+    let at = |w, x| bar::at(w, x, 22.0);
+    let wide = [at(1280.0, 27.0), at(1280.0, 1209.0), at(1280.0, 1253.0), at(1280.0, 640.0)];
+    let (m, f, s) = (Some(Button::Mark), Some(Button::Feedback), Some(Button::Settings));
+    assert_eq!((wide, at(390.0, 368.0), bar::at(390.0, 368.0, 50.0)), ([m, f, s, None], s, None));
+    let apps = [Button::Mark, Button::Feedback, Button::Settings].map(Button::app);
+    assert_eq!(apps, ["welcome", "feedback", "settings"]);
+    // Drawn: the hovered button washed; the date beside the time where it fits, the time alone
+    // on a phone.
+    let (mut text, t) = (text(), &THEMES[0]);
+    let time = host::LocalTime { year: 2026, month: 10, day: 1, weekday: 3, hour: 9, minute: 5 };
+    let mut drawn = |w: f32| {
+        let mut l = DrawList::new();
+        bar::draw(&mut l, &mut text, t, w, (Some((Button::Mark, true)), Some(time)));
+        let glyph = Kind::Glyph as u8 as f32;
+        (fills(&l, t.wash(true)), l.instances().iter().filter(|i| i.kind == glyph).count())
+    };
+    let ((washed, wide), (_, phone)) = (drawn(1280.0), drawn(390.0));
+    assert!(washed && wide >= phone + 7, "{wide} {phone}");
 }
 
 #[test]
@@ -261,4 +306,135 @@ fn the_persons_order_survives_new_apps_and_moves() {
     icons::draw_box(&mut list, &text, t, (300.0, 200.0), (100.0, 400.0));
     assert_eq!(list.instances().last().map(|i| i.rect), Some([100.0, 200.0, 200.0, 200.0]));
     assert_eq!(super::CLEAR, 85.0);
+}
+
+/// A 1280 x 800 desktop's grid area.
+const AREA: RectF = RectF { x: 0.0, y: 44.0, w: 1280.0, h: 671.0 };
+
+/// The home screen of `names`, as the host lists them.
+fn entries(names: &[&str]) -> Vec<Entry> {
+    let entry = |n: &&str| {
+        let (name, label, icon) = (n.to_string(), host::app_label(n), AppIcon::default());
+        Entry { name, label, icon, sigil: None }
+    };
+    names.iter().map(entry).collect()
+}
+
+/// The built-in apps' grid on a 1280 x 800 desktop in the `stored` order, listed and at rest.
+fn grid(stored: Option<&str>) -> Grid {
+    let (mut g, mut fx) = (Grid::new(stored), Vec::new());
+    (g.area, g.narrow) = (AREA, false);
+    assert!(g.list(1, || entries(&APPS), &mut fx) && fx.is_empty());
+    assert!(!g.list(1, || unreachable!(), &mut fx));
+    g.sync(0.0, true);
+    g
+}
+
+/// The middle of the icon in cell `i`.
+fn mid(i: usize) -> (f32, f32) {
+    let r = icons::cell(i, AREA, false);
+    (r.x + r.w / 2.0, r.y + 30.0)
+}
+
+fn labels(g: &Grid) -> Vec<&str> {
+    g.icons.iter().map(|e| &*e.label).collect()
+}
+
+#[test]
+fn icons_carried_past_their_travel_land_in_the_persons_order() {
+    let (mut g, mut fx) = (grid(None), Vec::new());
+    // A mouse carries an icon once it travels 4 px: it follows the pointer, the others close up
+    // around its slot and slide.
+    g.press(Press::Icon(0), mid(0), false);
+    assert!(!g.carry_to(Some((mid(0).0 + 3.0, mid(0).1))));
+    assert!(g.carry.as_ref().is_some_and(|c| !c.lifted));
+    assert!(g.carry_to(Some(mid(3))) && g.carry.as_ref().map(|c| c.slot) == Some(3));
+    let cells = [None, Some(0), Some(1), Some(2), Some(4)];
+    assert_eq!((g.at(mid(3).0, mid(3).1), &g.cells()[..5]), (None, &cells[..]));
+    g.sync(10.0, false);
+    assert!(g.moving(10.0));
+    // Dropped: there it stays, and the order is kept.
+    g.drop(true, Some(mid(3)), &mut fx);
+    assert_eq!(labels(&g)[..4], ["Assistant", "Terminal", "Files", "Studio"]);
+    let order = "assistant,terminal,files,studio,settings,feedback,about,welcome";
+    assert_eq!(fx, [Effect::Pref { key: "home.order".into(), value: order.into() }]);
+    // Escape, or the pointer leaving (a drop that keeps nothing), puts it back: it slides back
+    // from where it showed, and nothing changes.
+    for escape in [true, false] {
+        g.press(Press::Icon(0), mid(0), false);
+        g.carry_to(Some(mid(6)));
+        match escape {
+            true => assert_eq!(g.key(Key::Escape, Mods::default(), Some(mid(6))), Some(vec![])),
+            false => g.drop(false, Some(mid(6)), &mut fx),
+        }
+        let r = g.cells[0].value(2000.0).rect;
+        assert!(g.carry.is_none() && (r.x + r.w / 2.0, r.y + 30.0) == mid(6) && fx.len() == 1);
+    }
+    // Moved, but landing where it was: no change, nothing kept.
+    let near = (mid(1).0 + 9.0, mid(1).1);
+    g.press(Press::Icon(1), mid(1), false);
+    g.carry_to(Some(near));
+    g.drop(true, Some(near), &mut fx);
+    assert!(fx.len() == 1 && labels(&g)[1] == "Terminal");
+    // The order comes from the page: unknown names dropped, new apps last, nothing kept yet. An
+    // app new since (a `.app` saved) shows up last, and the order is kept.
+    let mut g = grid(Some("welcome,gone,terminal"));
+    let want =
+        ["Welcome", "Terminal", "Studio", "Assistant", "Files", "Settings", "Feedback", "About"];
+    assert_eq!(labels(&g), want);
+    let all: Vec<&str> = APPS.iter().copied().chain(["/apps/clock.app"]).collect();
+    assert!(g.list(2, || entries(&all), &mut fx) && labels(&g)[8] == "Clock");
+    let order = "welcome,terminal,studio,assistant,files,settings,feedback,about,/apps/clock.app";
+    assert_eq!(fx.last(), Some(&Effect::Pref { key: "home.order".into(), value: order.into() }));
+}
+
+#[test]
+fn a_box_selects_icons_which_open_and_move_together_and_a_finger_picks_one_up() {
+    let (mut g, mut fx, none) = (grid(None), Vec::new(), Mods::default());
+    let boxed = |g: &mut Grid, to: (f32, f32)| {
+        g.press(Press::Desktop, (5.0, 50.0), false);
+        g.lasso_to(Some(to));
+        g.lasso = None;
+    };
+    // From the bare desktop a mouse draws a box; the icons it touches are selected.
+    boxed(&mut g, (95.0, 260.0));
+    assert_eq!(g.selected, ["studio", "assistant", "terminal"]);
+    // A press in a menu keeps it; one on the bare desktop ends it, as Escape does.
+    g.press(Press::Menu, (5.0, 50.0), false);
+    assert_eq!(g.selected.len(), 3);
+    g.press(Press::Desktop, (600.0, 640.0), false);
+    assert!(g.selected.is_empty());
+    boxed(&mut g, (95.0, 260.0));
+    assert!(g.key(Key::Escape, none, None) == Some(vec![]) && g.selected.is_empty());
+    // Enter opens what is selected (its names), and the selection ends; other keys aren't theirs.
+    boxed(&mut g, (95.0, 160.0));
+    assert_eq!(g.key(Key::Char('x'), none, None), None);
+    let open = g.key(Key::Enter, none, None);
+    assert!(open == Some(vec!["studio".into(), "assistant".into()]) && g.selected.is_empty());
+    // Dragging a selected icon carries the selection: they land together, in their order.
+    boxed(&mut g, (95.0, 160.0));
+    g.press(Press::Icon(1), mid(1), false);
+    assert_eq!(g.carry.as_ref().map(|c| c.icons.clone()), Some(vec![0, 1]));
+    g.carry_to(Some(mid(5)));
+    g.drop(true, Some(mid(5)), &mut fx);
+    let order =
+        ["Terminal", "Files", "Settings", "Feedback", "About", "Studio", "Assistant", "Welcome"];
+    assert_eq!(labels(&g), order);
+    // Carried, the one pressed shows where the pointer holds it, two of the rest behind it.
+    let mut g = grid(None);
+    g.selected = ["studio", "assistant", "terminal", "files"].map(String::from).into();
+    g.press(Press::Icon(2), mid(2), false);
+    g.carry_to(Some((300.0, 300.0)));
+    let (shown, r) = (g.carried(Some((300.0, 300.0))), icons::cell(2, AREA, false));
+    assert_eq!(shown.iter().map(|s| s.0).collect::<Vec<_>>(), [2, 0, 1]);
+    let (lead, behind) = (shown[0].1, shown[1].1);
+    assert_eq!((lead.x, behind.x, behind.y), (300.0 - mid(2).0 + r.x, lead.x + 5.0, lead.y - 5.0));
+    // A finger draws no box. Held, it picks an icon up at once where it is (it drifted 9 px
+    // while it waited), lifted and unmoved; moved 8 px from there it drags.
+    g.press(Press::Desktop, (600.0, 640.0), true);
+    assert!(g.lasso.is_none() && g.carry.is_none());
+    g.carry = g.pick(0, (mid(0).0 + 9.0, mid(0).1), true);
+    assert!(g.carry.as_ref().is_some_and(|c| c.lifted && !c.moved && c.touch));
+    assert!(!g.carry_to(Some((mid(0).0 + 16.0, mid(0).1))));
+    assert!(g.carry_to(Some((mid(0).0 + 17.0, mid(0).1))));
 }

@@ -1,28 +1,22 @@
-//! The pointer: what lies under it; pressing, dragging, resizing, snapping, double clicks,
-//! buttons (which act on release), clicks into apps, icons carried and secondary presses.
+//! The pointer: what lies under it; pressing, windows held (moved, resized, snapped and
+//! maximized by a double click: `host::grab`), buttons (which act on release), clicks into apps,
+//! icons carried and secondary presses.
 
 use gfx::RectF;
-use host::frame::{
-    CTL_STEP, TOUCH_STEP, Zone, controls, edge, edge_cursor, hit_box, resized, zone,
-};
+use host::frame::{CTL_STEP, TOUCH_STEP, controls, edge, edge_cursor, hit_box};
+use host::grab::Grab;
 use host::{Cursor, OVERLAY, TITLEBAR_H, content_rect, rectf};
 use ui::{AppEvent, Sense};
-use wm::{Cmd, Placement, Rect, State, WinId};
+use wm::{Cmd, Placement, State, WinId};
 
 use crate::touch::Scroll;
 use crate::{BAR_H, Response, Shell};
 
-/// Travel before a titlebar press drags; most time between double clicks.
-const DRAG_PX: f32 = 4.0;
-const DOUBLE_MS: f64 = 350.0;
-
 /// What lies under a point.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Target {
-    /// The top bar's buttons, and the bare bar.
-    Mark,
-    Feedback,
-    Settings,
+    /// A top bar's button, and the bare bar.
+    Bar(home::bar::Button),
     Top,
     /// A dock tile, the AI button, and a bare wing of the dock.
     Dock(usize),
@@ -47,7 +41,7 @@ impl Target {
     /// Whether it acts on release (and highlights).
     pub(crate) fn is_button(self) -> bool {
         use Target::*;
-        matches!(self, Mark | Feedback | Settings | Dock(_) | Ai | Ctl(..) | Icon(_) | Menu(_))
+        matches!(self, Bar(_) | Dock(_) | Ai | Ctl(..) | Icon(_) | Menu(_))
     }
 
     pub(crate) fn win(self) -> Option<WinId> {
@@ -57,16 +51,6 @@ impl Target {
             _ => None,
         }
     }
-}
-
-/// A window held by the pointer.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) enum Grab {
-    /// Moving: the press, the pointer's offset in the window, whether it
-    /// moved yet, where it would snap.
-    Move { win: WinId, at: (f32, f32), off: (f32, f32), moving: bool, zone: Option<Zone> },
-    /// Resizing by `edge`: the press and the rect then.
-    Size { win: WinId, edge: (i8, i8), at: (f32, f32), from: Rect },
 }
 
 impl Shell {
@@ -102,7 +86,7 @@ impl Shell {
                 return Some(if body { Target::Body(p.win) } else { Target::Title(p.win) });
             }
         }
-        Some(self.icon_at(x, y).map_or(Target::Desktop, Target::Icon))
+        Some(self.grid.at(x, y).map_or(Target::Desktop, Target::Icon))
     }
 
     /// The window controls' reach: wide enough for a finger on a narrow screen.
@@ -136,7 +120,7 @@ impl Shell {
 
     /// The pointer's look; `text` when over text an app edits.
     pub(crate) fn cursor_for(&self, text: bool) -> Cursor {
-        let carried = self.carry.as_ref().is_some_and(|c| c.lifted && !c.touch);
+        let carried = self.grid.carry.as_ref().is_some_and(|c| c.lifted && !c.touch);
         match (self.grab, self.hover) {
             (Some(Grab::Move { .. }), _) => Cursor::Grabbing,
             _ if carried => Cursor::Grabbing,
@@ -188,17 +172,9 @@ impl Shell {
         let r = rectf(p.rect);
         match hit {
             Target::Title(_) if self.host.narrow() => {}
-            Target::Title(_) => {
-                let last = self.last_title.take();
-                if last.is_some_and(|(w, t)| w == win && now - t <= DOUBLE_MS) {
-                    return self.host.apply(Cmd::ToggleMaximize(win));
-                }
-                self.last_title = Some((win, now));
-                let off = (x - r.x, y - r.y);
-                self.grab = Some(Grab::Move { win, at: (x, y), off, moving: false, zone: None });
-            }
-            Target::Edge(_, dx, dy) => {
-                self.grab = Some(Grab::Size { win, edge: (dx, dy), at: (x, y), from: p.rect });
+            Target::Title(_) | Target::Edge(..) => {
+                let edge = if let Target::Edge(_, dx, dy) = hit { Some((dx, dy)) } else { None };
+                self.grab = self.host.grab(win, (x, y), edge, (now, &mut self.last_title));
             }
             Target::Body(_) => {
                 let (c, theme) = (content_rect(r), self.host.theme.at(now));
@@ -209,43 +185,19 @@ impl Shell {
                 let down = AppEvent::PointerDown { x: x - c.x, y: y - c.y, id };
                 match touch {
                     true => self.down = Some((win, down)),
-                    false => self.host.deliver(win, down, out),
+                    false => self.press_into(win, down, out),
                 }
             }
             _ => {}
         }
     }
 
-    /// The held window follows the pointer; a maximized or snapped one comes
-    /// back to its normal size under it, animated.
+    /// The held window follows the pointer (exactly, unless a maximized or snapped one comes
+    /// back to its normal size under it, animated).
     pub(crate) fn drag_to(&mut self) {
-        let ((x, y), Some(grab)) = (self.pointer.unwrap_or_default(), self.grab) else {
-            return;
-        };
-        match grab {
-            Grab::Move { win, at, mut off, moving, .. } => {
-                if !moving && (x - at.0).abs().max((y - at.1).abs()) < DRAG_PX {
-                    return;
-                }
-                let back =
-                    |p: &Placement| !moving && (p.state == State::Maximized || p.snap.is_some());
-                match (self.placement(win).filter(back), self.host.wm().normal_rect(win)) {
-                    (Some(p), Some(n)) => {
-                        off.0 = (off.0 / p.rect.w.max(1) as f32 * n.w as f32).round()
-                    }
-                    _ => self.instant = true,
-                }
-                let (nx, ny) = ((x - off.0).round() as i32, (y - off.1).round() as i32);
-                self.host.apply(Cmd::Move { win, x: nx, y: ny });
-                let zone = zone(self.size, x, y);
-                self.grab = Some(Grab::Move { win, at, off, moving: true, zone });
-            }
-            Grab::Size { win, edge, at, from } => {
-                self.instant = true;
-                let rect = resized(from, edge, (x - at.0, y - at.1), self.host.wm().area().y);
-                self.host.apply(Cmd::Resize { win, rect });
-            }
-        }
+        let (Some(at), Some(mut grab)) = (self.pointer, self.grab) else { return };
+        self.instant |= self.host.drag(&mut grab, at, self.size);
+        self.grab = Some(grab);
     }
 
     /// Lifts a finger (it may fling; a gesture's lift says so), drops a held window (snapping
@@ -259,17 +211,15 @@ impl Shell {
             // A press into content that outlived a long press is a tap.
             out.gesture = finger.done && self.down.is_none();
         }
-        let held = self.carry.as_ref().filter(|c| c.touch && c.lifted && !c.moved).map(|c| c.from);
+        let held = self.grid.carry.as_ref().filter(|c| c.touch && c.lifted && !c.moved);
+        let held = held.map(|c| c.from);
         self.drop_icons(held.is_none());
-        self.lasso = None;
+        self.grid.lasso = None;
         if let Some(at) = held {
             self.secondary(at, true, out);
         }
-        if let Some(Grab::Move { win, zone: Some(zone), .. }) = self.grab.take() {
-            self.host.apply(match zone {
-                Zone::Max => Cmd::Maximize(win),
-                Zone::Snap(snap) => Cmd::SnapTo { win, snap },
-            });
+        if let Some(grab) = self.grab.take() {
+            self.host.drop_grab(grab);
         }
         let over = self.pointer.and_then(|_| self.hit(x, y));
         let (press, down) = (self.app_press.take(), self.down.take());
@@ -277,7 +227,7 @@ impl Shell {
             self.activate(target, out);
         }
         if let (true, Some((win, down))) = (primary, down) {
-            self.host.deliver(win, down, out);
+            self.press_into(win, down, out);
         }
         if let (true, Some((win, id))) = (primary, press) {
             let hit = self.widget_at(win, x, y);
@@ -289,19 +239,27 @@ impl Shell {
         }
     }
 
+    /// Presses into `win`'s content; a press on the overlay's text field lets the keyboard come.
+    fn press_into(&mut self, win: WinId, down: AppEvent, out: &mut Response) {
+        let id = if let AppEvent::PointerDown { id, .. } = down { id } else { None };
+        let text = |h: &ui::Hit| Some(h.id) == id && h.sense == Sense::Text;
+        if win == OVERLAY && self.host.win(win).is_some_and(|w| w.hits.iter().any(text)) {
+            self.overlay.quiet = false;
+        }
+        self.host.deliver(win, down, out);
+    }
+
     fn activate(&mut self, target: Target, out: &mut Response) {
         let name = |s: &Shell, i: usize| s.dock.get(i).map_or(String::new(), |d| d.0.clone());
         match target {
-            Target::Mark => self.host.show("welcome", out),
-            Target::Feedback => self.host.show("feedback", out),
-            Target::Settings => self.host.show("settings", out),
+            Target::Bar(b) => self.host.show(b.app(), out),
             Target::Dock(i) => self.host.toggle(&name(self, i), out),
             Target::Ai => self.toggle_overlay(false),
             Target::Ctl(w, i) => {
                 self.host.apply([Cmd::Minimize, Cmd::ToggleMaximize, Cmd::Close][i](w))
             }
             Target::Icon(i) => {
-                let name = self.icons.get(i).map(|e| e.name.clone()).unwrap_or_default();
+                let name = self.grid.icons.get(i).map(|e| e.name.clone()).unwrap_or_default();
                 self.host.show(&name, out);
             }
             Target::Menu(i) => self.choose(Some(i), out),

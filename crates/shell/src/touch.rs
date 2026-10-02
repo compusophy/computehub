@@ -58,8 +58,8 @@ impl Shell {
         if finger.held(now) {
             let (at, menu, here) = (finger.at, self.menu.is_some(), self.pointer);
             if let (Some(Target::Icon(i)), false) = (self.hit(at.0, at.1), menu) {
-                let carry = self.pick(i, here.unwrap_or(at), true);
-                (self.carry, self.armed, out.redraw) = (carry, None, true);
+                let carry = self.grid.pick(i, here.unwrap_or(at), true);
+                (self.grid.carry, self.armed, out.redraw) = (carry, None, true);
                 return;
             }
             self.secondary(at, true, out);

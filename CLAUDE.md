@@ -67,9 +67,9 @@ crates/
   assistant/ the Assistant (wasip1): the overlay AI using the desktop
   uiwire/    remote UI protocol: GUI programs send widget trees, get events
   uiview/    draws them with ui; holds edited text
-  host/      wm + one app per window; agent (scene, acts); motion, frames
-  home/      the home grid (every app), AI button + dock strip, menus, touch
-  shell/     the desktop: top bar, window chrome, keys; wires host + home (no web deps)
+  host/      wm + one app per window; agent; grabs, squeeze; motion, frames
+  home/      top bar, home grid (every app), AI button + dock, menus, touch
+  shell/     the desktop: window chrome, keys, overlay; wires host + home (no web deps)
   platform/  the browser boundary: canvas, WebGL2, input, textarea, fetch,
              frames on demand, localStorage, workers, beacon
   os/        wasm entry: fonts, VFS, registry, prefs, event glue, Remote (a

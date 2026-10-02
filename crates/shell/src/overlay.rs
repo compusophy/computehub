@@ -3,8 +3,10 @@
 //! works; its content routes as a window's does. The AI button opens and hides it, as does
 //! Alt+Space; Escape (or a press on the bare desktop) hides it, or while it works stops the task,
 //! as the person's own press, key or wheel outside it does. A press in it gives it the keys; one
-//! on a window takes them back, the overlay staying. What the agent touches flashes; while it
-//! works, a ring runs round the AI button.
+//! on a window takes them back, the overlay staying. Shown by a finger, it holds the keyboard
+//! back until its text field is tapped. A failed program starts again at the next summon
+//! (`Host::open_overlay`). What the agent touches flashes; while it works, a ring runs round the
+//! AI button.
 
 use gfx::{DrawList, RectF};
 use host::agent::FLASH_MS;
@@ -15,11 +17,13 @@ use wm::{Placement, Rect, State, WinId};
 
 use crate::{BAR_H, Response, Shell};
 
-/// Whether the overlay shows, and whether it has the keys.
+/// Whether the overlay shows, whether it has the keys, and whether it holds the keyboard back
+/// (shown by a finger, until its text field is tapped).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Overlay {
     pub open: bool,
     pub focus: bool,
+    pub quiet: bool,
 }
 
 impl Shell {
@@ -55,17 +59,19 @@ impl Shell {
         target.is_some() && target == self.key_target()
     }
 
-    /// Shows the overlay with the keys (starting its app if it does not run).
-    pub(crate) fn show_overlay(&mut self) {
-        self.overlay.open = self.host.open_overlay();
-        self.overlay.focus = self.overlay.open;
+    /// Shows the overlay with the keys (starting its app if it does not run, or again if it
+    /// failed), `quiet`: the keyboard held back.
+    pub(crate) fn show_overlay(&mut self, quiet: bool) {
+        let open = self.host.open_overlay();
+        self.overlay = Overlay { open, focus: open, quiet };
     }
 
-    /// Hides the overlay if it shows (and, by `keys`, has them), else shows it.
+    /// Hides the overlay if it shows (and, by `keys`, has them), else shows it: by a key with
+    /// the keyboard, else with it only if the last press was not a finger's.
     pub(crate) fn toggle_overlay(&mut self, keys: bool) {
         match self.overlay.open && (!keys || self.overlay.focus) {
             true => self.overlay = Overlay::default(),
-            false => self.show_overlay(),
+            false => self.show_overlay(!keys && self.finger),
         }
     }
 
@@ -73,7 +79,7 @@ impl Shell {
     /// knows where it shows, the screen and the home screen's apps.
     pub(crate) fn place_overlay(&mut self, out: &mut Response) {
         if std::mem::take(&mut self.host.agent.summon) {
-            self.show_overlay();
+            self.show_overlay(self.finger);
         }
         if self.host.win(OVERLAY).is_none() {
             self.overlay = Overlay::default();

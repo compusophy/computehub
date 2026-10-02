@@ -1,8 +1,9 @@
-//! The bottom strip: the AI button at its center, where the early iPad's home button was (aside
-//! only as far as a phone's full dock needs), and the dock in two wings beside it, glass shelves of
-//! tiles: the person's favorites (kept as the [`PREF`] preference, none at first) to its left, the
-//! other running apps to its right, a dot under each running app. The strip's height and place on
-//! the screen's bottom never change, so neither does the work area.
+//! The bottom strip: the AI button, always at the screen's bottom center, where the early iPad's
+//! home button was; above it, in a row of its own and only while it holds anything, the dock: one
+//! centered glass shelf of tiles, the apps the person keeps there first ([`PREF`]; none at first),
+//! then the other running apps, a hairline between the two groups, a dot under each running app.
+//! On a narrow screen the tiles shrink evenly to fit between 13 px margins. The work area leaves
+//! the button's row free, and the dock's while it shows ([`clear`]).
 
 use gfx::{DrawList, RectF};
 use host::paint::{faded, px, sheen};
@@ -11,22 +12,20 @@ use ui::{AppIcon, TextSystem, Theme};
 
 /// The preference that keeps the favorites (the registry names, joined by commas).
 pub const PREF: &str = "dock";
-/// The strip's height (a full-size wing's), its space above the screen's bottom and the gap
-/// above it; the AI button's side.
-pub const H: f32 = 64.0;
+/// The AI button's side, its space above the screen's bottom, and the gap above it (and above
+/// the dock).
+pub const BUTTON: f32 = 64.0;
 pub const BOTTOM: f32 = 13.0;
 pub const GAP: f32 = 8.0;
-pub const BUTTON: f32 = 56.0;
-/// A tile's side, and the least it shrinks to beside a centered button (a finger's); a wing's
-/// padding around its tiles (below them, 12 for the dots); the space between tiles; the air
-/// between the button and a wing, and between a wing and the screen's edge; a wing's corner
-/// radius; the running dot.
+/// A tile's side, the shelf's padding around its tiles (below them 12, for the dots), and the
+/// dock's row (a full shelf's height); the space between tiles, and between the groups (the
+/// hairline's); the least margin beside the shelf; its corner radius; the running dot.
 pub const TILE: f32 = 44.0;
-const MIN_TILE: f32 = 32.0;
 const PAD: f32 = 8.0;
+pub const ROW: f32 = TILE + PAD + 12.0;
 const SPACE: f32 = 8.0;
-const AIR: f32 = 13.0;
-const EDGE: f32 = 5.0;
+const SEP: f32 = 17.0;
+const MARGIN: f32 = 13.0;
 const RADIUS: f32 = 18.0;
 const DOT: f32 = 4.0;
 /// The overlay: a card's widest, a pill's widest and height, the gutters it keeps from the
@@ -35,6 +34,12 @@ pub const CARD_W: f32 = 560.0;
 pub const PILL_W: f32 = 420.0;
 pub const PILL_H: f32 = 52.0;
 const GUTTER: f32 = 16.0;
+
+/// What the work area leaves free at the bottom: the button's row (the space under it and the
+/// gap above), and the dock's row and its gap while the dock shows (`docked`).
+pub fn clear(docked: bool) -> f32 {
+    BOTTOM + BUTTON + GAP + if docked { ROW + GAP } else { 0.0 }
+}
 
 /// The favorites a stored preference names (each once); none if none is stored.
 pub fn favorites(stored: Option<&str>) -> Vec<String> {
@@ -63,84 +68,80 @@ pub struct Look {
     pub focused: bool,
 }
 
-/// What lies at a point of the strip: the AI button, tile `i` (favorites first), or a bare wing.
+/// What lies at a point of the strip: the AI button, tile `i` (favorites first), or the bare
+/// shelf.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Spot {
     Button,
     Tile(usize),
-    Wing,
+    Shelf,
 }
 
-/// Where the strip's parts sit: the AI button, the wings (left, right; empty ones 0 wide), the
-/// tiles' side, and each tile's left edge, the favorites' then the others'.
+/// Where the strip's parts sit: the AI button; the dock's shelf (0 wide while the dock is empty:
+/// nothing drawn, nothing hit), its tiles' side, each tile's left edge (favorites first), and
+/// where the hairline between the groups is while both show.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Strip {
     pub button: RectF,
-    pub wings: [RectF; 2],
+    pub shelf: RectF,
     pub tile: f32,
     pub xs: Vec<f32>,
+    pub sep: Option<f32>,
 }
 
 impl Strip {
-    /// The strip on a `w` x `h` screen, for `favs` favorites and `others` other running apps:
-    /// the button centered, each wing growing out from it; tiles shrink until the fuller wing
-    /// fits beside the button. Past 32 px (a phone's full dock) the button slides off center as
-    /// far as the wings need to stay on the screen, and only a dock too long for the screen even
-    /// so shrinks its tiles further: every tile stays in reach.
+    /// The strip on a `w` x `h` screen for `favs` favorites and `others` other running apps:
+    /// the button centered, the shelf centered above it, its tiles [`TILE`] px but as small as
+    /// its margins on the screen need (never off it). On whole px.
     pub fn new(favs: usize, others: usize, (w, h): (f32, f32)) -> Strip {
-        let (y, cx) = (h - BOTTOM - H, (w / 2.0).round());
-        let wide = |k: usize, tile: f32| match k {
-            0 => 0.0,
-            k => 2.0 * PAD + k as f32 * tile + (k - 1) as f32 * SPACE,
-        };
-        let n = favs.max(others).max(1);
-        let beside = (cx - BUTTON / 2.0 - AIR - EDGE - wide(n, 0.0)) / n as f32;
-        let side = |k: usize, tile: f32| if k > 0 { AIR + wide(k, tile) } else { 0.0 };
-        let across = w - 2.0 * EDGE - BUTTON - side(favs, 0.0) - side(others, 0.0);
-        let all = across / (favs + others).max(1) as f32;
-        let tile = if beside >= MIN_TILE { beside.min(TILE) } else { all.clamp(1.0, MIN_TILE) };
-        let tile = tile.floor();
-        // Not clamp: its panic path links in float formatting.
-        let (lo, hi) = (EDGE + side(favs, tile), w - EDGE - BUTTON - side(others, tile));
-        let bx = (cx - BUTTON / 2.0).min(hi).max(lo);
-        let button = RectF::new(bx, y + (H - BUTTON) / 2.0, BUTTON, BUTTON);
-        let wh = tile + PAD + 12.0;
-        let wy = y + ((H - wh) / 2.0).round();
-        let left = RectF::new(button.x - AIR - wide(favs, tile), wy, wide(favs, tile), wh);
-        let right = RectF::new(button.x + BUTTON + AIR, wy, wide(others, tile), wh);
-        let mut xs = Vec::new();
-        for (wing, k) in [(left, favs), (right, others)] {
-            for i in 0..k {
-                xs.push(wing.x + PAD + i as f32 * (tile + SPACE));
-            }
+        let x = (w / 2.0 - BUTTON / 2.0).round();
+        let button = RectF::new(x, h - BOTTOM - BUTTON, BUTTON, BUTTON);
+        let (n, both) = (favs + others, favs > 0 && others > 0);
+        if n == 0 {
+            return Strip { button, ..Strip::default() };
         }
-        Strip { button, wings: [left, right], tile, xs }
+        let extra = if both { SEP - SPACE } else { 0.0 };
+        let fixed = 2.0 * PAD + (n - 1) as f32 * SPACE + extra;
+        // Constant bounds: clamp's panic path folds away.
+        let tile = ((w - 2.0 * MARGIN - fixed) / n as f32).floor().clamp(1.0, TILE);
+        let (sw, sh) = (fixed + n as f32 * tile, tile + PAD + 12.0);
+        let shelf = RectF::new(((w - sw) / 2.0).round(), button.y - GAP - sh, sw, sh);
+        let mut xs = Vec::new();
+        for i in 0..n {
+            let past = if i >= favs { extra } else { 0.0 };
+            xs.push(shelf.x + PAD + i as f32 * (tile + SPACE) + past);
+        }
+        let sep = both.then(|| xs[favs] - (SEP + 1.0) / 2.0);
+        Strip { button, shelf, tile, xs, sep }
+    }
+
+    /// The strip's top: the shelf's while the dock shows, else the button's.
+    pub fn top(&self) -> f32 {
+        if self.shelf.w > 0.0 { self.shelf.y } else { self.button.y }
     }
 
     /// Where the overlay (the Assistant over the desktop) shows on a `w` x `h` screen whose top
-    /// `top` px are the bar's: above the AI button, a card [`CARD_W`] wide at most and 60% of the
-    /// screen tall at most, centered on the button (a phone's: a sheet across but its 16 px
+    /// `bar` px are the bar's: above the strip, a card [`CARD_W`] wide at most and 60% of the
+    /// screen tall at most, centered as the button is (a phone's: a sheet across but its 16 px
     /// gutters, half the screen tall at most); while it works (`pill`), [`PILL_H`] tall and
     /// [`PILL_W`] wide at most. On whole px.
-    pub fn overlay(&self, (w, h): (f32, f32), top: f32, pill: bool) -> RectF {
-        let (b, narrow) = (self.button, crate::narrow(w));
-        let bottom = b.y - GAP;
+    pub fn overlay(&self, (w, h): (f32, f32), bar: f32, pill: bool) -> RectF {
+        let (bottom, narrow) = (self.top() - GAP, crate::narrow(w));
         let ow = (w - 2.0 * GUTTER).min(match (pill, narrow) {
             (true, _) => PILL_W,
             (false, true) => w,
             (false, false) => CARD_W,
         });
         let oh = if pill { PILL_H } else { h * if narrow { 0.5 } else { 0.6 } };
-        let oh = oh.min(bottom - top - GAP).max(0.0);
-        // Not clamp: its panic path links in float formatting.
-        let x = (b.x + (b.w - ow) / 2.0).min(w - GUTTER - ow).max(GUTTER);
+        let oh = oh.min(bottom - bar - GAP).max(0.0);
+        let x = ((w - ow) / 2.0).max(GUTTER);
         RectF::new(x.round(), (bottom - oh).round(), ow.round(), oh.round())
     }
 
-    /// Tile `i`'s rect.
+    /// Tile `i`'s rect (past the last, the button's).
     pub fn tile(&self, i: usize) -> RectF {
-        let x = self.xs.get(i).copied().unwrap_or(self.button.x);
-        RectF::new(x, self.wings[0].y + PAD, self.tile, self.tile)
+        let at = |&x: &f32| RectF::new(x, self.shelf.y + PAD, self.tile, self.tile);
+        self.xs.get(i).map_or(self.button, at)
     }
 
     /// What is at `(x, y)`; a tile takes half the space beside it.
@@ -149,20 +150,26 @@ impl Strip {
             return Some(Spot::Button);
         }
         let half = SPACE / 2.0;
-        let wing = self.wings.iter().any(|w| w.w > 0.0 && w.contains(x, y));
         let tile = self.xs.iter().position(|&s| x >= s - half && x < s + self.tile + half);
-        wing.then(|| tile.map_or(Spot::Wing, Spot::Tile))
+        let shelf = self.shelf.w > 0.0 && self.shelf.contains(x, y);
+        shelf.then(|| tile.map_or(Spot::Shelf, Spot::Tile))
     }
 
-    /// The wings (those with tiles) and their tiles, lifted while hovered, each over a dot while
-    /// its app runs: the accent's if it has the focus.
+    /// The shelf (while the dock shows) and its tiles, lifted while hovered, each over a dot
+    /// while its app runs (the accent's if it has the focus); the hairline between the groups.
     pub fn draw(&self, list: &mut DrawList, text: &mut TextSystem, theme: &Theme, apps: &[Look]) {
-        let line = px(text, 1.0);
-        for &d in self.wings.iter().filter(|w| w.w > 0.0) {
-            list.shadow_offset(d, RADIUS, 34.0, 8.0, theme.shadow);
-            list.fill(d, RADIUS, theme.glass);
-            list.border(d, RADIUS, line, theme.border);
-            sheen(list, d, RADIUS, line, theme.highlight);
+        let (d, line) = (self.shelf, px(text, 1.0));
+        if d.w <= 0.0 {
+            return;
+        }
+        list.shadow_offset(d, RADIUS, 34.0, 8.0, theme.shadow);
+        list.fill(d, RADIUS, theme.glass);
+        list.border(d, RADIUS, line, theme.border);
+        sheen(list, d, RADIUS, line, theme.highlight);
+        if let Some(x) = self.sep {
+            let k = (self.tile / 4.0).round();
+            let hair = RectF::new(text.snap(x), d.y + PAD + k, line, self.tile - 2.0 * k);
+            list.fill(hair, 0.0, theme.border);
         }
         for (i, a) in apps.iter().enumerate() {
             let t = self.tile(i);

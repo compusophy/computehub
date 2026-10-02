@@ -75,6 +75,11 @@ pub trait App {
     fn busy(&self) -> bool {
         false
     }
+    /// Whether what it ran failed and ended (the window says why): the overlay's starts afresh
+    /// at its next summon.
+    fn ended(&self) -> bool {
+        false
+    }
 }
 
 /// The marks of [`Ui::mark`]: a widget's role (0: as its hit's sense says) and state flags.

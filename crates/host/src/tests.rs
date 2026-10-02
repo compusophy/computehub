@@ -12,13 +12,16 @@ use super::*;
 const SANS: &[u8] = include_bytes!("../../../assets/fonts/Inter-Regular.ttf");
 const SYM_A: &[u8] = include_bytes!("../../../assets/fonts/lazy/symbols-a.ttf");
 const SYM_B: &[u8] = include_bytes!("../../../assets/fonts/lazy/symbols-b.ttf");
-/// The names the registry knows (`welcome` and `sized` are compact; `page` draws a page).
-const KNOWN: &str = "welcome terminal /apps/counter.app sized huge nan assistant files about page";
+/// The names the registry knows (`welcome` and `sized` are compact; `page` draws a page, `long`
+/// a page of too much).
+const KNOWN: &str =
+    "welcome terminal /apps/counter.app sized huge nan assistant files about page long";
 
 thread_local! {
-    /// What a Probe told `agent` asks of the desktop, and the Probe that is busy.
+    /// What a Probe told `agent` asks of the desktop, the Probe that is busy, the one that ended.
     static ASKS: RefCell<Vec<Ask>> = RefCell::default();
     static BUSY: Cell<u32> = const { Cell::new(0) };
+    static ENDED: Cell<u32> = const { Cell::new(0) };
 }
 
 type Log = Rc<RefCell<Vec<(u32, E)>>>;
@@ -32,6 +35,9 @@ impl App for Probe {
         self.1.to_uppercase()
     }
     fn draw(&mut self, ui: &mut Ui<'_>) {
+        if self.1 == "long" {
+            return (0..300).for_each(|i| ui.mark(W(i), sem::TEXTBOX, 0, &"x".repeat(2000)));
+        }
         if self.1 != "page" {
             return ui.hit(ui::WidgetId(1), ui.rect(), ui::Sense::Click);
         }
@@ -44,6 +50,9 @@ impl App for Probe {
     }
     fn busy(&self) -> bool {
         BUSY.with(|b| b.get() == self.0)
+    }
+    fn ended(&self) -> bool {
+        ENDED.with(|b| b.get() == self.0)
     }
     fn event(&mut self, ev: E, cx: &mut Cx<'_>) -> bool {
         self.2.borrow_mut().push((self.0, ev.clone()));
@@ -552,6 +561,106 @@ fn the_scene_holds_each_window_its_hits_its_marks_and_the_text_that_shows() {
     assert!(s.wins[2].hits.is_empty() && s.wins[2].runs.is_empty());
     // Reading the screen drew nothing on the atlas.
     assert!(h.text.atlas_mut().take_dirty().is_none());
+    // However much the windows say, the scene stays within 64 KiB as sent (the top windows
+    // first), a mark's value within 512 bytes.
+    h.open("long", None, &mut Response::default());
+    let (s, room) = (h.scene(), agent::SCENE);
+    let marks = &s.wins[0].marks;
+    assert!((room - 600..=room).contains(&s.encode().len()) && marks.len() > 100);
+    assert!(marks.iter().all(|m| m.value.len() == 512));
+}
+
+#[test]
+fn a_window_opening_gives_the_dock_its_row_first() {
+    // The shell's work area once the dock shows: a window opens into it, placed there.
+    let (mut h, _, _) = host();
+    let docked = Rect::new(0, 32, 1280, 600);
+    h.docked = Some(docked);
+    h.open("nope", None, &mut Response::default());
+    assert_eq!(h.wm().area(), Rect::new(0, 32, 1280, 684));
+    h.open("sized", None, &mut Response::default());
+    let r = h.rect_of(3).unwrap();
+    assert_eq!((h.wm().area(), r.x, r.y), (docked, (1280 - r.w) / 2, 32 + (600 - r.h) / 2));
+}
+
+#[test]
+fn windows_held_move_snap_maximize_on_a_double_click_and_resize() {
+    // Welcome, its titlebar held: under 4 px of travel nothing moves; then it follows exactly.
+    let (mut h, _, _) = host();
+    let (screen, mut last, rect) = ((1280.0, 800.0), None, |x, y| Rect::new(x, y, 680, 480));
+    let mut g = h.grab(WinId(1), (400.0, 150.0), None, (0.0, &mut last)).unwrap();
+    assert!(!h.drag(&mut g, (402.0, 151.0), screen) && h.rect_of(1) == Some(rect(300, 134)));
+    assert!(h.drag(&mut g, (500.0, 250.0), screen) && h.rect_of(1) == Some(rect(400, 234)));
+    h.drop_grab(g);
+    // Two presses within 350 ms maximize (the second holds nothing), two more restore; further
+    // apart they are two holds.
+    let (max, up) = (wm::State::Maximized, wm::State::Normal);
+    for (t, gap, state) in [(2000.0, 300.0, max), (3000.0, 300.0, up), (4000.0, 400.0, up)] {
+        let r = h.rect_of(1).unwrap();
+        let at = (r.x as f32 + 100.0, r.y as f32 + 10.0);
+        h.grab(WinId(1), at, None, (t, &mut last));
+        let held = h.grab(WinId(1), at, None, (t + gap, &mut last)).is_some();
+        let p = h.wm().layout().into_iter().find(|p| p.win == WinId(1)).unwrap();
+        assert_eq!((held, p.state), (gap > 350.0, state));
+    }
+    assert_eq!(h.rect_of(1), Some(rect(400, 234)));
+    // Dropped near the screen's edges it snaps there, at its top it maximizes; held again, a
+    // snapped or maximized window comes back to its normal size under the pointer, as far
+    // across, animated.
+    let tos = [(3.0, 400.0), (1278.0, 400.0), (10.0, 10.0), (1270.0, 790.0), (640.0, 4.0)];
+    let snaps = [Some(Snap::Left), Some(Snap::Right), Some(Snap::TopLeft), Some(Snap::BottomRight)];
+    for (to, snap) in tos.into_iter().zip(snaps.into_iter().chain([None])) {
+        let r = rectf(h.rect_of(1).unwrap());
+        let at = (r.x + r.w / 2.0, r.y + 10.0);
+        let mut g = h.grab(WinId(1), at, None, (9000.0, &mut None)).unwrap();
+        h.drag(&mut g, (at.0 + 20.0, at.1 + 20.0), screen);
+        h.drag(&mut g, to, screen);
+        let zone = g.zone().unwrap().rect(h.wm().area());
+        h.drop_grab(g);
+        let p = h.wm().layout().into_iter().find(|p| p.win == WinId(1)).unwrap();
+        assert_eq!((p.snap, p.state == max, p.rect), (snap, snap.is_none(), zone));
+    }
+    let mut g = h.grab(WinId(1), (320.0, 42.0), None, (9000.0, &mut None)).unwrap();
+    assert!(!h.drag(&mut g, (600.0, 300.0), screen) && h.rect_of(1) == Some(rect(430, 290)));
+    // An edge or corner resizes: the left edge moves, the right one stays, the size stays legal,
+    // and the top stops at the work area's.
+    let (mut h, _, _) = host();
+    let drags = [
+        ((-1, 0), (300.0, 300.0), (250.0, 300.0), Rect::new(250, 134, 730, 480)),
+        ((-1, 0), (250.0, 300.0), (900.0, 300.0), Rect::new(660, 134, 320, 480)),
+        ((0, -1), (800.0, 134.0), (800.0, 0.0), Rect::new(660, 32, 320, 582)),
+        ((1, 1), (980.0, 614.0), (1100.0, 700.0), Rect::new(660, 32, 440, 668)),
+    ];
+    for (edge, from, to, want) in drags {
+        let mut g = h.grab(WinId(1), from, Some(edge), (0.0, &mut None)).unwrap();
+        assert!(h.drag(&mut g, to, screen) && h.rect_of(1) == Some(want), "{want:?}");
+    }
+}
+
+#[test]
+fn a_keyboard_that_shortens_the_page_squeezes_free_windows_until_it_goes() {
+    // Welcome and the terminal free, the person typing: the keyboard takes half the page, then
+    // grows a bar, then goes. The work area of a page `h` tall leaves 116 px.
+    let (mut h, _, _) = host();
+    let (area, page) = (|t: f32| Rect::new(0, 32, 1280, t as i32 - 116), |t| (1280.0, t));
+    let before = h.wm().layout();
+    for (from, to) in [(800.0, 450.0), (450.0, 420.0)] {
+        h.resize((page(from), page(to)), area(to), true);
+        assert_ne!(h.wm().layout(), before);
+    }
+    h.resize((page(420.0), page(800.0)), area(800.0), true);
+    assert_eq!(h.wm().layout(), before);
+    // A window moved while the keyboard is up stays where it was put; the others come back.
+    h.resize((page(800.0), page(450.0)), area(450.0), true);
+    h.apply(Cmd::Move { win: WinId(2), x: 40, y: 60 });
+    let moved = h.rect_of(2);
+    h.resize((page(450.0), page(800.0)), area(800.0), true);
+    assert_eq!((h.rect_of(2), h.rect_of(1)), (moved, Some(before[0].rect)));
+    // Not typing, a shorter page is just a smaller screen: nothing comes back.
+    h.resize((page(800.0), page(450.0)), area(450.0), false);
+    let short = h.wm().layout();
+    h.resize((page(450.0), page(800.0)), area(800.0), false);
+    assert_eq!(h.wm().layout(), short);
 }
 
 #[test]
@@ -643,11 +752,31 @@ fn acts_wait_for_busy_windows_and_their_time() {
     h.now_ms = 2000.0;
     h.kernel_in(KernelIn::Wake, &mut Response::default());
     assert_eq!(codes(&log)[3..], [(4, acted::OK)]);
+    // A sooner timer firing first (the page keeps the sooner of two) has the act's deadline
+    // asked for again.
+    h.acts(5, Act::Wait { ms: 2000 });
+    let mut out = Response::default();
+    h.now_ms = 2500.0;
+    h.kernel_in(KernelIn::Wake, &mut out);
+    assert!(out.effects.contains(&Effect::Kernel(kernel::Effect::Wake { ms: 1501 })));
+    // The task stopped while its act settles: the act is dropped, and the next task's first
+    // look sees the screen at once.
+    let look = Ask::Act { id: 6, act: Act::Wait { ms: 0 }.encode() };
+    h.ask(0, vec![Ask::Status { working: false }, Ask::Status { working: true }, look]);
+    let last = heard(&log, me).pop().unwrap();
+    assert_eq!((last.0, last.1, last.2.wins.len()), (6, acted::OK, 2));
+    h.acts(7, Act::Wait { ms: 3000 });
     // The person takes over: a working overlay hears it once; its program's end ends it all.
     h.halt(&mut Response::default());
     h.halt(&mut Response::default());
     let halts = log.borrow().iter().filter(|e| e.1 == E::Agent(Event::Halt)).count();
     assert_eq!((halts, h.agent.working), (1, false));
+    h.acts(8, Act::Wait { ms: 0 });
+    assert_eq!(codes(&log).last(), Some(&(8, acted::OK)));
     h.say(0, "close");
     assert!(h.win(OVERLAY).is_none() && h.open_overlay() && *made.borrow() == me + 1);
+    // Running, it stays; once what it ran failed, the next summon starts it again.
+    assert!(h.open_overlay() && *made.borrow() == me + 1);
+    ENDED.with(|e| e.set(me + 1));
+    assert!(h.open_overlay() && *made.borrow() == me + 2);
 }

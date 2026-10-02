@@ -73,7 +73,7 @@ impl Shell {
                 };
                 return Some((menu(self, items), String::new(), Some(w)));
             }
-            Target::Icon(i) => (self.icons.get(i)?.name.clone(), false),
+            Target::Icon(i) => (self.grid.icons.get(i)?.name.clone(), false),
             Target::Dock(i) => self.dock.get(i).map(|d| (d.0.clone(), !d.2.is_empty()))?,
             _ => return None,
         };
