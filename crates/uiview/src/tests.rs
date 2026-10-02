@@ -727,3 +727,41 @@ fn play_ticks_while_shown_once_answered_and_taps_new_squares() {
     view.grids.clear();
     assert_eq!(p.tap(&view, Some(7), 50.0, 50.0), none);
 }
+
+#[test]
+fn trees_draw_with_the_toolkit_and_fills_take_the_rest() {
+    let (mut t, mut view) = (Texts::default(), View::default());
+    let button = |id, variant| Node::Button { id, variant, label: "Go".into() };
+    let row =
+        vec![button(1, Variant::Primary), button(2, Variant::Danger), text(Style::Small, "a")];
+    let row = Node::Row { id: 0, gap: 8, children: row };
+    let code =
+        Node::Code { id: 4, version: 1, line_numbers: true, text: "a\nb".into(), spans: vec![] };
+    let input = |v: &str| Node::Input { id: 5, value: v.into(), placeholder: "name".into() };
+    let card = Node::Card { id: 0, children: vec![input("v"), Node::Separator] };
+    let item = Node::Item { id: 9, text: "E1 2:3 bad".into(), detail: "x".into(), selected: true };
+    let fill = Node::Fill { id: 0, children: vec![code] };
+    let nodes = [row, fill, card, Node::Spacer { px: 4 }, item];
+    t.adopt(&nodes, &[]);
+    let d = draw(&nodes, &mut t, &mut view, None);
+    let (go, danger, field, code, row) = (d.hit(1), d.hit(2), d.hit(5), d.hit(4), d.hit(9));
+    let senses = (go.sense, field.sense, code.sense, row.sense);
+    assert_eq!(senses, (Sense::Click, Sense::Text, Sense::Text, Sense::Click));
+    assert_eq!((go.rect.x, go.rect.y, go.rect.h), (PAD, PAD, BUTTON_H));
+    assert!(danger.rect.x > go.rect.x + go.rect.w && danger.rect.y == go.rect.y);
+    // The Fill's Code takes what the others leave: the item ends at the bottom.
+    assert_eq!(row.rect.y + row.rect.h, 400.0 - PAD);
+    assert!(code.rect.y > PAD + BUTTON_H && code.rect.h > 100.0);
+    assert_eq!(field.rect.x, PAD + CARD_PAD);
+    // Too tall to fit: the wheel scrolls the window.
+    let tall = [Node::Spacer { px: 900 }, input("")];
+    t.adopt(&tall, &[]);
+    assert!(draw(&tall, &mut t, &mut view, None).hits.is_empty());
+    assert!(wheel(&mut t, &mut view, 10.0, 10.0, 2000.0));
+    assert_eq!(draw(&tall, &mut t, &mut view, None).hits[0].rect.y, 400.0 - PAD - FIELD_H);
+    assert!(!wheel(&mut t, &mut view, 10.0, 10.0, 5.0));
+    // Following (the Assistant), a view at the bottom stays there as the content grows.
+    view.follow = true;
+    let taller = [Node::Spacer { px: 1500 }, input("")];
+    assert_eq!(draw(&taller, &mut t, &mut view, None).hits[0].rect.y, 400.0 - PAD - FIELD_H);
+}

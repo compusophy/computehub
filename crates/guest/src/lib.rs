@@ -15,8 +15,8 @@ use vfs::VfsError::{self, IsADir, NotADir, NotFound};
 
 /// The apps `open` knows by name.
 #[rustfmt::skip]
-const BUILTIN: [&str; 9] = ["studio", "assistant", "terminal", "files", "editor",
-    "settings", "feedback", "about", "welcome"];
+const BUILTIN: [&str; 10] = ["studio", "assistant", "terminal", "files", "editor",
+    "activity", "settings", "feedback", "about", "welcome"];
 const KEYS: &str = "Up and Down recall history, Ctrl+C cancels the line, Ctrl+L clears the \
 screen. Quotes group words: \"a b\" or 'a b'.";
 /// `uname`, then `uname -a`.

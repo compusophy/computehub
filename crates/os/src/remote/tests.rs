@@ -4,8 +4,8 @@ use gfx::{DrawList, RectF};
 use platform::{Ctl, Effect as Fx};
 use ui::UiState;
 use ui::kernel::{Effect as K, Kernel, wire};
-use ui::{BUTTON_H, CARD_PAD, FIELD_H, FontId, Hit, PAD, Request as R, Sense, THEMES, TextSystem};
-use uiwire::{Class, Node, Span, Style, Variant, mods};
+use ui::{FontId, Hit, Request as R, THEMES, TextSystem};
+use uiwire::{Class, Node, Span, Variant, mods};
 
 const MONO: &[u8] = include_bytes!("../../../../assets/fonts/deferred/JetBrainsMono-Regular.ttf");
 
@@ -118,6 +118,7 @@ fn names_open_studio_and_the_first_size_starts_it() {
     let want = |i: usize, c| Some((SYSTEM[i].1.into(), SYSTEM[i].2, Some(SYSTEM[i].3), c));
     let got = [sys("about"), sys("feedback"), sys("files:~/a"), sys("editor:~/b.txt")];
     assert_eq!(got, [want(0, true), want(1, true), want(2, false), want(4, false)]);
+    assert_eq!(sys("activity"), want(5, true));
     assert!(SYSTEM[2].2.glyph == Glyph::Folder && open("system").is_none());
     // Before a frame: a still note, the title its own; no process yet.
     let mut s = Sys::new(false);
@@ -145,6 +146,21 @@ fn names_open_studio_and_the_first_size_starts_it() {
     assert!(s.cx(|r, cx| r.frame(2, &f[1..], cx)) && s.r.note == NEWER && s.r.frame.is_none());
     assert!(s.cx(|r, cx| r.frame(2, &f, cx)) && s.r.title() == "Mine");
     assert!(!s.cx(|r, cx| r.frame(2, &f[1..], cx)) && s.r.title() == "Mine");
+    // Activity runs the OS's own program, whatever its marker says. Its window may watch, and end
+    // a process: Studio's here, whose window a kill (137) closes; Activity's runs on.
+    let mut s = Sys::new(false);
+    s.r = Remote { trusted: true, ..Remote::new(STUDIO, vec!["activity".into()], &Ai::default()) };
+    s.ev(AppEvent::Resized { w: 1.0, h: 1.0 });
+    s.k.message(&mut s.fs, 2, &wire::Msg::Ready { version: wire::VERSION }.encode());
+    let url = ui::kernel::Load::Url("bin/system.wasm".into());
+    assert!(matches!(s.k.take_effects().pop(), Some(K::Start { program, .. }) if program == url));
+    let mut studio = Remote::new(STUDIO, vec!["studio".into()], &Ai::default());
+    studio.event(AppEvent::Resized { w: 1.0, h: 1.0 }, &mut Cx::new(&mut s.fs, &mut s.k, 0.0));
+    s.show(vec![], vec![Request::Watch { on: true }, Request::End { pid: 3 }]);
+    s.r.ai.pump(&mut Ctl::default(), &mut s.k);
+    let mut cx = Cx::new(&mut s.fs, &mut s.k, 0.0);
+    assert!(!studio.event(AppEvent::Io, &mut cx) && cx.take_requests() == [R::CloseSelf]);
+    assert!(s.r.ai.0.borrow().watch == Some(2) && s.k.procs() == [(2, "activity".into(), true)]);
     // A missing program says so and none starts; a failed one says why.
     let mut s = Sys::new(false);
     assert!(s.fs.remove(STUDIO, false).is_ok() && s.ev(AppEvent::Resized { w: 1.0, h: 1.0 }));
@@ -209,8 +225,7 @@ fn clicks_keys_and_requests_go_through() {
     assert_eq!(s.events(), [Event::Close]);
     s.k.message(&mut s.fs, 2, &wire::Msg::Exit { status: 0 }.encode());
     s.asked.clear();
-    assert!(!s.ev(AppEvent::Io));
-    assert_eq!(s.asked, [R::CloseSelf]);
+    assert!([s.ev(AppEvent::Io), s.ev(AppEvent::Io)] == [false; 2] && s.asked == [R::CloseSelf]);
 }
 
 #[test]
@@ -277,39 +292,6 @@ fn inputs_and_codes_keep_the_text_the_user_edits() {
 }
 
 #[test]
-fn trees_draw_with_the_toolkit_and_fills_take_the_rest() {
-    let mut s = Sys::new(true);
-    let button = |id, variant| Node::Button { id, variant, label: "Go".into() };
-    let note = Node::Text { id: 0, style: Style::Small, text: "a note".into() };
-    let row = vec![button(1, Variant::Primary), button(2, Variant::Danger), note];
-    let row = Node::Row { id: 0, gap: 8, children: row };
-    let fill = Node::Fill { id: 0, children: vec![code(1, "a\nb", vec![])] };
-    let card = Node::Card { id: 0, children: vec![input(5, "v"), Node::Separator] };
-    let item = Node::Item { id: 9, text: "E1 2:3 bad".into(), detail: "x".into(), selected: true };
-    s.show(vec![row, fill, card, Node::Spacer { px: 4 }, item], vec![]);
-    let (_, hits) = s.draw();
-    let at = |id| hits.iter().find(|h| h.id == WidgetId(id)).copied().expect("a hit");
-    let (go, danger, field, code, row) = (at(1), at(2), at(5), at(4), at(9));
-    let senses = (go.sense, field.sense, code.sense, row.sense);
-    assert_eq!(senses, (Sense::Click, Sense::Text, Sense::Text, Sense::Click));
-    assert_eq!((go.rect.x, go.rect.y, go.rect.h), (PAD, PAD, BUTTON_H));
-    assert!(danger.rect.x > go.rect.x + go.rect.w && danger.rect.y == go.rect.y);
-    // The Fill's Code takes what the others leave: the item ends at the bottom.
-    assert_eq!(row.rect.y + row.rect.h, 400.0 - PAD);
-    assert!(code.rect.y > PAD + BUTTON_H && code.rect.h > 100.0);
-    assert_eq!(field.rect.x, PAD + CARD_PAD);
-    // Too tall to fit: the wheel scrolls the window.
-    assert!(s.show(vec![Node::Spacer { px: 900 }, input(5, "")], vec![]) && s.draw().1.is_empty());
-    assert!(s.ev(AppEvent::Wheel { x: 10.0, y: 10.0, dy: 2000.0 }));
-    assert_eq!(s.draw().1[0].rect.y, 400.0 - PAD - FIELD_H);
-    assert!(!s.ev(AppEvent::Wheel { x: 10.0, y: 10.0, dy: 5.0 }));
-    // Following (the Assistant), a view at the bottom stays there as the content grows.
-    s.r.view.follow = true;
-    s.show(vec![Node::Spacer { px: 1500 }, input(5, "")], vec![]);
-    assert_eq!(s.draw().1[0].rect.y, 400.0 - PAD - FIELD_H);
-}
-
-#[test]
 fn asks_wait_for_the_start_and_frames_move_the_keyboard() {
     // A prompt asked before the first size goes after it and the AI settings.
     let mut s = Sys::new(false);
@@ -363,6 +345,9 @@ fn ai_requests_stream_back_to_the_program_that_asked() {
     [chunk, ended.clone(), ended].into_iter().for_each(|ev| s.r.ai.heard(&mut s.k, ev));
     let data = |data: &[u8]| Event::AiData { id: 1, data: data.to_vec() };
     assert_eq!(ask(&mut s, vec![]).1, [data(&big[..CHUNK]), data(&big[CHUNK..]), end(1, 429, "")]);
+    // Watch and End from any window but Activity's are dropped: never a Close to the hub.
+    let (watch, kill) = (Request::Watch { on: true }, Request::End { pid: 2 });
+    assert!(ask(&mut s, vec![watch, kill]).0.is_empty() && s.r.ai.0.borrow().watch.is_none());
     // A cancel aborts the stream and ends the request at once.
     let cancel = vec![Request::AiCancel { id: 4 }, Request::AiCancel { id: 2 }];
     assert_eq!(ask(&mut s, cancel), (vec![Fx::Abort(2)], vec![end(2, 0, "cancelled")]));
@@ -370,4 +355,14 @@ fn ai_requests_stream_back_to_the_program_that_asked() {
     assert_eq!(ask(&mut s, vec![ai(5)]), (vec![stream(3)], vec![]));
     s.cx(|r, cx| r.closing(cx));
     assert_eq!(ask(&mut s, vec![]), (vec![Fx::Abort(3)], vec![Event::Close]));
+    // Counted: 3 asked (not the busy one), 1 failed, 2 with no receipt (cancelled, closed); then
+    // a receipt a chunk boundary split, after more than the tail keeps.
+    assert_eq!(s.r.ai.0.borrow().counts, [3, 1, 2, 0, 0, 0]);
+    let b = [vec![b'x'; 99], b"\n: receipt in=1200 out=30 microusd=1812\n\n".to_vec()].concat();
+    let mut s = Sys::new(true);
+    ask(&mut s, vec![ai(1)]);
+    let chunk = |d: &[u8]| platform::Event::Chunk { id: 1, data: d.to_vec() };
+    let done = platform::Event::StreamEnd { id: 1, status: 200, error: "".into() };
+    [chunk(&b[..120]), chunk(&b[120..]), done].into_iter().for_each(|e| s.r.ai.heard(&mut s.k, e));
+    assert_eq!(s.r.ai.0.borrow().counts, [1, 0, 0, 1200, 30, 1812]);
 }

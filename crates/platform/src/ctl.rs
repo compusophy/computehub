@@ -162,6 +162,13 @@ impl Ctl {
         crate::io::storage()?.get_item(key).ok().flatten()
     }
 
+    /// Each worker's meters by pid, read where it keeps them (no message): the ms it ran (its
+    /// compile and the run so far too; wrapping), KB of its wasm memory as of its last wait, and
+    /// 1 while it runs (else 0). None for a worker with no SAB, and natively.
+    pub fn proc_stats(&self) -> Vec<(u32, [u32; 3])> {
+        crate::proc::stats()
+    }
+
     /// `performance.now()`: monotonic milliseconds since the page started.
     pub fn monotonic_ms(&self) -> f64 {
         if !cfg!(target_arch = "wasm32") {
