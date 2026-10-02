@@ -128,7 +128,7 @@ impl Studio {
                 text,
                 spans,
             };
-            let hint = crate::text(Style::Small, "Ctrl+Enter checks it, saves it and runs it");
+            let hint = crate::text(Style::Small, "Ctrl+Enter");
             let check = row(8, vec![button(CHECK, Variant::Normal, "Check"), hint]);
             return Node::Col { id: 0, gap: 8, children: vec![fill(vec![code]), check] };
         }
@@ -136,7 +136,7 @@ impl Studio {
         if app.is_empty() {
             let empty = match self.live {
                 Some(_) => "This app shows nothing yet.",
-                None => "Nothing here yet: describe the app and Make writes it.",
+                None => "Nothing here yet",
             };
             app.push(text(Style::Dim, empty));
         }

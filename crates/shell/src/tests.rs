@@ -975,56 +975,26 @@ fn degenerate_sizes_never_panic() {
 }
 
 #[test]
-fn a_finger_taps_into_a_window_it_just_opened() {
-    // However few frames it drew (mid-motion, or none), a tap finds what is there now.
-    for frames in [vec![], vec![16.0], vec![16.0, 90.0], vec![16.0, 90.0, 400.0, 3000.0]] {
-        let (mut s, log) = desk_with(390.0, 844.0, Prefs { seen: true, ..Prefs::default() });
-        s.rest(1000.0);
-        let t0 = s.host.now_ms + 100.0;
-        // The cog, tapped: Settings opens (maximized on a phone).
-        let cog = (390.0 - 22.0, BAR_H / 2.0);
-        s.set_now(t0);
-        s.push(cog, 0, true);
-        s.up(cog);
-        for dt in &frames {
-            s.at(t0 + dt);
-        }
-        let win = s.host.wins.last().map(|w| w.id).expect("settings opened");
-        let c = content_rect(rectf(s.placement(win).unwrap().rect));
-        let at = (c.x + 10.0, c.y + 10.0);
-        log.take();
-        s.set_now(t0 + 3500.0);
-        s.push(at, 0, true);
-        s.set_now(t0 + 3560.0);
-        s.up(at);
-        let got = log.take();
-        assert!(got.iter().any(|e| e == &("settings", E::Click(W(1)))), "{frames:?}: {got:?}");
-    }
-}
-
-#[test]
 fn a_finger_taps_an_apps_widget_however_late_its_lift_is_heard() {
-    // The phone bug: a Terminal open (it wants text), then Settings over it. A busy page heard
-    // each tap's lift after a frame that saw 500 ms pass: that long press opened nothing, yet it
-    // ended the press, so the app never heard the tap. Only a menu ends a press now.
+    // The phone bug: a busy page heard a tap's lift after a frame saw 500 ms pass, and that long
+    // press (opening nothing) ended the press. Only a menu ends a press now.
     let (mut s, log) = desk_with(390.0, 844.0, Prefs { seen: true, ..Prefs::default() });
     s.rest(1000.0);
-    let tap = |s: &mut Shell, (x, y): (f32, f32), t: f64, late: f64| {
-        s.set_now(t);
-        s.push((x, y), 0, true);
-        s.at(t + late);
-        s.set_now(t + late + 10.0);
-        s.up((x, y))
+    let tap = |s: &mut Shell, at: (f32, f32), t: f64, late: f64| {
+        let _ = (s.set_now(t), s.push(at, 0, true), s.at(t + late), s.set_now(t + late + 10.0));
+        s.up(at)
     };
     let term = home::icons::cell(2, rectf(s.wm().area()), true);
     let r = tap(&mut s, (term.x + term.w / 2.0, term.y + 30.0), 2000.0, 100.0);
     assert_eq!((s.names(), r.text_input), (vec!["terminal"], Some(true)));
     assert_eq!(tap(&mut s, (390.0 - 22.0, BAR_H / 2.0), 3000.0, 100.0).text_input, Some(false));
-    s.rest(1000.0);
+    // The first tap lands while Settings still opens (one frame, mid-motion): it finds it too.
     let c = content_rect(rectf(s.rect(2).unwrap()));
     log.take();
-    for (t, late) in [(6000.0, 100.0), (7000.0, 600.0), (8000.0, 1500.0)] {
+    for (t, late) in [(3200.0, 0.0), (6000.0, 100.0), (7000.0, 600.0), (8000.0, 1500.0)] {
         assert!(!tap(&mut s, (c.x + 10.0, c.y + 10.0), t, late).gesture);
-        assert!(matches!(log.take()[..], [(_, E::PointerDown { .. }), (_, E::Click(W(1)))]));
+        let got: Vec<_> =
+            log.take().into_iter().filter(|e| !matches!(e.1, E::Resized { .. })).collect();
+        assert!(matches!(got[..], [(_, E::PointerDown { .. }), (_, E::Click(W(1)))]), "{got:?}");
     }
 }

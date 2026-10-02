@@ -46,6 +46,7 @@ name = "compusophy-assistant"
 version = "0.1.0"
 dependencies = [
  "compusophy-applang",
+ "compusophy-lang",
  "compusophy-uiwire",
 ]
 

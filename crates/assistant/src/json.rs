@@ -171,6 +171,8 @@ pub struct Stream {
     pub usage: Option<(String, String)>,
     /// The chars of reasoning deltas so far: the model thinking, never part of the text.
     pub thought: usize,
+    /// Why the reply ended, once a chunk said: `stop`, or `length` when it ran out of room.
+    pub finish: String,
 }
 
 const MAX_OTHER: usize = 16 * 1024;
@@ -207,7 +209,11 @@ impl Stream {
             return;
         };
         let Some(v) = Json::parse(data) else { return };
-        let delta = v.get("choices").and_then(|c| c.at(0)?.get("delta"));
+        let choice = v.get("choices").and_then(|c| c.at(0));
+        if let Some(f) = choice.and_then(|c| c.get("finish_reason")?.text()) {
+            self.finish = f.into();
+        }
+        let delta = choice.and_then(|c| c.get("delta"));
         let field = |k| delta.and_then(|d| d.get(k)?.text());
         if let Some(d) = field("content").filter(|_| text.len() < max) {
             text.push_str(d);

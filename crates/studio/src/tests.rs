@@ -1,7 +1,8 @@
 use super::*;
 use crate::edit::{CHECK, CHIP, CODE, MAKE, NEW, OPEN, PROMPT, STOP, TOGGLE, spans};
+use crate::make::NO_BLOCK;
 use crate::run::{EDIT, TOO_BIG};
-use assistant::ai::{CORPUS, HOME, MAX_BODY};
+use assistant::ai::{CORPUS, HOME, HONEST, MAX_BODY, ROOM, SHORTER};
 use assistant::json::{Json, quote};
 use std::collections::BTreeMap;
 use uiwire::{Class, Key, Request, Variant, mods};
@@ -243,7 +244,7 @@ fn opens_empty_asking_what_to_make() {
     assert!(f.requests.contains(&Request::Focus { id: PROMPT + 1 }));
     assert_eq!(input(&f).1, "a dice roller");
     assert!(has(&f, "Stop") && !has(&f, "Make") && !has(&f, "a tip calculator"));
-    assert!(has(&f, "Asking m/x\u{2026}"));
+    assert!(has(&f, "Asking\u{2026}") && !has(&f, "m/x"));
     // New opens another Studio.
     assert_eq!(w.last(&[click(NEW)]).requests, [Request::Open { name: "studio".into() }]);
 }
@@ -259,44 +260,51 @@ fn makes_checks_fixes_and_saves() {
         [s("model"), s("max_tokens"), s("temperature")],
         [Some("m/x"), Some("8192"), Some("0.3")]
     );
-    let effort = body.get("reasoning").and_then(|r| r.get("effort")).and_then(Json::text);
-    assert_eq!((effort, body.get("stream")), (Some("low"), Some(&Json::Bool(true))));
+    // No reasoning field: the free AI turns thinking off (asked for, it took the whole room).
+    assert_eq!((body.get("reasoning"), body.get("stream")), (None, Some(&Json::Bool(true))));
     let (role, system) = message(&body, 0);
     assert!(role == "system" && system.contains(applang::REFERENCE) && system.contains("```app\n"));
+    assert!(system.contains(HONEST) && !system.contains("count with buttons"));
     assert_eq!((messages(&body), message(&body, 1)), (2, ("user", "a counter")));
-    assert!(has(&f, "Asking m/x\u{2026}") && has(&f, "Stop"));
+    assert!(has(&f, "Asking\u{2026}") && has(&f, "Stop"));
     // Reasoning shows as thinking, never as the program.
     let f = w.last(&[think(id, "Hm\u{e9}. "), think(id, "Ok.")]);
     assert!(has(&f, "Thinking\u{2026} 8 chars"), "{:?}", words(&f));
-    // A reply that does not compile goes back with its problem, once checked.
-    let frames = w.answer(id, &app("label;\n"));
+    // A reply that does not compile goes back with its problem, once checked: a fresh request
+    // with what was asked, the problem at its line with a caret, the rule, and the program.
+    let bad = "row {\n  label 1\n}\n";
+    let frames = w.answer(id, &app(bad));
     assert!(has(&frames[0], "Writing\u{2026} 5 chars"));
     let n = frames.len();
     assert!(has(&frames[n - 2], "Checking\u{2026}") && frames[n - 2].requests.is_empty());
-    assert!(has(&frames[n - 1], "Fixing (1 of 2) \u{2014} asking m/x\u{2026}"));
+    assert!(has(&frames[n - 1], "Fixing (1 of 3) \u{2014} asking\u{2026}"));
     let (id, body) = ai(&frames[n - 1]);
-    assert_eq!(messages(&body), 4);
-    assert_eq!(message(&body, 2), ("assistant", app("label;\n").as_str()));
-    let (role, fix) = message(&body, 3);
-    assert!(
-        role == "user" && fix.starts_with("The program did not compile: E0") && fix.contains(" 1:")
-    );
-    assert!(fix.ends_with("in one app block."));
-    // A reply with no program goes back too.
+    let (role, fix) = message(&body, 1);
+    let want = "You were asked: a counter\n\nYour program did not compile: E0101 at line 3, col 1: \
+                expected `;`, found `}`\n  }\n  ^\nRule: label, input, let and assignments end \
+                with ;, also inside the braces of if, row and col";
+    assert!(messages(&body) == 2 && role == "user" && fix.starts_with(want), "{fix}");
+    let tail = "fix every occurrence.\n\nYour program:\n```app\nrow {\n  label 1\n}\n```\nReply \
+                with the corrected complete program in one app block.";
+    assert!(fix.ends_with(tail), "{fix}");
+    // A reply with no program asks again, never sending the empty reply back.
+    let f = w.answer(id, "").pop().unwrap();
+    let (id, body) = ai(&f);
+    assert!(has(&f, "Fixing (2 of 3)") && messages(&body) == 2);
+    assert_eq!(message(&body, 1).1, ["a counter\n\n", NO_BLOCK].concat());
     let f = w.answer(id, "Sorry.").pop().unwrap();
     let (id, body) = ai(&f);
-    assert!(
-        has(&f, "Fixing (2 of 2)")
-            && message(&body, 3).1.starts_with("Your reply held no app block.")
-    );
-    // The fix compiles: saved under its first label's name, running, in the corpus.
+    assert!(has(&f, "Fixing (3 of 3)") && message(&body, 1).1.ends_with(NO_BLOCK));
+    // The fix compiles: saved under its first label's name, running, in the corpus; what its
+    // first comment says is what Studio says of it.
     let f = w.answer(id, &app(COUNTER)).pop().unwrap();
     let path = [HOME, "/apps/counter.app"].concat();
     assert_eq!(w.disk.get(&path).map(String::as_str), Some(COUNTER));
-    assert!(has(&f, "Ready \u{2713} \u{2014} saved ~/apps/counter.app"), "{:?}", words(&f));
+    let said = "A counter: two buttons change one number. \u{2014} saved ~/apps/counter.app";
+    assert!(has(&f, said) && !has(&f, "Ready"), "{:?}", words(&f));
     assert_eq!(f.title, "Studio \u{2014} counter.app");
     let line = format!(
-        "{{\"prompt\":\"a counter\",\"program\":{},\"attempts\":3,\"model\":\"m/x\"}}\n",
+        "{{\"prompt\":\"a counter\",\"program\":{},\"attempts\":4,\"model\":\"m/x\"}}\n",
         quote(COUNTER)
     );
     assert_eq!(w.disk[CORPUS], line);
@@ -334,7 +342,8 @@ fn a_change_sends_the_program_and_keeps_its_file() {
     let doubled = [COUNTER, "button \"x2\" { count = count * 2; }\n"].concat();
     let f = w.answer(id, &app(&doubled)).pop().unwrap();
     assert_eq!(w.disk["/apps/counter.app"], doubled);
-    assert!(has(&f, "Ready \u{2713} \u{2014} saved /apps/counter.app") && has(&f, "x2"));
+    let said = "A counter: two buttons change one number. \u{2014} saved /apps/counter.app";
+    assert!(has(&f, said) && has(&f, "x2"));
     let corpus = &w.disk[CORPUS];
     assert!(
         corpus.contains("\"attempts\":1")
@@ -342,11 +351,11 @@ fn a_change_sends_the_program_and_keeps_its_file() {
     );
     // A make that fails leaves the working program as it was.
     let (_, mut id, _) = w.make(&f, "break it");
-    for _ in 0..3 {
+    for _ in 0..4 {
         let f = w.answer(id, &app("label nope;\n")).pop().unwrap();
         if has(&f, "E0906") {
             assert!(
-                has(&f, "E0906 still not compiling after 2 fixes: E0302 1:7 "),
+                has(&f, "E0906 still not compiling after 3 fixes: E0302 1:7 "),
                 "{:?}",
                 words(&f)
             );
@@ -380,21 +389,77 @@ fn a_program_that_faults_when_it_first_renders_goes_back_and_is_never_saved() {
     let f = w.last(&[WIDE]);
     let (_, mut id, _) = w.make(&f, "show the average");
     let average = "state total = 0;\nstate count = 0;\nlabel \"Average: \" + total / count;\n";
-    for attempt in 1..=3 {
+    for attempt in 1..=4 {
         let f = w.answer(id, &app(average)).pop().unwrap();
-        if attempt == 3 {
-            let want = "E0906 still faulting after 2 fixes: E0203 3:";
+        if attempt == 4 {
+            let want = "E0906 still faulting after 3 fixes: E0203 3:";
             assert!(has(&f, want) && has(&f, "Reset") && f.requests.is_empty(), "{:?}", words(&f));
             break;
         }
         let body;
         (id, body) = ai(&f);
-        let (role, fix) = message(&body, 3);
-        assert!(
-            role == "user" && fix.starts_with("The program faults when it first renders: E0203 3:")
-        );
+        let (role, fix) = message(&body, 1);
+        let want = "You were asked: show the average\n\nYour program faults when it first \
+                    renders: E0203 at line 3, col 21: ";
+        assert!(role == "user" && fix.starts_with(want), "{fix}");
+        assert!(fix.contains("\nRule: guard every / and % so the divisor is never 0.\n"));
     }
     assert!(w.disk["/apps/counter.app"] == COUNTER && !w.disk.contains_key(CORPUS));
+}
+
+#[test]
+fn a_reply_out_of_room_asks_for_the_same_app_shorter_and_ends_in_e0907() {
+    // What GLM 5.3 did with "make a tetris game" when asked to think: all 8,192 tokens of
+    // reasoning and no program; then a program cut off mid-line.
+    let mut w = Win::new(&[], Mem::new());
+    let f = w.last(&[WIDE]);
+    let (_, mut id, _) = w.make(&f, "make a tetris game");
+    let cut = "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"length\"}]}\n\n";
+    for attempt in 1..=4 {
+        let mut evs = vec![think(id, "Rows of ten, so ten states each\u{2026}")];
+        evs.extend((attempt > 1).then(|| content(id, b"```app\nstate a = 0;\nlabel \"Tet")));
+        evs.push(Event::AiData { id, data: cut.into() });
+        evs.push(Event::AiEnd { id, status: 200, error: String::new() });
+        let f = w.frames(&evs).pop().unwrap();
+        if attempt == 4 {
+            assert!(has(&f, ROOM) && f.requests.is_empty() && has(&f, "Make"), "{:?}", words(&f));
+            break;
+        }
+        // The same ask, shorter, alone: no empty or cut-off reply goes back.
+        let body;
+        (id, body) = ai(&f);
+        let shorter = ["make a tetris game\n\n", SHORTER].concat();
+        assert_eq!((messages(&body), message(&body, 1).1), (2, shorter.as_str()));
+        assert!(has(&f, &format!("Fixing ({attempt} of 3)")), "{:?}", words(&f));
+    }
+    assert!(w.disk.is_empty() && ROOM.starts_with("E0907 "));
+}
+
+#[test]
+fn what_the_first_comment_says_is_said_instead_of_ready() {
+    // An honest program says what applang could not do; Studio says so, not "Ready".
+    let mut w = Win::new(&[], Mem::new());
+    let f = w.last(&[WIDE]);
+    let (_, id, _) = w.make(&f, "make a tetris game");
+    let src = "// Tetris, simplified: applang has no clock, so Drop moves the piece.\n\
+               //   Without: rotation.\nstate rows = 0;\nlabel \"Tetris\";\n\
+               button \"Drop\" { rows = rows + 1; }\n";
+    let f = w.answer(id, &app(src)).pop().unwrap();
+    let said = "Tetris, simplified: applang has no clock, so Drop moves the piece. Without: \
+                rotation. \u{2014} saved ~/apps/tetris.app";
+    assert!(has(&f, said) && !has(&f, "Ready"), "{:?}", words(&f));
+    // A block comment says it too; a comment after code is not the program's first.
+    let (_, id, _) = w.make(&f, "count");
+    let f = w.answer(id, &app("/* Count: a number */ state n = 0; label n;\n")).pop().unwrap();
+    assert!(has(&f, "Count: a number \u{2014} saved ~/apps/tetris.app"));
+    let (_, id, _) = w.make(&f, "plain");
+    let f = w.answer(id, &app("state n = 0; // the count\nlabel n;\n")).pop().unwrap();
+    assert!(has(&f, "Ready \u{2713} \u{2014} saved ~/apps/tetris.app") && !has(&f, "the count"));
+    // A long one is cut at 400 bytes.
+    let (_, id, _) = w.make(&f, "long");
+    let f = w.answer(id, &app(&["// ", &"word ".repeat(200), "\nlabel 1;\n"].concat()));
+    let cut = ["word ".repeat(80), "\u{2026} \u{2014} saved".into()].concat();
+    assert!(has(f.last().unwrap(), &cut), "{:?}", words(f.last().unwrap()));
 }
 
 #[test]
@@ -406,7 +471,7 @@ fn edits_and_prompts_made_while_the_ai_writes_are_kept() {
     let (f, id, _) = w.make(&f, "add a title");
     w.send(&[change(input(&f).0, 2, "bigger buttons")]);
     let f = w.answer(id, &app(&titled)).pop().unwrap();
-    assert!(has(&f, "Ready \u{2713}") && w.disk["/apps/counter.app"] == titled);
+    assert!(has(&f, "A counter: two") && w.disk["/apps/counter.app"] == titled);
     assert_eq!(input(&f), (PROMPT, "bigger buttons", "Describe a change\u{2026}"));
     // Code edited meanwhile, here checked and saved, wins over the reply, on screen and on disk.
     let (_, id, _) = w.make(&f, "add a footer");
@@ -415,7 +480,7 @@ fn edits_and_prompts_made_while_the_ai_writes_are_kept() {
     let f = w.last(&[change(code_id, 2, &zero), click(CHECK)]);
     assert!(has(&f, "Checked \u{2713}") && w.disk["/apps/counter.app"] == zero);
     let f = w.answer(id, &app(&[&titled, "label \"Footer\";\n"].concat())).pop().unwrap();
-    assert!(has(&f, "Not applied: the code was edited while it was made"), "{:?}", words(&f));
+    assert!(has(&f, "Kept your edits, not the AI's"), "{:?}", words(&f));
     assert_eq!((code(&f).2, w.disk["/apps/counter.app"].as_str()), (zero.as_str(), zero.as_str()));
     assert_eq!(input(&f).1, "add a footer");
     assert_eq!(w.disk[CORPUS].lines().count(), 1);
@@ -423,7 +488,7 @@ fn edits_and_prompts_made_while_the_ai_writes_are_kept() {
 
 #[test]
 fn makes_fit_what_the_free_ai_takes() {
-    // A fix too big to send with the program it changes goes without it (`ai` checks the size).
+    // A fix carries the program it fixes, never the one it changes (`ai` checks the size).
     let big = "label 1;\n".repeat(3500);
     let mut w = Win::new(&["edit", "/apps/big.app"], with(&[("/apps/big.app", &big)]));
     let f = w.last(&[WIDE]);
@@ -433,7 +498,9 @@ fn makes_fit_what_the_free_ai_takes() {
     let end = Event::AiEnd { id, status: 200, error: String::new() };
     let f = w.last(&[content(id, reply.as_bytes()), Event::AiData { id, data: done }, end]);
     let (_, body) = ai(&f);
-    assert_eq!((messages(&body), message(&body, 1)), (4, ("user", "add a title")));
+    let fix = message(&body, 1).1;
+    assert!(messages(&body) == 2 && fix.starts_with("You were asked: add a title\n\n"));
+    assert!(fix.contains(&[&big, "label;\n```"].concat()) && !fix.contains("The program now"));
     // One too big even so is not made, and nothing is sent.
     let big = "label 1;\n".repeat(9000);
     let mut w = Win::new(&["edit", "/apps/big.app"], with(&[("/apps/big.app", &big)]));
@@ -515,7 +582,7 @@ fn code_edits_check_save_and_mark_problems() {
     // An edit with a problem: Check marks it and leaves the app running as it was.
     let bad = "state count = 0;\nlabel count;\nlabel nope;";
     let f = w.last(&[change(id, 2, bad)]);
-    assert!(has(&f, "Edited \u{2014} Check (Ctrl+Enter) runs and saves it"));
+    assert_eq!(words(&f).last(), Some(&"Edited"));
     let f = w.last(&[click(CHECK)]);
     assert!(has(&f, "E0302 3:7 ") && w.disk["/apps/x.app"] == COUNTER);
     let (_, version, src, spans) = code(&f);
@@ -598,7 +665,7 @@ fn asks_from_the_everything_bar_make_in_turn() {
     let (_, body) = ai(f);
     assert!(message(&body, 1).1.contains("Change it: add a double button"));
     assert!(
-        has(&frames[frames.len() - 2], "Ready \u{2713}") && input(f).1 == "add a double button"
+        has(&frames[frames.len() - 2], "A counter: two") && input(f).1 == "add a double button"
     );
 }
 

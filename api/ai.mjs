@@ -114,8 +114,8 @@ export default async function handler(req, res) {
   if (!messages.length) return fail(res, 400, 'no messages');
   const model = Object.hasOwn(MODELS, body.model) ? body.model : Object.keys(MODELS)[0];
   const asked = Math.floor(Number(body.max_tokens));
-  // Thinking costs time and tokens: off, unless the program asks for a low effort (Studio does,
-  // for better code).
+  // Thinking costs time and tokens: off, unless the program asks for a low effort. (Off hides
+  // GLM 5.3's thinking but may not stop it: a reply can still spend max_tokens before any text.)
   const low = body.reasoning && body.reasoning.effort === 'low';
   const out = {
     model,

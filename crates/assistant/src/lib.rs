@@ -7,8 +7,10 @@
 //! A reply holding a fenced block whose info string is `app` is compiled with [`applang`]: a
 //! program that compiles is saved to `~/apps/<slug>.app` (or the first free `<slug>-<n>.app`: it
 //! never replaces a file), opened in Studio, and appended to the fine-tuning corpus
-//! ([`ai::CORPUS`]); one that does not goes back to the model with its diagnostics, at most
-//! [`RETRIES`] times. Files go through a [`Disk`]: [`Fs`] in the program.
+//! ([`ai::CORPUS`]); one that does not compile or faults when it first renders goes back to the
+//! model with its problem (its line, a caret, the rule broken), and one cut off where the reply ran
+//! out of room asks for the same app shorter, at most [`RETRIES`] times (then the problem, or
+//! E0907). Files go through a [`Disk`]: [`Fs`] in the program.
 //! A prompt from the desktop's everything bar ([`Event::Ask`]) is sent as if typed (the draft
 //! stays), after the request in flight if there is one. A request carries the newest history
 //! that fits in [`ai::MAX_BODY`]. [`ai`] and [`json`] are what Studio shares with it.
@@ -22,9 +24,9 @@ mod tests;
 
 use std::io::{self, ErrorKind, Read, Write};
 
-use ai::{CORPUS, EXAMPLE, MAX_BODY, MAX_REPLY, app_block, clip, corpus_line, failure, free_path};
+use ai::{CORPUS, MAX_BODY, MAX_REPLY, ROOM, SHORTER, app_block, clip, corpus_line, failure};
 pub use ai::{DEFAULT_MODEL, RETRIES};
-use ai::{problem, slug};
+use ai::{fault, free_path, slug};
 use json::Stream;
 use uiwire::client::Client;
 use uiwire::{Event, Frame, Node, Request, Style, Variant};
@@ -43,14 +45,14 @@ const STOP: u32 = 2;
 /// The prompt Input is this plus the prompts sent: a fresh id starts it empty.
 const INPUT: u32 = 100;
 
-/// The system prompt, with applang's reference card between the parts and an example after.
+/// The system prompt ([`ai::system`]): applang's reference card goes between the parts.
 const SYSTEM: [&str; 2] = [
     "You are the Assistant of compusophyOS, a computer that runs in one browser tab: a \
      desktop of floating windows, written in Rust and compiled to WebAssembly. Answer briefly \
      and plainly.\n\nYou can build small apps in applang, the OS's app language:\n\n",
     "\n\nWhen the user asks for an app, reply with one short sentence and one fenced block \
      whose info string is app, holding a complete program. The OS compiles it, saves it and \
-     opens it in Studio; if it does not compile, you get the diagnostics back. For example:\n",
+     opens it in Studio; if it does not compile, you get the diagnostics back. ",
 ];
 
 /// Where the program's files go.
@@ -196,7 +198,7 @@ impl Assistant {
     /// The chat-completions request: the system prompt and the newest history that fits in
     /// [`MAX_BODY`] bytes; none if the newest message alone does not.
     fn body(&self) -> Option<String> {
-        let system = [&SYSTEM.join(applang::REFERENCE), EXAMPLE].concat();
+        let system = ai::system(SYSTEM[0], SYSTEM[1]);
         let options = ",\"max_tokens\":4096,\"temperature\":0.3";
         let chat = |messages| ai::chat(self.model(), options, &system, messages);
         // A message takes its content quoted, its role and 23 bytes of JSON.
@@ -206,8 +208,9 @@ impl Assistant {
         (body.len() <= MAX_BODY).then_some(body)
     }
 
-    /// Ends the request in flight with `status` and the host's `error`: notes
-    /// what went wrong, else builds the app the reply holds, if any.
+    /// Ends the request in flight with `status` and the host's `error`: notes what went wrong,
+    /// else builds the app the reply holds, if any; a reply cut off where it ran out of room
+    /// (`finish_reason` length) says so, and its program is asked for again, shorter.
     fn finish(&mut self, status: u16, error: &str, disk: &mut dyn Disk) {
         let (Some(mut run), Some(turn)) = (self.run.take(), self.turns.last_mut()) else { return };
         run.stream.end(&mut turn.reply, MAX_REPLY);
@@ -216,23 +219,33 @@ impl Assistant {
         }
         let reply = turn.reply.clone();
         let failed = failure(status, error, &run.stream.error);
-        let empty = || reply.is_empty().then(|| (Style::Dim, "No reply.".to_string()));
+        let long = failed.is_none() && run.stream.finish == "length";
+        let empty = || (reply.is_empty() && !long).then(|| (Style::Dim, "No reply.".to_string()));
         turn.notes.extend(failed.clone().or_else(empty));
         // An unanswered prompt stays in the transcript, not in the history.
         match reply.is_empty() {
             true => _ = self.history.pop(),
             false => self.history.push(("assistant", reply.clone())),
         }
-        let Some(src) = app_block(&reply).filter(|_| failed.is_none()) else { return };
-        let why = match applang::compile(src) {
-            Ok(_) => return self.build(src, &run, disk),
-            Err(d) => ["The program did not compile: ", &problem(&d, src)].concat(),
+        let src = app_block(&reply).filter(|_| failed.is_none());
+        let (why, text) = match src.map(|src| (src, fault(src))) {
+            None => {
+                return if long {
+                    self.note((Style::Error, ROOM.into()))
+                };
+            }
+            Some((src, None)) => return self.build(src, &run, disk),
+            Some(_) if long => ("The program ran out of room".into(), SHORTER.into()),
+            Some((_, Some(([what, _], problem, account)))) => {
+                let again = "\nReply with the corrected full program in one app block.";
+                (format!("The program {what}: {problem}"), [account.as_str(), again].concat())
+            }
         };
         if run.attempt > RETRIES {
-            return self.note((Style::Error, why));
+            return self.note((Style::Error, if long { ROOM.into() } else { why }));
         }
-        self.note((Style::Dim, [&why, "; asking for a fix."].concat()));
-        let text = [&why, ". Reply with the corrected full program in one app block."].concat();
+        let next = if long { "; asking for a shorter one." } else { "; asking for a fix." };
+        self.note((Style::Dim, [&why, next].concat()));
         self.ask(text, run.prompt, run.attempt + 1);
     }
 

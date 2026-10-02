@@ -1,7 +1,8 @@
-//! What every program that makes apps with the AI shares (the Assistant and Studio): the request
-//! body, coded failures, the program in a reply, file names, diagnostics and the corpus line.
+//! What every program that makes apps with the AI shares (the Assistant and Studio): the system
+//! prompt and request body, coded failures, the program in a reply and what is wrong with it (as
+//! the person reads it and as the model fixing it does), file names and the corpus line.
 
-use applang::Class;
+use applang::{App, Class, Limits};
 use uiwire::Style;
 
 use crate::json::quote;
@@ -12,17 +13,35 @@ pub const HOME: &str = concat!("/home/", "guest");
 pub const CORPUS: &str = concat!("/home/", "guest", "/.ai/corpus.jsonl");
 /// The model until the desktop names one.
 pub const DEFAULT_MODEL: &str = "zai/glm-5.3";
-/// How many times a program that does not compile goes back to the model.
-pub const RETRIES: u32 = 2;
+/// How many times a make goes back to the model: with a program that does not compile or faults
+/// when it first renders, after a reply that ran out of room, or one without a program.
+pub const RETRIES: u32 = 3;
 /// The most bytes of a reply kept.
 pub const MAX_REPLY: usize = 64 * 1024;
 /// The most bytes a request's body takes: the free AI (`api/ai.mjs`) takes 96 KiB at most, so
 /// this leaves room.
 pub const MAX_BODY: usize = 80 * 1024;
-/// A program in the form replies give it, for system prompts.
-pub const EXAMPLE: &str = "```app\nstate count = 0;\nlabel \"Counter\";\nrow {\n  button \"-\" { \
-                           count = count - 1; }\n  label count;\n  button \"+\" { count = count + \
-                           1; }\n}\n```";
+/// A program in the form replies give it, for system prompts: its first comment says what it is.
+pub const EXAMPLE: &str = "```app\n// Counter: - and + change the number.\nstate count = 0;\nlabel \
+                           \"Counter\";\nrow {\n  button \"-\" { count = count - 1; }\n  label \
+                           count;\n  button \"+\" { count = count + 1; }\n}\n```";
+/// What a prompt that makes apps asks of the program, before [`EXAMPLE`]: to say what it is, and
+/// what of the ask applang could not do.
+pub const HONEST: &str = "Begin the program with a // comment of one or two short lines: what the \
+                          app does and how to use it. If applang cannot do part of what was asked, \
+                          make the closest app it can, and end that comment with \"Without:\" and \
+                          what it leaves out. For example:\n";
+/// What a make asks for after a reply that ran out of room before its program ended.
+pub const SHORTER: &str = "Your reply ran out of room before the program ended. Write the same app, \
+                           shorter: under 100 lines, extras left out (named after \"Without:\" in \
+                           its first comment). Reply with the complete program in one app block.";
+/// How a make ends that kept running out of room.
+pub const ROOM: &str = "E0907 the AI ran out of room before its reply ended; ask for less";
+
+/// A system prompt: `intro`, applang's card, `rules`, then [`HONEST`] and [`EXAMPLE`].
+pub fn system(intro: &str, rules: &str) -> String {
+    [intro, applang::REFERENCE, rules, HONEST, EXAMPLE].concat()
+}
 
 /// A streamed chat-completions request for `model` with the JSON members `options` (each with
 /// a leading comma), the `system` prompt and then `messages`, (role, content) each.
@@ -98,6 +117,33 @@ pub fn free_path(slug: &str, mut exists: impl FnMut(&str) -> bool) -> Option<Str
         n => format!("{HOME}/apps/{slug}-{n}.app"),
     };
     (1..1000).map(name).find(|p| !exists(p))
+}
+
+/// What is wrong with `src`, if anything: that it does not compile or faults when it first
+/// renders, as [what it did, what it still does after fixes], the problem as a person reads it
+/// ([`problem`]) and the account a model fixing it gets: the problem with its line and a caret
+/// under it, the rule its code says was broken, and that every occurrence wants fixing.
+pub fn fault(src: &str) -> Option<([&'static str; 2], String, String)> {
+    let (what, d) = match applang::compile(src).map(|p| App::new(p, Limits::default()).render()) {
+        Ok(Ok(_)) => return None,
+        Ok(Err(d)) => (["faults when it first renders", "faulting"], d),
+        Err(d) => (["did not compile", "not compiling"], d),
+    };
+    // "line 3, col 5", then the line and its carets.
+    let snip = d.span.and_then(|s| lang::diag::render_snippet(src, s)).unwrap_or_default();
+    let (at, line) = snip
+        .split_once('\n')
+        .map_or((String::new(), ""), |(at, line)| ([" at ", at].concat(), line));
+    let code = d.code.unwrap_or_default();
+    let account = format!(
+        "Your program {}: E{code:04}{at}: {}\n{}\nRule: {}\nThe same mistake may be on other \
+         lines too: fix every occurrence.",
+        what[0],
+        clip(&d.message, 1024),
+        clip(line, 4096),
+        applang::rule(code)
+    );
+    Some((what, problem(&d, src), account))
 }
 
 /// A diagnostic as `E0101 3:5 message`: line and column (in chars) from 1.

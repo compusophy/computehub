@@ -319,10 +319,17 @@ fn client_reads_events_and_writes_frames() {
     assert_eq!(client.next_event().unwrap_err().kind(), ErrorKind::InvalidData);
     assert_eq!(client.next_event().unwrap_err().kind(), ErrorKind::UnexpectedEof);
     client.show(&sample()).unwrap();
+    // A frame that breaks a cap (its size, or a node's: checked without decoding) is never sent.
+    let titled = |n| Frame { title: "t".repeat(n), ..Frame::default() };
+    let at = MAX_FRAME - titled(0).encode().len();
+    assert_eq!(client.show(&titled(at + 1)).unwrap_err().kind(), ErrorKind::InvalidInput);
     let bad = Frame { nodes: vec![code("a", &[(0, 2)])], ..Frame::default() };
     assert_eq!(client.show(&bad).unwrap_err().kind(), ErrorKind::InvalidInput);
     drop(client);
     assert_eq!(out, sample().encode());
+    let mut sent = Vec::new();
+    Client::new(io::empty(), &mut sent).show(&titled(at)).unwrap();
+    assert_eq!(sent.len(), MAX_FRAME);
 
     // A sink that takes 8 bytes of the frame.
     let mut small = Client::new(io::empty(), Cursor::new([0; 8]));
