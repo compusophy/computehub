@@ -131,9 +131,10 @@ fn about_shows_the_mark_the_name_the_stack_and_credits() {
     assert!(said.contains(&"The stack") && said.contains(&"Credits"));
     assert_eq!(said.last(), Some(&"github.com/compusophy/computehub"));
     // The stack names every crate, once; roles beside the names, under them when narrow.
-    let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/..");
-    let mut crates: Vec<String> = std::fs::read_dir(dir)
-        .unwrap()
+    let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../../");
+    let mut crates: Vec<String> = ["crates", "programs"]
+        .iter()
+        .flat_map(|d| std::fs::read_dir([root, d].concat()).unwrap())
         .map(|e| e.unwrap().file_name().into_string().unwrap())
         .collect();
     let mut named: Vec<String> = about::STACK.iter().map(|s| s.0.to_string()).collect();

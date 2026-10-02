@@ -130,7 +130,7 @@ fn sse(body: &str) -> String {
     }
     let last = body.rfind("\"content\"").map_or(body, |i| &body[i..]);
     let pieces: Vec<&str> = if last.contains("app") {
-        let program = include_str!("../../../crates/studio/samples/counter.app");
+        let program = include_str!("../../../programs/studio/samples/counter.app");
         let lines = program.split_inclusive('\n');
         ["Here is a counter.\n\n", "```app\n"].into_iter().chain(lines).chain(["```\n"]).collect()
     } else {

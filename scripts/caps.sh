@@ -6,8 +6,15 @@ cd "$(dirname "$0")/.."
 
 CRATE_CAP=2000
 CRATE_TEST_CAP=1000
+# Two totals, never traded: the OS (crates/ and tools/: what boots, the
+# kernel, the program worker) and the programs that run in it (programs/:
+# apps and the language they share). A program speaks only uiwire to the OS,
+# so neither grows into the other. When programs/ is full, programs move out
+# to repos of their own; the OS stays this size.
 REPO_CAP=25000
 TEST_CAP=12500
+PROGRAMS_CAP=25000
+PROGRAMS_TEST_CAP=12500
 CLAUDE_CAP=8000
 # Only these crates may touch the browser, so only they may take the
 # wasm-bindgen family.
@@ -22,12 +29,19 @@ DETERMINISTIC_CRATES="wm vfs kernel wasi"
 DET_TOKENS="HashMap|HashSet|RandomState|DefaultHasher|Instant|SystemTime|UNIX_EPOCH|thread_rng"
 fail=0
 
-# Crates live under crates/ (the libraries) and tools/ (build and dev tools).
-# Tools never ship, but they are Rust in this repo: every check below that
-# walks crates walks both.
+# Crates live under crates/ (the OS), programs/ (what runs in it) and tools/
+# (build and dev tools). Tools never ship, but they are Rust in this repo:
+# every check below that walks crates walks all three.
 crate_dirs=()
-for c in crates/*/ tools/*/; do
-  if [ -d "$c" ]; then crate_dirs+=("$c"); fi
+os_dirs=()
+program_dirs=()
+for c in crates/*/ tools/*/ programs/*/; do
+  if [ ! -d "$c" ]; then continue; fi
+  crate_dirs+=("$c")
+  case "$c" in
+    programs/*) program_dirs+=("$c") ;;
+    *) os_dirs+=("$c") ;;
+  esac
 done
 
 # 1. Lines of Rust per crate and in total. Product code and test code (files
@@ -49,13 +63,19 @@ for c in "${crate_dirs[@]}"; do
     fail=1
   fi
 done
-total=$(T=0 lines "${crate_dirs[@]}")
-tests=$(T=1 lines "${crate_dirs[@]}")
-printf '%-26s %6d LOC + %5d test (caps %d + %d)\n' "total" "$total" "$tests" "$REPO_CAP" "$TEST_CAP"
-if [ "$total" -gt "$REPO_CAP" ] || [ "$tests" -gt "$TEST_CAP" ]; then
-  echo "FAIL: repo exceeds a total cap"
-  fail=1
-fi
+totals() { # label, product cap, test cap, crate dirs...
+  local label=$1 cap=$2 tcap=$3 total tests
+  shift 3
+  total=$(T=0 lines "$@")
+  tests=$(T=1 lines "$@")
+  printf '%-26s %6d LOC + %5d test (caps %d + %d)\n' "$label" "$total" "$tests" "$cap" "$tcap"
+  if [ "$total" -gt "$cap" ] || [ "$tests" -gt "$tcap" ]; then
+    echo "FAIL: $label exceeds its total cap"
+    fail=1
+  fi
+}
+totals "total: the OS" "$REPO_CAP" "$TEST_CAP" "${os_dirs[@]}"
+totals "total: programs" "$PROGRAMS_CAP" "$PROGRAMS_TEST_CAP" "${program_dirs[@]}"
 
 # 2. CLAUDE.md stays a map, not a novel.
 if [ -f CLAUDE.md ]; then

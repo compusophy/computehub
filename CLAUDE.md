@@ -1,8 +1,7 @@
 # CLAUDE.md — computehub / compusophyOS
 
-Read this first; it is the operating map. `DESIGN.md` holds the vision, the
-architecture as built and what comes next (R2 kernel, R3 AI, R4 modules and
-shared compute).
+Read this first: the operating map. `DESIGN.md`: the vision, the architecture
+as built, what comes next.
 
 ## What this is
 
@@ -10,8 +9,7 @@ compusophyOS: a computer in one browser tab. Rust → wasm, one canvas, a
 desktop anyone can write apps for. It runs in the tab (no native helper, no
 shell tunnel; the only server code is `api/`). Floating windows as on
 Windows and Pop!_OS COSMIC; futuristic, ultra minimal, fast. AI-native (free
-AI for every visitor); later a mesh of pooled compute across tabs and
-devices. Author handle: compusophy.
+AI for all); later pooled compute across tabs and devices. Author handle: compusophy.
 
 ## Constitution (CI-enforced by `scripts/caps.sh` where possible)
 
@@ -22,9 +20,11 @@ devices. Author handle: compusophy.
 2. **Zero external dependencies.** Only `compusophy-*` workspace siblings.
    Exception: the web crates `platform`, `os` and `cpu` may take
    wasm-bindgen (pinned), js-sys, web-sys. Build-time tools never ship.
-3. **Caps:** product Rust ≤2,000 lines per crate and ≤25,000 total; tests
-   (`tests.rs`, `tests/`) ≤1,000 per crate and ≤12,500 total; this file
-   ≤8,000 chars. At a cap: split, shrink, or delete. Never raise one.
+3. **Caps:** product Rust ≤2,000 lines per crate, tests (`tests.rs`,
+   `tests/`) ≤1,000; totals ≤25,000 + 12,500 for the OS (`crates/`,
+   `tools/`) and as much again for `programs/`, never traded; this file
+   ≤8,000 chars. At a cap: split, shrink, or delete; a full `programs/`
+   moves programs to repos of their own. Never raise one.
 4. **Deterministic crates** (`wm`, `vfs`, `kernel`, `wasi`): no floats, no
    HashMap/HashSet, no clocks, no randomness. State must replay bit-for-bit
    and hash identically.
@@ -47,9 +47,7 @@ devices. Author handle: compusophy.
 ## Map
 
 ```
-crates/
-  fuel/ lang/                 forks of litelite (budgets, parse kit)
-  applang-syntax/ applang/    tier 0 app language: front end, runtime
+crates/      the OS (boot, kernel, worker); speaks to programs only by uiwire
   wm/        floating window manager: stacking, snapping, focus; deterministic
   vfs/       in-memory filesystem, deterministic (/apps, /home, /tmp)
   font/      TrueType reader + glyph rasterizer (no font engine ships)
@@ -61,10 +59,7 @@ crates/
              trait, Cx, the Code editor (re-exports text)
   vt/        VT/xterm escape parser        term/  terminal screen model
   guest/     the guest shell the Terminal runs
-  apps/      Settings, Terminal
-  system/    About, Feedback, Files, Welcome (one wasip1 program)
-  studio/    Studio (wasip1 GUI program): make apps by describing them
-  assistant/ the Assistant (wasip1): the overlay AI using the desktop
+  apps/      Settings, Terminal (built in)
   uiwire/    remote UI protocol: GUI programs send widget trees, get events
   uiview/    draws them with ui; holds edited text
   host/      wm + one app per window; agent; grabs, squeeze; motion, frames
@@ -78,7 +73,13 @@ crates/
              and file server (main), snap (/home), module
   wasi/      the kernel's worker half: WASI preview 1 Proc, fds, /dev
   cpu/       the program worker (cdylib; dist/cpu/): loader, WASI imports, homed
-  toolbox/   test programs, one wasm32-wasip1 multicall binary (dist/bin/)
+programs/    wasm32-wasip1 programs (dist/bin/), the app language they share
+  fuel/ lang/                 forks of litelite (budgets, parse kit)
+  applang-syntax/ applang/    tier 0 app language: front end, runtime
+  studio/    Studio: make apps by describing them; runs `.app` files
+  assistant/ the Assistant: the overlay AI using the desktop
+  system/    About, Feedback, Files, Welcome (one multicall program)
+  toolbox/   test programs (one multicall binary)
 assets/fonts/  Inter Regular (boot, in the wasm); deferred/ Inter SemiBold +
                JetBrains Mono; lazy/ symbol fallbacks; OFL texts; README.md
 api/           server functions (Vercel, Node): ai.mjs, feedback.mjs
@@ -88,9 +89,8 @@ web/worker.js  the program worker's one-line bootstrap
 scripts/       caps.sh, budget.sh, build-web.sh, deploy.sh (Vercel, prebuilt)
 ```
 
-Forks come from litelite 0.2.0, commit `4f5e056` (2026-07-20). Package names
-are `compusophy-<x>`; each crate's `[lib] name` is the short name code uses
-(`fuel::Fuel`, `lang::Diag`, `wm::Wm`).
+Forks: litelite 0.2.0, `4f5e056`. Packages are `compusophy-<x>`; each
+`[lib] name` is the short one code uses (`wm::Wm`).
 
 Event path: DOM → `platform::Event` → `os` → `shell::Input` → `host` →
 `ui::AppEvent` → app; back out as `ui::Request` → `host::Effect` → `os` →
@@ -115,12 +115,10 @@ cargo run -p serve --release -- dist 8080   # preview; --plain: no COOP/COEP
 `?debug` in the page URL marks each frame (`performance.mark("frame")`):
 an idle desktop adds none but the living grain's.
 
-Fonts load in three groups, each with its budget: **boot** (Inter Regular,
-`include_bytes!` in `os`), **deferred** (`fonts/deferred/*`, fetched after
-the first frame; until then bold draws as Regular, mono cells stay empty),
-**lazy** (`fonts/symbols-*.ttf`, when a terminal first opens).
-`build-web.sh` copies them and the OFL texts (`dist/licenses/`); subsets:
-`assets/fonts/README.md`.
+Fonts, each group with its budget: **boot** (Inter Regular, in `os`),
+**deferred** (`fonts/deferred/*`, after the first frame; until then bold is
+Regular, mono cells empty), **lazy** (`fonts/symbols-*.ttf`, when a terminal
+first opens). Subsets and OFL texts: `assets/fonts/README.md`.
 
 ## Safety (the owner runs unattended; never trigger an approval prompt)
 
