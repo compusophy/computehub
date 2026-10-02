@@ -428,11 +428,12 @@ fn tweens_ease_out_from_their_first_frame_replays_scale_and_themes_crossfade() {
     src.gradient(r, 4.0, Rgba(1, 1, 1, 255), Rgba(2, 2, 2, 51), -1.5);
     src.glow(r, Rgba(7, 7, 7, 100));
     src.grain(r, 20, -3.0);
+    src.segment(r, 6.0, true, Rgba(4, 4, 4, 255));
     let vis = Vis { rect: RectF::new(0.0, 0.0, 200.0, 200.0), s: 0.5, dx: 10.0, dy: -10.0, a: 0.5 };
     let mut dst = DrawList::new();
     replay(&mut dst, &src, vis);
     let out = dst.instances();
-    assert_eq!(out.len(), 8);
+    assert_eq!(out.len(), 9);
     for (o, i) in out.iter().zip(src.instances()) {
         assert_eq!((o.kind, o.uv, o.rect), (i.kind, i.uv, [110.0, 90.0, 20.0, 10.0]));
         assert_eq!(o.clip, [105.0, 85.0, 50.0, 50.0]);
@@ -444,10 +445,11 @@ fn tweens_ease_out_from_their_first_frame_replays_scale_and_themes_crossfade() {
     assert_eq!(params[..4], want);
     assert_eq!((params[5].1, params[7].1), (-1.5, -3.0));
     assert_eq!(out[7].kind, Kind::Grain as u8 as f32);
+    assert_eq!((out[8].kind, params[8]), (Kind::Line as u8 as f32, (0.0, 3.0, 1.0)));
     assert!(Vis::at(r).is_plain() && !vis.is_plain());
     // Faded to nothing, nothing is drawn.
     replay(&mut dst, &src, Vis { a: 0.0, ..vis });
-    assert_eq!(dst.len(), 8);
+    assert_eq!(dst.len(), 9);
     // Themes crossfade and switch by name.
     let [mid, dawn, mono] = &THEMES;
     assert_eq!(blend(mid, dawn, 0.0).base, mid.base);
