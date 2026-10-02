@@ -141,8 +141,8 @@ impl Play {
     /// The ms from `now` until the next Tick is due (0: due, or its count starts), when the
     /// window wants its next frame; `None` with no timer.
     pub fn due_in(&self, now: f64) -> Option<u32> {
-        let left = |at: f64| (at + self.wait() - now).max(0.0).ceil() as u32;
-        (self.timer > 0).then(|| self.at.map_or(0, left))
+        let at = self.at.unwrap_or(f64::MIN);
+        (self.timer > 0).then(|| (at + self.wait() - now).max(0.0).ceil() as u32)
     }
 
     /// The Tick due at `now` (page ms), the window last drawn at `drawn`: one only while it
@@ -685,17 +685,12 @@ fn grid(
                 }
                 v.push(char::from(b'0' + c));
             }
-            // Each text on a line, its first 32 bytes at most.
             for (i, s) in texts.iter().enumerate() {
-                let mut end = s.len().min(32);
-                while !s.is_char_boundary(end) {
-                    end -= 1;
-                }
-                if end > 0 {
+                if !s.is_empty() {
                     v.push('\n');
                     ui::push_num(&mut v, i);
                     v += ": ";
-                    s[..end].chars().for_each(|c| v.push(if c < ' ' { ' ' } else { c }));
+                    v += s;
                 }
             }
             ui.mark(WidgetId(id), ui::sem::GRID, 0, &v);

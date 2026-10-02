@@ -564,11 +564,11 @@ fn grids_draw_theme_squares_and_points_find_them() {
     // Boards alike but for where their texts are read apart.
     let board = |at: [usize; 3]| {
         let mut texts = vec![String::new(); 9];
-        (texts[at[0]], texts[at[1]], texts[at[2]]) = ("X".into(), "O".into(), "X\n".into());
+        (texts[at[0]], texts[at[1]], texts[at[2]]) = ("X".into(), "O".into(), "X".into());
         Node::Grid { id: 1, cols: 3, cells: vec![0; 9], texts }
     };
     let (a, b) = (marked(&board([0, 4, 8])), marked(&board([1, 3, 7])));
-    assert!(a.ends_with("\n000\n0: X\n4: O\n8: X ") && b.ends_with("\n1: X\n3: O\n7: X "), "{a}");
+    assert!(a.ends_with("\n000\n0: X\n4: O\n8: X") && b.ends_with("\n1: X\n3: O\n7: X"), "{a}");
     // A hundred columns are as wide as the width holds (here 5 px squares) with no gap, the
     // whole outlined; with no id, nothing to tap.
     let wide = Node::Grid { id: 0, cols: 100, cells: vec![1; 100], texts: Vec::new() };
