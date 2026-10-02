@@ -200,6 +200,17 @@ impl Shell {
         self.grab = Some(grab);
     }
 
+    /// A mouse held down on a window's content moved: its app hears where to.
+    pub(crate) fn drag_app(&mut self, out: &mut Response) {
+        let (Some((win, _)), Some((x, y)), None) = (self.app_press, self.pointer, self.touch)
+        else {
+            return;
+        };
+        if let Some(c) = self.placement(win).map(|p| content_rect(rectf(p.rect))) {
+            self.host.deliver(win, AppEvent::Drag { x: x - c.x, y: y - c.y }, out);
+        }
+    }
+
     /// Lifts a finger (it may fling; a gesture's lift says so), drops a held window (snapping
     /// it) or carried icons (a finger's picked-up icon lifted unmoved opens its menu instead),
     /// ends a selection box; button 0 fires the armed button, or presses into content if a

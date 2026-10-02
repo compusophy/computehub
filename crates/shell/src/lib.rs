@@ -284,6 +284,7 @@ impl Shell {
         if let Input::PointerDown { touch, .. } = input {
             self.finger = touch;
         }
+        let was = self.pointer;
         self.pointer = match input {
             Input::PointerMove { x, y }
             | Input::PointerDown { x, y, .. }
@@ -305,6 +306,9 @@ impl Shell {
             Input::PointerMove { .. } => {
                 self.finger(&mut out);
                 self.drag_to();
+                if self.pointer != was {
+                    self.drag_app(&mut out);
+                }
                 if self.grid.carry_to(self.pointer) {
                     self.armed = None;
                 }
@@ -325,7 +329,7 @@ impl Shell {
             }
             Input::Tick { time } => {
                 out.redraw |= self.clock.replace(time) != Some(time);
-                self.host.tick(&mut out);
+                self.host.tick(true, &mut out);
             }
         }
         self.finish(before, &mut out);
@@ -366,6 +370,7 @@ impl Shell {
         self.instant = false;
         self.hold(&mut out);
         self.flinging(&mut out);
+        self.host.tick(false, &mut out);
         self.settle(&mut out);
         let now = self.host.now_ms;
         self.arm(now);

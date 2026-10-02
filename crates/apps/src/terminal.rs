@@ -231,7 +231,8 @@ impl App for Terminal {
                 self.fit(grid_size(w, h, self.cell.0, self.cell.1));
                 true
             }
-            AppEvent::Click(_) | AppEvent::PointerDown { .. } | AppEvent::Tick { .. } => false,
+            AppEvent::Click(_) | AppEvent::PointerDown { .. } | AppEvent::Drag { .. } => false,
+            AppEvent::Tick { .. } => false,
             AppEvent::Io | AppEvent::Ask(_) | AppEvent::Agent(_) => false,
         };
         self.io(cx);

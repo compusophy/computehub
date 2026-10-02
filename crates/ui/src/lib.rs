@@ -93,6 +93,8 @@ pub mod sem {
     pub const CODE: u8 = 7;
     pub const TERMINAL: u8 = 8;
     pub const LINK: u8 = 9;
+    /// Squares to tap by number; the value is "N columns", then a row of digits a line.
+    pub const GRID: u8 = 10;
     pub const SELECTED: u8 = 1;
     pub const CHECKED: u8 = 2;
     pub const FOCUSED: u8 = 4;
@@ -124,6 +126,8 @@ pub enum AppEvent {
     Click(WidgetId),
     /// The primary button went down, over the topmost hit `id` if any.
     PointerDown { x: f32, y: f32, id: Option<WidgetId> },
+    /// A mouse held down on the content moved (a finger's moves scroll instead).
+    Drag { x: f32, y: f32 },
     /// A key went down while the window was focused.
     Key { key: Key, mods: Mods },
     /// Text typed, pasted or composed by an IME.
@@ -134,7 +138,8 @@ pub enum AppEvent {
     Focus(bool),
     /// The content rect is now `w` x `h`.
     Resized { w: f32, h: f32 },
-    /// Time passed (milliseconds on the page clock), for apps that animate.
+    /// Time passed (milliseconds on the page clock): each minute, and each frame for a shown
+    /// app that animates.
     Tick { now_ms: f64 },
     /// A process this window owns has console output, exited or changed
     /// mode, or homed has a new note: see [`Cx::kernel`].

@@ -475,10 +475,16 @@ impl Host {
         self.pump(out);
     }
 
-    pub fn tick(&mut self, out: &mut Response) {
+    /// Time passed: every app hears it (`all`, the minute), or each shown one that animates (a
+    /// frame).
+    pub fn tick(&mut self, all: bool, out: &mut Response) {
         let now_ms = self.now_ms;
+        let shown: Vec<WinId> = self.wm.layout().iter().map(|p| p.win).collect();
         for win in self.wins.iter().map(|w| w.id).collect::<Vec<_>>() {
-            self.deliver(win, AppEvent::Tick { now_ms }, out);
+            let animates = || self.win(win).is_some_and(|w| w.app.animating(now_ms));
+            if all || shown.contains(&win) && animates() {
+                self.deliver(win, AppEvent::Tick { now_ms }, out);
+            }
         }
     }
 

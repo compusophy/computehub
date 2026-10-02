@@ -519,3 +519,68 @@ fn app_rows_wear_their_sigil_rows_say_two_lines_and_display_is_large() {
     };
     assert!(tallest(Style::Display) > tallest(Style::Title) * 1.3);
 }
+
+#[test]
+fn grids_draw_theme_squares_and_points_find_them() {
+    let t = &THEMES[0];
+    let (mut texts, mut view) = (Texts::default(), View::default());
+    let words = ["", "X", "", "", ""].map(String::from).to_vec();
+    let grid = Node::Grid { id: 7, cols: 2, cells: vec![0, 1, 8, 2, 0], texts: words };
+    let d = draw(std::slice::from_ref(&grid), &mut texts, &mut view, None);
+    // Two columns across the width: 32 px squares (the most), centered, 3 rows, a pixel apart.
+    let x = PAD + (600.0 - 2.0 * PAD - 64.0) / 2.0;
+    assert_eq!(view.grids, [(7, RectF::new(x, PAD, 64.0, 96.0), 2, 5)]);
+    let square = |c: f32, r: f32| RectF::new(x + 32.0 * c, PAD + 32.0 * r, 31.0, 31.0);
+    assert!(d.filled(square(0.0, 0.0), t.surface_lo) && d.filled(square(1.0, 0.0), t.ansi[1]));
+    assert!(d.filled(square(0.0, 1.0), t.ansi[8]) && d.filled(square(1.0, 1.0), t.ansi[2]));
+    assert_eq!((d.hit(7).rect, d.hit(7).sense), (RectF::new(x, PAD, 64.0, 96.0), Sense::Click));
+    // A point finds its square; past the last square, outside, or another id: none.
+    assert_eq!(cell(&view, 7, x + 40.0, PAD + 40.0), Some(3));
+    let none = [(7, x + 40.0, PAD + 70.0), (7, x - 1.0, PAD), (8, x, PAD)];
+    assert!(none.iter().all(|&(id, px, py)| cell(&view, id, px, py).is_none()));
+    // For the AI: a mark with the rows, a line each, and the texts as runs.
+    let mut ts = TextSystem::new(SANS.to_vec()).unwrap();
+    let (mut list, mut hits) = (DrawList::recording(), Vec::new());
+    let r = RectF::new(0.0, 0.0, 600.0, 400.0);
+    let ui = Ui::new(&mut list, &mut ts, r, &mut hits, UiState::default(), t);
+    super::draw(&mut { ui }, &[grid], &mut texts, &mut view);
+    let sem = list.take_sem().unwrap();
+    let mark = (sem.marks[0].role, sem.marks[0].value.as_str());
+    assert_eq!(mark, (ui::sem::GRID, "2 columns\n01\n82\n0"));
+    assert_eq!(sem.runs.iter().map(|r| r.text.as_str()).collect::<Vec<_>>(), ["X"]);
+    // A hundred columns are 6 px squares (the least) with no gap; with no id, nothing to tap.
+    let wide = Node::Grid { id: 0, cols: 100, cells: vec![1; 100], texts: Vec::new() };
+    let d = draw(&[wide], &mut texts, &mut view, None);
+    assert!(view.grids.is_empty() && d.hits.is_empty());
+    let six = |f: &&&Instance| f.rect[2] == 6.0 && f.color == t.ansi[1];
+    assert_eq!(d.of(Kind::Fill).iter().filter(six).count(), 100);
+}
+
+#[test]
+fn play_ticks_while_shown_once_answered_and_taps_new_squares() {
+    let mut p = Play::default();
+    assert!(p.ask(&Request::Timer { ms: 100 }) && p.ask(&Request::Keys { on: true }));
+    assert!(!p.ask(&Request::Close) && p.keys);
+    // The first frame starts the count; due after 100 ms, then not until answered (or 1 s).
+    let tick = |p: &mut Play, now: f64| p.tick(now, now - 10.0);
+    assert_eq!([tick(&mut p, 1000.0), tick(&mut p, 1050.0)], [None, None]);
+    assert_eq!(tick(&mut p, 1116.0), Some(Event::Tick { ms: 116 }));
+    assert_eq!(tick(&mut p, 1300.0), None);
+    p.answered();
+    assert_eq!(tick(&mut p, 1300.0), Some(Event::Tick { ms: 184 }));
+    assert_eq!(tick(&mut p, 2400.0), Some(Event::Tick { ms: 1100 }));
+    // Hidden (not drawn for a while), none; shown again, the count starts over; 0 stops.
+    assert_eq!((p.tick(5000.0, 2400.0), tick(&mut p, 5016.0)), (None, None));
+    p.answered();
+    assert_eq!(tick(&mut p, 5117.0), Some(Event::Tick { ms: 101 }));
+    assert!(p.ask(&Request::Timer { ms: 0 }) && tick(&mut p, 9000.0).is_none());
+    // A press taps its square; a drag taps each new square of the grid pressed, none other.
+    let grids = vec![(7, RectF::new(10.0, 10.0, 64.0, 64.0), 2, 4)];
+    let mut view = View { grids, ..View::default() };
+    assert_eq!(p.tap(&view, Some(7), 50.0, 50.0), Some(Event::Tap { id: 7, cell: 3 }));
+    assert_eq!(p.tap(&view, None, 51.0, 51.0), None);
+    assert_eq!(p.tap(&view, None, 11.0, 11.0), Some(Event::Tap { id: 7, cell: 0 }));
+    assert_eq!((p.tap(&view, Some(3), 11.0, 11.0), p.tap(&view, None, 50.0, 11.0)), (None, None));
+    view.grids.clear();
+    assert_eq!(p.tap(&view, Some(7), 50.0, 50.0), None);
+}

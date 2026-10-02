@@ -7,8 +7,9 @@
 //!   always reaches the overlay. An idle desktop pays nothing for it.
 //! - **Hands.** An [`Act`] goes the way a person's pointer and keys go: a click raises the window,
 //!   tells it its focus, then presses and releases the widget's middle (`PointerDown`, then
-//!   `Click` for a button); a window verb is the title bar's control; opening an app is the home
-//!   screen's tile. Each act flashes what it touched ([`Agent::flash`]).
+//!   `Click` for a button); a tap names a grid's square, which its program hears as a pointer's
+//!   tap; a window verb is the title bar's control; opening an app is the home screen's tile.
+//!   Each act flashes what it touched ([`Agent::flash`]).
 //! - **Settling.** An act is answered by one [`Event::Acted`] once no window is
 //!   [`ui::App::busy`] or [`SETTLE_MS`] passed (a wait: once its time passed), with the scene
 //!   then; the platform's timer is armed for the deadline, and again whenever it fires before it
@@ -220,9 +221,10 @@ impl Host {
     /// A click, typing, a key or the wheel into a window, raised and focused first; its code.
     fn touch(&mut self, act: Act, out: &mut Response) -> u16 {
         let (win, id) = match act {
-            Act::Click { win, id } | Act::Type { win, id, .. } | Act::Scroll { win, id, .. } => {
-                (win, id)
-            }
+            Act::Click { win, id }
+            | Act::Type { win, id, .. }
+            | Act::Scroll { win, id, .. }
+            | Act::Tap { win, id, .. } => (win, id),
             Act::Key { win, .. } => (win, 0),
             _ => (0, 0),
         };
@@ -266,6 +268,12 @@ impl Host {
                 let (x, y) = middle(r);
                 self.agent.flash = Some((r, now));
                 AppEvent::Wheel { x, y, dy: f32::from(dy) }
+            }
+            // A grid's square, by number: the program hears the tap as from a pointer.
+            Act::Tap { cell, .. } => {
+                let Some(h) = hit else { return acted::OFF_SCREEN };
+                self.agent.flash = Some((h.rect, now));
+                AppEvent::Agent(Event::Tap { id, cell })
             }
             act => {
                 let Some(h) = hit else { return acted::OFF_SCREEN };

@@ -225,7 +225,7 @@ fn malformations_fail() {
         Node::decode(&[13, 0, 0, 0, 0, 0, 0, 6, 89, 0]),
         Some(Node::Glyph { glyph: 6, size: 89 })
     );
-    assert!([0, 20, 255].iter().all(|&kind| Node::decode(&[kind, 0, 0, 0, 0, 0, 0]).is_none()));
+    assert!([0, 21, 255].iter().all(|&kind| Node::decode(&[kind, 0, 0, 0, 0, 0, 0]).is_none()));
     // Codes: style, variant, selected, line-number and on flags, span class.
     assert!(Node::decode(&[3, 0, 0, 0, 0, 0, 0, 11, 0, 0, 0, 0]).is_none());
     assert!(Node::decode(&[4, 0, 0, 0, 0, 0, 0, 6, 0, 0, 0, 0]).is_none());
@@ -253,7 +253,7 @@ fn malformations_fail() {
     assert!(key(8, 15, 'x' as u32).is_some());
     assert!(key(0, 0, 0).is_none() && key(9, 0, 0).is_none());
     assert!(key(1, 16, 0).is_none() && key(1, 0, 0xD800).is_none());
-    assert!(Event::decode(&[14]).is_none() && Request::decode(&[10, 0, 0, 0, 0]).is_none());
+    assert!(Event::decode(&[16]).is_none() && Request::decode(&[12, 0, 0, 0, 0]).is_none());
     assert!(Event::decode(&[11, 2]).is_none() && Event::decode(&[11, 1]).is_some());
 }
 
@@ -268,6 +268,7 @@ fn agent() -> (Vec<Request>, Vec<Event>) {
         Act::Open { name: "settings".into() },
         Act::Window { win: 2, op: WinOp::Restore },
         Act::Theme { name: "Dawn".into() },
+        Act::Tap { win: 2, id: 1 << 30, cell: 199 },
     ];
     acts.iter().for_each(|a| strict(a, Act::encode, Act::decode));
     let ask = |(id, act): (u32, Act)| Request::Act { id, act: act.encode() };
@@ -328,9 +329,57 @@ fn acts_and_scenes_round_trip_strictly() {
     assert!(scene::Scene::decode(&set(bytes, at + 9, 0)).is_some());
 }
 
+/// A grid with a handler and texts, and one without either.
+fn grids() -> [Node; 2] {
+    let texts = ["x", "", "\u{e9}", "o"].map(String::from).to_vec();
+    let tap = Node::Grid { id: 1 << 30, cols: 2, cells: vec![0, 1, 8, 3], texts };
+    [tap, Node::Grid { id: 0, cols: 10, cells: vec![0; 200], texts: Vec::new() }]
+}
+
+#[test]
+fn grids_timers_ticks_keys_and_taps_round_trip_strictly() {
+    let grids = grids();
+    grids.iter().for_each(|g| strict(g, Node::encode, Node::decode));
+    let frame = Frame { nodes: vec![col(grids.to_vec())], ..Frame::default() };
+    assert_eq!(frame.encode_checked(), Some(frame.encode()));
+    let requests =
+        [Request::Timer { ms: 0 }, Request::Timer { ms: 150 }, Request::Keys { on: true }];
+    requests.iter().for_each(|r| strict(r, Request::encode, Request::decode));
+    let events = [Event::Tick { ms: 16 }, Event::Tap { id: 1 << 30, cell: 37 }];
+    events.iter().for_each(|e| strict(e, Event::encode, Event::decode));
+    // The codes allocated, after the last, fields in order.
+    assert_eq!(requests[1].encode(), [10, 150, 0, 0, 0]);
+    assert_eq!(requests[2].encode(), [11, 1]);
+    assert_eq!(events[0].encode(), [14, 16, 0, 0, 0]);
+    assert_eq!(events[1].encode(), [15, 0, 0, 0, 64, 37, 0, 0, 0]);
+    let small = Node::Grid { id: 3, cols: 2, cells: vec![1, 2], texts: Vec::new() };
+    assert_eq!(small.encode(), [20, 3, 0, 0, 0, 0, 0, 2, 0, 2, 0, 0, 0, 1, 2, 0, 0, 0, 0]);
+    assert_eq!(
+        Act::Tap { win: 1, id: 2, cell: 3 }.encode(),
+        [9, 1, 0, 0, 0, 2, 0, 0, 0, 3, 0, 0, 0]
+    );
+    // No columns, a square past 8, texts not one per square: neither checked nor decoded.
+    let bad = [
+        Node::Grid { id: 0, cols: 0, cells: vec![1], texts: Vec::new() },
+        Node::Grid { id: 0, cols: 1, cells: vec![9], texts: Vec::new() },
+        Node::Grid { id: 0, cols: 1, cells: vec![1, 2], texts: vec!["a".into()] },
+    ];
+    for g in bad {
+        let frame = Frame { nodes: vec![g.clone()], ..Frame::default() };
+        assert!(Node::decode(&g.encode()).is_none() && frame.encode_checked().is_none(), "{g:?}");
+    }
+    // A text count past what the bytes could hold, and a grid with a child.
+    let mut lie = small.encode();
+    lie.splice(15..19, [0xFF; 4]);
+    assert!(Node::decode(&lie).is_none());
+    assert!(Node::decode(&set(small.encode(), 5, 1)).is_none());
+}
+
 #[test]
 fn fuzzed_decodes_never_panic_and_stay_canonical() {
     let mut corpus = vec![sample().encode(), Frame::default().encode(), scene().encode()];
+    corpus.extend(grids().iter().map(Node::encode));
+    corpus.extend([Request::Timer { ms: 7 }.encode(), Event::Tap { id: 1, cell: 2 }.encode()]);
     let (requests, acted) = agent();
     corpus.extend(requests.iter().map(Request::encode).chain(acted.iter().map(Event::encode)));
     corpus.extend(events().iter().map(Event::encode));

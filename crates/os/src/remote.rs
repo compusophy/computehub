@@ -10,15 +10,20 @@
 //! [`Event::Change`] out at a time: the next waits for a frame, or goes before any other event.
 //! The wheel scrolls the Code under it, else the Scroll, else what does not fit
 //! ([`uiview::wheel`]); a revealed mark asks for frames while it comes in. The overlay's acts and
-//! status go to the host ([`Cx::agent`]), which answers through [`AppEvent::Agent`]; the window
-//! is busy while its program starts, and from a click or submit it was sent until it draws.
+//! status go to the host ([`Cx::agent`]), which answers through [`AppEvent::Agent`] (a tap the
+//! overlay makes goes to the program as it is); the window is busy while its program starts, and
+//! from a click, submit or tap it was sent until it draws. A program that asked for a timer
+//! ([`Request::Timer`]) gets frames while the window shows and an [`Event::Tick`] with the ms
+//! passed each time one is due and the last was answered (or a second went by); one that asked
+//! for keys ([`Request::Keys`]) gets plain keys while none of its text fields has the keyboard.
+//! A press on a Grid's square, and the mouse dragged onto another, is an [`Event::Tap`].
 
 use std::mem;
 
 use ui::icon::Glyph;
 use ui::kernel::{Spawn, wire::Stdout};
 use ui::{App, AppEvent, AppIcon, Cx, Key, Mods, Rgba, Ui, WidgetId};
-use uiview::{Texts, View};
+use uiview::{Play, Texts, View};
 use uiwire::{Event, Frame, Request};
 use vfs::Vfs;
 
@@ -117,8 +122,10 @@ pub struct Remote {
     last_key: Option<Key>,
     /// Prompts from the everything bar that wait for the program to start.
     asks: Vec<String>,
-    /// The content's corner as last drawn.
+    /// The content's corner as last drawn, and when (page ms); the timer, keys and taps.
     origin: (f32, f32),
+    drawn: f64,
+    play: Play,
 }
 
 impl Remote {
@@ -142,7 +149,7 @@ impl Remote {
     }
 
     fn post(&mut self, ev: Event, cx: &mut Cx<'_>) {
-        self.asked |= matches!(ev, Event::Click { .. } | Event::Submit { .. });
+        self.asked |= matches!(ev, Event::Click { .. } | Event::Submit { .. } | Event::Tap { .. });
         if let Some(pid) = self.pid {
             cx.kernel.post_event(pid, &ev.encode());
         }
@@ -205,12 +212,23 @@ impl Remote {
             Key::Space => (8, ' '),
             k => (KEYS.iter().position(|&x| x == k).map_or(0, |i| i as u8 + 1), '\0'),
         };
-        let wire = uiwire::Key::from_u8(code).filter(|_| chord || code <= 2);
+        // Plain arrows, letters, digits and space too, for a program that asked for keys.
+        let plain = self.play.keys && id == 0 && code > 3;
+        let wire = uiwire::Key::from_u8(code).filter(|_| chord || code <= 2 || plain);
         let Some(wire) = wire else { return false };
         let bits = [mods.meta, mods.alt, mods.ctrl, mods.shift];
         let mods = bits.iter().fold(0, |m, &b| m << 1 | u8::from(b));
         self.send(Event::Key { id, key: wire, mods, ch }, cx);
         key == Key::Escape && mem::take(&mut self.texts.focus) != 0
+    }
+
+    /// The pointer pressed (`id` the hit under it), or dragged while pressed, at `(x, y)` in the
+    /// window: a Grid's square, if new, is tapped.
+    fn tap(&mut self, id: Option<u32>, x: f32, y: f32, cx: &mut Cx<'_>) {
+        let (x, y) = (x + self.origin.0, y + self.origin.1);
+        if let Some(tap) = self.play.tap(&self.view, id, x, y) {
+            self.post(tap, cx);
+        }
     }
 
     /// Typed or pasted text for the focused Input, Code or Area, unless it
@@ -263,14 +281,17 @@ impl Remote {
                 Request::Close => cx.close_self(),
                 Request::Size { w, h } if self.frame.is_none() => cx.set_size(w, h),
                 Request::Size { .. } => {}
-                Request::Focus { id } if self.texts.has(id) => self.texts.focus = id,
+                // Focus 0 takes the keyboard from the text fields (to the program's keys).
+                Request::Focus { id } if id == 0 || self.texts.has(id) => self.texts.focus = id,
                 Request::Focus { .. } => {}
                 Request::Feedback { kind, text, context } => cx.feedback(&kind, &text, context),
                 r @ (Request::Act { .. } | Request::Status { .. }) => cx.agent(r),
+                r if self.play.ask(&r) => {}
                 r => self.ai.ask(self.pid.unwrap_or_default(), r),
             }
         }
         (self.frame, self.waiting, self.asked) = (Some(frame), false, false);
+        self.play.answered();
         self.flush(cx);
     }
 }
@@ -297,7 +318,7 @@ impl App for Remote {
     }
 
     fn animating(&self, now_ms: f64) -> bool {
-        self.view.animating(now_ms)
+        self.view.animating(now_ms) || self.play.timer > 0 && self.pid.is_some()
     }
 
     fn busy(&self) -> bool {
@@ -336,10 +357,26 @@ impl App for Remote {
                 false
             }
             AppEvent::Ask(text) => self.send(Event::Ask { text }, cx),
-            AppEvent::Click(WidgetId(id)) if id != 0 => self.send(Event::Click { id }, cx),
+            // A Grid's press was its tap.
+            AppEvent::Click(WidgetId(id))
+                if id != 0 && !self.view.grids.iter().any(|g| g.0 == id) =>
+            {
+                self.send(Event::Click { id }, cx)
+            }
             AppEvent::PointerDown { x, y, id } => {
+                self.tap(Some(id.map_or(0, |w| w.0)), x, y, cx);
                 let (x, y) = (x + self.origin.0, y + self.origin.1);
                 self.texts.press(id.map_or(0, |w| w.0), x, y)
+            }
+            AppEvent::Drag { x, y } => {
+                self.tap(None, x, y, cx);
+                false
+            }
+            AppEvent::Tick { now_ms } => {
+                if let Some(tick) = self.play.tick(now_ms, self.drawn) {
+                    self.send(tick, cx);
+                }
+                false
             }
             AppEvent::Key { key, mods } => self.key(key, mods, cx),
             AppEvent::Text(s) => self.type_text(&s, last, cx),
@@ -379,7 +416,7 @@ impl App for Remote {
 
     fn draw(&mut self, ui: &mut Ui<'_>) {
         let r = ui.rect();
-        self.origin = (r.x, r.y);
+        (self.origin, self.drawn) = ((r.x, r.y), ui.state().now_ms);
         let Some(frame) = &self.frame else {
             let t = ui.theme();
             if self.note.is_empty() {

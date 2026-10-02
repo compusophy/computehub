@@ -275,7 +275,9 @@ fn closed_apps_wait_to_be_reaped_and_their_processes_die_with_them() {
     log.take();
     assert_eq!((h.focused_app(), h.wm().focused()), (Some(WinId(1)), Some(WinId(1))));
     h.say(2, "open welcome");
-    h.tick(&mut Response::default());
+    h.tick(false, &mut Response::default());
+    assert!(log.take().is_empty(), "a frame's tick is only for apps that animate");
+    h.tick(true, &mut Response::default());
     h.settle(&mut Response::default());
     assert!(log.take().iter().all(|e| e.0 == 1));
     // A window closed in the wm directly is marked when the host settles.
@@ -696,6 +698,7 @@ fn the_overlay_acts_as_a_person_and_hears_once_the_screen_settles() {
         (Act::Scroll { win: 1, id: 0, dy: 3001 }, acted::MALFORMED),
         (Act::Type { win: 1, id: 1, text: "x".into(), submit: false }, acted::NOT_TEXT),
         (Act::Click { win: 1, id: 9 }, acted::OFF_SCREEN),
+        (Act::Tap { win: 1, id: 9, cell: 0 }, acted::OFF_SCREEN),
         (Act::Theme { name: "nope".into() }, acted::MALFORMED),
     ];
     for (i, (act, code)) in (10..).zip(fails) {
@@ -708,6 +711,9 @@ fn the_overlay_acts_as_a_person_and_hears_once_the_screen_settles() {
     assert!(log.borrow().contains(&(1, ctrl_s)));
     h.acts(21, Act::Theme { name: "dawn".into() });
     assert_eq!(h.theme.current().name, "Dawn");
+    // A tap names a grid's square: the window's program hears it as a pointer's tap.
+    h.acts(22, Act::Tap { win: 1, id: 1, cell: 4 });
+    assert!(log.borrow().contains(&(1, E::Agent(Event::Tap { id: 1, cell: 4 }))));
     let n = log.borrow().len();
     h.ask(1, vec![Ask::Act { id: 5, act: Act::Window { win: 1, op: WinOp::Close }.encode() }]);
     let no = Event::Acted { id: 5, code: acted::REFUSED, note: "".into(), scene: vec![] };

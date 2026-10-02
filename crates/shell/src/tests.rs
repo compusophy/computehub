@@ -868,6 +868,9 @@ fn the_focused_app_gets_keys_text_and_the_pointer() {
     s.up((c.x + 100.0, c.y + 10.0));
     assert!(s.input(Input::Wheel { x: c.x + 5.0, y: c.y + 5.0, dy: 3.0 }).consumed);
     assert_eq!(log.take().len(), 2);
+    // A mouse held down on content and moved: the app hears where to (a grid draws by it).
+    s.drag((c.x + 10.0, c.y + 10.0), (c.x + 30.0, c.y + 12.0));
+    assert_eq!(log.take()[1], ("welcome", E::Drag { x: 30.0, y: 12.0 }));
 }
 
 #[test]
