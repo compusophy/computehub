@@ -63,7 +63,7 @@ crates/      the OS (boot, kernel, worker); speaks to programs by WASI, uiwire
   uiwire/    remote UI protocol: GUI programs send widget trees, get events
   uiview/    draws them with ui; holds edited text
   host/      wm + one app per window; agent; grabs, squeeze; motion, frames
-  home/      top bar, home grid (every app), AI button + dock, menus, touch
+  home/      top bar, home grid (every app), dock + Assistant row, menus, touch
   shell/     the desktop: window chrome, keys, overlay; wires host + home (no web deps)
   platform/  the browser boundary: canvas, WebGL2, input, textarea, fetch,
              frames on demand, localStorage, workers, beacon

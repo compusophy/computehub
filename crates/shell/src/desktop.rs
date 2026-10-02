@@ -18,10 +18,9 @@ pub(crate) enum Target {
     /// A top bar's button, and the bare bar.
     Bar(home::bar::Button),
     Top,
-    /// A dock tile, the AI button, and a bare wing of the dock.
+    /// A dock tile, and the Assistant's in the corner.
     Dock(usize),
-    Ai,
-    Shelf,
+    Assistant,
     /// A window's control (minimize, maximize, close), titlebar, content, and
     /// an edge or corner (which way it resizes).
     Ctl(WinId, usize),
@@ -41,7 +40,7 @@ impl Target {
     /// Whether it acts on release (and highlights).
     pub(crate) fn is_button(self) -> bool {
         use Target::*;
-        matches!(self, Bar(_) | Dock(_) | Ai | Ctl(..) | Icon(_) | Menu(_))
+        matches!(self, Bar(_) | Dock(_) | Assistant | Ctl(..) | Icon(_) | Menu(_))
     }
 
     pub(crate) fn win(self) -> Option<WinId> {
@@ -54,8 +53,8 @@ impl Target {
 }
 
 impl Shell {
-    /// What is under `(x, y)`: a menu (which hides the rest), the top bar, the strip, the
-    /// windows top to bottom, then the home screen.
+    /// What is under `(x, y)`: a menu (which hides the rest), the top bar, the bottom row's
+    /// tiles, the windows top to bottom, then the home screen.
     pub(crate) fn hit(&self, x: f32, y: f32) -> Option<Target> {
         if let Some((m, ..)) = &self.menu {
             return Some(
@@ -120,7 +119,7 @@ impl Shell {
 
     /// The pointer's look; `text` when over text an app edits.
     pub(crate) fn cursor_for(&self, text: bool) -> Cursor {
-        let carried = self.grid.carry.as_ref().is_some_and(|c| c.lifted && !c.touch);
+        let carried = self.carrying() && !self.finger;
         match (self.grab, self.hover) {
             (Some(Grab::Move { .. }), _) => Cursor::Grabbing,
             _ if carried => Cursor::Grabbing,
@@ -146,10 +145,10 @@ impl Shell {
             return;
         }
         let overlay = matches!(hit, Some(Target::Body(OVERLAY)));
-        self.takeover(!overlay && hit != Some(Target::Ai), out);
+        self.takeover(!overlay && hit != Some(Target::Assistant), out);
         match hit {
             Some(Target::Desktop) => self.overlay = Default::default(),
-            Some(Target::Ai) => {}
+            Some(Target::Assistant) => {}
             _ => self.overlay.focus = overlay,
         }
         self.armed = hit.filter(|h| h.is_button());
@@ -212,9 +211,9 @@ impl Shell {
     }
 
     /// Lifts a finger (it may fling; a gesture's lift says so), drops a held window (snapping
-    /// it) or carried icons (a finger's picked-up icon lifted unmoved opens its menu instead),
-    /// ends a selection box; button 0 fires the armed button, or presses into content if a
-    /// finger's tap, then clicks the pressed widget, if still over it.
+    /// it), carried icons or a carried dock tile (a finger's pick-up lifted unmoved opens its
+    /// menu instead), ends a selection box; button 0 fires the armed button, or presses into
+    /// content if a finger's tap, then clicks the pressed widget, if still over it.
     pub(crate) fn release(&mut self, primary: bool, out: &mut Response) {
         let ((x, y), now) = (self.pointer.unwrap_or_default(), self.host.now_ms);
         if let Some((finger, scroll)) = self.touch.take() {
@@ -222,9 +221,9 @@ impl Shell {
             // A press into content that outlived a long press is a tap.
             out.gesture = finger.done && self.down.is_none();
         }
-        let held = self.grid.carry.as_ref().filter(|c| c.touch && c.lifted && !c.moved);
-        let held = held.map(|c| c.from);
+        let held = self.carried().and_then(|c| c.held());
         self.drop_icons(held.is_none());
+        self.dock.drop(held.is_none(), &mut self.pending);
         self.grid.lasso = None;
         if let Some(at) = held {
             self.secondary(at, true, out);
@@ -261,11 +260,11 @@ impl Shell {
     }
 
     fn activate(&mut self, target: Target, out: &mut Response) {
-        let name = |s: &Shell, i: usize| s.dock.get(i).map_or(String::new(), |d| d.0.clone());
+        let name = |s: &Shell, i: usize| s.tiles.get(i).map_or(String::new(), |d| d.0.clone());
         match target {
             Target::Bar(b) => self.host.show(b.app(), out),
             Target::Dock(i) => self.host.toggle(&name(self, i), out),
-            Target::Ai => self.toggle_overlay(false),
+            Target::Assistant => self.toggle_overlay(false),
             Target::Ctl(w, i) => {
                 self.host.apply([Cmd::Minimize, Cmd::ToggleMaximize, Cmd::Close][i](w))
             }

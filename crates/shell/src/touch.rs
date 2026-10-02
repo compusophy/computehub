@@ -1,5 +1,5 @@
 //! Fingers: scrolling what a finger holds as the wheel does, flinging it on, and long presses
-//! (see `home::touch`), which pick icons up.
+//! (see `home::touch`), which pick icons and kept dock tiles up.
 
 use host::{content_rect, rectf};
 use ui::AppEvent;
@@ -45,21 +45,32 @@ impl Shell {
     }
 
     /// A frame: a finger held still long enough ([`home::touch::Touch::held`]: after a stall,
-    /// 100 ms more, so a lift queued behind it is heard first) picks up the icon under it
-    /// where the finger is now (its drag starts from there; its menu waits for it to lift
-    /// unmoved), else is a secondary press where it went down. Only a menu that opens ends what
-    /// the finger holds (a button, a window, a press into content), and the menu is then what is
-    /// under it; a long press that opens nothing, such as one on an app's widget, is still a tap
-    /// when it lifts there. So a late lift (a busy page handles it after the frame that saw
-    /// 500 ms pass) loses no tap, on what has a menu or not.
+    /// 100 ms more, so a lift queued behind it is heard first) picks up the icon or kept dock
+    /// tile under it where the finger is now (its drag starts from there; its menu waits for it
+    /// to lift unmoved), else is a secondary press where it went down. Only a menu that opens
+    /// ends what the finger holds (a button, a window, a press into content), and the menu is
+    /// then what is under it; a long press that opens nothing, such as one on an app's widget,
+    /// is still a tap when it lifts there. So a late lift (a busy page handles it after the frame
+    /// that saw 500 ms pass) loses no tap, on what has a menu or not.
     pub(crate) fn hold(&mut self, out: &mut Response) {
         let now = self.host.now_ms;
         let Some((finger, _)) = &mut self.touch else { return };
         if finger.held(now) {
             let (at, menu, here) = (finger.at, self.menu.is_some(), self.pointer);
-            if let (Some(Target::Icon(i)), false) = (self.hit(at.0, at.1), menu) {
-                let carry = self.grid.pick(i, here.unwrap_or(at), true);
-                (self.grid.carry, self.armed, out.redraw) = (carry, None, true);
+            let from = here.unwrap_or(at);
+            let picked = match self.hit(at.0, at.1).filter(|_| !menu) {
+                Some(Target::Icon(i)) => {
+                    self.grid.carry = self.grid.pick(i, from, true);
+                    true
+                }
+                Some(Target::Dock(i)) => {
+                    self.dock.carry = self.dock.pick(i, from, true);
+                    self.dock.carry.is_some()
+                }
+                _ => false,
+            };
+            if picked {
+                (self.armed, out.redraw) = (None, true);
                 return;
             }
             self.secondary(at, true, out);

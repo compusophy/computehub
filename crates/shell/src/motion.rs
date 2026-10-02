@@ -16,23 +16,25 @@ const CLOSE_MS: f32 = 140.0;
 const DOCK_MS: f32 = 220.0;
 const MOVE_MS: f32 = 200.0;
 const LIFT_MS: f32 = 120.0;
+const SLIDE_MS: f32 = 180.0;
 const PREVIEW_MS: f32 = 160.0;
 const OPEN_SCALE: f32 = 0.96;
 
-/// The tweens of every window (closing and minimized too), each dock tile's lift (0 to 1, by
-/// app name) and the AI button's, and the snap preview.
+/// The tweens of every window (closing and minimized too), each dock tile's lift (0 to 1) and
+/// place (by app name) and the Assistant's lift, and the snap preview.
 #[derive(Default)]
 pub(crate) struct Motion {
     pub wins: Vec<(WinId, Tween<Vis>)>,
-    pub lifts: Vec<(String, Tween<f32>)>,
+    pub tiles: Vec<(String, Tween<f32>, Tween<f32>)>,
     pub ai: Tween<f32>,
     pub preview: Tween<Vis>,
 }
 
 impl Motion {
-    /// How lifted the dock tile of `name` is at `now`.
-    pub(crate) fn lift(&self, name: &str, now: f64) -> f32 {
-        self.lifts.iter().find(|l| l.0 == name).map_or(0.0, |l| l.1.value(now))
+    /// How lifted the dock tile of `name` is at `now`, and where its left edge shows.
+    pub(crate) fn tile(&self, name: &str, now: f64) -> Option<(f32, f32)> {
+        let t = self.tiles.iter().find(|t| t.0 == name)?;
+        Some((t.1.value(now), t.2.value(now)))
     }
 }
 
@@ -59,7 +61,7 @@ impl Shell {
                 Some(v) if cur.a < 1.0 => (v, DOCK_MS),
                 Some(v) => (v, MOVE_MS),
                 None => {
-                    let i = self.dock.iter().position(|d| d.2.contains(&win));
+                    let i = self.tiles.iter().position(|d| d.2.contains(&win));
                     (docked(rest.rect, i.map_or(self.dock_rect(), |i| self.dock_tile(i))), DOCK_MS)
                 }
             };
@@ -75,25 +77,31 @@ impl Shell {
         }
         let host = &self.host;
         self.motion.wins.retain(|e| host.win(e.0).is_some());
-        self.sync_lifts(now);
+        self.sync_tiles(now);
         self.sync_preview(now);
         self.grid.sync(now, self.instant);
     }
 
-    /// Each dock tile's lift, and the AI button's, heads up while hovered, else down.
-    fn sync_lifts(&mut self, now: f64) {
+    /// Each dock tile's lift, and the Assistant's, heads up while hovered, else down; each tile
+    /// slides to its place (a new one shows there; on a new screen size, all at once).
+    fn sync_tiles(&mut self, now: f64) {
         let hovered = match self.hover {
-            Some(Target::Dock(i)) => self.dock.get(i).map(|d| d.0.as_str()),
+            Some(Target::Dock(i)) => self.tiles.get(i).map(|d| d.0.as_str()),
             _ => None,
         };
-        let old = std::mem::take(&mut self.motion.lifts);
-        let lift =
-            |name: &String| old.iter().find(|l| &l.0 == name).map_or(Tween::new(0.0), |l| l.1);
-        self.motion.lifts = self.dock.iter().map(|d| (d.0.clone(), lift(&d.0))).collect();
-        for (name, t) in &mut self.motion.lifts {
-            t.to(f32::from(u8::from(hovered == Some(name.as_str()))), now, LIFT_MS);
+        let old = std::mem::take(&mut self.motion.tiles);
+        for (i, (name, ..)) in self.tiles.iter().enumerate() {
+            let to = self.dock_tile(i).x;
+            let was = old.iter().find(|t| &t.0 == name);
+            let (mut lift, mut at) = was.map_or((Tween::new(0.0), Tween::new(to)), |t| (t.1, t.2));
+            lift.to(f32::from(u8::from(hovered == Some(name.as_str()))), now, LIFT_MS);
+            match self.instant {
+                true => at = Tween::new(to),
+                false => at.to(to, now, SLIDE_MS),
+            }
+            self.motion.tiles.push((name.clone(), lift, at));
         }
-        let ai = f32::from(u8::from(self.hover == Some(Target::Ai)));
+        let ai = f32::from(u8::from(self.hover == Some(Target::Assistant)));
         self.motion.ai.to(ai, now, LIFT_MS);
     }
 
@@ -116,7 +124,10 @@ impl Shell {
     pub(crate) fn arm(&mut self, now: f64) {
         let m = &mut self.motion;
         m.wins.iter_mut().for_each(|w| w.1.arm(now));
-        m.lifts.iter_mut().for_each(|l| l.1.arm(now));
+        for t in &mut m.tiles {
+            t.1.arm(now);
+            t.2.arm(now);
+        }
         self.grid.arm(now);
         m.ai.arm(now);
         m.preview.arm(now);
@@ -135,7 +146,7 @@ impl Shell {
     pub fn frame_in(&self) -> Option<u32> {
         let (now, m) = (self.host.now_ms, &self.motion);
         if m.wins.iter().any(|w| w.1.is_running(now))
-            || m.lifts.iter().any(|l| l.1.is_running(now))
+            || m.tiles.iter().any(|t| t.1.is_running(now) || t.2.is_running(now))
             || self.grid.moving(now)
             || m.ai.is_running(now)
             || m.preview.is_running(now)

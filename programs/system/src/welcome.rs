@@ -9,8 +9,8 @@ use crate::{Disk, View, center, space, text};
 
 const TITLE: &str = "compusophy";
 const LINE: &str = "a computer in your browser \u{2014} free AI, nothing to install.";
-pub(crate) const HINT: &str = "Every app is on the home screen; the AI button at the bottom \
-center opens the Assistant.";
+pub(crate) const HINT: &str = "Every app is on the home screen; the sparkle at the bottom \
+right opens the Assistant.";
 /// The apps, rows 1 to 7: the name to open, what it is called, what it is for, its icon.
 #[rustfmt::skip]
 pub(crate) const APPS: [(&str, &str, &str, Glyph, u32); 7] = [
