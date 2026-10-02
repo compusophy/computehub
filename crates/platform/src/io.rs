@@ -11,7 +11,7 @@ use web_sys::{
 };
 
 use crate::ctl::{Effect, is_relative_url};
-use crate::{Event, Shared, arm, dispatch, has, js_text, proc, request_frame};
+use crate::{Event, Shared, arm, bytes, dispatch, has, js_text, proc, request_frame};
 
 /// Invisible and out of the way; 16 px so iOS does not zoom when it focuses.
 const SINK_STYLE: &str = "position:fixed;left:0;top:0;width:1px;height:1px;margin:0;\
@@ -148,7 +148,7 @@ fn on_response(s: &Rc<Shared>, id: u32, v: JsValue) {
 }
 
 fn on_body(s: &Rc<Shared>, id: u32, buf: JsValue) {
-    fetched(s, id, Ok(Uint8Array::new(&buf).to_vec()));
+    fetched(s, id, Ok(bytes(&Uint8Array::new(&buf))));
 }
 
 /// `"HTTP <status>"`.
@@ -233,7 +233,7 @@ fn on_stream(s: &Rc<Shared>, id: u32, v: JsValue) {
             t.reader.as_ref().map(|_| Vec::new())
         }
         Some(_) if field("done").is_truthy() => None,
-        Some(_) => Some(Uint8Array::new(&field("value")).to_vec()),
+        Some(_) => Some(bytes(&Uint8Array::new(&field("value")))),
     };
     let status = t.status;
     drop(list);
