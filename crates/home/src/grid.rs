@@ -71,9 +71,9 @@ pub enum Press {
     Other,
 }
 
-/// The grid: its icons (in the reading order of the layout last arranged), where each is kept
-/// (once listed, by the icons' order; before, as stored) and where each shows (a cell's
-/// position in reading order: [`place::resolve`]), the files' generation they were listed at,
+/// The grid: its icons (in their order: as kept, new ones last), where each is kept (once
+/// listed, by the icons' order; before, as stored) and where each shows (a cell's position in
+/// reading order: [`place::resolve`]), the files' generation they were listed at,
 /// the icons selected, carried, the selection box's corner, where each icon slides, and the
 /// area it lays out in (whether a phone's).
 #[derive(Default)]
@@ -138,32 +138,14 @@ impl Grid {
         true
     }
 
-    /// Keeps where the icons show as their cells in this layout (the preference to `fx`): if
-    /// `all` (a drop), every one's, the icons then in its reading order; else but those kept for
-    /// a larger screen ([`place::keep`]), the icons as they are (a new one stays last).
+    /// Keeps where the icons show as their cells in this layout (the preference to `fx`): every
+    /// one's if `all` (a drop: what the person sees stays), else but those kept for a larger
+    /// screen ([`place::keep`]).
     fn keep(&mut self, all: bool, fx: &mut Vec<Effect>) {
         let dims = self.dims();
         place::keep(&mut self.places, &self.spots, dims, all);
-        if all {
-            self.reorder();
-        }
         let value = place::format(&self.places);
         fx.push(Effect::Pref { key: icons::PREF.to_string(), value });
-    }
-
-    /// Puts the icons, with their places and slides, in the reading order of where they show.
-    fn reorder(&mut self) {
-        let mut order: Vec<usize> = (0..self.icons.len()).collect();
-        order.sort_by_key(|&i| self.spots.get(i).copied().unwrap_or(usize::MAX));
-        let (icons, places) = (mem::take(&mut self.icons), mem::take(&mut self.places));
-        let cells = mem::take(&mut self.cells);
-        let whole = cells.len() == icons.len();
-        for i in order {
-            self.icons.push(icons[i].clone());
-            self.places.push(places[i].clone());
-            self.cells.extend(cells.get(i).filter(|_| whole));
-        }
-        self.lay();
     }
 
     /// Where every icon shows while `c` is carried: the carried landing where the one pressed is

@@ -348,6 +348,11 @@ fn places_read_the_old_order_and_keep_each_layouts_cells() {
     assert_eq!(place::format(&p), "@2,studio:0.0:3.1,/apps/x:y.app::0.0,files:2.5:,bad::");
     assert_eq!((place::parse("@2"), place::parse("")), (vec![], vec![]));
     assert_eq!(names(&place::parse("@2,files")), ["files"]);
+    let odd = place::parse("@2,a:+1.0:65536.0,b:12.65535:.3");
+    assert_eq!(
+        odd.iter().map(|p| p.cells).collect::<Vec<_>>(),
+        [[None; 2], [Some((12, 65535)), None]]
+    );
     // The apps as kept first (unknown ones dropped), new ones after with no cells.
     let apps = ["studio", "assistant", "terminal", "files", "clock.app"].map(String::from);
     let (got, kept, new) = place::arrange(&old, apps.to_vec(), |n| n.as_str());
@@ -524,30 +529,26 @@ fn icons_carried_past_their_travel_land_in_any_cell_and_stay() {
     g.sync(10.0, false);
     assert!(g.moving(10.0));
     // Dropped: there it stays, its own cell stays empty, and every cell is kept (this layout's;
-    // the phone's has none yet), the icons in reading order.
+    // the phone's has none yet), the icons in their order.
     g.drop(true, Some(mid(3)), &mut fx);
-    assert_eq!(
-        (labels(&g)[..4].to_vec(), g.spots[0]),
-        (vec!["Assistant", "Terminal", "Studio", "Files"], 1)
-    );
-    let kept = "@2,assistant:0.1:,terminal:0.2:,studio:0.3:,files:0.4:,settings:0.5:,".to_string()
+    assert_eq!((labels(&g)[0], &g.spots), ("Studio", &vec![3, 1, 2, 4, 5, 6, 7, 8]));
+    let kept = "@2,studio:0.3:,assistant:0.1:,terminal:0.2:,files:0.4:,settings:0.5:,".to_string()
         + "feedback:1.0:,about:1.1:,welcome:1.2:";
     assert_eq!(fx, [pref(&kept)]);
     // Dropped on an empty cell far off, it goes there and nothing else moves; reloaded, every
     // icon is where it was.
-    let (before, far) = (g.spots.clone(), mid(40));
-    g.press(Press::Icon(1), mid(2), false);
+    let far = mid(40);
+    g.press(Press::Icon(2), mid(2), false);
     g.carry_to(Some(far));
     g.drop(true, Some(far), &mut fx);
-    assert_eq!((spot(&g, "terminal"), &g.spots[..7]), (Some(40), &[1, 3, 4, 5, 6, 7, 8][..]));
-    assert!(before.iter().all(|s| *s == 2 || g.spots.contains(s)));
+    assert_eq!(g.spots, [3, 1, 40, 4, 5, 6, 7, 8]);
     let Some(Effect::Pref { value, .. }) = fx.last() else { panic!("kept") };
     let h = grid(Some(value.as_str()));
     assert_eq!((labels(&h), &h.spots), (labels(&g), &g.spots));
     // Escape, or the pointer leaving (a drop that keeps nothing), puts it back: it slides back
     // from where it showed, and nothing changes.
     for escape in [true, false] {
-        g.press(Press::Icon(0), mid(1), false);
+        g.press(Press::Icon(0), mid(3), false);
         g.carry_to(Some(mid(6)));
         match escape {
             true => assert_eq!(g.key(Key::Escape, Mods::default(), Some(mid(6))), Some(vec![])),
@@ -558,14 +559,14 @@ fn icons_carried_past_their_travel_land_in_any_cell_and_stay() {
     }
     // Moved, but landing where it was: no change, nothing kept.
     let near = (mid(3).0 + 9.0, mid(3).1);
-    g.press(Press::Icon(1), mid(3), false);
+    g.press(Press::Icon(0), mid(3), false);
     g.carry_to(Some(near));
     g.drop(true, Some(near), &mut fx);
-    assert!(fx.len() == 2 && labels(&g)[1] == "Studio");
+    assert!(fx.len() == 2 && g.spots[0] == 3);
     // Carried below the grid (over the bottom row), it heads back to its cell, its app offered
     // to the dock; dropped there, nothing moves.
     let low = (300.0, 760.0);
-    g.press(Press::Icon(1), mid(3), false);
+    g.press(Press::Icon(0), mid(3), false);
     assert!(g.carry_to(Some(low)) && g.below(Some(mid(3))).is_empty());
     let got = (g.carry.as_ref().map(|c| c.slot), g.below(Some(low)));
     assert_eq!(got, (Some(3), vec!["studio".to_string()]));
@@ -605,10 +606,9 @@ fn a_phone_keeps_icons_where_dropped_and_a_wide_screen_its_own_arrangement() {
     g.carry = g.pick(1, mid(&g, 1), true);
     g.carry_to(Some(mid(&g, 23)));
     g.drop(true, Some(mid(&g, 23)), &mut fx);
-    assert_eq!((spot(&g, "studio"), &g.spots), (Some(23), &vec![0, 2, 3, 4, 5, 6, 7, 23]));
-    let kept = "@2,files::0.0,assistant::2.0,terminal::3.0,settings::0.1,feedback::1.1,"
-        .to_string()
-        + "about::2.1,welcome::3.1,studio::3.5";
+    assert_eq!((spot(&g, "studio"), &g.spots), (Some(23), &vec![0, 23, 2, 3, 4, 5, 6, 7]));
+    let kept = "@2,files::0.0,studio::3.5,assistant::2.0,terminal::3.0,settings::0.1,".to_string()
+        + "feedback::1.1,about::2.1,welcome::3.1";
     let kept = kept.as_str();
     assert_eq!(fx, [pref(kept)]);
     // Reloaded, every icon is where it was. A new app takes the first free cell, Studio's old.
@@ -627,8 +627,8 @@ fn a_phone_keeps_icons_where_dropped_and_a_wide_screen_its_own_arrangement() {
     h.area.h = 688.0;
     h.sync(0.0, true);
     assert_eq!(spot(&h, "studio"), Some(23));
-    // A wide screen keeps its own arrangement: never arranged there, the icons packed in the
-    // phone's reading order (the new one last). Arranged there (Files carried to the next
+    // A wide screen keeps its own arrangement: never arranged there, the icons packed in their
+    // order (as kept before, the new one last). Arranged there (Files carried to the next
     // column), the phone's stays as it was, and both are kept.
     (h.area, h.narrow) = (AREA, false);
     h.sync(0.0, true);
@@ -636,11 +636,10 @@ fn a_phone_keeps_icons_where_dropped_and_a_wide_screen_its_own_arrangement() {
     h.press(Press::Icon(0), mid(&h, 0), false);
     h.carry_to(Some(mid(&h, 6)));
     h.drop(true, Some(mid(&h, 6)), &mut fx);
-    let names = ["files", "welcome", "studio", "/apps/clock.app"];
-    assert_eq!(names.map(|n| spot(&h, n)), [Some(6), Some(7), Some(8), Some(9)]);
+    assert_eq!(h.spots, [6, 1, 2, 3, 4, 5, 7, 8, 9]);
     let Some(Effect::Pref { value, .. }) = fx.last() else { panic!("kept") };
-    let ends = value.ends_with(",studio:1.2:3.5,/apps/clock.app:1.3:1.0");
-    assert!(value.contains(",files:1.0:0.0,") && ends, "{value}");
+    let ends = value.ends_with(",welcome:1.2:3.1,/apps/clock.app:1.3:1.0");
+    assert!(value.starts_with("@2,files:1.0:0.0,studio:0.1:3.5,") && ends, "{value}");
     (h.area, h.narrow) = (phone, true);
     h.sync(0.0, true);
     let names = ["files", "/apps/clock.app", "assistant", "studio"];
@@ -678,9 +677,7 @@ fn a_box_selects_icons_which_open_and_move_together_and_a_finger_picks_one_up() 
     assert_eq!(g.carry.as_ref().map(|c| c.icons.clone()), Some(vec![0, 1]));
     g.carry_to(Some(mid(5)));
     g.drop(true, Some(mid(5)), &mut fx);
-    let order =
-        ["Terminal", "Files", "Studio", "Assistant", "Settings", "Feedback", "About", "Welcome"];
-    assert_eq!((labels(&g), &g.spots), (order.to_vec(), &(2..10).collect::<Vec<_>>()));
+    assert_eq!(g.spots, [4, 5, 2, 3, 6, 7, 8, 9]);
     // Carried, the one pressed shows where the pointer holds it, two of the rest behind it.
     let mut g = grid(None);
     g.selected = ["studio", "assistant", "terminal", "files"].map(String::from).into();

@@ -2,16 +2,14 @@
 //! the grid, staying where the person put it, empty cells staying empty. A cell is a column and
 //! a row. A wide screen's grid (columns down from the top left, as many rows as fit) and a
 //! phone's (rows of four) differ in shape, so each keeps its own arrangement: one the person
-//! never arranged shows the apps packed in order, the reading order of the last one arranged
-//! (until then, the apps' own), new ones after. From its first change on (a drop, or a new app
-//! there), every icon there has its cell.
+//! never arranged shows the apps packed in their order (the apps' own, or the order kept before
+//! cells were; new ones last). From its first change on (a drop, or a new app there), every
+//! icon there has its cell.
 //!
 //! Kept as the `home.order` preference ([`format()`]): `@2`, then each app as
 //! `name:wide:narrow`, a cell as `col.row` or empty for none. Before `@2` it held the names
 //! alone, in order, which [`parse`] reads as places with no cells: each layout packed in that
 //! order, so nothing moves.
-
-use std::collections::VecDeque;
 
 /// A cell: its column and row.
 pub type Cell = (u16, u16);
@@ -118,7 +116,13 @@ fn entry(item: &str) -> Place {
 /// A stored cell, `col.row`.
 fn cell(s: &str) -> Option<Cell> {
     let (c, r) = s.split_once('.')?;
-    Some((c.parse().ok()?, r.parse().ok()?))
+    Some((num(c)?, num(r)?))
+}
+
+/// A stored number: decimal digits, at least one (not `parse`: a few hundred bytes of boot).
+fn num(s: &str) -> Option<u16> {
+    let digit = |n: u16, b: u8| n.checked_mul(10)?.checked_add(u16::from(b.checked_sub(b'0')?));
+    s.bytes().try_fold(0, |n, b| digit(n, b).filter(|_| b <= b'9')).filter(|_| !s.is_empty())
 }
 
 /// `places` as stored: `@2`, then each (but one without a name or with a comma in it).
@@ -224,31 +228,28 @@ pub fn plan(spots: &[usize], carried: &[usize], lead: usize, to: usize, dims: Di
 
 /// Where `carried` land with the `lead` at `to`: each the same columns and rows from it as now,
 /// the group moved whole and kept inside the cells shown; one larger than the grid, the lead
-/// at `to` and the rest after it, in their reading order.
+/// at `to` and the rest after it, in order.
 fn group(spots: &[usize], carried: &[usize], lead: usize, to: usize, dims: Dims) -> Vec<usize> {
     let at = |p: usize| {
         let (c, r) = dims.cell(p);
-        (i64::from(c), i64::from(r))
+        (i32::from(c), i32::from(r))
     };
-    let (l, t) = (at(spots[lead]), at(to));
-    let offs: Vec<(i64, i64)> =
-        carried.iter().map(|&k| at(spots[k])).map(|(c, r)| (c - l.0, r - l.1)).collect();
-    let span = |f: fn(&(i64, i64)) -> i64| {
-        (offs.iter().map(f).min().unwrap_or(0), offs.iter().map(f).max().unwrap_or(0))
-    };
-    let ((c0, c1), (r0, r1)) = (span(|o| o.0), span(|o| o.1));
-    let fit = |v: usize| i64::try_from(v).unwrap_or(i64::MAX);
-    let (cols, rows) = (fit(dims.cols), fit(dims.rows));
-    if c1 - c0 < cols && r1 - r0 < rows {
-        let c = t.0.max(-c0).min(cols - 1 - c1);
-        let r = t.1.max(-r0).min(rows - 1 - r1);
-        let index = |(dc, dr): &(i64, i64)| dims.index((c + dc) as usize, (r + dr) as usize);
-        return offs.iter().map(index).collect();
+    let ((lc, lr), (tc, tr)) = (at(spots[lead]), at(to));
+    let offs: Vec<(i32, i32)> =
+        carried.iter().map(|&k| at(spots[k])).map(|(c, r)| (c - lc, r - lr)).collect();
+    // The group's extent around the lead (which is at 0, 0).
+    let (mut lo, mut hi) = ((0, 0), (0, 0));
+    for &(c, r) in &offs {
+        (lo, hi) = ((lo.0.min(c), lo.1.min(r)), (hi.0.max(c), hi.1.max(r)));
     }
-    let mut after: Vec<usize> = carried.iter().copied().filter(|&k| k != lead).collect();
-    after.sort_by_key(|&k| spots[k]);
-    let rank = |k: usize| after.iter().position(|&j| j == k).map_or(0, |i| i + 1);
-    carried.iter().map(|&k| to.saturating_add(rank(k))).collect()
+    let fit = |v: usize| i32::try_from(v).unwrap_or(i32::MAX);
+    let (cols, rows) = (fit(dims.cols), fit(dims.rows));
+    if hi.0 - lo.0 >= cols || hi.1 - lo.1 >= rows {
+        let rank = |k: usize| carried.iter().filter(|&&j| j != lead && j <= k && k != lead).count();
+        return carried.iter().map(|&k| to.saturating_add(rank(k))).collect();
+    }
+    let (c, r) = (tc.max(-lo.0).min(cols - 1 - hi.0), tr.max(-lo.1).min(rows - 1 - hi.1));
+    offs.iter().map(|&(dc, dr)| dims.index((c + dc) as usize, (r + dr) as usize)).collect()
 }
 
 /// The icons not `carried` (at `spots`) moved off the `claimed` cells, walking from the first
@@ -265,7 +266,8 @@ fn shove(
     let mut out = spots.to_vec();
     let along = |p: usize, c: usize| if up { c > p } else { c < p };
     let first = if up { claimed.iter().min() } else { claimed.iter().max() };
-    let (mut p, mut queue) = (*first?, VecDeque::new());
+    // Those waiting for a cell, in order: the queue from `head` on.
+    let (mut p, mut queue, mut head) = (*first?, Vec::new(), 0);
     loop {
         if up && p >= end {
             return None;
@@ -273,13 +275,13 @@ fn shove(
         let here = (0..out.len()).find(|&i| out[i] == p && !carried.contains(&i));
         if claimed.contains(&p) {
             queue.extend(here);
-        } else if let Some(i) = queue.pop_front() {
-            out[i] = p;
+        } else if let Some(&i) = queue.get(head) {
+            (out[i], head) = (p, head + 1);
             queue.extend(here);
         }
         let next = claimed.iter().copied().filter(|&c| along(p, c));
         let next = if up { next.min() } else { next.max() };
-        p = match (queue.is_empty(), next) {
+        p = match (head == queue.len(), next) {
             (true, None) => return Some(out),
             (true, Some(c)) => c,
             (false, _) if up => p.saturating_add(1),

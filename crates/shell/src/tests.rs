@@ -650,7 +650,7 @@ fn a_finger_held_still_long_presses_and_only_a_menu_ends_its_press() {
     assert!(!s.grid.carry.as_ref().unwrap().moved);
     s.to((STUDIO.0, STUDIO.1 + 192.0));
     s.up((STUDIO.0, STUDIO.1 + 192.0));
-    assert!(s.menu.is_none() && s.labels_home()[..3] == ["Assistant", "Studio", "Terminal"]);
+    assert!(s.menu.is_none() && s.grid.spots[..3] == [2, 1, 3]);
     s.push((600.0, 640.0), 0, true);
     s.to((400.0, 500.0));
     assert!(s.grid.lasso.is_none() && s.up((400.0, 500.0)).gesture);
@@ -770,7 +770,7 @@ fn icons_move_and_open_by_the_pointer_and_the_keys() {
     assert!(
         r.cursor == Some(Cursor::Grabbing) && s.hit(cell(3).0, cell(3).1) == Some(Target::Desktop)
     );
-    let kept = "@2,assistant:0.1:,terminal:0.2:,studio:0.3:,files:0.4:,settings:0.5:,feedback:1.0:";
+    let kept = "@2,studio:0.3:,assistant:0.1:,terminal:0.2:,files:0.4:,settings:0.5:,feedback:1.0:";
     let order = [kept, ",about:1.1:,welcome:1.2:"].concat();
     assert_eq!(s.up(cell(3)).effects, [Effect::Pref { key: "home.order".into(), value: order }]);
     assert!(s.names() == ["welcome"] && log.take().iter().all(|e| !matches!(e.1, E::Click(_))));
