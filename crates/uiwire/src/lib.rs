@@ -462,9 +462,12 @@ impl Node {
             19 => Self::Strip { id, gap: r.u8()?, children: Vec::new() },
             20 => {
                 let (cols, cells) = (r.u16()?, r.bytes()?.to_vec());
-                let n = r.count().filter(|n| *n <= r.0.len() / 4)?;
-                let texts = (0..n).map(|_| r.str()).collect::<Option<Vec<_>>>()?;
-                grid(cols, &cells, n).then_some(Self::Grid { id, cols, cells, texts })?
+                let n = r.count().filter(|n| *n <= r.0.len() / 4 && grid(cols, &cells, *n))?;
+                let mut texts = Vec::with_capacity(n);
+                for _ in 0..n {
+                    texts.push(r.str()?);
+                }
+                Self::Grid { id, cols, cells, texts }
             }
             _ => return None,
         };

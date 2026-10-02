@@ -127,7 +127,8 @@ pub fn cell(view: &View, id: u32, x: f32, y: f32) -> Option<u32> {
 /// A grid's square in `w` across `cols`: whole device px, 6 to 32 logical px.
 fn side(ts: &TextSystem, w: f32, cols: u16) -> f32 {
     let d = ts.dpr();
-    (w * d / f32::from(cols)).floor().clamp((6.0 * d).ceil(), (32.0 * d).floor()) / d
+    // Not `clamp`: its panic message would link float formatting into the boot.
+    (w * d / f32::from(cols)).floor().min((32.0 * d).floor()).max((6.0 * d).ceil()) / d
 }
 
 /// A Scroll as last drawn: its id, how far down it is, its content's height and its rect.
@@ -553,11 +554,12 @@ fn grid(
     if id != 0 {
         ui.hit(WidgetId(id), at, Sense::Click);
         if ui.list().sem().is_some() {
-            let mut rows = format!("{cols} columns");
-            for (i, c) in cells.iter().enumerate() {
-                rows.extend((i % n == 0).then_some('\n').into_iter().chain([char::from(b'0' + c)]));
+            let mut rows = format!("{cols} columns").into_bytes();
+            for row in cells.chunks(n) {
+                rows.push(b'\n');
+                rows.extend(row.iter().map(|c| b'0' + c));
             }
-            ui.mark(WidgetId(id), ui::sem::GRID, 0, &rows);
+            ui.mark(WidgetId(id), ui::sem::GRID, 0, &String::from_utf8_lossy(&rows));
         }
     }
     at
