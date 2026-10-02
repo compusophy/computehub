@@ -595,7 +595,14 @@ impl Logon {
             (Target::Circle(_) | Target::Back, State::Pin(..)) => self.go(State::Pick),
             (Target::Circle(i), _) => {
                 self.focus = i;
-                match self.list.list.get(i).map(|p| p.id) {
+                let id = self.list.list.get(i).map(|p| p.id);
+                // As stored now: a PIN set, or a removal, in another tab counts.
+                if id.is_some() {
+                    self.list = Profiles::read(get(LIST).as_deref()).0;
+                    self.focus = self.focus.min(self.circles() - 1);
+                }
+                match id {
+                    Some(id) if self.list.get(id).is_none() => self.say(profiles::GONE, true),
                     Some(id) if self.pin(id).is_some() => self.ask_pin(id, Then::SignIn),
                     Some(id) => self.sign_in(id, now, outs),
                     None if self.list.list.len() >= profiles::MAX => self.say(profiles::FULL, true),
@@ -717,7 +724,10 @@ impl Logon {
     /// size of its files, unless it is the last), which never needs the PIN: the browser's own
     /// "clear site data" removes anything, and a forgotten PIN means just that.
     fn menu_act(&mut self, id: u32, act: Act, get: &dyn Fn(&str) -> Option<String>) {
-        let Some(name) = self.list.get(id).map(|p| p.name.clone()) else { return };
+        self.list = Profiles::read(get(LIST).as_deref()).0;
+        let Some(name) = self.list.get(id).map(|p| p.name.clone()) else {
+            return self.say(profiles::GONE, true);
+        };
         let pinned = self.pin(id).is_some();
         match act {
             Act::Rename if pinned => self.ask_pin(id, Then::Rename),

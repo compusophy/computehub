@@ -440,7 +440,9 @@ in its home; names in it, and roots per profile, wait for R2.
   Alt+Q, Alt+arrows and Alt+Backquote before a terminal sees them
   (readline's Alt+F still arrives). A way through for apps that want them
   waits on the Super key question.
-- **The boot budget** (224 KB since 2026-10-02, about 26 KB of headroom)
-  pays for what must draw the first frame. Everything else should be a
-  program, fetched when it first runs (Studio and applang already are;
-  Settings and the Terminal could be).
+- **The boot budget** (224 KB since 2026-10-02) pays for what must draw the
+  first frame. With the canvas, the welcome, profiles and the PIN it holds
+  229,048 of 229,376 bytes: about 0.3 KB of headroom. Everything else
+  should be a program, fetched when it first runs (Studio and applang
+  already are; Settings, est. 4.7 KB, and the Terminal's guest shell, est.
+  5 KB, could be, at the cost of needing an isolated page to open).

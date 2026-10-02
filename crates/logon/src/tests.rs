@@ -395,8 +395,8 @@ fn a_held_circle_opens_its_menu_to_rename_or_remove_it() {
     let renamed = "CSPR 1 3\n0 be5cdbf3 - guest\n2 0c55aa31 - anA B";
     assert_eq!(feed(&mut l, &kv, &ins), [Out::Set(LIST.into(), renamed.into())]);
     assert_eq!((l.state, l.leaving()), (State::Pick, false));
-    // Remove: a right-click opens the menu; a removal says what goes and needs a yes, which
-    // takes the profile's keys, then its line.
+    // Remove (of the list as stored: here, still ana's name): a right-click opens the menu; a
+    // removal says what goes and needs a yes, which takes the profile's keys, then its line.
     draw(&mut l, 2000.0);
     let (x, y) = spot(&l, Target::Circle(1));
     feed(&mut l, &kv, &[Input::PointerDown { x, y, button: 2, touch: false }]);
@@ -405,7 +405,7 @@ fn a_held_circle_opens_its_menu_to_rename_or_remove_it() {
     feed(&mut l, &kv, &tap(x, y));
     assert_eq!(l.state, State::Confirm(2));
     let said = draw(&mut l, 2000.0).1.join(" ");
-    assert!(said.contains("Remove anA B and their files (0.0 KB) from this browser?"), "{said}");
+    assert!(said.contains("Remove ana and their files (0.0 KB) from this browser?"), "{said}");
     let (x, y) = spot(&l, Target::Cancel);
     assert_eq!((feed(&mut l, &kv, &tap(x, y)), l.state), (vec![], State::Pick));
     feed(&mut l, &kv, &[Input::PointerDown { x: 1.0, y: 1.0, button: 2, touch: false }]);
@@ -413,7 +413,8 @@ fn a_held_circle_opens_its_menu_to_rename_or_remove_it() {
     let gone = PER_PROFILE.map(|k| Out::Remove(key(2, k)));
     let list = Out::Set(LIST.into(), "CSPR 1 3\n0 be5cdbf3 - guest".into());
     assert_eq!(feed(&mut l, &kv, &[down(Key::Enter)]), [&gone[..], &[list]].concat());
-    // The last one cannot go.
+    // The last one cannot go (the list as stored now holds guest alone).
+    let kv = [(SEEN, "1"), (LIST, "CSPR 1 3\n0 be5cdbf3 - guest")];
     draw(&mut l, 3000.0);
     let (x, y) = spot(&l, Target::Circle(0));
     feed(&mut l, &kv, &[Input::PointerDown { x, y, button: 2, touch: false }]);
@@ -632,6 +633,20 @@ fn a_pin_is_checked_by_the_browser_asked_at_every_load_and_never_kept() {
     assert_eq!(answers, [None, Some(true)]);
     feed(&mut l, &kv, &tap(20.0, 100.0));
     assert_eq!(l.state, State::Pick);
+    // A PIN another tab set since this welcome read the list is asked all the same; a
+    // profile it removed is gone.
+    let (mut l, ..) = drawn((411.0, 794.0), 3.5, &[(SEEN, "1"), (LIST, TWO)]);
+    let rec = list.split(' ').find(|t| t.starts_with("p1:")).expect("a record");
+    let now = TWO.replace("2 0c55aa31 -", &format!("2 0c55aa31 {rec}"));
+    let stored = [(SEEN, "1"), (LIST, &now[..])];
+    let (x, y) = spot(&l, Target::Circle(1));
+    assert_eq!(
+        (feed(&mut l, &stored, &tap(x, y)).len(), l.state),
+        (1, State::Pin(2, Then::SignIn))
+    );
+    let (mut l, ..) = drawn((411.0, 794.0), 3.5, &[(SEEN, "1"), (LIST, TWO)]);
+    let (x, y) = spot(&l, Target::Circle(1));
+    assert_eq!((feed(&mut l, &kv, &tap(x, y)), l.note), (vec![], Some((profiles::GONE, true))));
     // An insecure page cannot check a PIN, so it says so.
     l.secure = false;
     let (x, y) = spot(&l, Target::Circle(1));

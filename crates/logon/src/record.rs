@@ -157,32 +157,23 @@ impl Record {
     /// The card's rows: each stage's name, size and time (`—` where unknown; `cache` for a
     /// load that crossed no network), then Ready's.
     pub fn rows(&self) -> Vec<[String; 3]> {
-        let stages = self.stages();
-        let mut rows: Vec<[String; 3]> = STAGES
-            .iter()
-            .enumerate()
-            .map(|(i, name)| {
-                let s = stages.iter().find(|s| s.i == i);
-                let (mut size, mut time) = (String::from("\u{2014}"), String::from("\u{2014}"));
-                if let Some(s) = s {
-                    time.clear();
-                    ms(&mut time, s.to - s.from);
-                    size = match s.bytes {
-                        _ if i == 2 => "budget 100".into(),
-                        Some(b) => {
-                            let mut k = String::new();
-                            kb(&mut k, b);
-                            k
-                        }
-                        None => "cache".into(),
-                    };
+        let (stages, mut rows) = (self.stages(), Vec::new());
+        for (i, name) in STAGES.into_iter().enumerate() {
+            let mut row = [String::from(name), "\u{2014}".into(), "\u{2014}".into()];
+            if let Some(s) = stages.iter().find(|s| s.i == i) {
+                row[2].clear();
+                ms(&mut row[2], s.to - s.from);
+                row[1] = if i == 2 { "budget 100".into() } else { "cache".into() };
+                if let Some(b) = s.bytes.filter(|_| i != 2) {
+                    row[1].clear();
+                    kb(&mut row[1], b);
                 }
-                [String::from(*name), size, time]
-            })
-            .collect();
-        let mut ready = String::new();
-        ms(&mut ready, self.ready());
-        rows.push(["Ready".into(), String::new(), ready]);
+            }
+            rows.push(row);
+        }
+        let mut ready = [String::from("Ready"), String::new(), String::new()];
+        ms(&mut ready[2], self.ready());
+        rows.push(ready);
         rows
     }
 
