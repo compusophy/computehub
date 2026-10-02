@@ -3,7 +3,7 @@ use ai::{
     DEFAULT_MODEL, HOME, MAX_BODY, MAX_REPLY, failure, fault, fenced, free_path, problem, slug,
 };
 use edits::{Edit, Reply, apply, read};
-use json::{Json, Stream, micros, quote};
+use json::{Json, Stream, Usage, quote};
 
 /// A clean program, one that does not compile (E0302 at 2:7) and one that faults as it first
 /// renders (E0203 at 3:22).
@@ -106,21 +106,14 @@ fn json_and_streams_read_replies_split_anywhere() {
     body.chunks(3).for_each(|c| s.feed(c, &mut out, MAX_REPLY));
     s.end(&mut out, MAX_REPLY);
     assert_eq!((out.as_str(), s.thought, s.finish.as_str()), (reply, 11, "stop"));
-    let want = json::Usage {
-        input: 3000,
-        cached: 1900,
-        output: 1500,
-        reasoning: 400,
-        cost_micros: Some(8123),
-    };
-    assert_eq!(s.usage, Some(want));
-    for (text, want) in
-        [("0.0081234", Some(8123)), ("1", Some(1_000_000)), ("12.5", Some(12_500_000))]
-    {
-        assert_eq!(micros(text), want, "{text}");
-    }
-    for bad in ["1e-5", "-1", "", ".5", "1000", "0.1.2"] {
-        assert_eq!(micros(bad), None, "{bad}");
+    assert_eq!(s.usage, Some(Usage { input: 3000, cached: 1900, output: 1500, reasoning: 400 }));
+    // A count that does not read as one (a sign, an exponent, too long) is no usage.
+    for bad in ["-1", "1e3", "1.5", "12345678901"] {
+        let (mut s, mut out) = (Stream::default(), String::new());
+        let usage =
+            format!("data: {{\"usage\":{{\"prompt_tokens\":{bad},\"completion_tokens\":1}}}}\n");
+        s.feed(usage.as_bytes(), &mut out, MAX_REPLY);
+        assert_eq!(s.usage, None, "{bad}");
     }
     // Errors, in a chunk or as the whole body; the reply kept to its room.
     let (mut s, mut out) = (Stream::default(), String::new());
@@ -132,6 +125,28 @@ fn json_and_streams_read_replies_split_anywhere() {
     s.feed(delta("content", "abcdef").as_bytes(), &mut out, 4);
     s.feed(delta("content", "gh").as_bytes(), &mut out, 4);
     assert_eq!((s.error.as_str(), out.as_str(), s.usage), ("busy", "abcdef", None));
+    // Not the errors of the providers the gateway tried first, in its metadata (as it sent them,
+    // live, once Fireworks answered 503 and Baseten the reply).
+    let (mut s, mut out) = (Stream::default(), String::new());
+    let tried = "data: {\"id\":\"g\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"\",\
+                 \"providerMetadata\":{\"gateway\":{\"modelAttempts\":[{\"providerAttempts\":[{\
+                 \"provider\":\"fireworks\",\"success\":false,\"error\":\"Service temporarily \
+                 unavailable\",\"statusCode\":503},{\"provider\":\"baseten\",\"success\":true}]}],\
+                 \"note\":\"a \\\"quoted\\\" {brace\"}}},\"finish_reason\":\"stop\"}],\
+                 \"usage\":{\"prompt_tokens\":2501,\"completion_tokens\":999}}\n";
+    s.feed(tried.as_bytes(), &mut out, MAX_REPLY);
+    s.end(&mut out, MAX_REPLY);
+    assert_eq!(
+        (s.error.as_str(), s.finish.as_str(), s.usage.map(|u| u.output)),
+        ("", "stop", Some(999))
+    );
+    let (mut s, mut out) = (Stream::default(), String::new());
+    s.feed(
+        b"data: {\"id\":\"g\", \"error\" : {\"code\":5,\"message\":\"cut\"}}\n",
+        &mut out,
+        MAX_REPLY,
+    );
+    assert_eq!(s.error, "cut");
 }
 
 #[test]
@@ -347,9 +362,9 @@ fn problems_get_fixes_by_edits_and_the_best_so_far_stays() {
     let r = &done.receipt;
     assert_eq!(
         (r.turns.len(), r.est, r.turns[1].usd_micros, r.turns[0].code),
-        (2, true, 8123, 302)
+        (2, true, 8634, 302)
     );
-    assert_eq!(r.usd_micros, r.turns[0].usd_micros + 8123);
+    assert_eq!(r.usd_micros, r.turns[0].usd_micros + 8634);
     // The same problem twice is rewritten once; a third time ends with the best so far: a new
     // app's that compiles, installed faulting.
     let replies = [(app(FAULTS), "stop"), (app(FAULTS), "stop"), (app(FAULTS), "stop")];
@@ -549,8 +564,10 @@ fn receipts_are_priced_and_recorded() {
     let proxy = include_str!("../../../api/ai.mjs");
     let models = "const MODELS = { 'zai/glm-5.3': [1.4, 4.4], 'zai/glm-5.3-flash': [0.15, 0.5] };";
     assert!(proxy.contains(models));
+    // As the gateway charged a reply of 1,961 tokens in (986 cached) and 2,751 out: $0.01372576.
+    let u = Usage { input: 1961, cached: 986, output: 2751, reasoning: 1037 };
     assert_eq!(
-        (receipt::price("zai/glm-5.3"), receipt::price("zai/glm-5.3-flash")),
-        ((1400, 4400), (150, 500))
+        (receipt::price("zai/glm-5.3", &u), receipt::price("zai/glm-5.3-flash", &u)),
+        (13726, 1549)
     );
 }

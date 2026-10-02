@@ -372,15 +372,13 @@ impl Make {
                 ..Usage::default()
             }
         });
-        let (pin, pout) = price(&self.task.model);
-        let usd = u64::from(u.input) * pin + u64::from(u.output) * pout;
         self.log.push(TurnLog {
             turn: self.turn,
             input: u.input,
             cached: u.cached,
             output: u.output,
             reasoning: u.reasoning,
-            usd_micros: u.cost_micros.unwrap_or((usd / 1000) as u32),
+            usd_micros: price(&self.task.model, &u),
             ms: now.saturating_sub(self.sent) as u32,
             code: 0,
         });

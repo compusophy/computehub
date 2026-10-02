@@ -169,16 +169,13 @@ pub fn put(out: &mut String, s: &str) {
 }
 
 /// What a reply cost, as its usage chunk said: tokens in (of them, read from the provider's
-/// cache), out (of them, reasoning: thinking a provider spent, streamed or not) and the
-/// gateway's own price in micro-dollars (`usage.cost`, which counts cached tokens at their rate),
-/// if it said.
+/// cache) and out (of them, reasoning: thinking a provider spent, streamed or not).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Usage {
     pub input: u32,
     pub cached: u32,
     pub output: u32,
     pub reasoning: u32,
-    pub cost_micros: Option<u32>,
 }
 
 /// A server-sent-events chat-completion body, read in chunks of any size:
@@ -246,19 +243,15 @@ impl Stream {
         if let Some(m) = error(b) {
             self.error = m;
         }
-        // The last usage: the gateway's own metadata, earlier in the chunk, has a cost too.
+        // The last usage: the gateway's own metadata comes earlier in the chunk.
         let Some(at) = (0..b.len()).rev().find(|&i| b[i..].starts_with(b"\"usage\":{")) else {
             return;
         };
-        let (u, n) = (&b[at..], |k| number(&b[at..], k).and_then(|s| whole(s, 0)));
+        let n = |k| number(&b[at..], k).and_then(whole);
         if let (Some(input), Some(output)) = (n("prompt_tokens"), n("completion_tokens")) {
-            self.usage = Some(Usage {
-                input,
-                cached: n("cached_tokens").unwrap_or(0),
-                output,
-                reasoning: n("reasoning_tokens").unwrap_or(0),
-                cost_micros: number(u, "cost").and_then(micros),
-            });
+            let (cached, reasoning) = (n("cached_tokens"), n("reasoning_tokens"));
+            let (cached, reasoning) = (cached.unwrap_or(0), reasoning.unwrap_or(0));
+            self.usage = Some(Usage { input, cached, output, reasoning });
         }
     }
 }
@@ -285,24 +278,44 @@ fn number<'a>(b: &'a [u8], key: &str) -> Option<&'a str> {
     core::str::from_utf8(&rest[start..start + n]).ok().filter(|s| !s.is_empty())
 }
 
-/// `error.message`, or `error` when it is a string.
+/// Where the value of the outermost object's member `"key":` starts in `b` (`b` from that
+/// object's `{`): a member of a nested object is not it.
+fn member(b: &[u8], key: &str) -> Option<usize> {
+    let pat = ["\"", key, "\""].concat();
+    let (mut depth, mut text, mut i) = (0, false, 0);
+    while i < b.len() {
+        match b[i] {
+            b'\\' if text => i += 1,
+            b'"' if !text && depth == 1 && b[i..].starts_with(pat.as_bytes()) => {
+                let mut p = Parser { s: b, i: i + pat.len() };
+                if p.eat(b':') {
+                    return Some(p.i);
+                }
+                text = true;
+            }
+            b'"' => text = !text,
+            b'{' | b'[' if !text => depth += 1,
+            b'}' | b']' if !text => depth -= 1,
+            _ => {}
+        }
+        i += 1;
+    }
+    None
+}
+
+/// The chunk's own `error.message`, or `error` when it is a string; never one nested in it (the
+/// gateway's metadata lists each provider it tried, with the errors of those that failed).
 fn error(b: &[u8]) -> Option<String> {
-    let at = value(b, "error")?;
-    string(&b[at..], "message").or_else(|| Parser { s: b, i: at }.string())
+    let mut p = Parser { s: b, i: member(b, "error")? };
+    p.ws();
+    match b.get(p.i)? {
+        b'{' => Parser { s: b, i: p.i + member(&b[p.i..], "message")? }.string(),
+        _ => p.string(),
+    }
 }
 
-/// `s`, digits only (at most 9), as a number times 10 to the `shift`; `None` for anything else.
-fn whole(s: &str, shift: usize) -> Option<u32> {
-    let digits = [s, &"000000"[..shift]].concat();
-    let ok = !digits.is_empty() && digits.len() <= 9 && digits.bytes().all(|b| b.is_ascii_digit());
-    ok.then(|| digits.bytes().fold(0, |n, b| n * 10 + u32::from(b - b'0')))
-}
-
-/// Dollars written as a plain decimal ("0.01372576") in micro-dollars, the rest cut; `None` for
-/// anything else (an exponent, a sign, $1,000 or more).
-pub fn micros(s: &str) -> Option<u32> {
-    let (whole_part, frac) = s.split_once('.').unwrap_or((s, ""));
-    let frac = &frac[..frac.len().min(6)];
-    let n = whole([whole_part, frac].concat().as_str(), 6 - frac.len())?;
-    (whole_part.len() <= 3 && !whole_part.is_empty()).then_some(n)
+/// `s`, digits only (at most 9), as a number; `None` for anything else.
+fn whole(s: &str) -> Option<u32> {
+    let ok = !s.is_empty() && s.len() <= 9 && s.bytes().all(|b| b.is_ascii_digit());
+    ok.then(|| s.bytes().fold(0, |n, b| n * 10 + u32::from(b - b'0')))
 }

@@ -55,8 +55,10 @@ pub struct Knobs {
     /// The thinking budget asked for a program and for a fix: 0 for the free AI's (1,024).
     pub write_reasoning: u16,
     pub fix_reasoning: u16,
-    /// Past this many reasoning tokens (estimated from their chars) with no reply yet, the model
-    /// is thinking past its budget: the request stops and is made again, once.
+    /// Past this many reasoning tokens (estimated from their chars, 3.4 a token) with no reply
+    /// yet, the model is thinking past its budget: the request stops and is made again, once.
+    /// Twice the 1,024 the free AI asks for (a provider that keeps to it stops near 1,037; one
+    /// that did not, live, thought 6,144 tokens at 40 a second, 2.2 chars each, and left no time).
     pub runaway: u32,
     /// The smoke test's seeds: 1 to this.
     pub seeds: u8,
@@ -64,7 +66,7 @@ pub struct Knobs {
 
 impl Default for Knobs {
     /// 5 requests, 1 rewrite, 20,000 output tokens, $0.08, 150 s; 6,144 tokens for a program and
-    /// 4,096 for a fix, the free AI's thinking budget; a runaway past 4,096 reasoning tokens;
+    /// 4,096 for a fix, the free AI's thinking budget; a runaway past 2,048 reasoning tokens;
     /// seeds 1 to 3.
     fn default() -> Knobs {
         Knobs {
@@ -77,7 +79,7 @@ impl Default for Knobs {
             fix_tokens: 4_096,
             write_reasoning: 0,
             fix_reasoning: 0,
-            runaway: 4_096,
+            runaway: 2_048,
             seeds: 3,
         }
     }
