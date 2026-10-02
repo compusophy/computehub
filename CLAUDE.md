@@ -136,9 +136,9 @@ first opens). Subsets and OFL texts: `assets/fonts/README.md`.
   or chrome draws from a color constant. Rects, strokes and baselines land
   on device pixels.
 - Measure the boot budget (`build-web.sh`, `budget.sh`) after any change
-  that ships. Avoid core's Unicode tables
-  (`char::to_lowercase` and friends; see `host::upper`) and float
-  formatting in shipped code.
+  that ships. Avoid in shipped code: core's Unicode tables
+  (`char::to_lowercase` and friends; see `host::upper`), float formatting,
+  panics that format (`&s[a..b]`: use `s.get`) and `f32::sin` (`icons::sin`).
 - Git: plain `git commit`, no user.name/email overrides. Authors:
   `compusophy`. No email address in any file.
 - No absolute home-directory paths in committed files or `dist/` (caps.sh

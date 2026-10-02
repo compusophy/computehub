@@ -241,6 +241,7 @@ impl TextSystem {
         for para in text.split('\n') {
             let para = para.strip_suffix('\r').unwrap_or(para);
             let (mut start, mut w, mut brk, mut prev) = (0, 0.0, None, None);
+            let cut = |a: usize, b: usize| para.get(a..b).unwrap_or_default();
             for (i, c) in para.char_indices() {
                 let adv = self.lookup(style.font, c, style.size).1;
                 if c == ' ' {
@@ -254,24 +255,24 @@ impl TextSystem {
                     if let Some((end, next)) = brk.take() {
                         // Leading spaces leave nothing before their break.
                         if end > start {
-                            lines.push(&para[start..end]);
+                            lines.push(cut(start, end));
                         }
                         start = next;
-                        w = self.measure(&para[start..i], style);
+                        w = self.measure(cut(start, i), style);
                     }
                     if w + adv > width && i > start {
-                        lines.push(&para[start..i]);
+                        lines.push(cut(start, i));
                         (start, w) = (i, 0.0);
                     }
                 }
                 w += adv;
                 let after = i + c.len_utf8();
-                if breaks_after(prev, c, para[after..].chars().next()) {
+                if breaks_after(prev, c, cut(after, para.len()).chars().next()) {
                     brk = Some((after, after));
                 }
                 prev = Some(c);
             }
-            lines.push(para[start..].trim_end_matches(' '));
+            lines.push(cut(start, para.len()).trim_end_matches(' '));
         }
         lines
     }
@@ -293,7 +294,7 @@ impl TextSystem {
             }
             end = i + c.len_utf8();
         }
-        s[..end].trim_end().to_string() + "\u{2026}"
+        s.get(..end).unwrap_or_default().trim_end().to_string() + "\u{2026}"
     }
 
     /// A terminal cell's width: Mono's advance of `0`, on device pixels.

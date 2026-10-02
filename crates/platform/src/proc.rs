@@ -54,7 +54,7 @@ fn find(s: &Shared, pid: u32) -> Option<RefMut<'_, Proc>> {
 /// A worker's message, or its error (which has no data), after its ring.
 fn on_message(s: &Rc<Shared>, pid: u32, e: &DomEvent) {
     let data = Reflect::get(e, &"data".into()).unwrap_or_default();
-    let msg = Uint8Array::new(&data).to_vec();
+    let msg = crate::bytes(&Uint8Array::new(&data));
     let Some(out) = drain(s, pid) else { return };
     if out.len() > 1 {
         dispatch(s, Event::Proc { pid, msg: out });
@@ -79,9 +79,9 @@ fn drain(s: &Shared, pid: u32) -> Option<Vec<u8>> {
     if let Some((words, bytes, _)) = &p.sab {
         set(words, BELL, 0);
         let head = Atomics::load(words, HEAD).unwrap_or(0) as u32;
-        // to_vec, not copy_to into a resized Vec: fewer boot bytes.
+        // A copy, not copy_to into a resized Vec: fewer boot bytes.
         for (a, b) in ring_spans(p.tail, head) {
-            out.extend_from_slice(&bytes.subarray(RING_AT + a, RING_AT + b).to_vec());
+            out.extend_from_slice(&crate::bytes(&bytes.subarray(RING_AT + a, RING_AT + b)));
         }
         p.tail = head;
         set(words, TAIL, head as i32);

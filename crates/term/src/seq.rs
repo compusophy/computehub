@@ -134,7 +134,12 @@ impl Perform for Sink<'_> {
             (None, [], b'n') if arg(0) == 5 => return t.reply(b"\x1b[0n"),
             (None, [], b'n') if arg(0) == 6 => {
                 let row = y.saturating_sub(if t.cur.origin { t.top } else { 0 });
-                return t.reply(format!("\x1b[{};{}R", row + 1, x + 1).as_bytes());
+                let mut r = b"\x1b[".to_vec();
+                num(&mut r, row + 1);
+                r.push(b';');
+                num(&mut r, x + 1);
+                r.push(b'R');
+                return t.reply(&r);
             }
             (None, [], b'c') if arg(0) == 0 => return t.reply(b"\x1b[?62;22c"),
             (Some(b'>'), [], b'c') if arg(0) == 0 => return t.reply(b"\x1b[>0;10;1c"),
@@ -185,6 +190,14 @@ fn ext_color(p: &Params, i: usize) -> (Option<Color>, usize) {
     (color, if colon { 0 } else { used })
 }
 
+/// Appends `n` in decimal: a reply's numbers without the formatting machinery.
+fn num(out: &mut Vec<u8>, n: usize) {
+    if n >= 10 {
+        num(out, n / 10);
+    }
+    out.push(b'0' + (n % 10) as u8);
+}
+
 impl Term {
     fn reply(&mut self, bytes: &[u8]) {
         if self.replies.len() + bytes.len() <= MAX_REPLIES {
@@ -208,9 +221,11 @@ impl Term {
             (true, 2026) => Some(self.sync),
             _ => None,
         };
-        let state = on.map_or(0, |on| if on { 1 } else { 2 });
-        let q = if private { "?" } else { "" };
-        self.reply(format!("\x1b[{q}{mode};{state}$y").as_bytes());
+        let state = on.map_or(b'0', |on| if on { b'1' } else { b'2' });
+        let mut r = [&b"\x1b["[..], &b"?"[..usize::from(private)]].concat();
+        num(&mut r, mode.into());
+        r.extend_from_slice(&[b';', state, b'$', b'y']);
+        self.reply(&r);
     }
 
     /// DECSET (`on`) or DECRST of one private mode.

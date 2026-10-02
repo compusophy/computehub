@@ -46,9 +46,10 @@ thread_local! {
 }
 
 /// Adds `new` to the notes (if any; the oldest beyond [`NOTES`] goes), then gives the last `n`,
-/// oldest first, a line each. One function, so the ring's access is built once.
+/// oldest first, a line each. One function, so the ring's access is built once. None while the
+/// ring is busy (a panic in it) or gone (`try_with`: `with`'s panic formats its error).
 fn ring(new: Option<String>, n: usize) -> String {
-    RING.with(|r| {
+    let notes = RING.try_with(|r| {
         let Ok(mut r) = r.try_borrow_mut() else { return String::new() };
         if let Some(s) = new {
             if r.len() >= NOTES {
@@ -61,7 +62,8 @@ fn ring(new: Option<String>, n: usize) -> String {
             out = out + s + "\n";
         }
         out
-    })
+    });
+    notes.unwrap_or_default()
 }
 
 /// Notes `text`, control chars as spaces, cut to [`NOTE_MAX`] bytes.
@@ -86,11 +88,11 @@ fn split(s: &str, at: u8) -> Vec<&str> {
     let (mut out, mut start) = (Vec::new(), 0);
     for (i, b) in s.bytes().enumerate() {
         if b == at {
-            out.push(&s[start..i]);
+            out.push(s.get(start..i).unwrap_or_default());
             start = i + 1;
         }
     }
-    out.push(&s[start..]);
+    out.push(s.get(start..).unwrap_or_default());
     out
 }
 
@@ -139,9 +141,9 @@ pub fn title(text: &str) -> String {
             break;
         }
     }
-    match line.char_indices().nth(TITLE_MAX - 1) {
-        Some((cut, _)) if line[cut..].chars().nth(1).is_some() => {
-            [line[..cut].trim_end(), "\u{2026}"].concat()
+    match line.char_indices().nth(TITLE_MAX - 1).and_then(|(cut, _)| line.split_at_checked(cut)) {
+        Some((head, tail)) if tail.chars().nth(1).is_some() => {
+            [head.trim_end(), "\u{2026}"].concat()
         }
         _ => line.to_string(),
     }
@@ -153,7 +155,7 @@ pub fn body(text: &str, ctx: Option<&Context>) -> String {
     let mut text = text.trim();
     if text.len() > BODY_MAX / 2 {
         let cut = (0..=BODY_MAX / 2).rev().find(|&i| text.is_char_boundary(i)).unwrap_or(0);
-        text = &text[..cut];
+        text = text.get(..cut).unwrap_or_default();
     }
     let mut out = [text, "\n\n```text\nbuild    ", BUILD].concat();
     let Some(c) = ctx else { return out + "\n```" };
@@ -167,7 +169,7 @@ pub fn body(text: &str, ctx: Option<&Context>) -> String {
     let touch = if d.touch { "yes" } else { "no" };
     let windows = if c.windows.is_empty() { "none" } else { &c.windows };
     for (k, v) in [("agent", d.agent.as_str()), ("screen", &screen), ("touch", touch)] {
-        out = out + "\n" + k + &"         "[k.len()..] + v;
+        out = out + "\n" + k + "         ".get(k.len()..).unwrap_or_default() + v;
     }
     out = out + "\ntheme    " + &c.theme + "\nwindows  " + windows + "\n```";
     out + "\n\nRecent events, oldest first:\n```text\n" + &notes(SHOWN) + "```"
@@ -329,7 +331,8 @@ impl Reports {
 
     /// The worker of process `pid`, running `argv0`, failed to load or threw.
     pub fn proc_failed(&mut self, pid: u32, argv0: &str) {
-        let name = &argv0[argv0.bytes().rposition(|b| b == b'/').map_or(0, |i| i + 1)..];
+        let name = argv0.get(argv0.bytes().rposition(|b| b == b'/').map_or(0, |i| i + 1)..);
+        let name = name.unwrap_or_default();
         let mut n = String::from("proc ");
         ui::push_num(&mut n, pid as usize);
         let message = ["The program ", name, " failed to load or run"].concat();

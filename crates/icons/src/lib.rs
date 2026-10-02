@@ -17,6 +17,9 @@
 use core::f32::consts::{FRAC_PI_2, FRAC_PI_4, PI, TAU};
 
 pub use font::Point;
+pub use trig::{cos, sin};
+
+mod trig;
 
 /// The golden ratio, φ.
 pub const PHI: f32 = 1.618_034;
@@ -122,11 +125,11 @@ fn add(o: &mut Outline, mut c: Vec<Point>, solid: bool) {
 fn arc(v: &mut Vec<Point>, c: (f32, f32), r: f32, a0: f32, a1: f32) {
     let n = ((a1 - a0).abs() / (PI / 8.0)).ceil().max(1.0);
     let step = (a1 - a0) / n;
-    let at = |a: f32, k: f32, on| Point { x: c.0 + k * a.cos(), y: c.1 + k * a.sin(), on };
+    let at = |a: f32, k: f32, on| Point { x: c.0 + k * cos(a), y: c.1 + k * sin(a), on };
     v.push(at(a0, r, true));
     for i in 0..n as usize {
         let a = a0 + step * i as f32;
-        v.push(at(a + step / 2.0, r / (step / 2.0).cos(), false));
+        v.push(at(a + step / 2.0, r / cos(step / 2.0), false));
         v.push(at(a + step, r, true));
     }
 }
@@ -200,7 +203,7 @@ fn rect(o: &mut Outline, x0: f32, y0: f32, x1: f32, y1: f32) {
 /// Appends a quarter turn of radius `r` around `c` from angle `a`, as path points.
 fn corner(v: &mut Vec<(f32, f32)>, c: (f32, f32), r: f32, a: f32) {
     let at = |i: u8| a + FRAC_PI_2 * f32::from(i) / 8.0;
-    v.extend((0..=8).map(|i| (c.0 + r * at(i).cos(), c.1 + r * at(i).sin())));
+    v.extend((0..=8).map(|i| (c.0 + r * cos(at(i)), c.1 + r * sin(at(i)))));
 }
 
 /// The radius of the mark's center dot, in box units (its outer ring reaches 500).
@@ -225,7 +228,7 @@ fn mark(o: &mut Outline) {
     for (n, r, dot) in rings() {
         for j in 0..n {
             let a = FRAC_PI_2 - TAU * j as f32 / n as f32;
-            circle(o, (C.0 + r * a.cos(), C.1 + r * a.sin()), dot, true);
+            circle(o, (C.0 + r * cos(a), C.1 + r * sin(a)), dot, true);
         }
     }
 }
@@ -246,7 +249,7 @@ fn cog(o: &mut Outline) {
     let mut v = Vec::new();
     for i in 0..8u8 {
         let t = FRAC_PI_2 + FRAC_PI_4 * f32::from(i);
-        let (u, n) = ((t.cos(), t.sin()), (-t.sin(), t.cos()));
+        let (u, n) = ((cos(t), sin(t)), (-sin(t), cos(t)));
         let at = |a: f32, s: f32| pt(C.0 + u.0 * a + n.0 * s, C.1 + u.1 * a + n.1 * s);
         v.extend([at(foot, -w), at(crest, -w), at(crest, w), at(foot, w)]);
         arc(&mut v, C, root, t + skew, t + FRAC_PI_4 - skew);
@@ -269,7 +272,7 @@ fn studio(o: &mut Outline) {
         bend(o, c, r, a, a - FRAC_PI_2);
         a -= FRAC_PI_2;
         let k = r - r / PHI;
-        (c, r) = ((c.0 + k * a.cos(), c.1 + k * a.sin()), r / PHI);
+        (c, r) = ((c.0 + k * cos(a), c.1 + k * sin(a)), r / PHI);
     }
 }
 
@@ -408,7 +411,7 @@ pub fn sigil(seed: u32, o: &mut Outline) {
     let (family, a, b) = (s / 5 % 5, s / 25 % 2 == 1, s / 50 % 2 == 1);
     let n = 5 + s % 5 - if family == 2 { 2 } else { 0 };
     let (step, k) = (PI / n as f32, (n - 1) / 2);
-    let at = |r: f32, a: f32| (C.0 + r * a.cos(), C.1 + r * a.sin());
+    let at = |r: f32, a: f32| (C.0 + r * cos(a), C.1 + r * sin(a));
     // The n points' angles, counter-clockwise from 12 o'clock, `half` a step on if asked.
     let angles = |half: bool| {
         let a0 = FRAC_PI_2 + if half { step } else { 0.0 };
@@ -428,7 +431,7 @@ pub fn sigil(seed: u32, o: &mut Outline) {
                 (true, false) => 440.0 - 2.0 * STROKE,
                 (false, _) => 460.0,
             };
-            let inner = r * (step * k as f32).cos() / (step * (k - 1) as f32).cos();
+            let inner = r * cos(step * k as f32) / cos(step * (k - 1) as f32);
             let pts = (0..2 * n).map(|i| {
                 let (x, y) = at(if i % 2 == 0 { r } else { inner }, FRAC_PI_2 + step * i as f32);
                 pt(x, y)
@@ -440,16 +443,16 @@ pub fn sigil(seed: u32, o: &mut Outline) {
         }
         1 => {
             let r = if a { 255.0 } else { 340.0 };
-            let dot = r * step.sin() / PHI;
+            let dot = r * sin(step) / PHI;
             angles(b).for_each(|x| circle(o, at(r, x), dot, true));
             circle(o, C, dot / PHI, true);
         }
         2 => {
             // Each corner's miter reaches 470, whatever its angle.
-            let r = 470.0 - H / (FRAC_PI_2 - step).sin();
+            let r = 470.0 - H / sin(FRAC_PI_2 - step);
             frame(o, &angles(a).map(|x| at(r, x)).collect::<Vec<_>>());
             if b {
-                circle(o, C, (r * step.cos() - H) / (PHI * PHI), true);
+                circle(o, C, (r * cos(step) - H) / (PHI * PHI), true);
             }
         }
         3 => {

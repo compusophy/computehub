@@ -123,7 +123,8 @@ pub fn draw(
     let lines = text.wrap(label, style, room);
     let first = lines.first().copied().unwrap_or("");
     // The rest of the label after the first line, from where the second began.
-    let rest = lines.get(1).map_or("", |l| &label[l.as_ptr() as usize - label.as_ptr() as usize..]);
+    let at = |l: &&str| l.as_ptr() as usize - label.as_ptr() as usize;
+    let rest = lines.get(1).and_then(|l| label.get(at(l)..)).unwrap_or_default();
     let rest = text.ellipsize(rest, style, room);
     for (k, line) in [first, &rest].into_iter().enumerate() {
         if line.is_empty() {

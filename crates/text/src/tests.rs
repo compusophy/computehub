@@ -324,6 +324,8 @@ fn measures_draws_and_wraps() {
     assert_eq!(t.wrap("ab abcdefghijkl", MONO13, 40.0)[1..], words);
     assert_eq!(t.wrap("abc", MONO13, 0.0), ["a", "b", "c"]);
     assert_eq!(t.wrap("é ü", MONO13, 500.0), ["é ü"]);
+    assert_eq!(t.wrap("éééééééé", MONO13, 40.0), ["ééééé", "ééé"]);
+    assert_eq!(t.ellipsize("ééééééééé", MONO13, 40.0), "éééé\u{2026}");
     // Leading spaces before a long word leave no empty first line.
     assert_eq!(t.wrap("  verylongword", MONO13, 47.0), ["verylo", "ngword"]);
     // `+`, `/` and `-` between letters or digits are break opportunities, kept at

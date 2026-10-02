@@ -69,6 +69,7 @@ fn reads_the_real_fonts() {
         assert!(Font::parse(INTER[..cut].to_vec()).is_err(), "cut at {cut}");
     }
     assert_eq!(FontError::Malformed(*b"loca").to_string(), "malformed `loca` table");
+    assert_eq!(FontError::NoGlyph(65_535).to_string(), "no glyph 65535");
 }
 
 #[test]

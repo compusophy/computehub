@@ -453,6 +453,11 @@ pub(crate) fn mark_debug(s: &Shared, name: &str, nums: &[u32]) {
 extern "C" {
     #[wasm_bindgen(thread_local_v2, js_name = window)]
     static WINDOW: Option<Window>;
+
+    /// A typed array's bytes in a Vec: its `slice()`, which the glue copies in. Not
+    /// `Uint8Array::to_vec`, whose length check formats a failure with Debug in the boot.
+    #[wasm_bindgen(js_namespace = ["Uint8Array", "prototype", "slice"], js_name = call)]
+    pub(crate) fn bytes(array: &js_sys::Uint8Array) -> Vec<u8>;
 }
 
 /// `window`, or `None` outside a page: `web_sys::window` without its search

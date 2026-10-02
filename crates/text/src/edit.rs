@@ -45,7 +45,7 @@ impl Editor {
 
     /// The caret as (line, column), both from 0.
     pub fn caret(&self) -> (usize, usize) {
-        let mut before = self.text[..self.at].split('\n');
+        let mut before = self.halves().0.split('\n');
         let col = before.next_back().map_or(0, |l| l.chars().count());
         (before.count(), col)
     }
@@ -61,7 +61,7 @@ impl Editor {
     pub fn move_to_line(&mut self, line: usize) {
         let line = line.min(self.line_count() - 1);
         let start: usize = self.lines().take(line).map(|l| l.len() + 1).sum();
-        let l = self.text[start..].split('\n').next().unwrap_or_default();
+        let l = self.text.get(start..).unwrap_or_default().split('\n').next().unwrap_or_default();
         self.at = start + l.char_indices().nth(self.goal).map_or(l.len(), |(i, _)| i);
     }
 
@@ -79,16 +79,21 @@ impl Editor {
     /// Enter: breaks the line, the new one indented like the current line
     /// (its leading spaces up to the caret).
     pub fn newline(&mut self) {
-        let line = self.text[..self.at].split('\n').next_back().unwrap_or_default();
+        let line = self.halves().0.split('\n').next_back().unwrap_or_default();
         let indent = line.bytes().take_while(|&b| b == b' ').count();
         self.insert(&["\n", &" ".repeat(indent)].concat());
+    }
+
+    /// The text before the caret and after it.
+    fn halves(&self) -> (&str, &str) {
+        self.text.split_at_checked(self.at).unwrap_or_default()
     }
 
     /// The char before the caret (`back`) or after it.
     fn next(&self, back: bool) -> Option<char> {
         match back {
-            true => self.text[..self.at].chars().next_back(),
-            false => self.text[self.at..].chars().next(),
+            true => self.halves().0.chars().next_back(),
+            false => self.halves().1.chars().next(),
         }
     }
 
@@ -104,7 +109,7 @@ impl Editor {
     pub fn delete(&mut self, back: bool) {
         if let Some(c) = self.next(back) {
             self.at -= if back { c.len_utf8() } else { 0 };
-            self.text.remove(self.at);
+            self.text.drain(self.at..self.at + c.len_utf8());
         }
         self.goal = self.caret().1;
     }

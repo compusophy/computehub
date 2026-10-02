@@ -49,7 +49,7 @@ impl Rect {
 
     /// Positions clamped to `±MAX_COORD`, sizes to `[0, MAX_COORD]`.
     fn normalized(self) -> Rect {
-        let c = |v: i32, lo: i32| v.clamp(lo, MAX_COORD);
+        let c = |v: i32, lo: i32| v.max(lo).min(MAX_COORD);
         Rect::new(c(self.x, -MAX_COORD), c(self.y, -MAX_COORD), c(self.w, 0), c(self.h, 0))
     }
 }
@@ -177,7 +177,7 @@ struct Win {
 /// the area (the minimum wins), then moved the least that keeps `VISIBLE_W` x `TITLE_H` of it
 /// inside, or, if `whole`, all of it that fits. The top edge never leaves the area's top.
 fn fit(r: Rect, a: Rect, whole: bool) -> Rect {
-    let (w, h) = (r.w.clamp(MIN_W, MIN_W.max(a.w)), r.h.clamp(MIN_H, MIN_H.max(a.h)));
+    let (w, h) = (r.w.max(MIN_W).min(MIN_W.max(a.w)), r.h.max(MIN_H).min(MIN_H.max(a.h)));
     let (vw, vh) = if whole { (w.min(a.w), h.min(a.h)) } else { (0, 0) };
     let (vw, vh) = (vw.max(VISIBLE_W), vh.max(TITLE_H));
     let x = r.x.min(a.x + a.w - vw).max(a.x + vw - w);

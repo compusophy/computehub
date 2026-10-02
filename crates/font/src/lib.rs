@@ -48,7 +48,7 @@ impl fmt::Display for FontError {
             NotTrueType => write!(f, "not a TrueType font"),
             MissingTable(t) => write!(f, "missing `{}` table", String::from_utf8_lossy(t)),
             Malformed(t) => write!(f, "malformed `{}` table", String::from_utf8_lossy(t)),
-            NoGlyph(g) => write!(f, "no glyph {g}"),
+            NoGlyph(g) => write!(f, "no glyph {}", u32::from(*g)), // u32: its Display is in the boot
             TooComplex => write!(f, "composite glyph too deep or too large"),
             BadSize => write!(f, "bad pixel size or bitmap too large"),
         }
