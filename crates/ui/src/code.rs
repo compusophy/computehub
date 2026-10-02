@@ -155,7 +155,7 @@ impl Code {
             return false;
         }
         self.top = top;
-        self.ed.move_to_line(self.ed.caret().0.clamp(top, top + g.rows - 1));
+        self.ed.move_to_line(self.ed.caret().0.max(top).min(top + g.rows - 1));
         true
     }
 
@@ -180,8 +180,9 @@ impl Code {
         let (rows, cols) = (((text.h / row) as usize).max(1), ((text.w / cell) as usize).max(1));
         self.geo = Some(Geo { well: rect, text, cell, row, rows });
         let (cl, cc) = self.ed.caret();
-        self.top = self.top.clamp((cl + 1).saturating_sub(rows), cl);
-        self.left = self.left.clamp((cc + 1).saturating_sub(cols), cc);
+        // max then min, as clamp (rows and cols are at least 1) without its panic's formatting.
+        self.top = self.top.max((cl + 1).saturating_sub(rows)).min(cl);
+        self.left = self.left.max((cc + 1).saturating_sub(cols)).min(cc);
         ui.fill(rect, RADIUS_SM, t.surface_lo);
         ui.push_clip(rect);
         if numbers {
