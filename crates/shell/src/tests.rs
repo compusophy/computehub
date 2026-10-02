@@ -13,7 +13,7 @@ use wm::{Snap, State};
 use super::*;
 
 const SANS: &[u8] = include_bytes!("../../../assets/fonts/Inter-Regular.ttf");
-const KNOWN: &str = "welcome terminal assistant studio settings about files feedback";
+const KNOWN: &str = "welcome terminal assistant studio settings about files feedback .app";
 /// The compact apps, each 680 x 480 as a window.
 const COMPACT: &str = "welcome settings about feedback";
 type Log = Rc<RefCell<Vec<(&'static str, E)>>>;
@@ -80,8 +80,7 @@ fn desk_with(w: f32, h: f32, prefs: Prefs) -> (Shell, Log) {
     let (log, text) = (Log::default(), TextSystem::new(SANS.to_vec()).unwrap());
     let l = log.clone();
     let reg: Registry = Box::new(move |name| {
-        let k =
-            KNOWN.split(' ').find(|k| *k == name).or(name.ends_with(".app").then_some("app"))?;
+        let k = KNOWN.split(' ').find(|k| name.ends_with(k))?;
         Some(Box::new(Probe(k, l.clone())) as Box<dyn App>)
     });
     (Shell::new(w, h, text, Vfs::new(), reg, prefs), log)
@@ -744,22 +743,10 @@ fn the_home_screen_shows_every_app_and_the_top_bar_its_buttons() {
     let order = [kept, ",", &mine, "/clock.app::"].concat();
     assert_eq!(r.effects, [Effect::Pref { key: "home.order".into(), value: order }]);
     assert!(r.redraw && s.labels_home()[8] == "Clock" && s.grid.icons[8].mark.is_some());
-    // Its own icon once its file draws one: in the grid, and on the dock as it settles.
-    let (clock, x) = ([&mine, "/clock.app"].concat(), ui::icon::Made::parse(b"ring 12 12 8"));
-    let made = b"// A clock.
-// icon: ring 12 12 8
-label 1;
-";
-    s.host.vfs.write(&clock, made).unwrap();
-    s.input(Input::PointerLeave);
-    assert_eq!(s.grid.icons[8].mark, x.ok().map(Mark::Made));
-    let prefs = Prefs { dock: Some(clock.clone()), seen: true, ..Prefs::default() };
-    let (mut d, _) = desk_with(1280.0, 800.0, prefs);
-    assert_eq!(d.marks, [host::sigil(&clock).map(Mark::Sigil)]);
-    d.host.vfs.mkdir_all(&mine).unwrap();
-    d.host.vfs.write(&clock, made).unwrap();
-    d.input(Input::PointerLeave);
-    assert_eq!((&*d.tiles[0].0, &d.marks[..]), (&*clock, &[x.ok().map(Mark::Made)][..]));
+    let (c, m) = ([&mine, "/clock.app"].concat(), ui::icon::Made::parse(b"dot 9 9 3").ok());
+    (s.dock.favs, _) = (vec![c.clone()], s.host.vfs.write(&c, b"// icon: dot 9 9 3").unwrap());
+    let r = (s.input(Input::PointerLeave).redraw, s.grid.icons[8].mark, s.marks.clone());
+    assert_eq!(r, (true, m.map(Mark::Made), vec![m.map(Mark::Made), None]), "its icon, grid, dock");
     // The mark shows Welcome; the right buttons Feedback (a bug) and Settings.
     s.click((27.0, 22.0));
     assert_eq!(s.wm().focused(), Some(WinId(1)));
