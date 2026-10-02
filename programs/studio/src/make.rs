@@ -26,9 +26,10 @@ pub(crate) const EXAMPLES: [&str; 4] =
 const SYSTEM: [&str; 2] = [
     "You write apps for Studio, the app maker of compusophyOS, a desktop that runs in a browser \
      tab. Apps are written in applang:\n\n",
-    "\n\nA game keeps its board in a list shown with grid, moves with every, is steered with on \
-     key and with buttons too (a phone has no arrow keys), and shows Start until it runs. Write \
-     small functions instead of \
+    "\n\nA game remembers its world in states and lists of its own (what has landed, where \
+     things are), and draws the list a grid shows anew from them; it moves with every, is \
+     steered with on key and with buttons too (a phone has no arrow keys), and shows Start until \
+     it runs. Write small functions instead of \
      repeating code; keep programs under 200 lines. Decide quickly what applang can make, then \
      write it: your reply has room for the program, not for long deliberation.\n\n\
      Reply with the complete program in one fenced block whose info string is app, and nothing \

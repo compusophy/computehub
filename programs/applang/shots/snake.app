@@ -1,5 +1,5 @@
 // Snake: the arrows steer; eat the food; the walls and your tail end it.
-state cells = [0; 300];   // 20 x 15 squares
+state cells = [0; 300];   // what the grid shows, 20 x 15: drawn anew from the states below
 state xs = [0; 0];        // the body, head last
 state ys = [0; 0];
 state dx = 1;
@@ -11,6 +11,7 @@ saved state best = 0;
 
 fn at(x: int, y: int) -> int { return y * 20 + x; }
 
+// The squares from what the game remembers: the body and the food.
 fn paint() {
   for i in 0..len(cells) { cells[i] = 0; }
   for i in 0..len(xs) { cells[at(xs[i], ys[i])] = 2; }
