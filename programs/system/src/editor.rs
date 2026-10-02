@@ -334,7 +334,8 @@ pub(crate) fn suggest(text: &str) -> String {
         if n == 40 || lead || (space && name.ends_with(' ')) {
             continue;
         }
-        (n, _) = (n + 1, name.push(if space { ' ' } else { c }));
+        name.push(if space { ' ' } else { c });
+        n += 1;
     }
     let stem = name.trim_end();
     [if stem.is_empty() { "Untitled" } else { stem }, ".txt"].concat()
