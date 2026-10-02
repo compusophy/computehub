@@ -17,12 +17,13 @@
 //! widget). Frames judge a long press, never a lift: the first past 500 ms on a page keeping up,
 //! one 100 ms after it on a page that stalled, so a quick tap's lift that a busy page hears late,
 //! after frames saw the time pass, is a tap. A finger that travels over a window's content
-//! scrolls it as the wheel does, and flings it on when it lifts moving. Icons move: a mouse drags
-//! one past 4 px; a finger held on one for 500 ms picks it up, then moving it 8 px drags it, and
-//! lifting it unmoved opens its menu instead; a tile kept on the dock moves so along it, and an
-//! icon dropped on the bottom row puts its app on the dock and goes back to its place. A mouse
-//! dragged on the bare desktop draws a box that selects the icons it touches; dragging a
-//! selected icon carries them all. Bindings, pointer rules and motion are those of `DESIGN.md`.
+//! scrolls it as the wheel does, and flings it on when it lifts moving. Icons move to any cell of
+//! the grid (`home::place`): a mouse drags one past 4 px; a finger held on one for 500 ms picks
+//! it up, then moving it 8 px drags it, and lifting it unmoved opens its menu instead; a tile
+//! kept on the dock moves so along it, and an icon dropped on the bottom row puts its app on the
+//! dock and goes back to its place. A mouse dragged on the bare desktop draws a box that selects
+//! the icons it touches; dragging a selected icon carries them all. Bindings, pointer rules and
+//! motion are those of `DESIGN.md`.
 //! While anything moves (or a held finger waits to long-press), [`Shell::draw`] asks for the
 //! next frame; otherwise none, but for the living grain's and an app's timer's
 //! ([`Shell::frame_in`]). Above the windows lies the overlay, the Assistant that uses the
@@ -62,11 +63,11 @@ pub const GRAIN_MS: f64 = 125.0;
 type Widget = (WinId, WidgetId);
 
 /// What the page keeps for the shell between visits: the theme's name (else the default, Mono),
-/// the dock's favorites and the home screen's order as stored (the `dock` and `home`
-/// preferences; `None` for none), whether Welcome was shown on a first visit (the `seen`
-/// preference) and whether the grain is still (the `grain` preference `"off"`); and whether the
-/// page is cross-origin isolated, which programs need: the kernel knows before Welcome, a
-/// program, opens.
+/// the dock's favorites and where the home screen's icons sit, as stored (the `dock` and
+/// `home.order` preferences; `None` for none), whether Welcome was shown on a first visit (the
+/// `seen` preference) and whether the grain is still (the `grain` preference `"off"`); and
+/// whether the page is cross-origin isolated, which programs need: the kernel knows before
+/// Welcome, a program, opens.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Prefs {
     pub theme: String,

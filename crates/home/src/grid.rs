@@ -1,8 +1,9 @@
 //! The home screen's grid as it behaves (where cells are and how an icon draws: [`icons`]):
-//! every app, listed in the person's order and the order kept as it changes ([`icons::PREF`]);
-//! icons carried to a new place (a mouse's once it travels 4 px, a finger's once held, then 8 px)
-//! or below the grid, onto the bottom row, which keeps their apps (they go back); the selection
-//! box; Enter and Escape for them; each icon sliding to its cell.
+//! every app, each in the cell the person put it in ([`place`], kept as [`icons::PREF`]); icons
+//! carried to a cell (a mouse's once it travels 4 px, a finger's once held, then 8 px), those in
+//! the way making room while they hover there, or below the grid, onto the bottom row, which
+//! keeps their apps (they go back); the selection box; Enter and Escape for them; each icon
+//! sliding to its cell.
 
 use std::mem;
 
@@ -12,6 +13,7 @@ use host::{Effect, Entry};
 use ui::{Key, Mods, TextSystem, Theme};
 
 use crate::icons::{self, State};
+use crate::place::{self, Dims, Place};
 
 /// The built-in apps in the home screen's first order (those the registry knows).
 #[rustfmt::skip]
@@ -28,7 +30,8 @@ const SLIDE_MS: f32 = 180.0;
 /// Icons carried, or pressed and about to be: their indices (in order) and the one pressed, where
 /// the press (or the finger's pick-up) was and its offset in that icon's cell, whether a finger
 /// holds them, whether they show lifted, whether they moved past the travel (and will drop), and
-/// where among the rest they would. A new listing that changes the icons drops them.
+/// where the one pressed would land (the grid's: a cell's position; the dock's: its slot). A new
+/// listing that changes the icons drops them.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Carry {
     pub icons: Vec<usize>,
@@ -58,11 +61,6 @@ impl Carry {
     pub fn held(&self) -> Option<(f32, f32)> {
         (self.touch && self.lifted && !self.moved).then_some(self.from)
     }
-
-    /// The slot they were picked up from, among the rest.
-    pub fn home(&self) -> usize {
-        (0..self.lead).filter(|k| !self.icons.contains(k)).count()
-    }
 }
 
 /// What a button-0 press lands on, as the grid sees it.
@@ -74,13 +72,16 @@ pub enum Press {
     Other,
 }
 
-/// The grid: its icons in the person's order (and that order by name), the files' generation
-/// they were listed at, the icons selected, carried, the selection box's corner, where each icon
-/// slides, and the area it lays out in (whether a phone's).
+/// The grid: its icons (in their order: as kept, new ones last), where each is kept (once
+/// listed, by the icons' order; before, as stored) and where each shows (a cell's position in
+/// reading order: [`place::resolve`]), the files' generation they were listed at,
+/// the icons selected, carried, the selection box's corner, where each icon slides, and the
+/// area it lays out in (whether a phone's).
 #[derive(Default)]
 pub struct Grid {
     pub icons: Vec<Entry>,
-    pub order: Vec<String>,
+    pub places: Vec<Place>,
+    pub spots: Vec<usize>,
     listed: Option<u64>,
     pub selected: Vec<String>,
     pub carry: Option<Carry>,
@@ -91,14 +92,26 @@ pub struct Grid {
 }
 
 impl Grid {
-    /// A grid in the order a stored preference names (none: the apps' own).
+    /// A grid where a stored preference keeps the icons (none: the apps' own order, packed).
     pub fn new(stored: Option<&str>) -> Grid {
-        Grid { order: crate::names(stored.unwrap_or("")), ..Grid::default() }
+        Grid { places: place::parse(stored.unwrap_or("")), ..Grid::default() }
     }
 
-    /// Lists `apps` again if the files changed since (`generation`): in the person's order, new
-    /// ones last; one new since the first listing is kept in the order as it is now (so the
-    /// newest stays last), its preference pushed to `fx`. Whether it listed.
+    /// The grid's shape in its area.
+    pub fn dims(&self) -> Dims {
+        icons::dims(self.area, self.narrow)
+    }
+
+    /// Finds where each icon shows, in the grid's area as it is now (none before the first
+    /// listing).
+    fn lay(&mut self) {
+        let n = self.icons.len().min(self.places.len());
+        self.spots = place::resolve(&self.places[..n], self.dims());
+    }
+
+    /// Lists `apps` again if the files changed since (`generation`), each where it was kept, new
+    /// ones in the first free cells; one new since the first listing keeps where the icons show
+    /// (the preference to `fx`), so it stays there. Whether it listed.
     pub fn list(
         &mut self,
         generation: u64,
@@ -109,48 +122,53 @@ impl Grid {
         if self.listed.replace(generation) == Some(generation) {
             return false;
         }
-        let (icons, new) = icons::arrange(&self.order, apps(), |e| &e.name);
-        let before = mem::take(&mut self.order);
-        self.icons = icons;
-        self.note_order(!first && new, fx);
-        if self.order != before {
+        let names = |icons: &[Entry]| icons.iter().map(|e| e.name.clone()).collect::<Vec<_>>();
+        let before = names(&self.icons);
+        let (icons, places, new) = place::arrange(&self.places, apps(), |e| &e.name);
+        (self.icons, self.places) = (icons, places);
+        self.lay();
+        if !first && new {
+            self.keep(false, fx);
+        }
+        let now = names(&self.icons);
+        if now != before {
             self.carry = None;
             self.cells.clear();
         }
-        let order = &self.order;
-        self.selected.retain(|n| order.contains(n));
+        self.selected.retain(|n| now.contains(n));
         true
     }
 
-    /// Notes the icons' order, and keeps it (the preference, to `fx`) if `keep`.
-    fn note_order(&mut self, keep: bool, fx: &mut Vec<Effect>) {
-        self.order = self.icons.iter().map(|e| e.name.clone()).collect();
-        if keep {
-            let value = crate::joined(&self.order);
-            fx.push(Effect::Pref { key: icons::PREF.to_string(), value });
-        }
+    /// Keeps where the icons show as their cells in this layout (the preference to `fx`): every
+    /// one's if `all` (a drop: what the person sees stays), else but those kept for a larger
+    /// screen ([`place::keep`]).
+    fn keep(&mut self, all: bool, fx: &mut Vec<Effect>) {
+        let dims = self.dims();
+        place::keep(&mut self.places, &self.spots, dims, all);
+        let value = place::format(&self.places);
+        fx.push(Effect::Pref { key: icons::PREF.to_string(), value });
     }
 
-    /// Each icon's cell: its place in the order, but while icons are carried (`None` for them)
-    /// the rest close up around a gap for them at the slot.
+    /// Where every icon shows while `c` is carried: the carried landing where the one pressed is
+    /// headed, the others making room ([`place::plan`]).
+    fn plan(&self, c: &Carry) -> Vec<usize> {
+        place::plan(&self.spots, &c.icons, c.lead, c.slot, self.dims())
+    }
+
+    /// Each icon's cell (its position): where it shows, but while icons are carried (`None` for
+    /// them) where the rest would be with them put down where they are headed.
     pub fn cells(&self) -> Vec<Option<usize>> {
-        let (carry, mut out, mut k) = (self.carry.as_ref().filter(|c| c.lifted), Vec::new(), 0);
-        for i in 0..self.icons.len() {
-            let cell = match carry {
-                Some(c) if c.icons.contains(&i) => None,
-                Some(c) if k >= c.slot => Some(k + c.icons.len()),
-                _ => Some(k),
-            };
-            k += usize::from(cell.is_some());
-            out.push(cell);
-        }
-        out
+        let Some(c) = self.carry.as_ref().filter(|c| c.lifted) else {
+            return self.spots.iter().map(|&s| Some(s)).collect();
+        };
+        let plan = self.plan(c).into_iter().enumerate();
+        plan.map(|(i, s)| (!c.icons.contains(&i)).then_some(s)).collect()
     }
 
     /// The icon under `(x, y)`, unless icons are carried.
     pub fn at(&self, x: f32, y: f32) -> Option<usize> {
         let free = self.carry.as_ref().is_none_or(|c| !c.lifted);
-        icons::at(self.icons.len(), self.area, self.narrow, x, y).filter(|_| free)
+        icons::at(&self.spots, self.area, self.narrow, x, y).filter(|_| free)
     }
 
     /// A button-0 press at `at` (a finger's if `touch`): on an icon a mouse's may carry it (with
@@ -179,17 +197,12 @@ impl Grid {
     /// Icon `i` (and the selection with it, if it is selected) pressed at `at`: lifted at once
     /// for a finger, which held it.
     pub fn pick(&self, i: usize, at: (f32, f32), touch: bool) -> Option<Carry> {
-        let all = self.selected.contains(&self.icons.get(i)?.name);
-        let (mut picked, mut slot) = (Vec::new(), 0);
-        for (k, e) in self.icons.iter().enumerate() {
-            match k == i || all && self.selected.contains(&e.name) {
-                true => picked.push(k),
-                false => slot += usize::from(k < i),
-            }
-        }
-        let r = icons::cell(i, self.area, self.narrow);
-        let (off, lifted) = ((at.0 - r.x, at.1 - r.y), touch);
-        Some(Carry { icons: picked, lead: i, from: at, off, touch, lifted, moved: false, slot })
+        let (all, slot) = (self.selected.contains(&self.icons.get(i)?.name), *self.spots.get(i)?);
+        let with = |k: usize, e: &Entry| k == i || all && self.selected.contains(&e.name);
+        let picked = self.icons.iter().enumerate().filter(|(k, e)| with(*k, e)).map(|p| p.0);
+        let r = icons::cell(slot, self.area, self.narrow);
+        let (icons, off, lifted) = (picked.collect(), (at.0 - r.x, at.1 - r.y), touch);
+        Some(Carry { icons, lead: i, from: at, off, touch, lifted, moved: false, slot })
     }
 
     /// Whether `at` lies below the grid: over the bottom row, which keeps carried icons' apps
@@ -205,26 +218,25 @@ impl Grid {
         icons.map(|e| e.name.clone()).collect()
     }
 
-    /// The pointer moved to `at`: carried icons follow it once it traveled far enough, and the
-    /// slot under them opens (below the grid, the one they came from). Whether they just
-    /// started to move (a press is no click then).
+    /// The pointer moved to `at`: carried icons follow it once it traveled far enough, headed
+    /// for the cell under them (below the grid, the one they came from), those in the way
+    /// making room. Whether they just started to move (a press is no click then).
     pub fn carry_to(&mut self, at: Option<(f32, f32)>) -> bool {
         let beneath = self.beneath(at);
         let (Some(at), Some(c)) = (at, &mut self.carry) else { return false };
         let start = c.travel(at);
-        if c.moved {
+        if let (true, Some(&home)) = (c.moved, self.spots.get(c.lead)) {
             let r = icons::cell(0, self.area, self.narrow);
             let center = (at.0 - c.off.0 + r.w / 2.0, at.1 - c.off.1 + r.h / 2.0);
-            let rest = self.icons.len() - c.icons.len();
-            c.slot =
-                if beneath { c.home() } else { icons::slot(rest, self.area, self.narrow, center) };
+            c.slot = if beneath { home } else { icons::slot(self.area, self.narrow, center) };
         }
         start
     }
 
-    /// Puts carried icons down: where they are headed if `keep` and they moved (keeping the
-    /// order if it changed, its preference to `fx`), else (or below the grid) back; each slides
-    /// there from where it showed with the pointer at `at`.
+    /// Puts carried icons down: if `keep` and they moved, where they are headed, those in the way
+    /// moved aside, and every icon kept where it then shows (the preference to `fx`) if any
+    /// moved; else (or below the grid) back. Each slides there from where it showed with the
+    /// pointer at `at`.
     pub fn drop(&mut self, keep: bool, at: Option<(f32, f32)>, fx: &mut Vec<Effect>) {
         for (i, r) in self.carried(at) {
             if let Some(t) = self.cells.get_mut(i) {
@@ -233,14 +245,10 @@ impl Grid {
         }
         let keep = keep && !self.beneath(at);
         let Some(c) = self.carry.take() else { return };
-        let order = icons::moved(self.icons.len(), &c.icons, c.slot);
-        if keep && c.moved && order.iter().enumerate().any(|(k, &i)| k != i) {
-            let (icons, cells) = (mem::take(&mut self.icons), mem::take(&mut self.cells));
-            for i in order {
-                self.icons.push(icons[i].clone());
-                self.cells.extend(cells.get(i));
-            }
-            self.note_order(true, fx);
+        let spots = self.plan(&c);
+        if keep && c.moved && spots != self.spots {
+            self.spots = spots;
+            self.keep(true, fx);
         }
     }
 
@@ -248,12 +256,12 @@ impl Grid {
     pub fn lasso_to(&mut self, at: Option<(f32, f32)>) {
         let (Some(from), Some(at)) = (self.lasso, at) else { return };
         let b = icons::boxed(from, at);
-        let touches = |i: usize| {
-            let r = icons::cell(i, self.area, self.narrow).inset(4.0).intersect(b);
+        let touches = |s: usize| {
+            let r = icons::cell(s, self.area, self.narrow).inset(4.0).intersect(b);
             r.w > 0.0 && r.h > 0.0
         };
-        let picked = self.icons.iter().enumerate().filter(|(i, _)| touches(*i));
-        self.selected = picked.map(|(_, e)| e.name.clone()).collect();
+        let picked = self.icons.iter().zip(&self.spots).filter(|(_, s)| touches(**s));
+        self.selected = picked.map(|(e, _)| e.name.clone()).collect();
     }
 
     /// Escape puts carried icons back (the pointer at `at`) and forgets the press, else ends the
@@ -275,13 +283,14 @@ impl Grid {
         Some(Vec::new())
     }
 
-    /// Each icon heads for its cell (a new one, or all on a new screen size, at once: `instant`);
-    /// carried ones wait.
+    /// Each icon heads for its cell, found anew for the area (a new one, or all on a new screen
+    /// size, at once: `instant`); carried ones wait.
     pub fn sync(&mut self, now: f64, instant: bool) {
+        self.lay();
         let (cells, m) = (self.cells(), &mut self.cells);
         m.truncate(cells.len());
-        for (i, cell) in cells.into_iter().enumerate() {
-            let to = Vis::at(icons::cell(cell.unwrap_or(i), self.area, self.narrow));
+        for (i, (cell, &spot)) in cells.into_iter().zip(&self.spots).enumerate() {
+            let to = Vis::at(icons::cell(cell.unwrap_or(spot), self.area, self.narrow));
             match m.get_mut(i) {
                 None => m.push(Tween::new(to)),
                 Some(_) if cell.is_none() => {}

@@ -2,8 +2,10 @@
 //! windows, which the shell wires to its input and draws in the frame's [`ui::Theme`].
 //!
 //! - [`bar`]: the top bar, its buttons and clock;
-//! - [`icons`]: every app as an icon in a grid behind the windows, in the person's order;
-//! - [`grid`]: the grid as it behaves: listed, carried to a new place, selected by a box;
+//! - [`icons`]: every app as an icon in a grid behind the windows;
+//! - [`place`]: where each icon sits, in the cell the person put it in, empty cells staying
+//!   empty; a phone's grid and a wide screen's each arranged on its own;
+//! - [`grid`]: the grid as it behaves: listed, carried to a cell, selected by a box;
 //! - [`dock`]: the bottom row, one tile high: the dock at its left (the person's favorites, kept
 //!   as the `dock` preference and moved as icons are, then the others running) and the
 //!   Assistant alone at the bottom-right corner;
@@ -20,6 +22,7 @@ pub mod dock;
 pub mod grid;
 pub mod icons;
 pub mod menu;
+pub mod place;
 pub mod touch;
 
 use gfx::{DrawList, RectF};
