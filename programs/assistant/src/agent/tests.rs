@@ -340,6 +340,11 @@ fn the_screen_reads_as_text_whose_refs_last_the_session() {
         "{text}"
     );
     assert_eq!((refs.get(3), refs.get(7)), (Some((2, 30)), None));
+    // A grid shows the text in it and its squares, a row a line.
+    let mut grid = page(2, true);
+    grid.marks[0] = Mark { id: 1, role: 10, flags: 0, value: "2 columns\n01\n80".into() };
+    let text = render(&Scene { focus: 2, wins: vec![grid], ..Scene::default() }, &mut refs, 0).0;
+    assert!(text.contains("e1 grid \"Privacy\" squares \"2 columns\\n01\\n80\"\n"), "{text}");
 }
 
 #[test]

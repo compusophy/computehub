@@ -62,6 +62,11 @@ fn every_failure_is_coded_and_a_whole_app_compiles() {
     assert_eq!(span("label !\"é\";"), Some(Span::new(6, 11)));
     // A short operator chain is within the depth cap.
     assert!(compile(&format!("label {}0;", "1+".repeat(40))).is_ok());
+    // A stray `;` after a closing brace, or doubled, is nothing; a missing one is an error.
+    let stray = "state n = 0;; grid 1, [1] { n = cell; }; row { label n;; }; \
+                 button \"b\" { if true { n = 1; }; };";
+    assert!(compile(stray).is_ok());
+    assert_eq!(code("row { label 1 }"), Some(UNEXPECTED_TOKEN));
 }
 
 #[test]

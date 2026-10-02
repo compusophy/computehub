@@ -378,8 +378,8 @@ pub fn rule(code: u16) -> &'static str {
         codes::BAD_ESCAPE => "the only escapes are \\\" \\\\ and \\n.",
         codes::UNEXPECTED_TOKEN => {
             "every widget, let, assignment, call and return ends with ;, also inside the braces \
-             of if, row, col and for (if on { label \"a\"; } else { label \"b\"; }), and no ; \
-             follows a closing }. States come first; there is no while, ?:, ++, *= or class."
+             of if, row, col and for (if on { label \"a\"; } else { label \"b\"; }). States come \
+             first; there is no while, ?:, ++, *= or class."
         }
         codes::TOO_DEEP => "nest less: split long expressions and deep if chains into functions.",
         codes::DIV_BY_ZERO => "guard every / and % so the divisor is never 0.",

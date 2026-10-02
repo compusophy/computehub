@@ -285,6 +285,10 @@ pub(crate) fn parse(src: &str) -> Result<Program, Diag> {
     };
     let (mut ids, mut first) = (0u32, true);
     while !t.at_last() {
+        // A stray `;` (after a closing `}`, or doubled) is nothing.
+        if t.eat(|x| x.kind == TokKind::Semi).is_some() {
+            continue;
+        }
         first &= t.peek().kind == TokKind::State || word(src, t.peek(), "saved");
         item(src, &mut t, &mut p, (&mut ids, first)).map_err(|e| e.0)?;
     }
@@ -564,7 +568,9 @@ fn braced<T>(src: &str, t: &mut Toks<'_>, item: Item<'_, T>) -> PResult<(Vec<T>,
         if t.at_last() {
             return Err(unexpected(src, t.peek(), "`}`"));
         }
-        items.push(item(src, t)?);
+        if t.eat(|x| x.kind == TokKind::Semi).is_none() {
+            items.push(item(src, t)?);
+        }
     }
     let end = expect(src, t, TokKind::RBrace, "`}`")?;
     Ok((items, end))
