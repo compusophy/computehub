@@ -116,8 +116,8 @@ fn names_open_studio_and_the_first_size_starts_it() {
     // About, Feedback and Files: bin/system.wasm, as their markers name it.
     let sys = |n: &str| open(n).map(|a| (a.title(), a.icon(), a.preferred_size(), a.compact()));
     let want = |i: usize, c| Some((SYSTEM[i].1.into(), SYSTEM[i].2, Some(SYSTEM[i].3), c));
-    let got = [sys("about"), sys("feedback"), sys("files:~/a")];
-    assert_eq!(got, [want(0, true), want(1, true), want(2, false)]);
+    let got = [sys("about"), sys("feedback"), sys("files:~/a"), sys("editor:~/b.txt")];
+    assert_eq!(got, [want(0, true), want(1, true), want(2, false), want(4, false)]);
     assert!(SYSTEM[2].2.glyph == Glyph::Folder && open("system").is_none());
     // Before a frame: a still note, the title its own; no process yet.
     let mut s = Sys::new(false);
@@ -265,15 +265,15 @@ fn inputs_and_codes_keep_the_text_the_user_edits() {
     s.ev(key(Key::Enter, "c"));
     let run = Event::Key { id: 4, key: uiwire::Key::Enter, mods: mods::CTRL, ch: '\0' };
     assert_eq!((s.events(), got(&s).0), (vec![run], "new".into()));
-    // An Area: Enter is a new line (its echo no second), Ctrl+Enter a key for the program.
+    // An Area: Enter is a new line (no echo), Ctrl+Enter a key; Close goes after the last edit.
     let area = |v: &str| Node::Area { id: 8, value: v.into(), placeholder: "".into() };
     s.show(vec![area("hi")], vec![]);
     assert!(s.ev(press(8)) && s.ev(key(Key::Enter, "")) && !s.ev(text("\n")) && s.ev(text("x")));
     assert_eq!(s.events(), [change(8, 1, "hi\n")]);
-    s.show(vec![area("old")], vec![]);
     s.ev(key(Key::Enter, "c"));
     let send = Event::Key { id: 8, key: uiwire::Key::Enter, mods: mods::CTRL, ch: '\0' };
-    assert_eq!(s.events(), [change(8, 2, "hi\nx"), send]);
+    assert!(s.ev(text("y")) && s.cx(|r, cx| (r.closing(cx), true).1));
+    assert_eq!(s.events(), [change(8, 2, "hi\nx"), send, change(8, 3, "hi\nxy"), Event::Close]);
 }
 
 #[test]

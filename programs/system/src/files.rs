@@ -22,7 +22,7 @@ const FILE: u32 = 0x94a3b8;
 /// A folder's contents as rows (folders first, then files with their sizes) under a path bar
 /// that stays put while they scroll: Up, then the path as crumbs from `~` (or `/` outside home),
 /// each one a click away, on one line (a long path slides left, its last crumb in view). A folder
-/// opens in place, at its top; a `.app` runs; any other file opens in Studio. The folder is
+/// opens in place, at its top; a `.app` runs; any other file opens in Editor. The folder is
 /// listed again at every event (a focus brings one), so what changed elsewhere shows; past
 /// 1,000 rows the rest are a count.
 #[derive(Debug)]
@@ -97,7 +97,7 @@ impl Files {
             (true, _) => self.dir = path,
             (false, true) => self.requests.push(Request::Open { name: path }),
             (false, false) => {
-                self.requests.push(Request::Open { name: ["studio:", &path].concat() })
+                self.requests.push(Request::Open { name: ["editor:", &path].concat() })
             }
         }
         true

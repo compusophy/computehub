@@ -79,7 +79,7 @@ programs/    wasm32-wasip1 programs (dist/bin/), the app language they share
   studio/    make apps by describing them; runs `.app` files
   coder/     Studio's coding agent: write, test, fix by edits, keep the best
   assistant/ the Assistant: the overlay AI using the desktop
-  system/    About, Feedback, Files, Welcome (one multicall program)
+  system/    About, Editor, Feedback, Files, Welcome (one multicall program)
   toolbox/   test programs, one binary
 assets/fonts/  the fonts (see Fonts below)
 api/           server functions (Vercel, Node): ai.mjs, feedback.mjs

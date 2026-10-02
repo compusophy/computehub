@@ -42,14 +42,15 @@ pub const APP_ICON: AppIcon = AppIcon { glyph: Glyph::Window, hue: Rgba::hex(0xf
 pub const ASSISTANT_ICON: AppIcon = AppIcon { glyph: Glyph::Assistant, hue: Rgba::hex(0xa78bfa) };
 /// A system app as (name, title, icon, size, whether compact).
 pub type SystemApp = (&'static str, &'static str, AppIcon, (f32, f32), bool);
-/// About, Feedback, Files and Welcome: one program, bin/system.wasm, run as the name of its /bin
-/// marker.
+/// About, Feedback, Files, Welcome and Editor: one program, bin/system.wasm, run as the name of
+/// its /bin marker.
 #[rustfmt::skip]
-pub const SYSTEM: [SystemApp; 4] = [
+pub const SYSTEM: [SystemApp; 5] = [
     ("about", "About", icon(Glyph::About, 0xfbbf24), (560.0, 640.0), true),
     ("feedback", "Feedback", icon(Glyph::Bug, 0x34d399), (520.0, 420.0), true),
     ("files", "Files", icon(Glyph::Folder, 0x60a5fa), (640.0, 480.0), false),
     ("welcome", "Welcome", icon(Glyph::Mark, 0xf472b6), (520.0, 768.0), true),
+    ("editor", "Editor", icon(Glyph::Editor, 0xfb923c), (640.0, 560.0), false),
 ];
 /// Studio's size: room for the app beside its prompt.
 const STUDIO_SIZE: Option<(f32, f32)> = Some((880.0, 560.0));
@@ -60,14 +61,17 @@ const fn icon(glyph: Glyph, hue: u32) -> AppIcon {
     AppIcon { glyph, hue: Rgba::hex(hue) }
 }
 
-/// The app for a window name: About, Feedback, Files or Welcome ([`SYSTEM`]; `"files:<dir>"` is
-/// Files at that folder), the Assistant for `"assistant"`, Studio with nothing open for
-/// `"studio"` or on `<path>` for `"studio:<path>"`, or running a `.app` path (relative: in
-/// `/apps`).
+/// The app for a window name: About, Feedback, Files, Welcome or Editor ([`SYSTEM`];
+/// `"files:<dir>"` is Files at that folder, `"editor:<path>"` Editor on that file), the Assistant
+/// for `"assistant"`, Studio with nothing open for `"studio"` or on `<path>` for
+/// `"studio:<path>"`, or running a `.app` path (relative: in `/apps`).
 pub fn open(name: &str, ai: &Ai) -> Option<Box<dyn App>> {
-    let (head, dir) = name.strip_prefix("files:").map_or((name, None), |d| ("files", Some(d)));
+    let (head, arg) = match name.split_once(':') {
+        Some((head @ ("files" | "editor"), arg)) => (head, Some(arg)),
+        _ => (name, None),
+    };
     if let Some(&(prog, title, icon, size, compact)) = SYSTEM.iter().find(|s| s.0 == head) {
-        let argv = [prog].into_iter().chain(dir).map(String::from).collect();
+        let argv = [prog].into_iter().chain(arg).map(String::from).collect();
         let mut r = Remote::new(&["/bin/", prog].concat(), argv, ai);
         (r.title, r.icon, r.size, r.compact) = (title.into(), icon, Some(size), compact);
         return Some(Box::new(r));
@@ -424,7 +428,8 @@ impl App for Remote {
 
     fn closing(&mut self, cx: &mut Cx<'_>) {
         if !mem::replace(&mut self.closed, true) {
-            self.post(Event::Close, cx);
+            // The last edits first: the program may keep them.
+            self.send(Event::Close, cx);
             self.ai.ask(self.pid.unwrap_or_default(), Request::Close);
         }
     }

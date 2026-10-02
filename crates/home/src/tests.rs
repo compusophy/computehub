@@ -537,9 +537,9 @@ fn icons_carried_past_their_travel_land_in_any_cell_and_stay() {
     // Dropped: there it stays, its own cell stays empty, and every cell is kept (this layout's;
     // the phone's has none yet), the icons in their order.
     g.drop(true, Some(mid(3)), &mut fx);
-    assert_eq!((labels(&g)[0], &g.spots), ("Studio", &vec![3, 1, 2, 4, 5, 6, 7, 8]));
-    let kept = "@2,studio:0.3:,assistant:0.1:,terminal:0.2:,files:0.4:,settings:0.5:,".to_string()
-        + "feedback:1.0:,about:1.1:,welcome:1.2:";
+    assert_eq!((labels(&g)[0], &g.spots), ("Studio", &vec![3, 1, 2, 4, 5, 6, 7, 8, 9]));
+    let kept = "@2,studio:0.3:,assistant:0.1:,terminal:0.2:,files:0.4:,editor:0.5:,".to_string()
+        + "settings:1.0:,feedback:1.1:,about:1.2:,welcome:1.3:";
     assert_eq!(fx, [pref(&kept)]);
     // Dropped on an empty cell far off, it goes there and nothing else moves; reloaded, every
     // icon is where it was.
@@ -547,7 +547,7 @@ fn icons_carried_past_their_travel_land_in_any_cell_and_stay() {
     g.press(Press::Icon(2), mid(2), false);
     g.carry_to(Some(far));
     g.drop(true, Some(far), &mut fx);
-    assert_eq!(g.spots, [3, 1, 40, 4, 5, 6, 7, 8]);
+    assert_eq!(g.spots, [3, 1, 40, 4, 5, 6, 7, 8, 9]);
     let Some(Effect::Pref { value, .. }) = fx.last() else { panic!("kept") };
     let h = grid(Some(value.as_str()));
     assert_eq!((labels(&h), &h.spots), (labels(&g), &g.spots));
@@ -582,13 +582,15 @@ fn icons_carried_past_their_travel_land_in_any_cell_and_stay() {
     // nothing kept yet. An app new since (a `.app` saved) takes the first free cell, and the
     // order is kept (a layout never arranged keeps no cells: it packs as the screen changes).
     let mut g = grid(Some("welcome,gone,terminal"));
-    let want =
-        ["Welcome", "Terminal", "Studio", "Assistant", "Files", "Settings", "Feedback", "About"];
-    assert_eq!((labels(&g), &g.spots), (want.to_vec(), &(0..8).collect::<Vec<_>>()));
+    #[rustfmt::skip]
+    let want = ["Welcome", "Terminal", "Studio", "Assistant", "Files", "Editor", "Settings",
+        "Feedback", "About"];
+    assert_eq!((labels(&g), &g.spots), (want.to_vec(), &(0..9).collect::<Vec<_>>()));
     let all: Vec<&str> = APPS.iter().copied().chain(["/apps/clock.app"]).collect();
-    assert!(g.list(2, || entries(&all), &mut fx) && (labels(&g)[8], g.spots[8]) == ("Clock", 8));
-    let kept = "@2,welcome::,terminal::,studio::,assistant::,files::,settings::,feedback::,";
-    assert_eq!(fx.last(), Some(&pref(&[kept, "about::,/apps/clock.app::"].concat())));
+    assert!(g.list(2, || entries(&all), &mut fx) && (labels(&g)[9], g.spots[9]) == ("Clock", 9));
+    let kept = "@2,welcome::,terminal::,studio::,assistant::,files::,editor::,settings::,";
+    let kept = [kept, "feedback::,about::,/apps/clock.app::"].concat();
+    assert_eq!(fx.last(), Some(&pref(&kept)));
 }
 
 #[test]
@@ -605,15 +607,15 @@ fn a_phone_keeps_icons_where_dropped_and_a_wide_screen_its_own_arrangement() {
     g.sync(0.0, true);
     assert_eq!(
         (&labels(&g)[..3], &g.spots),
-        (&["Files", "Studio", "Assistant"][..], &(0..8).collect::<Vec<_>>())
+        (&["Files", "Studio", "Assistant"][..], &(0..9).collect::<Vec<_>>())
     );
     // A finger holds Studio, drags it to the last cell, lifts: it stays there, no other moves.
     g.carry = g.pick(1, mid(&g, 1), true);
     g.carry_to(Some(mid(&g, 23)));
     g.drop(true, Some(mid(&g, 23)), &mut fx);
-    assert_eq!((spot(&g, "studio"), &g.spots), (Some(23), &vec![0, 23, 2, 3, 4, 5, 6, 7]));
-    let kept = "@2,files::0.0,studio::3.5,assistant::2.0,terminal::3.0,settings::0.1,".to_string()
-        + "feedback::1.1,about::2.1,welcome::3.1";
+    assert_eq!((spot(&g, "studio"), &g.spots), (Some(23), &vec![0, 23, 2, 3, 4, 5, 6, 7, 8]));
+    let kept = "@2,files::0.0,studio::3.5,assistant::2.0,terminal::3.0,editor::0.1,".to_string()
+        + "settings::1.1,feedback::2.1,about::3.1,welcome::0.2";
     let kept = kept.as_str();
     assert_eq!(fx, [pref(kept)]);
     // Reloaded, every icon is where it was. A new app takes the first free cell, Studio's old.
@@ -637,13 +639,13 @@ fn a_phone_keeps_icons_where_dropped_and_a_wide_screen_its_own_arrangement() {
     // column), the phone's stays as it was, and both are kept.
     (h.area, h.narrow) = (AREA, false);
     h.sync(0.0, true);
-    assert_eq!((h.spots.clone(), labels(&h)[8]), ((0..9).collect::<Vec<_>>(), "Clock"));
+    assert_eq!((h.spots.clone(), labels(&h)[9]), ((0..10).collect::<Vec<_>>(), "Clock"));
     h.press(Press::Icon(0), mid(&h, 0), false);
     h.carry_to(Some(mid(&h, 6)));
     h.drop(true, Some(mid(&h, 6)), &mut fx);
-    assert_eq!(h.spots, [6, 1, 2, 3, 4, 5, 7, 8, 9]);
+    assert_eq!(h.spots, [6, 1, 2, 3, 4, 5, 7, 8, 9, 10]);
     let Some(Effect::Pref { value, .. }) = fx.last() else { panic!("kept") };
-    let ends = value.ends_with(",welcome:1.2:3.1,/apps/clock.app:1.3:1.0");
+    let ends = value.ends_with(",welcome:1.3:0.2,/apps/clock.app:1.4:1.0");
     assert!(value.starts_with("@2,files:1.0:0.0,studio:0.1:3.5,") && ends, "{value}");
     (h.area, h.narrow) = (phone, true);
     h.sync(0.0, true);
@@ -682,7 +684,7 @@ fn a_box_selects_icons_which_open_and_move_together_and_a_finger_picks_one_up() 
     assert_eq!(g.carry.as_ref().map(|c| c.icons.clone()), Some(vec![0, 1]));
     g.carry_to(Some(mid(5)));
     g.drop(true, Some(mid(5)), &mut fx);
-    assert_eq!(g.spots, [4, 5, 2, 3, 6, 7, 8, 9]);
+    assert_eq!(g.spots, [4, 5, 2, 3, 6, 7, 8, 9, 10]);
     // Carried, the one pressed shows where the pointer holds it, two of the rest behind it.
     let mut g = grid(None);
     g.selected = ["studio", "assistant", "terminal", "files"].map(String::from).into();
