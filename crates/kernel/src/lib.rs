@@ -9,8 +9,14 @@
 //! CONS_WRITE; EXIT, a kill or a failed worker ends a process, leaving its status for
 //! [`Kernel::reap`]; both wake its owner window. File ops are served at once, each path checked
 //! against the roots, and none writes under /bin (EROFS): only the desktop does. A GUI process
-//! draws ([`Effect::Draw`]) and reads [`Kernel::post_event`]'s events. Not yet: console reads,
-//! modes.
+//! draws ([`Effect::Draw`]) and reads [`Kernel::post_event`]'s events.
+//!
+//! A process spawned with a tty holds a console: [`Kernel::input`] is its keys, as a terminal
+//! sends them, which a CONS_READ waits for. Cooked (the default): a line at a time with
+//! backspace, Enter (CR is LF), Ctrl+D (the line so far; on an empty line, end of file) and
+//! Ctrl+C (the line dropped, the console's other processes ended with 130), echoed unless
+//! NOECHO, controls as `^X`. Raw: every byte as it comes, no echo, nothing special. A CONS_MODE
+//! sets the mode until the process that set it ends.
 
 #![forbid(unsafe_code)]
 
@@ -85,7 +91,9 @@ pub enum Effect {
 }
 
 /// A process: its owner window, argv, Start and program until READY, valid roots, status once
-/// ended, untaken output, queued events, a waiting read's `max`, DRAWs taken.
+/// ended, untaken output (its console's, if it holds one), queued events, the read it waits on
+/// (its op and `max`), DRAWs taken; the pid holding its console (0: none) and, if its own, the
+/// console.
 #[derive(Debug, Default)]
 struct Process {
     pid: u32,
@@ -96,8 +104,21 @@ struct Process {
     status: Option<i32>,
     out: Vec<u8>,
     events: Vec<Vec<u8>>,
-    waiting: Option<u32>,
+    waiting: Option<(u8, u32)>,
     draws: u32,
+    tty: u32,
+    console: Option<Console>,
+}
+
+/// A console: its mode's bits (`wire::MODE_*`) and the pid that set them, the cooked line being
+/// typed, the input reads take, an end of file pending.
+#[derive(Debug, Default)]
+struct Console {
+    bits: u8,
+    setter: u32,
+    line: Vec<u8>,
+    input: Vec<u8>,
+    eof: bool,
 }
 
 impl Process {
@@ -105,6 +126,20 @@ impl Process {
     fn name(&self) -> &str {
         self.argv.first().map_or("", String::as_str)
     }
+
+    /// Whether it runs and waits on a read of `op`.
+    fn reads(&self, op: u8) -> bool {
+        self.status.is_none() && self.waiting.is_some_and(|w| w.0 == op)
+    }
+}
+
+/// The first `max` bytes of `v` (and [`wire::MAX_PAYLOAD`]), taken out of it.
+fn take(v: &mut Vec<u8>, max: u32) -> Vec<u8> {
+    let n = v.len().min(max as usize).min(wire::MAX_PAYLOAD);
+    let data = v[..n].to_vec();
+    v.copy_within(n.., 0);
+    v.truncate(v.len() - n);
+    data
 }
 
 /// The shared half: a deterministic state machine whose asks
@@ -153,7 +188,10 @@ impl Kernel {
         }
         let (owner, start, wire::Start { roots, argv, .. }) =
             (self.owner, Some((msg, program)), st);
-        self.procs.push(Process { pid, owner, argv, start, roots, ..Process::default() });
+        let (tty, console) =
+            if tty.is_some() { (pid, Some(Console::default())) } else { (0, None) };
+        let p = Process { pid, owner, argv, start, roots, tty, console, ..Process::default() };
+        self.procs.push(p);
         self.last_pid = pid;
         // No COLS/ROWS words yet: until step 3's live /dev/winsize the worker
         // reads its size from the Start, and the words cost boot bytes.
@@ -162,12 +200,15 @@ impl Kernel {
     }
 
     /// A message from the worker of `pid`, dropped unless it runs. Each request gets one
-    /// [`Effect::Reply`]: EINVAL if it does not decode or goes the wrong way, ENOSYS for
-    /// CONS_READ and CONS_MODE. Raw until [`Msg`] has them: DRAW (`rest frame`) is an
-    /// [`Effect::Draw`] (E2BIG past [`MAX_FRAME`]); EVENTS (`u32 max`) waits for an event
-    /// and gets up to `max` bytes (and [`wire::MAX_PAYLOAD`]), the rest left for next time.
+    /// [`Effect::Reply`]: EINVAL if it does not decode or goes the wrong way. Raw until [`Msg`]
+    /// has them: DRAW (`rest frame`) is an [`Effect::Draw`] (E2BIG past [`MAX_FRAME`]); EVENTS
+    /// (`u32 max`) waits for an event and gets up to `max` bytes (and [`wire::MAX_PAYLOAD`]), the
+    /// rest left for next time. CONS_READ waits for console input as EVENTS does for events (no
+    /// console: end of file at once) and wakes the owner; CONS_MODE takes bits below 4 (ENOTTY
+    /// with no console).
     pub fn message(&mut self, vfs: &mut Vfs, pid: u32, msg: &[u8]) {
         let Some(i) = self.find(pid, true) else { return };
+        let (tty, owner) = (self.procs[i].tty, self.procs[i].owner);
         let reply = match *msg {
             [wire::DRAW, ref frame @ ..] if frame.len() <= MAX_FRAME => {
                 self.procs[i].draws = self.procs[i].draws.wrapping_add(1);
@@ -176,18 +217,31 @@ impl Kernel {
             }
             [wire::DRAW, ..] => Err(wire::E2BIG),
             [wire::EVENTS, a, b, c, d] => {
-                self.procs[i].waiting = Some(u32::from_le_bytes([a, b, c, d]));
+                self.procs[i].waiting = Some((wire::EVENTS, u32::from_le_bytes([a, b, c, d])));
                 return self.serve(i);
             }
             _ => match Msg::decode(msg) {
                 Some(Msg::Ready { version }) => return self.ready(vfs, i, version),
-                Some(Msg::ConsWrite { data }) => {
-                    self.procs[i].out.extend_from_slice(data);
-                    return self.touch(self.procs[i].owner);
-                }
+                Some(Msg::ConsWrite { data }) => return self.show(tty, i, data),
                 Some(Msg::Exit { status }) => return self.end(i, status),
                 Some(Msg::ConsBell | Msg::HomeState { .. }) => return,
-                Some(Msg::ConsRead { .. } | Msg::ConsMode { .. }) => Err(wire::ENOSYS),
+                Some(Msg::ConsRead { max }) => {
+                    self.procs[i].waiting = Some((wire::CONS_READ, max));
+                    self.touch(owner);
+                    return self.serve(i);
+                }
+                Some(Msg::ConsMode { bits }) => match self.console(tty) {
+                    Some(c) if bits < 4 => {
+                        // Raw takes the line typed so far as it is.
+                        if bits & wire::MODE_RAW != 0 {
+                            c.input.append(&mut c.line);
+                        }
+                        (c.bits, c.setter) = (bits, pid);
+                        Ok(Vec::new())
+                    }
+                    Some(_) => Err(wire::EINVAL),
+                    None => Err(wire::ENOTTY),
+                },
                 Some(op) => file(vfs, &self.procs[i].roots, op),
                 None => Err(wire::EINVAL),
             },
@@ -201,8 +255,72 @@ impl Kernel {
         self.kill(pid, wire::CANNOT_EXECUTE);
     }
 
-    /// Console input for `pid`: cooked lines, raw bytes or terminal replies. Not yet.
-    pub fn input(&mut self, _pid: u32, _bytes: &[u8]) {}
+    /// Keys for the console `pid` holds, as a terminal sends them (and its replies), taken in its
+    /// mode (module docs); then its newest waiting reader is served.
+    pub fn input(&mut self, pid: u32, bytes: &[u8]) {
+        let Some(c) = self.console(pid) else { return };
+        let (mut shown, mut intr) = (Vec::new(), false);
+        for &b in bytes {
+            if c.bits & wire::MODE_RAW != 0 {
+                c.input.push(b);
+                continue;
+            }
+            match b {
+                3 => {
+                    (intr, c.eof) = (true, false);
+                    c.line.clear();
+                    c.input.clear();
+                    shown.extend_from_slice(b"^C");
+                }
+                4 if c.line.is_empty() => c.eof = true,
+                4 => c.input.append(&mut c.line),
+                b'\r' | b'\n' => {
+                    c.line.push(b'\n');
+                    c.input.append(&mut c.line);
+                    shown.push(b'\n');
+                }
+                // Backspace takes a whole UTF-8 char.
+                8 | 0x7F => {
+                    while let Some(x) = c.line.pop() {
+                        if x & 0xC0 != 0x80 {
+                            shown.extend_from_slice(b"\x08 \x08");
+                            break;
+                        }
+                    }
+                }
+                b'\t' | 0x20.. => {
+                    c.line.push(b);
+                    shown.push(b);
+                }
+                _ => {
+                    c.line.push(b);
+                    shown.extend_from_slice(&[b'^', b + 64]);
+                }
+            }
+        }
+        if c.bits & wire::MODE_NOECHO != 0 {
+            shown.clear();
+        }
+        if let Some(i) = self.find(pid, true) {
+            self.show(pid, i, &shown);
+        }
+        // Ctrl+C: what runs on the console, but the process holding it, ends.
+        let job = self.procs.iter().filter(|p| intr && p.tty == pid && p.pid != pid);
+        for q in job.map(|p| p.pid).collect::<Vec<u32>>() {
+            self.kill(q, wire::INTERRUPTED);
+        }
+        if let Some(i) = self.procs.iter().rposition(|p| p.tty == pid && p.reads(wire::CONS_READ)) {
+            self.serve(i);
+        }
+    }
+
+    /// Whether a process waits to read the console `pid` holds and no input is queued for it:
+    /// the console waits for keys.
+    pub fn idle(&self, pid: u32) -> bool {
+        let reads = self.procs.iter().any(|p| p.tty == pid && p.reads(wire::CONS_READ));
+        let c = self.procs.iter().find(|p| p.pid == pid).and_then(|p| p.console.as_ref());
+        reads && c.is_some_and(|c| c.input.is_empty() && !c.eof)
+    }
 
     /// Queues `event` (one uiwire event) for the /dev/events reads of `pid` if
     /// it runs; dropped if empty or past [`MAX_FRAME`] bytes queued.
@@ -222,11 +340,18 @@ impl Kernel {
         }
     }
 
-    /// The console of `pid` is now `cols` x `rows`: stored in its SAB.
+    /// The console `pid` holds is now `cols` x `rows`: stored in the SAB of each process running
+    /// on it.
     pub fn resize(&mut self, pid: u32, cols: u16, rows: u16) {
-        let runs = self.find(pid, true).is_some();
-        let words = [(wire::COLS, cols), (wire::ROWS, rows)].into_iter().filter(|_| runs);
-        self.effects.extend(words.map(|(index, n)| Effect::Word { pid, index, value: n.into() }));
+        for p in self.procs.iter().filter(|p| p.tty == pid && p.status.is_none()) {
+            let words = [(wire::COLS, cols), (wire::ROWS, rows)];
+            let pid = p.pid;
+            self.effects.extend(words.map(|(index, n)| Effect::Word {
+                pid,
+                index,
+                value: n.into(),
+            }));
+        }
     }
 
     /// The console output of `pid` so far, leaving none.
@@ -234,9 +359,11 @@ impl Kernel {
         self.find(pid, false).map(|i| core::mem::take(&mut self.procs[i].out)).unwrap_or_default()
     }
 
-    /// The console mode of `pid`: cooked with echo until modes are served.
-    pub fn mode(&self, _pid: u32) -> Mode {
-        Mode { raw: false, echo: true }
+    /// The mode of the console `pid` holds (cooked with echo for none).
+    pub fn mode(&self, pid: u32) -> Mode {
+        let c = self.procs.iter().find(|p| p.pid == pid).and_then(|p| p.console.as_ref());
+        let bits = c.map_or(0, |c| c.bits);
+        Mode { raw: bits & wire::MODE_RAW != 0, echo: bits & wire::MODE_NOECHO == 0 }
     }
 
     /// The exit status of `pid` once it ended, once; then the pid is gone.
@@ -314,13 +441,17 @@ impl Kernel {
         }
     }
 
-    /// Ends process `i` with `status`: its worker is terminated.
+    /// Ends process `i` with `status`: its worker is terminated, and a console mode it set
+    /// goes back to cooked with echo.
     fn end(&mut self, i: usize, status: i32) {
         let p = &mut self.procs[i];
-        (p.status, p.start) = (Some(status), None);
-        let (pid, owner) = (p.pid, p.owner);
+        (p.status, p.start, p.waiting) = (Some(status), None, None);
+        let (pid, owner, tty) = (p.pid, p.owner, p.tty);
         self.effects.push(Effect::Kill { pid });
         self.touch(owner);
+        if let Some(c) = self.console(tty).filter(|c| c.setter == pid) {
+            (c.bits, c.setter) = (0, 0);
+        }
     }
 
     /// The worker of process `i` is up: send its Start. A version mismatch
@@ -346,19 +477,49 @@ impl Kernel {
         self.effects.push(Effect::Start { pid: p.pid, msg, program });
     }
 
-    /// Answers a waiting EVENTS read of process `i` from its oldest event.
-    fn serve(&mut self, i: usize) {
-        let p = &mut self.procs[i];
-        let (Some(max), Some(head)) = (p.waiting, p.events.first_mut()) else { return };
-        let n = head.len().min(max as usize).min(wire::MAX_PAYLOAD);
-        let data = head[..n].to_vec();
-        head.copy_within(n.., 0);
-        head.truncate(head.len() - n);
-        if head.is_empty() {
-            p.events.remove(0);
+    /// The console `pid` holds, while it runs.
+    fn console(&mut self, pid: u32) -> Option<&mut Console> {
+        let i = self.find(pid, true)?;
+        self.procs[i].console.as_mut()
+    }
+
+    /// Console output `data` from process `i`: onto the console `tty` holds (0: its own); wakes
+    /// its owner.
+    fn show(&mut self, tty: u32, i: usize, data: &[u8]) {
+        if !data.is_empty() {
+            let at = self.find(tty, false).unwrap_or(i);
+            self.procs[at].out.extend_from_slice(data);
+            self.touch(self.procs[i].owner);
         }
-        p.waiting = None;
-        self.effects.push(Effect::Reply { pid: p.pid, errno: 0, data });
+    }
+
+    /// Answers the read process `i` waits on, if it can be: EVENTS from its oldest event,
+    /// CONS_READ from its console's input (or its end of file; no console, at once).
+    fn serve(&mut self, i: usize) {
+        let (pid, tty) = (self.procs[i].pid, self.procs[i].tty);
+        let data = match self.procs[i].waiting {
+            Some((wire::EVENTS, max)) => {
+                let p = &mut self.procs[i];
+                let Some(head) = p.events.first_mut() else { return };
+                let data = take(head, max);
+                if head.is_empty() {
+                    p.events.remove(0);
+                }
+                data
+            }
+            Some((wire::CONS_READ, max)) => match self.console(tty) {
+                Some(c) if c.input.is_empty() && !c.eof => return,
+                Some(c) => {
+                    // An end of file is read once, after the input before it.
+                    c.eof &= !c.input.is_empty();
+                    take(&mut c.input, max)
+                }
+                None => Vec::new(),
+            },
+            _ => return,
+        };
+        self.procs[i].waiting = None;
+        self.effects.push(Effect::Reply { pid, errno: 0, data });
     }
 }
 

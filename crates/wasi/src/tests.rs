@@ -419,7 +419,7 @@ fn readdir_reads_every_page_cuts_at_the_buffer_and_never_skips_entries_removed_m
 fn dev_holds_null_tty_winsize_draw_and_events() {
     let mut t = T::new(Some((80, 24)), &[]);
     let devs: Vec<_> = t.readdir(7, 1_000, 0).0.into_iter().map(|e| (e.2, e.3)).collect();
-    let names = ["draw", "events", "null", "tty", "winsize"].map(|n| (2, n.to_string()));
+    let names = ["consctl", "draw", "events", "null", "tty", "winsize"].map(|n| (2, n.into()));
     assert_eq!(devs, [vec![(3, ".".into()), (3, "..".into())], names.to_vec()].concat());
     let bad = [("nope", 0), ("null", CREAT | EXCL), ("tty", DIR)].map(|(d, o)| t.open(7, d, o, 0));
     assert_eq!(bad, [Err(ENOENT), Err(EEXIST), Err(ENOTDIR)]);
@@ -451,6 +451,23 @@ fn dev_holds_null_tty_winsize_draw_and_events() {
     assert_eq!((t.io(FD_READ, events, 9, &[]), t.got(2)), ((0, 2), b"ef".to_vec()));
     assert_eq!((t.io(FD_READ, events, 9, &[]), t.got(2)), ((0, 2), b"gh".to_vec()));
     assert_eq!(t.h.ops, [wire::EVENTS; 2]);
+    // The console's input comes as the kernel cooks it; consctl's words set its mode, each fd
+    // from cooked with echo, and read as nothing.
+    t.h.k.input(t.h.pid, b"hi\r");
+    assert_eq!((t.io(FD_READ, 0, 9, &[]), t.got(3)), ((0, 3), b"hi\n".to_vec()));
+    let ctl = t.open(7, "consctl", 0, 0).unwrap();
+    let ctl_write = |t: &mut T, words: &[u8]| {
+        t.put(BUF, words);
+        let e = t.io(FD_WRITE, ctl, words.len() as u64, &[]).0;
+        (e, t.h.k.mode(t.h.pid))
+    };
+    let mode = |raw, echo| kernel::Mode { raw, echo };
+    assert_eq!(ctl_write(&mut t, b"rawon echooff\n"), (0, mode(true, false)));
+    assert_eq!(ctl_write(&mut t, b" rawoff"), (0, mode(false, false)));
+    assert_eq!(ctl_write(&mut t, b"echoon raw"), (EINVAL, mode(false, false)));
+    assert_eq!(ctl_write(&mut t, b"echoon"), (0, mode(false, true)));
+    assert_eq!(t.io(FD_READ, ctl, 9, &[]), (0, 0));
+    assert_eq!(&t.h.ops[2..], [wire::CONS_READ, wire::CONS_MODE, wire::CONS_MODE, wire::CONS_MODE]);
 }
 
 #[test]

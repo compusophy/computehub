@@ -6,8 +6,10 @@
 //! Preopens: fd 3 is `.` (the cwd), then each top-level directory (roots `["/"]`) or each root,
 //! then /dev. Paths resolve lexically (`..` stops at "/"); main checks the roots. fds are paths:
 //! each file call is one wire op (a WRITE 64 KiB at most). /dev is local: `null`, `tty` (the
-//! console), `winsize` (`"<cols> <rows>\n"`), `draw` (a write is one uiwire frame) and `events`
-//! (a read is one event). Not yet: poll_oneoff, NONBLOCK, consctl.
+//! console: a read waits for its input), `consctl` (words written set its mode: `rawon`,
+//! `rawoff`, `echooff`, `echoon`, each fd from cooked with echo), `winsize`
+//! (`"<cols> <rows>\n"`), `draw` (a write is one uiwire frame) and `events` (a read is one
+//! event). Not yet: poll_oneoff, NONBLOCK.
 
 #![forbid(unsafe_code)]
 
@@ -15,6 +17,7 @@ use kernel::snap::fnv64;
 use kernel::wire::{self, Msg, Reader, Writer};
 use kernel::wire::{E2BIG, EBADF, EEXIST, EFAULT, EILSEQ, EINVAL, EISDIR, ENOENT, ENOSYS};
 use kernel::wire::{ENOTCAPABLE, ENOTDIR, ENOTSUP, ESPIPE, KIND_DIR, KIND_FILE, O_CREAT};
+use kernel::wire::{MODE_NOECHO, MODE_RAW};
 use vfs::Vfs;
 
 /// Calls `$m! { ID name(types); .. }` on the 46 `wasi_snapshot_preview1` functions in witx order,
@@ -115,13 +118,20 @@ enum Kind {
     Winsize,
     Draw,
     Events,
+    Consctl,
 }
 
 /// The devices of /dev, in listing order, and what each is.
-const DEVS: [&str; 5] = ["draw", "events", "null", "tty", "winsize"];
-const DEV_KINDS: [Kind; 5] = [Kind::Draw, Kind::Events, Kind::Null, Kind::Console, Kind::Winsize];
+const DEVS: [&str; 6] = ["consctl", "draw", "events", "null", "tty", "winsize"];
+#[rustfmt::skip]
+const DEV_KINDS: [Kind; 6] =
+    [Kind::Consctl, Kind::Draw, Kind::Events, Kind::Null, Kind::Console, Kind::Winsize];
+/// What /dev/consctl takes: words that set (even) or clear (odd) a mode bit.
+const CTL: [(&str, u8); 4] =
+    [("rawon", MODE_RAW), ("rawoff", MODE_RAW), ("echooff", MODE_NOECHO), ("echoon", MODE_NOECHO)];
 
-/// An open fd: its kind, absolute path (`/dev/tty` for a console) and offset.
+/// An open fd: its kind, absolute path (`/dev/tty` for a console) and offset (/dev/consctl:
+/// the mode's bits).
 #[derive(Debug)]
 struct Fd {
     kind: Kind,
@@ -374,7 +384,7 @@ impl Proc {
             }
             (_, Some(_)) => return Err(ESPIPE),
             (Kind::Console, _) => call(h, &Msg::ConsRead { max }.encode())?,
-            (Kind::Null, _) => Vec::new(),
+            (Kind::Null | Kind::Consctl, _) => Vec::new(),
             (Kind::Winsize, _) => {
                 let ((cols, rows), at) = (h.winsize(), f.pos.min(16) as usize);
                 format!("{cols} {rows}\n").into_bytes().get(at..).unwrap_or_default().to_vec()
@@ -415,6 +425,17 @@ impl Proc {
             (_, Some(_)) => return Err(ESPIPE),
             (Kind::Console, _) => gather(m, &list, u32::MAX, &mut |b| h.console(b))?,
             (Kind::Null, _) => total,
+            (Kind::Consctl, _) => {
+                let mut text = Vec::new();
+                let n = gather(m, &list, CHUNK, &mut |b| text.extend_from_slice(b))?;
+                for w in text.split(u8::is_ascii_whitespace).filter(|w| !w.is_empty()) {
+                    let i = CTL.iter().position(|c| c.0.as_bytes() == w).ok_or(EINVAL)?;
+                    let bit = u64::from(CTL[i].1);
+                    f.pos = if i % 2 == 0 { f.pos | bit } else { f.pos & !bit };
+                }
+                req(h, Msg::ConsMode { bits: f.pos as u8 })?;
+                n
+            }
             (Kind::Draw, _) if total as usize > kernel::MAX_FRAME => return Err(E2BIG),
             (Kind::Draw, _) => {
                 let mut frame = vec![wire::DRAW];

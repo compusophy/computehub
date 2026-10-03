@@ -58,14 +58,14 @@ fn spawn_asks_for_a_worker_and_starts_it_at_ready() {
     let program = Load::Url("bin/toolbox.wasm".into());
     assert_eq!(k.take_effects(), [Effect::Start { pid, msg, program }]);
     assert_eq!(k.procs(), [(2, "hello".into(), true)]);
-    // What does not decode or goes the wrong way is EINVAL; console reads ENOSYS.
+    // What does not decode or goes the wrong way is EINVAL; its console takes a mode.
     let (exit, events, mode) = ([wire::EXIT, 0], [wire::EVENTS, 0], [wire::CONS_MODE, 0]);
     for m in [&exit[..], &[wire::SAVE], &[], &[wire::OPEN], &events, &mode] {
         k.message(&mut fs, pid, m);
         k.message(&mut fs, 9, m); // No such process: dropped.
     }
-    let (inval, nosys) = (wire::EINVAL, wire::ENOSYS);
-    let errnos = [inval, inval, inval, inval, inval, nosys];
+    let inval = wire::EINVAL;
+    let errnos = [inval, inval, inval, inval, inval, 0];
     assert_eq!(k.take_effects(), errnos.map(|errno| Effect::Reply { pid, errno, data: vec![] }));
     assert!(k.take_woken().is_empty());
 }

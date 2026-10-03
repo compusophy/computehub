@@ -1,3 +1,4 @@
+mod console;
 mod module;
 mod shared;
 mod snap;
