@@ -22,7 +22,8 @@ install, and no server runs your apps: the tab is the machine.
 - **Studio.** Make an app by describing it. A coding agent writes it in applang, a small
   language made for this, then tests and fixes it.
 - **Assistant.** An AI that uses the desktop as you do: it reads the screen, then clicks, types
-  and opens apps.
+  and opens apps. It reads and writes your files, and with your yes tells compusophy which tool
+  it lacked.
 - **Activity.** The resource monitor: CPU, memory, frames and AI use over the last minute, and
   a table of what runs.
 - **Files, Editor, Settings, Feedback and About.**

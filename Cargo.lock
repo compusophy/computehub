@@ -54,6 +54,7 @@ version = "0.1.0"
 dependencies = [
  "compusophy-chats",
  "compusophy-coder",
+ "compusophy-files",
  "compusophy-host",
  "compusophy-system",
  "compusophy-ui",
@@ -87,6 +88,14 @@ dependencies = [
  "js-sys",
  "wasm-bindgen",
  "web-sys",
+]
+
+[[package]]
+name = "compusophy-files"
+version = "0.1.0"
+dependencies = [
+ "compusophy-system",
+ "compusophy-vfs",
 ]
 
 [[package]]

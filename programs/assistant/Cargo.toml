@@ -18,6 +18,7 @@ path = "src/main.rs"
 [dependencies]
 compusophy-chats.workspace = true
 compusophy-coder.workspace = true
+compusophy-files.workspace = true
 compusophy-uiwire.workspace = true
 
 # A real desktop for the agent to drive in tests: the host, Settings (the system program, drawn

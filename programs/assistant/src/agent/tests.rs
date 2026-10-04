@@ -315,8 +315,8 @@ fn tool_calls_are_collected_however_they_are_split() {
     let body = reply("Sure.", Some(("click", r#"{"ref":"e4"}"#)));
     body.as_bytes().chunks(3).for_each(|p| c.feed(p));
     c.end();
-    let call =
-        Call { id: "call_click".into(), name: "click".into(), args: r#"{"ref":"e4"}"#.into() };
+    let args = r#"{"ref":"e4"}"#.into();
+    let call = Call { id: "call_click".into(), name: "click".into(), args, cut: false };
     assert_eq!(
         (c.text.as_str(), &c.calls[..], c.finish.as_str()),
         ("Sure.", &[call][..], "tool_calls")
@@ -423,7 +423,7 @@ fn the_screen_reads_as_text_whose_refs_last_the_session() {
         wait: Wait::User, calls: 0, acts: 0, fails: 0, repeat: (0, 0), approved: false,
         usage: (0, 0) };
     let click = |args: &str| {
-        let c = Call { id: "c".into(), name: "click".into(), args: args.into() };
+        let c = Call { id: "c".into(), name: "click".into(), args: args.into(), cut: false };
         Agent::default().prepare(&t, &c).map(|p| p.0)
     };
     let tap = Act::Tap { win: 2, id: 1, cell: 50 * 300 + 250 };
@@ -556,6 +556,7 @@ fn the_person_takes_over_answers_questions_and_feedback_waits_for_a_yes() {
         id: "c".into(),
         name: "type_text".into(),
         args: r#"{"ref":"e2","text":"hi"}"#.into(),
+        cut: false,
     };
     assert!(a.prepare(&t, &typed).unwrap_err().starts_with("E0916: refused: Feedback"));
     // So does a press in Activity, which ends programs; a scroll there only reads.
@@ -568,6 +569,12 @@ fn the_person_takes_over_answers_questions_and_feedback_waits_for_a_yes() {
     assert!(matches!(a.prepare(&t, &look), Ok((Act::Scroll { win: 1, id: 0, dy: 90 }, ..))));
     t.approved = true;
     assert!(matches!(a.prepare(&t, &typed), Ok((Act::Type { win: 1, .. }, ..))));
+    // A text past what one act types: its first part goes, nothing added, and the model hears so.
+    let long = format!(r#"{{"ref":"e2","text":"{}"}}"#, "x".repeat(MAX_TYPED + 1));
+    let long = a.prepare(&t, &Call { args: long, ..typed.clone() }).unwrap();
+    let want = "typed into \u{201c}Your name\u{201d} (e2); only its first 4000 bytes";
+    let x4000 = "x".repeat(MAX_TYPED);
+    assert!(matches!(long.0, Act::Type { text, .. } if text == x4000) && long.2 == want);
     t.scene.wins[0].app = "feedback".into();
     // A scroll names its window: an element of another window is not one of its.
     t.scene.wins.push(page(2, false));
@@ -577,6 +584,7 @@ fn the_person_takes_over_answers_questions_and_feedback_waits_for_a_yes() {
         id: "s".into(),
         name: "scroll".into(),
         args: format!("{{\"window\":\"w{w}\",\"ref\":\"e{}\",\"amount\":100}}", e.n),
+        cut: false,
     };
     assert_eq!(a.prepare(&t, &scroll(1)).unwrap_err(), format!("E0918: e{} is not in w1", e.n));
     let act = Act::Scroll { win: 2, id: e.id, dy: 100 };
@@ -784,4 +792,159 @@ fn compact_condenses_the_chat_into_a_note_and_a_failure_keeps_the_memory() {
     let m = messages(d.bodies.last().unwrap());
     let kept = (m.len(), m[1].1.as_str(), m[2].1.as_str(), m[3].1.as_str());
     assert_eq!(kept, (10, SUM, note.as_str(), "step 1"));
+}
+
+/// Serves `a` with no desktop: each look and act settles at once on an empty screen, and the
+/// model answers as `model` says. What else it asked, and the bodies the model was sent.
+fn alone(a: &mut Agent, model: &dyn Fn(&Json) -> String) -> (Vec<Request>, Vec<Json>) {
+    let (mut left, mut bodies) = (Vec::new(), Vec::new());
+    loop {
+        let mut events = Vec::new();
+        for r in a.frame().requests {
+            match r {
+                Request::Ai { id, body } => {
+                    let body = Json::parse(&body).expect("a JSON body");
+                    events.push(Event::AiData { id, data: model(&body).into_bytes() });
+                    events.push(Event::AiEnd { id, status: 200, error: "".into() });
+                    bodies.push(body);
+                }
+                Request::Act { id, .. } => {
+                    let scene = Scene::default().encode();
+                    events.push(Event::Acted { id, code: 0, note: "".into(), scene });
+                }
+                r => left.push(r),
+            }
+        }
+        if events.is_empty() {
+            return (left, bodies);
+        }
+        events.iter().for_each(|e| _ = a.event(e));
+    }
+}
+
+/// The last message of `body`: the latest tool result, with the screen.
+fn last(body: &Json) -> String {
+    messages(body).pop().unwrap_or_default().1
+}
+
+#[test]
+fn feedback_goes_to_compusophy_only_on_a_yes_to_it() {
+    let mut a = Agent::default();
+    ask(&mut a, "copy this to the clipboard");
+    let report = r#"{"kind":"idea","text":" A clipboard tool\nAsked to copy; none reaches it."}"#;
+    let text = "Assistant: A clipboard tool\nAsked to copy; none reaches it.";
+    // The model asks compusophy for the tool until it hears the report went.
+    let model = |b: &Json| match last(b) {
+        l if l.starts_with("ok: sent") => reply("Asked compusophy for one.", None),
+        _ => reply("I can't reach the clipboard.", Some(("send_feedback", report))),
+    };
+    let sent = |r: &[Request]| r.iter().filter(|r| matches!(r, Request::Feedback { .. })).count();
+    // Asked first, the report shown as it would go, the question under it; nothing sent.
+    let (left, _) = alone(&mut a, &model);
+    let q = "Send this idea to compusophy, with what is open and recent events (never your files)?";
+    let said = shown(&mut a);
+    assert!(sent(&left) == 0 && said.ends_with(&[text, "\n", q].concat()), "{said}");
+    // Any answer but a yes: nothing goes, and the model hears so (here it asks again).
+    ask(&mut a, "please, leave my name out");
+    let (left, bodies) = alone(&mut a, &model);
+    let not = "the user answered: please, leave my name out; so it was not done\n";
+    assert!(sent(&left) == 0 && last(&bodies[0]).starts_with(not));
+    // A yes to it: it goes as shown, with the desktop's context; the model hears what went.
+    ask(&mut a, "Yes, send it");
+    let (left, bodies) = alone(&mut a, &model);
+    let feedback = Request::Feedback { kind: "idea".into(), text: text.into(), context: true };
+    assert_eq!((sent(&left), left.contains(&feedback)), (1, true));
+    let went = "ok: sent compusophy your idea, \u{201c}Assistant: A clipboard tool\u{201d} (59 bytes, \
+                with what is open and recent events); it goes when it can\n";
+    assert!(last(&bodies[0]).starts_with(went) && shown(&mut a).contains("for one."));
+    // A report that cannot go is coded, never asked about.
+    let call =
+        |args: &str| Call { name: "send_feedback".into(), args: args.into(), ..Call::default() };
+    let love = a.local(&call(r#"{"kind":"love","text":"hi"}"#), true);
+    assert_eq!(love, Some(Ran::Failed("E0918: kind is idea or bug, not love".into())));
+    let long = format!(r#"{{"kind":"bug","text":"{}"}}"#, "x".repeat(MAX_FEEDBACK));
+    let long = a.local(&call(&long), false);
+    assert!(
+        matches!(&long, Some(Ran::Failed(e)) if e.starts_with("E0918: the report is 8011 bytes"))
+    );
+    // A yes is yes words alone: one that asks for a change, or says no, is none.
+    let yeses = ["yes", "OK, go", "Sure!", "y", "please do", "sure, why not", "yes, no problem"];
+    assert!(yeses.into_iter().chain(["Sounds good", "send it", "yes\u{2014}do it"]).all(yes));
+    let nos = ["please don't", "no", "yes, but shorter", "not now", "what?", "ok hold on", ""];
+    let more = ["please make it shorter", "please, I can't share that", "yeah nah", "ok, later"];
+    assert!(!nos.into_iter().chain(more).chain(["yes, and one about the dock"]).any(yes));
+}
+
+#[test]
+fn file_tools_ask_their_yes_fold_for_room_and_misses_go_on() {
+    let disk = files::Mem::default();
+    let file = |p: &str| disk.0.borrow().read(&[Vfs::HOME, p].concat()).map(<[u8]>::to_vec);
+    files::write(&mut disk.clone(), "notes/a.txt", "hello").unwrap();
+    // A replace shows the text whole, the question under it, and waits for the yes to it: a
+    // no leaves the file, a yes writes it.
+    let mut a = Agent::new(Box::new(disk.clone()));
+    let model = |b: &Json| match last(b) {
+        l if l.starts_with("ok: wrote") || l.contains("not done") => reply("Done.", None),
+        _ => reply("", Some(("write_file", r#"{"path":"notes/a.txt","text":"bye"}"#))),
+    };
+    let q = "bye\nReplace ~/notes/a.txt (5 bytes) with these 3 bytes?";
+    for answer in ["no, keep it", "yes"] {
+        ask(&mut a, "say bye in notes/a.txt");
+        alone(&mut a, &model);
+        assert!(shown(&mut a).ends_with(q) && file("/notes/a.txt") == Ok(b"hello".to_vec()));
+        ask(&mut a, answer);
+        let (_, bodies) = alone(&mut a, &model);
+        let heard = "the user answered: no, keep it; so it was not done\n";
+        assert!(answer == "yes" || last(&bodies[0]).starts_with(heard));
+    }
+    assert_eq!(file("/notes/a.txt"), Ok(b"bye".to_vec()));
+    assert!(shown(&mut a).contains("yes\nWrote ~/notes/a.txt (3 bytes; it held 5)\nDone."));
+    // Three misses in a row are news, not failures; six reads that would pass what the free AI
+    // takes keep the oldest to their first line; the task answers.
+    for i in 0..6 {
+        files::write(&mut disk.clone(), &format!("r{i}"), &"line\n".repeat(3000)).unwrap();
+    }
+    let read = |p: String| ("read_file", format!("{{\"path\":\"{p}\"}}"));
+    let model = |b: &Json| match messages(b).iter().filter(|m| m.0 == "tool").count() {
+        0 => many(&["a", "b", "c"].map(|p| read(p.into()))),
+        3 => many(&(0..6).map(|i| read(format!("r{i}"))).collect::<Vec<_>>()),
+        _ => reply("Read them.", None),
+    };
+    ask(&mut a, "read them all");
+    let (_, bodies) = alone(&mut a, &model);
+    let (m, body) = (messages(&bodies[2]), encode(&bodies[2]));
+    let folded =
+        m.iter().filter(|m| m.1.ends_with("(the rest left out for room: call it again to see it)"));
+    assert!(bodies.len() == 3 && folded.count() == 4 && body.len() <= MAX_BODY, "{}", body.len());
+    assert!(m[m.len() - 1].1.starts_with("ok: read ~/r5 (15000 bytes):\nline\nline\n"));
+    assert!(shown(&mut a).contains("Couldn't: E0925: nothing is at ~/c; list_files shows what is"));
+    assert!(shown(&mut a).contains("Read them."));
+    // No files at all: E0927.
+    let list =
+        Call { name: "list_files".into(), args: r#"{"path":"~"}"#.into(), ..Call::default() };
+    let none = Some(Ran::Failed("E0927: there are no files here".into()));
+    assert_eq!(Agent::default().local(&list, false), none);
+}
+
+#[test]
+fn a_cut_call_and_a_grid_clicked_whole_say_so() {
+    // Out of room inside a call's arguments, or past 8 KB of them: cut, and the model hears so.
+    let (mut c, mut big) = (Calls::default(), Calls::default());
+    let head =
+        r#"{"index":0,"id":"w","function":{"name":"write_file","arguments":"{\"text\":\"ab"}"#;
+    c.feed(sse(&["{\"tool_calls\":[", head, "}]}"].concat()).as_bytes());
+    c.feed(b"data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"length\"}]}\n\n");
+    let args = quote(&"x".repeat(crate::calls::MAX_ARGS + 1));
+    let call = format!(r#"{{"index":0,"id":"w","function":{{"name":"wait","arguments":{args}}}}}"#);
+    big.feed(sse(&["{\"tool_calls\":[", &call, "]}"].concat()).as_bytes());
+    [&mut c, &mut big].into_iter().for_each(Calls::end);
+    assert!(c.calls[0].cut && big.calls[0].cut && big.calls[0].args.is_empty());
+    // A file's text is never written in parts: each would replace the one before.
+    let why = Agent::default().local(&c.calls[0], true);
+    let cut = "E0918: the arguments of write_file were cut off (a reply holds 2048 tokens";
+    let whole = "write a shorter text: write_file replaces the whole file, no append";
+    assert!(matches!(&why, Some(Ran::Failed(w)) if w.starts_with(cut) && w.ends_with(whole)));
+    // A grid clicked whole (or a square it lacks): how to click one.
+    assert!(result(acted::MALFORMED, "", "e4").starts_with("E0918: e4 cannot take that: a grid's"));
+    assert_eq!(result(acted::MALFORMED, "", "dusk"), "E0918: dusk cannot take that");
 }
