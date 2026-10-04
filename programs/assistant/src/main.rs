@@ -6,7 +6,7 @@
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
-    let mut agent = assistant::agent::Agent::default();
+    let mut agent = assistant::agent::Agent::new(Box::new(assistant::files::Fs));
     let served =
         uiwire::client::open().and_then(|mut ui| assistant::agent::serve(&mut ui, &mut agent));
     if let Err(e) = served {

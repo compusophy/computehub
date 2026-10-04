@@ -449,12 +449,20 @@ in its home; names in it, and roots per profile, wait for R2.
   and the one instanced renderer draws them, so a program can draw from
   another device just as well.
 - **R3, AI.** An agent whose tools are the OS's capabilities (open apps,
-  press widgets, type, keys, windows; then files and programs) and whose eyes
+  press widgets, type, keys, windows, files; then programs) and whose eyes
   are the UI tree (windows, titles, widget hits, labels and marks). Its first
   phase is built: the Assistant is the overlay; the host draws each window
   again into a recording list to read it (`host::agent`), the model sees it as
   text with refs (`assistant::look`) and calls tools, and each call is an act
-  done the way a person's pointer and keys go (uiwire `Act`, `Acted`). Cloud AI is free for
+  done the way a person's pointer and keys go (uiwire `Act`, `Acted`). Some
+  tools are its own, no act: it lists, reads and writes the person's files
+  over its program's WASI filesystem, paths from the home (`assistant::files`,
+  failures E0925 to E0928), and what no tool does it tells compusophy
+  (`send_feedback`, an idea or a bug, marked `Assistant:`, through the page's
+  outbox as the Feedback app's reports go). A call that sends a report or
+  replaces what is kept (feedback always; a write over a file or outside the
+  home) shows the person what would go and runs only on their yes to it. So the loop of growth: the Assistant meets what it cannot do,
+  says so, asks its creator for the tool, and the tool ships. Cloud AI is free for
   every visitor: `api/ai.mjs`, a thin same-origin function, forwards
   chat-completions to the Vercel AI Gateway (GLM 5.3) with the project's
   own OIDC identity, so no key ever reaches the browser; bring-your-own-key

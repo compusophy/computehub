@@ -1,22 +1,26 @@
 //! A streamed chat completion that may call tools, read as it arrives: the text, and the
 //! `delta.tool_calls` collected by their `index` (`id` and `name` from their first chunk, the
-//! `arguments` appended), whether a provider sends a call whole in one chunk or in pieces.
+//! `arguments` appended), whether a provider sends a call whole in one chunk or in pieces. A call
+//! whose arguments went past [`MAX_ARGS`], or were still coming when the reply ran out of room,
+//! is marked [`Call::cut`], so the model hears that rather than that they do not parse.
 //! [`crate::json::Stream`] stays as Studio needs it; this is the agent's.
 
 use crate::json::Json;
 
 /// The most calls one reply makes, and bytes of a call's arguments or of the text.
 pub const MAX_CALLS: usize = 8;
-const MAX_ARGS: usize = 8 << 10;
+pub const MAX_ARGS: usize = 8 << 10;
 const MAX_TEXT: usize = 16 << 10;
 const MAX_OTHER: usize = 16 << 10;
 
-/// One tool call: the provider's id for it, the tool's name and its arguments (JSON text).
+/// One tool call: the provider's id for it, the tool's name, its arguments (JSON text), and
+/// whether they were cut off.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Call {
     pub id: String,
     pub name: String,
     pub args: String,
+    pub cut: bool,
 }
 
 /// A reply as read so far.
@@ -42,13 +46,17 @@ impl Calls {
         }
     }
 
-    /// The body ended: the last line, and an error body's message if no chunk said one.
+    /// The body ended: the last line, an error body's message if no chunk said one, and the last
+    /// call cut if the reply ran out of room before its arguments closed.
     pub fn end(&mut self) {
         let rest = std::mem::take(&mut self.rest);
         self.line(&String::from_utf8_lossy(&rest));
         let said = Json::parse(&self.other).and_then(|v| message(&v).map(String::from));
         if let (true, Some(m)) = (self.error.is_empty(), said) {
             self.error = m;
+        }
+        if let (true, Some(c)) = (self.finish == "length", self.calls.last_mut()) {
+            c.cut |= !matches!(Json::parse(&c.args), Some(Json::Obj(_)));
         }
     }
 
@@ -114,6 +122,8 @@ impl Calls {
         };
         if c.args.len() + args.len() <= MAX_ARGS {
             c.args.push_str(&args);
+        } else {
+            c.cut = true;
         }
     }
 }
