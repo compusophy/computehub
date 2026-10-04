@@ -1,4 +1,4 @@
-//! Settings: the themes and the living grain, the AI model, and what gets reported.
+//! Settings: the themes and the living grain, the AI model, what gets reported, and a reset.
 
 use std::mem;
 
@@ -7,15 +7,17 @@ use uiwire::{Event, Frame, Node, Request, Style, Variant};
 use crate::{Disk, View, space, text};
 
 /// The pages, one a line.
-const PAGES: &str = "Appearance\nAI\nPrivacy";
+const PAGES: &str = "Appearance\nAI\nPrivacy\nReset";
 /// Widget ids: page `i` is `NAV + i`, theme `i` `THEME + i`, model `i` `MODEL + i`; the reports
-/// switch, the feedback link and the grain's switch.
+/// switch, the feedback link and the grain's switch; the reset's word and its button.
 pub(crate) const NAV: u32 = 1;
 pub(crate) const THEME: u32 = 10;
 pub(crate) const MODEL: u32 = 20;
 pub(crate) const REPORTS: u32 = 30;
 pub(crate) const FEEDBACK: u32 = 31;
 pub(crate) const LIVING: u32 = 32;
+pub(crate) const WORD: u32 = 40;
+pub(crate) const ERASE: u32 = 41;
 /// The desktop's themes in its own order, which its theme cards' ids follow.
 pub(crate) const THEMES: [&str; 3] = ["Midnight", "Dawn", "Mono"];
 /// The models on offer as (name, then what it is best at; the value stored), the first the
@@ -38,13 +40,21 @@ reloads.";
 const GRAIN: &str = "Living grain";
 const GRAIN_NOTE: &str =
     "The backdrop's grain shifts, slightly. It stays still when your device asks for less motion.";
+const RESET: &str = "Erase everything compusophy keeps in this browser: every profile, with its \
+files, settings and PIN, and any reports waiting to send. compusophy then starts again as on a \
+first visit, at the welcome. This cannot be undone.";
+/// What the person types to reset, and what says so.
+pub(crate) const SAY: &str = "reset";
+const TYPE: &str = "Type reset to confirm.";
 /// The widest row of cards.
 const ROW_MAX: u16 = 440;
 
 /// Settings: Appearance (the desktop's themes as cards, a click applying one; the living grain's
 /// switch), AI (a note on the free AI, the models as cards; a click picks one, which the desktop
-/// stores) and Privacy (the automatic reports switch, what a report holds, where files stay or
-/// that they could not be kept, a link to Feedback), as the desktop's pages ([`Node::Pages`]).
+/// stores), Privacy (the automatic reports switch, what a report holds, where files stay or
+/// that they could not be kept, a link to Feedback) and Reset (what it erases; once `reset` is
+/// typed, Erase or Enter asks the desktop to, [`Request::Reset`]), as the desktop's pages
+/// ([`Node::Pages`]).
 #[derive(Debug)]
 pub struct Settings {
     /// The page shown, the model the desktop answers with, and whether reports go, the grain
@@ -54,6 +64,8 @@ pub struct Settings {
     model: String,
     pub(crate) on: [bool; 3],
     told: Option<[bool; 3]>,
+    /// What is typed to reset.
+    pub(crate) word: String,
     /// The nodes last framed, the requests since, whether a frame went yet.
     shown: Vec<Node>,
     requests: Vec<Request>,
@@ -68,6 +80,7 @@ impl Default for Settings {
             model: String::new(),
             on: [true; 3],
             told: None,
+            word: String::new(),
             shown,
             requests,
             framed,
@@ -89,10 +102,14 @@ impl View for Settings {
                 }
             }
             Event::Click { id } => self.click(id),
+            Event::Change { id: WORD, ref text, .. } => self.word.clone_from(text),
+            Event::Submit { id: WORD } => self.click(ERASE),
             _ => {}
         }
         let nodes = self.nodes();
-        let changed = !self.framed || !self.requests.is_empty() || nodes != self.shown;
+        // Every Change gets a frame: the desktop sends the next one then.
+        let edit = matches!(ev, Event::Change { .. });
+        let changed = !self.framed || edit || !self.requests.is_empty() || nodes != self.shown;
         self.shown = nodes;
         changed
     }
@@ -105,7 +122,12 @@ impl View for Settings {
 }
 
 impl Settings {
-    /// A click on widget `id`: a page, a theme, a model, a switch or the feedback link.
+    /// Whether the reset's word is typed.
+    fn armed(&self) -> bool {
+        self.word.trim().eq_ignore_ascii_case(SAY)
+    }
+
+    /// A click on widget `id`: a page, a theme, a model, a switch, the feedback link or Erase.
     fn click(&mut self, id: u32) {
         let pref = |key: &str, value: &str| Request::Pref { key: key.into(), value: value.into() };
         if let Some(name) = THEMES.get(id.wrapping_sub(THEME) as usize) {
@@ -119,7 +141,9 @@ impl Settings {
             self.requests.push(pref(key, if self.on[i] { "on" } else { "off" }));
         } else if id == FEEDBACK {
             self.requests.push(Request::Open { name: "feedback".into() });
-        } else if id.wrapping_sub(NAV) < 3 {
+        } else if id == ERASE && self.armed() {
+            self.requests.push(Request::Reset);
+        } else if id.wrapping_sub(NAV) < 4 {
             self.page = (id - NAV) as u8;
         }
     }
@@ -155,6 +179,18 @@ impl Settings {
                     text(Style::Heading, "AI"),
                     Node::Col { id: 0, gap: 12, children: note },
                     Node::Pane { id: 0, w: ROW_MAX, children: models.collect() },
+                ]);
+            }
+            3 => {
+                let (value, placeholder) = (self.word.clone(), SAY.into());
+                let variant = if self.armed() { Variant::Danger } else { Variant::Normal };
+                nodes.extend([
+                    text(Style::Heading, "Reset"),
+                    text(Style::Body, RESET),
+                    space(0),
+                    text(Style::Small, TYPE),
+                    row(Node::Input { id: WORD, value, placeholder }),
+                    row(Node::Button { id: ERASE, variant, label: "Erase everything".into() }),
                 ]);
             }
             _ => nodes.extend([

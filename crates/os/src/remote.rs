@@ -4,7 +4,7 @@
 //! frame the window shows a note, or why it failed (a first frame that does not decode: the
 //! program is newer than the desktop). A frame's title is the window's and its requests are
 //! honored (Size in the first only; Focus when the frame holds that Input, Code or Area; Feedback
-//! goes to the page; Watch, End and Pref, `theme` a theme, from the OS's own windows alone,
+//! goes to the page; Watch, End, Pref (`theme` a theme) and Reset from the OS's own windows alone,
 //! Activity's and Settings', which run its own `bin/system.wasm`, never what a `/bin` file names,
 //! and hear [`Event::Prefs`] after the first Resize, then with an event once they change); a
 //! clean exit or a kill (137) closes the window, and closing it sends [`Event::Close`]. The
@@ -321,8 +321,12 @@ impl Remote {
                 Request::Feedback { kind, text, context } => cx.feedback(&kind, &text, context),
                 r @ (Request::Act { .. } | Request::Status { .. }) => cx.agent(r),
                 // The OS's own windows' alone (Watch and End go to the hub); others', dropped.
-                Request::Watch { .. } | Request::End { .. } | Request::Pref { .. }
+                Request::Watch { .. }
+                | Request::End { .. }
+                | Request::Pref { .. }
+                | Request::Reset
                     if !self.trusted => {}
+                Request::Reset => cx.reset(),
                 Request::Pref { key, value } if key == "theme" => cx.set_theme(&value),
                 Request::Pref { key, value } => cx.pref(&key, &value),
                 r if self.play.ask(&r) => {}

@@ -9,7 +9,8 @@
 //! The theme is kept in `localStorage` ([`THEME_KEY`]), as are the preferences of [`PREFS`]
 //! (`compusophy.<key>`), which apps and the shell set ([`shell::Effect::Pref`]) and the shell
 //! reads when it is made ([`shell::Prefs`]): each under the signed-in profile's key
-//! ([`logon::own`]; these are the first profile's). Sign out keeps /home and reloads.
+//! ([`logon::own`]; these are the first profile's). Sign out keeps /home and reloads; a reset
+//! (Settings', the person's own) erases every key the device keeps ([`ALL`]) and reloads.
 //!
 //! Fonts: boot (Inter Regular, in the wasm); deferred (Inter SemiBold and JetBrains Mono, fetched
 //! after the first frame under the top two fetch ids, which the shell never reaches; a failure
@@ -52,8 +53,9 @@ const DEFERRED: [(u32, FontId, &str); 2] = [
     (u32::MAX, FontId::Mono, "fonts/deferred/JetBrainsMono-Regular.ttf"),
 ];
 
-/// The `localStorage` key of the theme's name.
+/// The `localStorage` key of the theme's name, and what every key the desktop keeps starts with.
 pub const THEME_KEY: &str = "compusophy.theme";
+pub const ALL: &str = "compusophy.";
 /// The preferences kept as `compusophy.<key>`: the AI model (which the AI hub keeps, see [`ai`]),
 /// the dock's favorites (registry names, comma-separated), `"1"` once Welcome was shown on a
 /// first visit, `"off"` to stop automatic error reports, the home screen's order (as the dock's)
@@ -273,8 +275,15 @@ impl Desktop {
         };
         let Some(r) = r else { return Handled::default() };
         let (asked, out) = (r.text_input.is_some(), r.effects.contains(&Effect::SignOut));
+        let reset = r.effects.contains(&Effect::Reset);
         apply(r.effects, ctl, (&self.ai, &mut self.wake), &mut self.report);
-        if out {
+        if reset {
+            // All the device keeps (every profile's files, settings and PIN, the outbox, the
+            // session) goes, to the welcome as a first visit: with no shell, nothing is kept.
+            self.shell = None;
+            ctl.storage_erase(ALL);
+            ctl.reload();
+        } else if out {
             self.sign_out(ctl, false);
         }
         if let Some(on) = r.text_input {
@@ -305,10 +314,9 @@ impl Desktop {
     fn flush(&mut self, ctl: &mut Ctl, hiding: bool) {
         self.meter(ctl);
         let Some(shell) = &mut self.shell else { return };
-        if let Some(ms) = self.home.keep(shell.vfs(), ctl, &mut self.report, hiding) {
-            if arm(&mut self.wake, ctl, ms) {
-                ctl.wake_in(ms);
-            }
+        let ms = self.home.keep(shell.vfs(), ctl, &mut self.report, hiding);
+        if let Some(ms) = ms.filter(|&ms| arm(&mut self.wake, ctl, ms)) {
+            ctl.wake_in(ms);
         }
         for _ in 0..2 {
             let told = self.ai.pump(ctl, shell.kernel_mut()) | self.home.retell();
@@ -368,10 +376,9 @@ impl Desktop {
                 k.post_event(watcher, &v);
             }
         }
-        if let Some(ms) = self.pace.wait(now).map(|ms| ms + 1) {
-            if arm(&mut self.wake, ctl, ms) {
-                ctl.wake_in(ms);
-            }
+        let ms = self.pace.wait(now).map(|ms| ms + 1);
+        if let Some(ms) = ms.filter(|&ms| arm(&mut self.wake, ctl, ms)) {
+            ctl.wake_in(ms);
         }
     }
 
@@ -410,17 +417,13 @@ impl Desktop {
     /// first (when the start's record reads its timings), what the shell queued.
     fn drawn(&mut self, ctl: &mut Ctl) {
         let shell = self.shell.as_ref().and_then(Shell::frame_in);
-        match [shell, self.wish].into_iter().flatten().min() {
-            Some(0) => {
-                ctl.request_frame();
-                self.why |= MOTION;
-            }
-            Some(ms) => {
-                ctl.frame_in(ms);
-                self.why |= TIMER;
-            }
+        let next = [shell, self.wish].into_iter().flatten().min();
+        match next {
+            Some(0) => ctl.request_frame(),
+            Some(ms) => ctl.frame_in(ms),
             None => {}
         }
+        self.why |= next.map_or(0, |ms| if ms == 0 { MOTION } else { TIMER });
         if self.deferred.is_none() {
             self.deferred = Some([true; 2]);
             self.record.first(ctl.monotonic_ms(), ctl.timings());
@@ -442,10 +445,7 @@ impl Desktop {
     /// hears either (and, once both landed, notes how the start went).
     fn set_font(&mut self, slot: FontId, got: Result<Vec<u8>, String>, ctl: &Ctl) -> Handled {
         let text = text_of(&mut self.shell, &mut self.parts);
-        let ok = match (got, text) {
-            (Ok(bytes), Some(text)) => text.set_font(slot, bytes).is_ok(),
-            _ => false,
-        };
+        let ok = text.zip(got.ok()).is_some_and(|(text, b)| text.set_font(slot, b).is_ok());
         let (i, now) = (usize::from(slot == FontId::Mono), ctl.monotonic_ms());
         self.record.font(i, ok, now, ctl.timings()).inspect(|n| report::note(n));
         Handled { redraw: ok || self.logon.is_some(), prevent_default: false }
@@ -561,8 +561,8 @@ fn effect(fx: Effect, ctl: &mut Ctl, ai: &ai::Ai) {
         Effect::Kernel(K::Wake { ms }) => ctl.wake_in(ms),
         Effect::Pref { key, value } => pref(&key, &value, ctl, ai),
         // Telemetry took it ([`apply`]): it goes at the next flush, which can say what is open.
-        // Signing out is the desktop's own, after the effects before it.
-        Effect::Feedback { .. } | Effect::SignOut => {}
+        // Signing out and resetting are the desktop's own, after the effects before them.
+        Effect::Feedback { .. } | Effect::SignOut | Effect::Reset => {}
         // The host hands frames to the apps; none reach here.
         Effect::Kernel(K::Draw { .. }) => {}
     }

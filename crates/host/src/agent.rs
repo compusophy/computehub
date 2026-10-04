@@ -10,7 +10,8 @@
 //!   `Click` for a button); a tap names a grid's square, which its program hears as a pointer's
 //!   tap (a grid takes only taps, of squares it has: [`ui::App::squares`]); a window verb is the
 //!   title bar's control; opening an app is the home screen's tile.
-//!   Each act flashes what it touched ([`Agent::flash`]).
+//!   Each act flashes what it touched ([`Agent::flash`]); a window it put input into can no
+//!   longer reset the device ([`Agent::touched`]).
 //! - **Settling.** An act is answered by one [`Event::Acted`] once no window is
 //!   [`ui::App::busy`] or [`SETTLE_MS`] passed (a wait: once its time passed), with the scene
 //!   then; the platform's timer is armed for the deadline, and again whenever it fires before it
@@ -64,8 +65,10 @@ pub struct Agent {
     stepping: bool,
     /// Whether the overlay works on a task ([`Request::Status`]).
     pub working: bool,
-    /// What the last act touched (a widget, or a window's frame) and when.
+    /// What the last act touched (a widget, or a window's frame) and when; the windows its
+    /// input went into, whose [`ui::Request::Reset`] is dropped (only the person resets).
     pub flash: Option<(RectF, f64)>,
+    pub touched: Vec<WinId>,
     /// An app asked for the Assistant: the shell opens the overlay.
     pub summon: bool,
     /// The home screen's apps and the screen's size, as the shell has them, for the scene.
@@ -232,6 +235,9 @@ impl Host {
             _ => (0, 0),
         };
         let Some(w) = self.target(win) else { return acted::GONE };
+        if !self.agent.touched.contains(&w) {
+            self.agent.touched.push(w);
+        }
         self.apply(Cmd::Focus(w));
         self.settle(out);
         let layout = self.wm.layout();

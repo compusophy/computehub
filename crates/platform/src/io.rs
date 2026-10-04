@@ -55,6 +55,13 @@ pub(crate) fn apply(s: &Rc<Shared>, effects: Vec<Effect>) {
             Effect::Stream { id, url, headers, body } => stream(s, id, &url, headers, &body),
             Effect::Abort(id) => _ = take(s, id).map(|a| a.abort()),
             Effect::Remove(key) => _ = storage().map(|st| st.remove_item(&key)),
+            Effect::Erase(prefix) => [storage(), session()].into_iter().flatten().for_each(|st| {
+                // From the last: a removal moves the keys after it down.
+                for i in (0..st.length().unwrap_or(0)).rev() {
+                    let key = st.key(i).ok().flatten().filter(|k| k.starts_with(prefix.as_str()));
+                    _ = key.map(|k| st.remove_item(&k));
+                }
+            }),
             Effect::Session { key, value } => {
                 let st = session();
                 _ = st.map(|st| value.map_or(st.remove_item(&key), |v| st.set_item(&key, &v)));

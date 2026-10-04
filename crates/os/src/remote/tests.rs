@@ -2,9 +2,9 @@ use super::*;
 use crate::ai::{self, Ai, CHUNK};
 use gfx::{DrawList, RectF};
 use platform::{Ctl, Effect as Fx};
-use ui::UiState;
+use ui::AppEvent::Resized;
 use ui::kernel::{Effect as K, Kernel, wire};
-use ui::{FontId, Hit, Request as R, THEMES, TextSystem};
+use ui::{FontId, Hit, Request as R, THEMES, TextSystem, UiState};
 use uiwire::{Class, Node, Span, Variant, mods};
 
 const MONO: &[u8] = include_bytes!("../../../../assets/fonts/deferred/JetBrainsMono-Regular.ttf");
@@ -133,8 +133,7 @@ fn names_open_studio_and_the_first_size_starts_it() {
     let (start, url) = (s.k.take_effects().pop(), ui::kernel::Load::Url("bin/studio.wasm".into()));
     assert!(matches!(start, Some(K::Start { pid: 2, program, .. }) if program == url));
     // The size is its first event, then the AI settings; the same size is no news, a new one is.
-    s.ev(AppEvent::Resized { w: 640.0, h: 1e9 });
-    s.ev(AppEvent::Resized { w: 500.0, h: 400.0 });
+    [(640.0, 1e9), (500.0, 400.0)].into_iter().for_each(|(w, h)| _ = s.ev(Resized { w, h }));
     let config = Event::Config { model: ai::DEFAULT_MODEL.into() };
     let sized = [Event::Resize { w: 640, h: 65_535 }, config, Event::Resize { w: 500, h: 400 }];
     assert_eq!(s.events(), sized);
@@ -145,8 +144,8 @@ fn names_open_studio_and_the_first_size_starts_it() {
     assert!(s.cx(|r, cx| r.frame(2, &f[1..], cx)) && s.r.note == NEWER && s.r.frame.is_none());
     assert!(s.cx(|r, cx| r.frame(2, &f, cx)) && s.r.title() == "Mine");
     assert!(!s.cx(|r, cx| r.frame(2, &f[1..], cx)) && s.r.title() == "Mine");
-    // Activity runs the OS's own program, whatever its marker says. Its window may watch, and end
-    // a process: Studio's here, whose window a kill (137) closes; Activity's runs on.
+    // Activity runs the OS's own program, whatever its marker says. Its window may watch, end a
+    // process (Studio's here, whose window a kill, 137, closes; Activity's runs on) and reset.
     let mut s = Sys::new(false);
     s.r = Remote { trusted: true, ..Remote::new(STUDIO, vec!["activity".into()], &Ai::default()) };
     s.ev(AppEvent::Resized { w: 1.0, h: 1.0 });
@@ -155,11 +154,12 @@ fn names_open_studio_and_the_first_size_starts_it() {
     assert!(matches!(s.k.take_effects().pop(), Some(K::Start { program, .. }) if program == url));
     let mut studio = Remote::new(STUDIO, vec!["studio".into()], &Ai::default());
     studio.event(AppEvent::Resized { w: 1.0, h: 1.0 }, &mut Cx::new(&mut s.fs, &mut s.k, 0.0));
-    s.show(vec![], vec![Request::Watch { on: true }, Request::End { pid: 3 }]);
+    s.show(vec![], vec![Request::Watch { on: true }, Request::End { pid: 3 }, Request::Reset]);
     s.r.ai.pump(&mut Ctl::default(), &mut s.k);
     let mut cx = Cx::new(&mut s.fs, &mut s.k, 0.0);
     assert!(!studio.event(AppEvent::Io, &mut cx) && cx.take_requests() == [R::CloseSelf]);
     assert!(s.r.ai.0.borrow().watch == Some(2) && s.k.procs() == [(2, "activity".into(), true)]);
+    assert_eq!(s.asked, [R::Reset]);
     // A missing program says so and none starts; a failed one says why.
     let mut s = Sys::new(false);
     assert!(s.fs.remove(STUDIO, false).is_ok() && s.ev(AppEvent::Resized { w: 1.0, h: 1.0 }));
@@ -344,9 +344,10 @@ fn ai_requests_stream_back_to_the_program_that_asked() {
     [chunk, ended.clone(), ended].into_iter().for_each(|ev| s.r.ai.heard(&mut s.k, ev));
     let data = |data: &[u8]| Event::AiData { id: 1, data: data.to_vec() };
     assert_eq!(ask(&mut s, vec![]).1, [data(&big[..CHUNK]), data(&big[CHUNK..]), end(1, 429, "")]);
-    // Watch and End from any window but Activity's are dropped: never a Close to the hub.
-    let (watch, kill) = (Request::Watch { on: true }, Request::End { pid: 2 });
-    assert!(ask(&mut s, vec![watch, kill]).0.is_empty() && s.r.ai.0.borrow().watch.is_none());
+    // Watch, End and Reset from any window but the OS's own are dropped: never a Close to the hub.
+    let no = vec![Request::Watch { on: true }, Request::End { pid: 2 }, Request::Reset];
+    assert!(ask(&mut s, no).0.is_empty() && s.r.ai.0.borrow().watch.is_none());
+    assert!(s.asked.is_empty());
     // A cancel aborts the stream and ends the request at once.
     let cancel = vec![Request::AiCancel { id: 4 }, Request::AiCancel { id: 2 }];
     assert_eq!(ask(&mut s, cancel), (vec![Fx::Abort(2)], vec![end(2, 0, "cancelled")]));
