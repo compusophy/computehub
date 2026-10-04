@@ -111,7 +111,8 @@ frame: os → shell::draw → gfx::DrawList → platform::Renderer: one draw cal
 | `activity` | Activity, the resource monitor: graphs of CPU, memory, frames and the AI over the last minute, storage, a table of what runs |
 | `studio` | the applang editor, and `AppHost`, which runs `.app` files |
 | `coder` | the coding agent Studio runs: write, check (compile, smoke on 3 seeds), fix by SEARCH/REPLACE edits, keep the best so far, stop by budget; sans-IO, replayable |
-| `uiwire`, `uiview`, `canvas` | the remote UI protocol GUI programs speak; the desktop's half, which draws their trees; a `Canvas` as the desktop draws one (its shapes and pixels in the theme, on device pixels) and lists it for the AI |
+| `uiwire`, `uiview` | the remote UI protocol GUI programs speak; the desktop's half, which draws their trees |
+| `canvas` | a program's `Canvas` as the desktop draws it (its shapes and pixels in the theme, on device pixels) and lists it for the AI |
 | `host` | the wm plus one app per window, the home screen's apps, windows held by the pointer, the keyboard's squeeze; motion, frame geometry |
 | `home` | the top bar, the home grid in the person's order (icons carried, the selection box), the bottom row (the person's dock at the left, the Assistant at the right), menus, touch |
 | `shell` | the desktop around `host`: chrome, keys, the overlay; wires the home screen to the pointer |
