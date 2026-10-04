@@ -397,7 +397,7 @@ fn watch_dpr(s: &Rc<Shared>) {
     // JS prints the ratio as `${devicePixelRatio}` would: Rust's float
     // formatting costs ~10 KB.
     let ratio = js_sys::Number::from(s.window.device_pixel_ratio()).to_string_with_radix(10);
-    let query = ratio.map(|n| ["(resolution: ", &String::from(n), "dppx)"].concat());
+    let query = ratio.map(|n| String::from("(resolution: ") + &String::from(n) + "dppx)");
     let Ok(Some(mql)) = query.and_then(|q| s.window.match_media(&q)) else { return };
     let f = handler(&Rc::downgrade(s), 0, |s, _, _| {
         resize(s);

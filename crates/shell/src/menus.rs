@@ -11,15 +11,17 @@ use crate::desktop::Target;
 use crate::{Response, Shell};
 
 /// What a menu item does to the menu's app: open a new window of it, show it (its window, else a
-/// new one), add it to the dock (or remove it), close its windows, delete it (asking again
-/// first; then its windows close, the dock lets it go and its file goes); or show the
-/// Assistant, show a built-in app, open a terminal, command the menu's window (minimize, toggle
-/// maximize, close), or sign out.
+/// new one), add it to the dock (or remove it), move it (asking where: a folder, or the home
+/// screen), close its windows, delete it (asking again first; then its windows close, the dock
+/// lets it go and its file goes); or show the Assistant, show a built-in app, open a terminal,
+/// command the menu's window (minimize, toggle maximize, close), or sign out.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum Act {
     Open,
     Show,
     Keep(bool),
+    Move,
+    To(usize),
     Close,
     Delete(bool),
     Ask,
@@ -81,12 +83,16 @@ impl Shell {
                 return Some((menu(self, items), String::new(), Some(w)));
             }
             Target::Icon(i) => (self.grid.icons.get(i)?.name.clone(), false),
+            Target::Inside(i) => (self.grid.inside[self.grid.open?].get(i)?.name.clone(), false),
             Target::Dock(i) => self.tiles.get(i).map(|d| (d.0.clone(), !d.2.is_empty()))?,
             _ => return None,
         };
+        if home::folders::index(&name).is_some() {
+            return None;
+        }
         let kept = self.dock.favs.contains(&name);
         let mine = name.strip_prefix(Vfs::HOME).is_some_and(|p| p.starts_with("/apps/"));
-        let mut items = [
+        let items = [
             match running {
                 true => ("New window", "", Some(Act::Open)),
                 false => ("Open", "", Some(Act::Show)),
@@ -95,16 +101,18 @@ impl Shell {
                 true => ("Remove from dock", "", Some(Act::Keep(false))),
                 false => ("Add to dock", "", Some(Act::Keep(true))),
             },
+            ("Move to\u{2026}", "", Some(Act::Move)),
             ("Close", "", Some(Act::Close)),
             ("", "", None),
             ("Delete", "", Some(Act::Delete(false))),
         ];
-        // Not running: no Close, Delete (if any) right after the line.
+        let mut items = items;
+        // Not running: no Close, the line and Delete (if any) after Move.
         if !running {
-            items.swap(2, 4);
-            items.swap(2, 3);
+            items.swap(3, 4);
+            items.swap(4, 5);
         }
-        let n = 2 + usize::from(running) + 2 * usize::from(mine);
+        let n = 3 + usize::from(running) + 2 * usize::from(mine);
         let n = if name == host::ASSISTANT { 1 } else { n };
         Some((menu(self, &items[..n]), name, None))
     }
@@ -118,12 +126,18 @@ impl Shell {
             Act::Show => self.host.show(&name, out),
             Act::Keep(keep) => self.dock.keep(&name, keep, &mut self.pending),
             // Asked again where it was: a press anywhere else keeps it.
-            Act::Delete(false) => {
+            Act::Delete(false) | Act::Move => {
+                let [s, g, p] = home::folders::NAMES;
+                #[rustfmt::skip]
+                let to = [(s, "", Some(Act::To(0))), (g, "", Some(Act::To(1))),
+                    (p, "", Some(Act::To(2))), ("", "", None), ("Home screen", "", Some(Act::To(3)))];
                 let again = [("Delete for good", "No undo", Some(Act::Delete(true)))];
+                let items: &[_] = if act == Act::Move { &to } else { &again };
                 let (at, touch) = ((menu.rect.x, menu.rect.y), menu.row > 40.0);
-                let menu = Menu::new(&again, at, self.size, touch, &mut self.host.text);
+                let menu = Menu::new(items, at, self.size, touch, &mut self.host.text);
                 (self.menu, out.redraw) = (Some((menu, name, None)), true);
             }
+            Act::To(k) => self.grid.folders.put(&name, k, &mut self.pending),
             Act::Close | Act::Delete(true) => {
                 for w in self.host.windows_of(&name) {
                     self.host.apply(Cmd::Close(w));

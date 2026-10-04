@@ -19,6 +19,7 @@
 
 pub mod bar;
 pub mod dock;
+pub mod folders;
 pub mod grid;
 pub mod icons;
 pub mod menu;

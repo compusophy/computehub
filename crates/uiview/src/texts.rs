@@ -2,7 +2,7 @@
 
 use std::mem;
 
-use ui::Code;
+use ui::{Code, Key};
 use uiwire::Node;
 
 use crate::Area;
@@ -27,6 +27,42 @@ impl Texts {
     pub fn has(&self, id: u32) -> bool {
         let (i, c) = (self.inputs.iter().any(|i| i.0 == id), self.codes.iter().any(|c| c.0 == id));
         i || c || self.areas.iter().any(|a| a.0 == id)
+    }
+
+    /// Key `key` for the focused Code, Area or Input (none of them takes Escape or a chord):
+    /// whether one took it (`Some`), and whether that edited it. Enter in an Input it leaves
+    /// to the window: its Submit.
+    pub fn key(&mut self, key: Key, chord: bool) -> Option<bool> {
+        let id = self.focus;
+        if chord || key == Key::Escape {
+            return None;
+        }
+        let code = self.codes.iter_mut().find(|c| c.0 == id).and_then(|c| c.1.key(key));
+        let typed = code.or_else(|| self.areas.iter_mut().find(|a| a.0 == id)?.1.key(key));
+        typed.or_else(|| {
+            let i = self.inputs.iter_mut().find(|i| i.0 == id && key == Key::Backspace)?;
+            let popped = i.1.pop().is_some();
+            i.2 = i.2.wrapping_add(u32::from(popped));
+            Some(popped)
+        })
+    }
+
+    /// Typed or pasted `s` into the focused Code, Area or Input (into a Code or an Area none of
+    /// it if `echo`: the Enter or Tab just handled); whether it edited it.
+    pub fn insert(&mut self, s: &str, echo: bool) -> bool {
+        let id = self.focus;
+        let area = self.areas.iter_mut().find(|a| a.0 == id).map(|a| !echo && a.1.insert(s));
+        match self.codes.iter_mut().find(|c| c.0 == id) {
+            Some(c) => !echo && c.1.insert(s),
+            None if area.is_some() => area == Some(true),
+            None => self.inputs.iter_mut().find(|i| i.0 == id).is_some_and(|i| {
+                let n = i.1.len();
+                i.1.extend(s.chars().filter(|c| !c.is_control()));
+                i.1.truncate(if i.1.len() > ui::CODE_MAX { n } else { i.1.len() });
+                i.2 = i.2.wrapping_add(u32::from(i.1.len() != n));
+                i.1.len() != n
+            }),
+        }
     }
 
     /// The edits so far of Input or Area `id`.

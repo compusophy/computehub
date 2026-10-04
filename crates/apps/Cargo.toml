@@ -1,6 +1,6 @@
 [package]
 name = "compusophy-apps"
-description = "compusophyOS built-in app: the Terminal, the console of the shell (/bin/sh, a program) it runs."
+description = "compusophyOS's console for a terminal: the shell (/bin/sh, a program) on a console the Terminal program asks for, its input and output carried as uiwire events."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -13,6 +13,5 @@ name = "apps"
 
 [dependencies]
 compusophy-ui.workspace = true
-compusophy-gfx.workspace = true
-compusophy-term.workspace = true
+compusophy-uiwire.workspace = true
 compusophy-vfs.workspace = true

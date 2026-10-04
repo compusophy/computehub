@@ -10,7 +10,8 @@
 //! narrower than [`NARROW`] (a phone's) chips and quiet buttons are touch targets, [`TOUCH`] tall.
 //! Grids and Canvases are boards: they take the room the other widgets leave ([`SQUARE`]), and
 //! with an id they are pads ([`Sense::Pad`]) a press or a drag taps ([`Play::tap`]). A frame
-//! whose first node is its Pages lays the rest out beside or under them.
+//! whose first node is its Pages lays the rest out beside or under them; one whose only node is
+//! a Screen is a terminal's, edge to edge ([`ui::screen`]).
 
 #![forbid(unsafe_code)]
 
@@ -265,6 +266,15 @@ pub fn wheel(texts: &mut Texts, view: &mut View, x: f32, y: f32, dy: f32) -> boo
 /// beside or under the window's pages if the first is its Pages, a new page at the top.
 pub fn draw(ui: &mut Ui<'_>, nodes: &[Node], texts: &mut Texts, view: &mut View) {
     let whole = ui.rect();
+    if let [Node::Screen { id, cols, rows, cursor, cells }] = nodes {
+        let (focused, theme) = (ui.state().focused, ui.theme());
+        ui.hit(WidgetId(*id), whole, Sense::Text);
+        // A Ui lends its draw list and its text system one at a time.
+        let mut list = mem::take(ui.list());
+        let screen = (*cols, *rows, *cursor, &cells[..]);
+        ui::screen::draw(&mut list, ui.text_system(), theme, whole, screen, focused);
+        return *ui.list() = list;
+    }
     let (r, left, nodes) = match nodes {
         [Node::Pages { id, on, labels }, rest @ ..] => {
             if mem::replace(&mut view.page, *on) != *on {
@@ -512,7 +522,8 @@ impl Lay<'_> {
             Node::Columns { .. } => (w, meters::HEAD_H),
             Node::Themes { .. } => (w, cards::themes_size(w).3),
             Node::Faces { .. } => (w, cards::faces_size(w).1),
-            Node::Pages { .. } => (0.0, 0.0),
+            // Elsewhere than alone in a frame, a Screen is nothing.
+            Node::Pages { .. } | Node::Screen { .. } => (0.0, 0.0),
             // As tall as its rows, and what it takes of a Fill's room.
             Node::Area { id, .. } => {
                 let (y, a) = (self.y, self.texts.areas.iter_mut().find(|a| a.0 == *id));
@@ -683,7 +694,7 @@ impl Lay<'_> {
             Node::Meter { hue, value, .. } => meters::meter(ui, r, *hue, *value),
             Node::Columns { id, on, labels } => meters::columns(ui, *id, r, *on, labels),
             Node::Separator => ui.fill(RectF { h: ui.px(1.0), ..r }, 0.0, t.border),
-            Node::Spacer { .. } | Node::Pages { .. } => {}
+            Node::Spacer { .. } | Node::Pages { .. } | Node::Screen { .. } => {}
             Node::Grid { id, cols, cells, texts } => {
                 // The square measured: the rows share the height.
                 let cols = (*cols).max(1);

@@ -133,7 +133,7 @@ pub(crate) fn inserts_text(input_type: &str) -> bool {
 
 fn fetch(s: &Rc<Shared>, id: u32, url: &str) {
     if !is_relative_url(url) {
-        let result = Err(["not a same-origin relative URL: ", url].concat());
+        let result = Err(String::from("not a same-origin relative URL: ") + url);
         return later(s, Event::Fetched { id, result });
     }
     settle(s, id, &s.window.fetch_with_str(url), (on_response, failed));

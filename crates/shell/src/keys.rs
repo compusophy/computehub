@@ -43,6 +43,11 @@ impl Shell {
             out.consumed = true;
             return;
         }
+        // Escape closes the open folder.
+        if key == Key::Escape && self.grid.open.take().is_some() {
+            (out.consumed, out.redraw) = (true, true);
+            return;
+        }
         // The overlay with the keys: Escape hides it, or stops its task.
         let overlay = self.key_target() == Some(host::OVERLAY);
         if overlay && key == Key::Escape {

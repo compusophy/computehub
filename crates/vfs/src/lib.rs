@@ -170,13 +170,21 @@ impl Vfs {
     /// Fails with `InvalidPath` for a NUL, a relative `cwd` that is needed, or a result over
     /// [`Vfs::MAX_NAME`] or [`Vfs::MAX_DEPTH`].
     pub fn normalize(cwd: &str, path: &str) -> Result<String, VfsError> {
+        // Appended, not `concat`, `join` or `format!`: each would add its own copy of a generic
+        // to the boot.
         let full = match path.strip_prefix('~') {
-            Some(rest) if rest.is_empty() || rest.starts_with('/') => [Vfs::HOME, rest].concat(),
+            Some(rest) if rest.is_empty() || rest.starts_with('/') => {
+                String::from(Vfs::HOME) + rest
+            }
             _ if path.starts_with('/') => String::from(path),
-            _ if cwd.starts_with('/') => [cwd, "/", path].concat(),
+            _ if cwd.starts_with('/') => String::from(cwd) + "/" + path,
             _ => return Err(VfsError::InvalidPath),
         };
-        Ok(format!("/{}", names(&full)?.join("/")))
+        let mut out = String::new();
+        for name in names(&full)? {
+            out = out + "/" + name;
+        }
+        Ok(if out.is_empty() { String::from("/") } else { out })
     }
 
     /// Whether `path` is a directory. False for any error, a bad path too.

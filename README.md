@@ -3,9 +3,9 @@
 A computer in one browser tab.
 
 compusophy is a desktop operating system that runs entirely in a web page: Rust compiled to
-WebAssembly, drawing everything on one canvas. Floating windows, a home screen, a terminal with
-a real shell, files kept in your browser, and AI built in, free. Nothing to install, and no
-server runs your apps: the tab is the machine.
+WebAssembly, drawing everything on one canvas. Floating windows, a home screen with folders, a
+terminal with a real shell, files kept in your browser, and AI built in, free. Nothing to
+install, and no server runs your apps: the tab is the machine.
 
 **Try it:** <https://computehub-sigma.vercel.app>
 
@@ -17,7 +17,7 @@ server runs your apps: the tab is the machine.
 - **Programs.** Apps are WebAssembly programs (WASI preview 1), each in its own Web Worker,
   under a small kernel in the page: processes, a file system, consoles, jobs and pipes. A program
   with a window describes it as a widget tree; the desktop draws it.
-- **Terminal.** A console running `/bin/sh`: Unix-like commands, pipes (`a | b`), redirects
+- **Terminal.** A program drawing an xterm screen of `/bin/sh`: Unix-like commands, pipes (`a | b`), redirects
   (`<`, `>`, `>>`), history.
 - **Studio.** Make an app by describing it. A coding agent writes it in applang, a small
   language made for this, then tests and fixes it.

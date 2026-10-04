@@ -81,7 +81,7 @@ impl Editor {
     pub fn newline(&mut self) {
         let line = self.halves().0.split('\n').next_back().unwrap_or_default();
         let indent = line.bytes().take_while(|&b| b == b' ').count();
-        self.insert(&["\n", &" ".repeat(indent)].concat());
+        self.insert(&(String::from("\n") + &" ".repeat(indent)));
     }
 
     /// The text before the caret and after it.

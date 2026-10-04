@@ -38,21 +38,29 @@ fn fresh() -> Desktop {
     Desktop::new().expect("the boot font loads")
 }
 
-/// A desktop at 1280 x 800 (a signed-in tab's reload), with a terminal (its shell pid 2) if asked.
+/// An isolated 1280 x 800 desktop (a reload), and a terminal if asked: program 2, its shell 3.
 pub(crate) fn desktop(terminal: bool) -> Desktop {
     let (mut desk, mut ctl) = (fresh(), Ctl::default());
     ctl.session_set(logon::SESSION, Some("0"));
     desk.event(resize(1280.0, 800.0), &mut ctl);
+    desk.shell.as_mut().expect("made").kernel_mut().set_isolated(true);
     if terminal {
-        desk.shell.as_mut().expect("made").kernel_mut().set_isolated(true);
         send(&mut desk, key("Enter/Enter/a", true));
+        screen(&mut desk, vec![uiwire::Request::Tty { cols: 80, rows: 24 }]);
     }
     desk
 }
 
+/// What the Terminal's program (pid 2) asks of the page with a frame of its screen.
+pub(crate) fn screen(desk: &mut Desktop, requests: Vec<uiwire::Request>) -> Vec<Fx> {
+    let screen = uiwire::Node::Screen { id: 1, cols: 1, rows: 1, cursor: None, cells: vec![0; 13] };
+    let f = uiwire::Frame { requests, nodes: vec![screen], ..Default::default() }.encode();
+    send(desk, Event::Proc { pid: 2, msg: [&[kernel::wire::DRAW][..], &f].concat() }).1
+}
+
 /// What `desk` asks of the page, but replies, as the terminal's shell sends `msg`.
 pub(crate) fn sh(desk: &mut Desktop, msg: Msg<'_>) -> Vec<Fx> {
-    let fx = send(desk, Event::Proc { pid: 2, msg: msg.encode() }).1;
+    let fx = send(desk, Event::Proc { pid: 3, msg: msg.encode() }).1;
     fx.into_iter().filter(|f| !matches!(f, Fx::Reply { .. })).collect()
 }
 
@@ -113,16 +121,13 @@ fn events_map_to_inputs_and_keys_by_code_or_by_meaning() {
     let (x, y, button, dy, touch) = (3.0, 4.0, 2, -48.0, true);
     let t = platform::LocalTime { year: 2026, month: 9, day: 30, weekday: 3, hour: 14, minute: 7 };
     let shell_time = LocalTime { year: 2026, month: 9, day: 30, weekday: 3, hour: 14, minute: 7 };
-    let pairs = [
-        (Event::Text("é".into()), Input::Text("é".into())),
-        (Event::PointerMove { x, y }, Input::PointerMove { x, y }),
+    #[rustfmt::skip]
+    let pairs = [(Event::Text("é".into()), Input::Text("é".into())),
+        (Event::PointerMove { x, y }, Input::PointerMove { x, y }), (Event::PointerLeave, Input::PointerLeave),
         (Event::PointerDown { x, y, button, touch }, Input::PointerDown { x, y, button, touch }),
         (Event::PointerUp { x, y, button }, Input::PointerUp { x, y, button }),
-        (Event::PointerLeave, Input::PointerLeave),
-        (Event::Wheel { x, y, dy }, Input::Wheel { x, y, dy }),
-        (resize(8.0, 6.0), Input::Resize { w: 8.0, h: 6.0 }),
-        (Event::Tick { time: t }, Input::Tick { time: shell_time }),
-    ];
+        (Event::Wheel { x, y, dy }, Input::Wheel { x, y, dy }), (resize(8.0, 6.0), Input::Resize { w: 8.0, h: 6.0 }),
+        (Event::Tick { time: t }, Input::Tick { time: shell_time })];
     pairs.into_iter().for_each(|(ev, want)| assert_eq!(input_of(ev.clone()), Some(want), "{ev:?}"));
 }
 
@@ -158,9 +163,8 @@ fn typed_keys_are_left_to_the_textarea_and_key_ups_prevent_only_modifiers() {
     let (_, fx) = send(&mut desk, key("Enter/Enter/a", true));
     assert!(fx.contains(&Fx::TextInput(true)), "{fx:?}");
     assert!(["KeyA/a", "KeyQ/@/cag", "KeyV/v/c"].iter().all(|e| !prevented(&mut desk, e)));
-    for e in ["Tab/Tab", "Enter/Enter", "KeyC/c/c", "/c/c", "KeyV/k/c"] {
-        assert!(prevented(&mut desk, e), "{e}");
-    }
+    let shortcuts = ["Tab/Tab", "Enter/Enter", "KeyC/c/c", "/c/c", "KeyV/k/c"];
+    shortcuts.iter().for_each(|e| assert!(prevented(&mut desk, e), "{e}"));
 }
 
 #[test]
@@ -233,9 +237,8 @@ fn fonts_load_in_groups_and_frames_come_only_while_something_moves() {
     send(&mut desk, resize(1280.0, 800.0));
     assert!(has(&mut desk, FontId::Mono) && !has(&mut desk, FontId::SansBold));
     // A failed fetch leaves the slot empty, quietly; then its id is the shell's, which knows none.
-    for got in [Err("HTTP 404".into()), Ok(SEMI.to_vec())] {
-        assert_eq!(send(&mut desk, fetched(bold, got)).1, vec![]);
-    }
+    let quiet = [Err("HTTP 404".into()), Ok(SEMI.to_vec())];
+    quiet.into_iter().for_each(|got| assert_eq!(send(&mut desk, fetched(bold, got)).1, vec![]));
     assert!(!has(&mut desk, FontId::SansBold));
     // With the shell up: a bad font is skipped, a good one fills the slot. The
     // welcome window fades in and the page clock reads 0 here, so the fade
@@ -252,10 +255,11 @@ fn fonts_load_in_groups_and_frames_come_only_while_something_moves() {
         let (h, fx) = send(&mut desk, fetched(bold, Ok(got)));
         assert_eq!((h.1, fx, has(&mut desk, FontId::SansBold)), (false, vec![], want));
     }
-    // The lazy fonts: the first terminal asks for them, under other ids.
+    // The lazy fonts: the first terminal's console asks for them, under other ids.
     assert_eq!(send(&mut fresh(), fetched(1, Ok(vec![]))), ((false, false), vec![]));
     let mut desk = desktop(false);
-    let (_, fx) = send(&mut desk, key("Enter/Enter/a", true));
+    send(&mut desk, key("Enter/Enter/a", true));
+    let fx = screen(&mut desk, vec![uiwire::Request::Tty { cols: 80, rows: 24 }]);
     let [Fx::Fetch { id: a, url: ref ua }, Fx::Fetch { id: b, url: ref ub }, ..] = fx[..] else {
         panic!("{fx:?}");
     };
@@ -307,10 +311,9 @@ fn desktop_routes_events_through_the_shell() {
         send(&mut desk, key(ev, true));
         assert_eq!(state(&desk), opened, "{ev}");
     }
-    // With the terminal typing: on the focused window, button 0 only; never off it (bare desktop).
+    // A terminal typing (no screen yet): on the focused window, button 0 only; not off it.
     let at = focused_middle(&desk);
-    let (h, fx) = down(&mut desk, at);
-    assert_eq!((h.1, fx), (true, vec![Fx::Cursor("text")]));
+    assert_eq!(down(&mut desk, at), ((true, true), vec![Fx::Cursor("default")]));
     assert_eq!(up(&mut desk, at, 0), [Fx::TextInput(true)]);
     assert_eq!(up(&mut desk, at, 2), []);
     // A finger's scroll there is no tap: its lift asks for nothing.
@@ -346,7 +349,7 @@ fn programs_reach_the_kernel_and_its_effects_the_page() {
     // /bin holds each applet's marker; kernel events before the shell are dropped.
     let mut desk = fresh();
     let vfs = &desk.parts.as_ref().expect("unused").1;
-    assert_eq!(vfs.list("/bin").map(|l| l.len()), Ok(19));
+    assert_eq!(vfs.list("/bin").map(|l| l.len()), Ok(20));
     assert_eq!(vfs.read("/bin/sh").unwrap(), b"#!wasm bin/sh.wasm\n");
     assert_eq!(vfs.read("/bin/selftest").unwrap(), b"#!wasm bin/toolbox.wasm\n");
     assert_eq!(vfs.read("/bin/assistant").unwrap(), b"#!wasm bin/assistant.wasm\n");
@@ -404,8 +407,7 @@ fn home_and_the_meters_keep_to_the_one_shot_timer() {
     let mut desk = desktop(true);
     let touch =
         |d: &mut Desktop, f| sh(d, Msg::Open { oflags: O_CREAT, path: &[Vfs::HOME, f].concat() });
-    let changes = [touch(&mut desk, "/a"), touch(&mut desk, "/b")];
-    assert_eq!(changes, [vec![], vec![Fx::Wake(1001)]]);
+    assert_eq!([touch(&mut desk, "/a"), touch(&mut desk, "/b")], [vec![], vec![Fx::Wake(1001)]]);
     assert_eq!(send(&mut desk, Event::Wake).1, [Fx::Wake(1001)]);
     assert_eq!([send(&mut desk, Event::Hidden).1, send(&mut desk, Event::Wake).1], [[], []]);
     let mut ctl = Ctl::default();
@@ -415,8 +417,8 @@ fn home_and_the_meters_keep_to_the_one_shot_timer() {
     assert!(desk.home.unkept && touch(&mut desk, "/d").is_empty());
     // A watcher (Activity's process; the shell's here) hears the meters at once, in its read of
     // its events, and the timer is (already) armed for a look a second on; nothing more is due.
-    (desk.ai.0.borrow_mut().watch, desk.ai.0.borrow_mut().fresh) = (Some(2), true);
-    let read = |d: &mut Desktop| send(d, Event::Proc { pid: 2, msg: vec![0x21, 0, 0, 1, 0] }).1;
+    (desk.ai.0.borrow_mut().watch, desk.ai.0.borrow_mut().fresh) = (Some(3), true);
+    let read = |d: &mut Desktop| send(d, Event::Proc { pid: 3, msg: vec![0x21, 0, 0, 1, 0] }).1;
     let (fx, stats) = (read(&mut desk), |d: &Vec<u8>| d.get(5..).and_then(stat::Stats::decode));
     let s = fx.iter().find_map(|f| if let Fx::Reply { data, .. } = f { stats(data) } else { None });
     assert!(s.is_some_and(|s| s.loud.len() == stat::LOUD && s.quiet.len() == stat::QUIET));

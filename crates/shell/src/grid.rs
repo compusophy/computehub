@@ -9,12 +9,23 @@ use crate::desktop::Target;
 use crate::{Response, Shell};
 
 impl Shell {
-    /// Lists the apps again if the files changed; the overlay learns them.
+    /// Lists the apps again if the files or the folders changed; the overlay learns them (those
+    /// in folders too).
     pub(crate) fn list_icons(&mut self) {
         let (generation, host) = (self.host.vfs.generation(), &mut self.host);
         if self.grid.list(generation, || host.home(&APPS), &mut self.pending) {
-            let apps = self.grid.icons.iter().map(|e| &e.name).filter(|n| *n != host::ASSISTANT);
+            let all = self.grid.icons.iter().chain(self.grid.inside.iter().flatten());
+            let apps = all.map(|e| &e.name).filter(|n| *n != host::ASSISTANT);
+            let apps = apps.filter(|n| home::folders::index(n).is_none());
             self.host.agent.apps = apps.cloned().collect();
+        }
+    }
+
+    /// Opens the app `name`, or the folder it names.
+    pub(crate) fn launch(&mut self, name: &str, out: &mut Response) {
+        match home::folders::index(name) {
+            Some(k) => (self.grid.open, out.redraw) = (Some(k), true),
+            None => self.host.show(name, out),
         }
     }
 
@@ -58,7 +69,7 @@ impl Shell {
             self.armed = None;
         }
         for name in open {
-            self.host.show(&name, out);
+            self.launch(&name, out);
         }
         true
     }
@@ -70,6 +81,16 @@ impl Shell {
             _ => None,
         };
         self.grid.draw(list, &mut self.host.text, theme, now, hover, self.pointer);
+    }
+
+    /// The open folder, over everything but menus; the app under the pointer washed (more while
+    /// pressed).
+    pub(crate) fn draw_folder(&mut self, list: &mut DrawList, theme: &Theme) {
+        let hover = match self.hover {
+            Some(Target::Inside(i)) => Some((i, self.armed == self.hover)),
+            _ => None,
+        };
+        self.grid.draw_open(list, &mut self.host.text, theme, self.size, hover);
     }
 
     /// The icons or dock tile carried, over everything but menus.

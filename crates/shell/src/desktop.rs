@@ -27,9 +27,12 @@ pub(crate) enum Target {
     Title(WinId),
     Body(WinId),
     Edge(WinId, i8, i8),
-    /// A home screen icon, and the bare desktop.
+    /// A home screen icon, and the bare desktop; an app in the open folder, and the rest of its
+    /// panel.
     Icon(usize),
     Desktop,
+    Inside(usize),
+    Folder,
     /// A menu's action, the rest of the menu, and anywhere else while it shows.
     Menu(usize),
     MenuPanel,
@@ -40,7 +43,7 @@ impl Target {
     /// Whether it acts on release (and highlights).
     pub(crate) fn is_button(self) -> bool {
         use Target::*;
-        matches!(self, Bar(_) | Dock(_) | Assistant | Ctl(..) | Icon(_) | Menu(_))
+        matches!(self, Bar(_) | Dock(_) | Assistant | Ctl(..) | Icon(_) | Inside(_) | Menu(_))
     }
 
     pub(crate) fn win(self) -> Option<WinId> {
@@ -53,13 +56,17 @@ impl Target {
 }
 
 impl Shell {
-    /// What is under `(x, y)`: a menu (which hides the rest), the top bar, the bottom row's
-    /// tiles, the windows top to bottom, then the home screen.
+    /// What is under `(x, y)`: a menu (which hides the rest), the open folder (likewise), the
+    /// top bar, the bottom row's tiles, the windows top to bottom, then the home screen.
     pub(crate) fn hit(&self, x: f32, y: f32) -> Option<Target> {
         if let Some((m, ..)) = &self.menu {
             return Some(
                 m.at(x, y).map_or(Target::Off, |i| i.map_or(Target::MenuPanel, Target::Menu)),
             );
+        }
+        if let Some(k) = self.grid.open {
+            let at = home::folders::at(self.size, self.grid.inside[k].len(), x, y);
+            return Some(at.map_or(Target::Off, |i| i.map_or(Target::Folder, Target::Inside)));
         }
         if (0.0..BAR_H).contains(&y) {
             return Some(self.bar_hit(x, y));
@@ -142,7 +149,9 @@ impl Shell {
         (self.grab, self.app_press, self.armed, self.fling) = (None, None, None, None);
         self.down = None;
         if hit == Some(Target::Off) {
-            self.menu = None;
+            // Outside a menu, or the open folder (with none), closes it.
+            (self.menu, self.grid.open) = (None, self.grid.open.filter(|_| self.menu.is_some()));
+            out.redraw = true;
             return;
         }
         let overlay = matches!(hit, Some(Target::Body(OVERLAY)));
@@ -279,6 +288,11 @@ impl Shell {
             }
             Target::Icon(i) => {
                 let name = self.grid.icons.get(i).map(|e| e.name.clone()).unwrap_or_default();
+                self.launch(&name, out);
+            }
+            Target::Inside(i) => {
+                let k = self.grid.open.take().unwrap_or_default();
+                let name = self.grid.inside[k].get(i).map(|e| e.name.clone()).unwrap_or_default();
                 self.host.show(&name, out);
             }
             Target::Menu(i) => self.choose(Some(i), out),

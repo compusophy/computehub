@@ -23,7 +23,6 @@ compusophy-uiwire.workspace = true
 # as the desktop draws it) and its toolkit.
 [dev-dependencies]
 compusophy-host.workspace = true
-compusophy-apps.workspace = true
 compusophy-system.workspace = true
 compusophy-uiview.workspace = true
 compusophy-ui.workspace = true

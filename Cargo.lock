@@ -43,9 +43,8 @@ dependencies = [
 name = "compusophy-apps"
 version = "0.1.0"
 dependencies = [
- "compusophy-gfx",
- "compusophy-term",
  "compusophy-ui",
+ "compusophy-uiwire",
  "compusophy-vfs",
 ]
 
@@ -53,7 +52,6 @@ dependencies = [
 name = "compusophy-assistant"
 version = "0.1.0"
 dependencies = [
- "compusophy-apps",
  "compusophy-coder",
  "compusophy-host",
  "compusophy-system",
@@ -225,6 +223,16 @@ name = "compusophy-term"
 version = "0.1.0"
 dependencies = [
  "compusophy-vt",
+]
+
+[[package]]
+name = "compusophy-terminal"
+version = "0.1.0"
+dependencies = [
+ "compusophy-gfx",
+ "compusophy-term",
+ "compusophy-ui",
+ "compusophy-uiwire",
 ]
 
 [[package]]

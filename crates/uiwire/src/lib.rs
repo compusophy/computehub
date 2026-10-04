@@ -25,7 +25,10 @@
 //! watch the desktop's meters ([`Request::Watch`], answered by [`Event::Stats`] in the [`stat`]
 //! format), end a process ([`Request::End`]), set a preference ([`Request::Pref`]) and reset the
 //! device ([`Request::Reset`]), and hear what Settings shows ([`Event::Prefs`], [`Event::Face`]);
-//! the desktop drops those requests from any other.
+//! the Terminal's window may run the shell on a console ([`Request::Tty`], [`Request::Input`];
+//! its output comes as [`Event::Output`], its end as [`Event::Ended`], the window's keys, text
+//! and wheel as events) and show it as a [`Node::Screen`]. The desktop drops those requests from
+//! any other window.
 
 #![forbid(unsafe_code)]
 
@@ -85,9 +88,11 @@ codes! {
     /// The highlight class of a [`Span`]; Error is drawn underlined.
     Class { Plain = 0, Keyword = 1, String = 2, Number = 3, Comment = 4, Name = 5, Punct = 6,
         Error = 7, }
-    /// The key of an [`Event::Key`]: the four arrows are Up to Right, and Char is a
-    /// character key (the event's `ch` says which).
-    Key { Enter = 1, Escape = 2, Tab = 3, Up = 4, Down = 5, Left = 6, Right = 7, Char = 8, }
+    /// The key of an [`Event::Key`]: the four arrows are Up to Right, Char is a character key
+    /// (the event's `ch` says which), and F a function key (`ch` its number, 1 to 12).
+    Key { Enter = 1, Escape = 2, Tab = 3, Up = 4, Down = 5, Left = 6, Right = 7, Char = 8,
+        Backspace = 9, Delete = 10, Home = 11, End = 12, PageUp = 13, PageDown = 14, Insert = 15,
+        F = 16, }
     /// What an [`Act::Window`] does to a window: the title bar's controls, and raising it.
     WinOp { Focus = 0, Close = 1, Minimize = 2, Maximize = 3, Restore = 4, }
     /// What a [`Draw`] of a [`Node::Canvas`] draws.
@@ -270,6 +275,14 @@ pub enum Node {
     /// width, [`FACE`] px each, face `i` the button `id + i`, face `on` (if any) ringed in the
     /// accent.
     Faces { id: u32, on: u8 },
+    /// A terminal's screen, a frame's only node (elsewhere nothing): `cols` x `rows` cells
+    /// ([`SCREEN_CELLS`] at most) of [`CELL`] logical px from [`INSET`] in, the window's whole
+    /// content, its keyboard's; `cells` [`CELL_BYTES`] each, row by row: the char (its low 21
+    /// bits; its width, 0 for the rest of a wide one, at bit 24), the foreground and the
+    /// background (0 the default, `1 << 24 | i` xterm color `i`, `2 << 24 | rgb`), then the
+    /// attributes (bold, dim, italic, underline, blink, inverse, hidden, strike from bit 0); the
+    /// cursor at (row, column) if shown.
+    Screen { id: u32, cols: u16, rows: u16, cursor: Option<(u16, u16)>, cells: Vec<u8> },
     /// A raised card [`CARD_H`] tall across the width offering a choice: `text` (a second line,
     /// after a `\n`, small under the first), ringed and checked in the accent when it is `on`
     /// (the chosen one of a set); a click sends [`Event::Click`].
@@ -307,6 +320,20 @@ pub const CARD_H: u16 = 56;
 pub const LINK_H: u16 = 44;
 /// The side of a face of [`Node::Faces`].
 pub const FACE: u16 = 55;
+/// A [`Node::Screen`]'s cell (width, height), its inset in the window, the most cells it holds,
+/// and the bytes a cell takes.
+pub const CELL: (u16, u16) = (8, 17);
+pub const INSET: u16 = 14;
+pub const SCREEN_CELLS: usize = 65_536;
+pub const CELL_BYTES: usize = 13;
+
+/// The screen (columns, rows) that fits content `w` x `h` logical px: 1 x 1 to 1000 x 500, and
+/// no more cells than [`SCREEN_CELLS`] (rows give way).
+pub fn screen(w: u16, h: u16) -> (u16, u16) {
+    let fit = |len: u16, cell: u16| (len.saturating_sub(2 * INSET) / cell).max(1);
+    let cols = fit(w, CELL.0).min(1000);
+    (cols, fit(h, CELL.1).min((SCREEN_CELLS / usize::from(cols)).min(500) as u16))
+}
 /// The narrowest and the widest card of [`Node::Themes`].
 pub const THEME_MIN: u16 = 150;
 pub const THEME_MAX: u16 = 216;
@@ -438,6 +465,10 @@ pub enum Request {
     /// profile's files, settings and PIN) and start again at the welcome, as a first visit.
     /// Dropped from any other window, and from one the overlay acted on.
     Reset,
+    /// The Terminal's window only: run the shell on a console `cols` x `rows`, or resize it.
+    Tty { cols: u16, rows: u16 },
+    /// The Terminal's window only: bytes typed into the shell's console.
+    Input { data: Vec<u8> },
 }
 
 /// Something that happened in the window, host to program.
@@ -487,6 +518,14 @@ pub enum Event {
     /// The OS's own windows only, after the first Resize and on every change: the signed-in
     /// profile's face ([`Node::Faces`]).
     Face { face: u8 },
+    /// The Terminal's window only: what the shell wrote to its console ([`Request::Tty`]).
+    Output { data: Vec<u8> },
+    /// The Terminal's window only: text typed or pasted (Enter and Tab come as keys).
+    Text { text: String },
+    /// The Terminal's window only: the wheel moved `dy` logical px (down: positive).
+    Wheel { dy: i32 },
+    /// The Terminal's window only: the shell ended, with `status` (or could not start: 127).
+    Ended { status: i32 },
 }
 
 /// The public `encode` and `decode` of each message, from its `put` and `get`.
@@ -542,6 +581,11 @@ impl Node {
             Self::Canvas { w, h, draws, .. } => canvas(*w, *h, draws),
             Self::Chart { hue, h, values, .. } => chart(*hue, *h, values),
             Self::Meter { hue, value, .. } => *hue <= CANVAS_COLOR && *value <= 1000,
+            Self::Screen { cols, rows, cursor, cells, .. } => {
+                let n = usize::from(*cols) * usize::from(*rows);
+                let inside = cursor.is_none_or(|(r, c)| r < *rows && c < *cols);
+                n > 0 && n <= SCREEN_CELLS && cells.len() == n * CELL_BYTES && inside
+            }
             Self::Code { text, spans, .. } => {
                 let mut end = 0;
                 spans.iter().all(|s| {
@@ -605,6 +649,10 @@ impl Node {
             Self::Pages { id, on, labels } => o.head(22, *id, n).u8(*on).str(labels),
             Self::Themes { id } => o.head(23, *id, n),
             Self::Faces { id, on } => o.head(29, *id, n).u8(*on),
+            Self::Screen { id, cols, rows, cursor, cells } => {
+                let (r, c) = cursor.map_or((u16::MAX, 0), |rc| rc);
+                o.head(30, *id, n).u16(*cols).u16(*rows).u16(r).u16(c).bytes(cells)
+            }
             Self::Choice { id, on, text } => o.head(24, *id, n).u8((*on).into()).str(text),
             Self::Switch { id, on, label } => o.head(25, *id, n).u8((*on).into()).str(label),
             Self::Chart { id, hue, h, values } => {
@@ -675,6 +723,11 @@ impl Node {
             }
             28 => Self::Columns { id, on: r.u8()?, labels: r.str()? },
             29 => Self::Faces { id, on: r.u8()? },
+            30 => {
+                let (cols, rows, at) = (r.u16()?, r.u16()?, (r.u16()?, r.u16()?));
+                let cursor = (at.0 != u16::MAX).then_some(at);
+                Self::Screen { id, cols, rows, cursor, cells: r.bytes()?.to_vec() }
+            }
             _ => return None,
         };
         match &mut node {
@@ -801,6 +854,8 @@ impl Request {
             Self::End { pid } => o.u8(13).u32(*pid),
             Self::Pref { key, value } => o.u8(14).str(key).str(value),
             Self::Reset => o.u8(15),
+            Self::Tty { cols, rows } => o.u8(16).u16(*cols).u16(*rows),
+            Self::Input { data } => o.u8(17).bytes(data),
         }
     }
 
@@ -824,15 +879,18 @@ impl Request {
             13 => Self::End { pid: r.u32()? },
             14 => Self::Pref { key: r.str()?, value: r.str()? },
             15 => Self::Reset,
+            16 => Self::Tty { cols: r.u16()?, rows: r.u16()? },
+            17 => Self::Input { data: r.bytes()?.to_vec() },
             _ => return None,
         })
     }
 }
 
 impl Request {
-    /// Whether only the OS's own windows may ask it: Watch, End, Pref and Reset.
+    /// Whether only the OS's own windows may ask it: Watch, End, Pref, Reset, Tty and Input.
     pub fn own(&self) -> bool {
-        matches!(self, Self::Watch { .. } | Self::End { .. } | Self::Pref { .. } | Self::Reset)
+        use Request::*;
+        matches!(self, Watch { .. } | End { .. } | Pref { .. } | Reset | Tty { .. } | Input { .. })
     }
 }
 
@@ -900,6 +958,10 @@ impl Event {
                 o.u8(17).u8((*reports).into()).u8((*grain).into()).u8((*kept).into())
             }
             Self::Face { face } => o.u8(18).u8(*face),
+            Self::Output { data } => o.u8(19).bytes(data),
+            Self::Text { text } => o.u8(20).str(text),
+            Self::Wheel { dy } => o.u8(21).u32(*dy as u32),
+            Self::Ended { status } => o.u8(22).u32(*status as u32),
         }
     }
 
@@ -933,6 +995,10 @@ impl Event {
             16 => Self::Stats { data: r.bytes()?.to_vec() },
             17 => Self::Prefs { reports: r.bool()?, grain: r.bool()?, kept: r.bool()? },
             18 => Self::Face { face: r.u8()? },
+            19 => Self::Output { data: r.bytes()?.to_vec() },
+            20 => Self::Text { text: r.str()? },
+            21 => Self::Wheel { dy: r.u32()? as i32 },
+            22 => Self::Ended { status: r.u32()? as i32 },
             _ => return None,
         })
     }

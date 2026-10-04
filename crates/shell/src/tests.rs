@@ -84,6 +84,7 @@ fn desk_with(w: f32, h: f32, prefs: Prefs) -> (Shell, Log) {
         let k = KNOWN.split(' ').find(|k| name.ends_with(k))?;
         Some(Box::new(Probe(k, l.clone())) as Box<dyn App>)
     });
+    let prefs = Prefs { folders: prefs.folders.or_else(|| Some(String::new())), ..prefs };
     (Shell::new(w, h, text, Vfs::new(), reg, prefs), log)
 }
 
@@ -236,8 +237,7 @@ fn the_first_visits_welcome_runs_as_a_program_on_an_isolated_page() {
 fn resizes_set_the_work_area_and_windows_follow_at_once() {
     // Welcome free, a terminal snapped, studio maximized.
     let (mut s, _) = desk();
-    s.k(Enter, "a");
-    s.k(Left, "a");
+    let _ = [Enter, Left].map(|k| s.k(k, "a"));
     s.say(1, "open studio");
     s.k(Up, "a");
     s.rest(1000.0);
@@ -415,7 +415,7 @@ fn the_dock_opens_minimizes_and_focuses_and_keeps_the_persons_favorites() {
     let hits = [57.0, 58.0, 150.0].map(|x| s.hit(x, 760.0).unwrap());
     assert_eq!(hits, [Target::Dock(0), Target::Dock(1), Target::Desktop]);
     s.right(s.tile_at(0));
-    assert_eq!(s.labels(), ["Open", "Remove from dock"]);
+    assert_eq!(s.labels(), ["Open", "Remove from dock", "Move to\u{2026}"]);
     let pref = |v: &str| vec![Effect::Pref { key: "dock".into(), value: v.into() }];
     assert_eq!(s.click(s.item("Remove from dock")).effects, pref("nope,files"));
     assert_eq!((s.menu.is_none(), s.tiles.len(), s.dock.favs.len()), (true, 1, 2));
@@ -424,7 +424,7 @@ fn the_dock_opens_minimizes_and_focuses_and_keeps_the_persons_favorites() {
     s.right(s.tile_at(1));
     s.click(s.item("Open"));
     s.right(s.tile_at(1));
-    assert_eq!(s.labels(), ["New window", "Remove from dock", "Close"]);
+    assert_eq!(s.labels(), ["New window", "Remove from dock", "Move to\u{2026}", "Close"]);
     let _ = [Down, Enter].map(|k| s.k(k, ""));
     assert_eq!(s.names(), ["studio", "studio"]);
     s.right(s.tile_at(1));
@@ -467,7 +467,7 @@ fn kept_tiles_move_along_the_dock_by_a_mouse_or_a_held_finger() {
         assert!(s.dock.carry.as_ref().is_some_and(|c| c.lifted) && s.menu.is_none());
         s.to(s.tile_at(to));
         s.up(s.tile_at(to));
-        assert_eq!(s.labels().len(), if menu { 2 } else { 0 });
+        assert_eq!(s.labels().len(), if menu { 3 } else { 0 });
         s.k(Escape, "");
     }
     // An icon carried onto the row opens a gap under the pointer: dropped, its app is kept
@@ -587,7 +587,7 @@ fn menus_open_where_pressed_follow_the_keys_and_act() {
     assert_eq!(s.names(), ["welcome"]);
     // An icon's: open it, or add it to the dock; a right press inside a menu does nothing.
     s.right((57.0, 297.0));
-    assert_eq!(s.labels(), ["Open", "Add to dock"]);
+    assert_eq!(s.labels(), ["Open", "Add to dock", "Move to\u{2026}"]);
     s.right(s.item("Open"));
     s.click(s.item("Open"));
     assert_eq!(s.names(), ["welcome", "terminal"]);
@@ -641,7 +641,7 @@ fn a_finger_held_still_long_presses_and_only_a_menu_ends_its_press() {
     s.held(10_600.0);
     assert!(s.grid.carry.as_ref().is_some_and(|c| c.lifted && !c.moved) && s.menu.is_none());
     s.up(STUDIO);
-    assert_eq!((s.grid.carry.is_none(), s.labels()), (true, vec!["Open", "Add to dock"]));
+    assert!(s.grid.carry.is_none() && s.labels() == ["Open", "Add to dock", "Move to\u{2026}"]);
     s.k(Escape, "");
     s.set_now(11_000.0);
     s.push(STUDIO, 0, true);
@@ -745,7 +745,7 @@ fn the_home_screen_shows_every_app_and_the_top_bar_its_buttons() {
     assert_eq!(r, (true, m.map(Mark::Made), vec![m.map(Mark::Made), None]), "its icon, grid, dock");
     // Its menu deletes it, asked again: its file, its tile and its icon go.
     s.right(cell(8));
-    assert_eq!(s.labels(), ["Open", "Remove from dock", "", "Delete"]);
+    assert_eq!(s.labels(), ["Open", "Remove from dock", "Move to\u{2026}", "", "Delete"]);
     let _ = (s.click(s.item("Delete")), s.click(s.item("Delete for good")), s.to(cell(0)));
     assert!(!s.host.vfs.exists(&c) && s.dock.favs.is_empty() && s.labels_home().len() == 8);
     // The mark shows Welcome; the right buttons Feedback (a bug) and Settings.

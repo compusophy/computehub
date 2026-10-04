@@ -111,7 +111,7 @@ fn desk() -> Desk {
     let registry: Registry = Box::new(move |name| match name {
         "assistant" => Some(Box::new(Hand(o.clone(), h.clone())) as Box<dyn App>),
         "settings" => Some(Box::new(Own::default())),
-        name => apps::open(name),
+        _ => None,
     });
     let (wm, text) = (Wm::new(Rect::new(0, 44, 1440, 771)), TextSystem::new(SANS.to_vec()));
     let mut host = Host::new(wm, text.unwrap(), Vfs::new(), registry, "Mono");

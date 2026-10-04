@@ -24,14 +24,14 @@ const AUTHOR: &str = "Made by compusophy. Apache-2.0.";
 const SOURCE: &str = "github.com/compusophy/computehub";
 /// Every crate and its role.
 #[rustfmt::skip]
-pub(crate) const STACK: [(&str, &str); 33] = [
+pub(crate) const STACK: [(&str, &str); 34] = [
     ("os", "The wasm entry: fonts, files, telemetry"),
     ("platform", "The browser boundary: canvas, WebGL2, input"),
     ("logon", "The welcome: the mark, the start's record, sign-in"),
     ("profiles", "Profiles: their keys, faces, names and PINs"),
     ("shell", "The desktop: top bar, windows, keys"), ("home", "The home screen, dock and touch"),
     ("host", "Windows and the apps in them"), ("wm", "Window manager; deterministic"),
-    ("apps", "The Terminal: a console and its screen"),
+    ("apps", "The console a terminal's shell runs on"),
     ("system", "About, Editor, Feedback, Files, Welcome, Settings; serves Activity"),
     ("activity", "The resource monitor: CPU, memory, frames, AI"),
     ("ui", "Widgets, themes and the App trait"), ("icons", "The mark and the vector icons"),
@@ -42,6 +42,7 @@ pub(crate) const STACK: [(&str, &str); 33] = [
     ("uiwire", "How GUI programs draw and hear"), ("uiview", "How the desktop draws them"),
     ("studio", "Write, check and run apps"), ("coder", "The AI that writes and fixes apps"),
     ("assistant", "Ask; it does it on the desktop"),
+    ("terminal", "The Terminal: an xterm screen of the shell"),
     ("sh", "The shell the Terminal runs"), ("term", "Terminal screen model"),
     ("vt", "Terminal escape-sequence parser"), ("applang", "The tier 0 app language"),
     ("applang-syntax", "applang's lexer and parser"), ("lang", "Diagnostics, lexer and parser kit"),

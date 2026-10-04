@@ -4,9 +4,11 @@
 //! frame the window shows a note, or why it failed (a first frame that does not decode: the
 //! program is newer than the desktop). A frame's title is the window's and its requests are
 //! honored (Size in the first only; Focus when the frame holds that Input, Code or Area; Feedback
-//! goes to the page; Watch, End, Pref (`theme` a theme) and Reset from the OS's own windows alone,
-//! Activity's and Settings', which run its own `bin/system.wasm`, never what a `/bin` file names,
-//! and hear [`Event::Prefs`] and [`Event::Face`] after the first Resize, then once they change); a
+//! goes to the page; Watch, End, Pref (`theme` a theme), Reset, Tty and Input from the OS's own
+//! windows alone, Activity's and Settings' (its own `bin/system.wasm`) and the Terminal's (its
+//! `bin/terminal.wasm`), never what a `/bin` file names, which hear [`Event::Prefs`] and
+//! [`Event::Face`] after the first Resize, then once they change; the Terminal's runs the shell
+//! on an [`apps::Console`] and hears its own keys, text and wheel as events); a
 //! clean exit or a kill (137) closes the window, and closing it sends [`Event::Close`]. The
 //! window's focus goes to the program as [`Event::Focus`], and a prompt from the everything bar
 //! as [`Event::Ask`], held until it starts. Edited text is owned as uiwire says ([`Texts`]), one
@@ -39,10 +41,12 @@ use crate::ai::Ai;
 /// The Studio and Assistant programs.
 pub const STUDIO: &str = "/bin/studio";
 pub const ASSISTANT: &str = "/bin/assistant";
+pub const TERMINAL: &str = "/bin/terminal";
 /// Studio's icon (braces on violet), and that of every `.app` it runs.
 pub const STUDIO_ICON: AppIcon = AppIcon { glyph: Glyph::Studio, hue: Rgba::hex(0x8b7bff) };
 pub const APP_ICON: AppIcon = AppIcon { glyph: Glyph::Window, hue: Rgba::hex(0xf59e0b) };
 pub const ASSISTANT_ICON: AppIcon = AppIcon { glyph: Glyph::Assistant, hue: Rgba::hex(0xa78bfa) };
+pub const TERMINAL_ICON: AppIcon = AppIcon { glyph: Glyph::Terminal, hue: Rgba::hex(0x2dd4bf) };
 /// A system app as (name, title, icon, size, whether compact).
 pub type SystemApp = (&'static str, &'static str, AppIcon, (f32, f32), bool);
 /// About, Feedback, Files, Welcome, Editor, Activity and Settings: one program, bin/system.wasm,
@@ -81,7 +85,7 @@ pub fn open(name: &str, ai: &Ai) -> Option<Box<dyn App>> {
         let argv = [prog].into_iter().chain(arg).map(String::from).collect();
         let mut r = Remote::new(&["/bin/", prog].concat(), argv, ai);
         (r.title, r.icon, r.size, r.compact) = (title.into(), icon, Some(size), compact);
-        r.trusted = matches!(prog, "activity" | "settings");
+        r.own = matches!(prog, "activity" | "settings").then_some(OWN);
         return Some(Box::new(r));
     }
     let abs = |p: &str| Vfs::normalize("/apps", p).ok().filter(|_| !p.is_empty());
@@ -89,6 +93,9 @@ pub fn open(name: &str, ai: &Ai) -> Option<Box<dyn App>> {
     let (argv, title, icon, size) = match name.strip_prefix("studio:") {
         _ if name == "assistant" => {
             (vec![name.into()], "Assistant".into(), ASSISTANT_ICON, Some((560.0, 600.0)))
+        }
+        _ if name == "terminal" => {
+            (vec![name.into()], "Terminal".into(), TERMINAL_ICON, Some((668.0, 436.0)))
         }
         _ if name == "studio" => (vec![name.into()], "Studio".into(), STUDIO_ICON, STUDIO_SIZE),
         Some(p) => {
@@ -102,8 +109,15 @@ pub fn open(name: &str, ai: &Ai) -> Option<Box<dyn App>> {
         }
         None => return None,
     };
-    let program = if name == "assistant" { ASSISTANT } else { STUDIO };
+    let program = match name {
+        "assistant" => ASSISTANT,
+        "terminal" => TERMINAL,
+        _ => STUDIO,
+    };
     let mut r = Remote::new(program, argv, ai);
+    if name == "terminal" {
+        (r.own, r.tty) = (Some("bin/terminal.wasm"), Some(apps::Console::default()));
+    }
     (r.title, r.icon, r.size, r.view.follow) = (title, icon, size, name == "assistant");
     Some(Box::new(r))
 }
@@ -122,9 +136,11 @@ pub struct Remote {
     argv: Vec<String>,
     pid: Option<u32>,
     ai: Ai,
-    /// The OS's own window (Activity's, Settings'), and what Settings shows as it was last told.
-    trusted: bool,
+    /// The program of the OS's own window (Activity's and Settings' share one; the Terminal's),
+    /// what Settings shows as it was last told, and the Terminal's console.
+    own: Option<&'static str>,
     prefs: Option<([bool; 3], u8)>,
+    tty: Option<apps::Console>,
     /// Why nothing runs (empty while it does), and its last output.
     note: String,
     log: String,
@@ -155,9 +171,9 @@ impl Remote {
     fn start(&mut self, cx: &mut Cx<'_>) {
         let (argv, cwd, roots, stdout) =
             (self.argv.clone(), "/".into(), vec!["/".into()], wire::Stdout::Console);
-        let program = match self.trusted {
-            true => Ok(Program::Url(OWN.into())),
-            false => ui::kernel::program(cx.vfs, &self.program),
+        let program = match self.own {
+            Some(url) => Ok(Program::Url(url.into())),
+            None => ui::kernel::program(cx.vfs, &self.program),
         };
         let pid = program
             .map_err(|missing| if missing { "not found" } else { "cannot execute" })
@@ -177,7 +193,7 @@ impl Remote {
         let Some(pid) = self.pid else { return };
         cx.kernel.post_event(pid, &ev.encode());
         let now = ([!cx.ai.reports_off, cx.grain, !cx.ai.unkept], logon::profiles::face());
-        if self.trusted && self.prefs.replace(now) != Some(now) {
+        if self.own.is_some() && self.prefs.replace(now) != Some(now) {
             let ([reports, grain, kept], face) = now;
             let told = [Event::Prefs { reports, grain, kept }, Event::Face { face }];
             told.iter().for_each(|ev| cx.kernel.post_event(pid, &ev.encode()));
@@ -220,35 +236,20 @@ impl Remote {
     /// Escape (which also leaves the editor), Enter and chords.
     fn key(&mut self, key: Key, mods: Mods, cx: &mut Cx<'_>) -> bool {
         let (chord, id) = (mods.ctrl || mods.alt || mods.meta, self.texts.focus);
-        let (plain, t) = (!chord && key != Key::Escape, &mut self.texts);
-        let edited = t.codes.iter_mut().find(|c| c.0 == id && plain).and_then(|c| c.1.key(key));
-        let edited = edited.or_else(|| t.areas.iter_mut().find(|a| a.0 == id && plain)?.1.key(key));
-        match (edited, self.texts.inputs.iter_mut().find(|i| i.0 == id && plain), key) {
-            (Some(edited), ..) => return !edited || self.changed(id, cx),
-            (_, Some(_), Key::Enter) => return self.send(Event::Submit { id }, cx),
-            (_, Some(i), Key::Backspace) => {
-                let popped = i.1.pop().is_some();
-                i.2 = i.2.wrapping_add(u32::from(popped));
-                return popped && self.changed(id, cx);
-            }
-            _ => {}
+        let input = self.texts.inputs.iter().any(|i| i.0 == id) && !chord;
+        match self.texts.key(key, chord) {
+            _ if input && key == Key::Enter => return self.send(Event::Submit { id }, cx),
+            Some(edited) => return !edited || self.changed(id, cx),
+            None => {}
         }
-        // The wire's key codes: these seven from 1, then Char.
-        const KEYS: [Key; 7] =
-            [Key::Enter, Key::Escape, Key::Tab, Key::Up, Key::Down, Key::Left, Key::Right];
-        let (code, ch) = match key {
-            Key::Char(c) => (8, c),
-            Key::Space => (8, ' '),
-            k => (KEYS.iter().position(|&x| x == k).map_or(0, |i| i as u8 + 1), '\0'),
-        };
-        // Plain arrows, letters, digits and space too, for a program that asked for keys: the
-        // play it answers with a frame.
-        let plain = self.play.keys && id == 0 && code > 3 && !chord;
-        let wire = uiwire::Key::from_u8(code).filter(|_| chord || code <= 2 || plain);
-        let Some(wire) = wire else { return false };
-        let bits = [mods.meta, mods.alt, mods.ctrl, mods.shift];
-        let mods = bits.iter().fold(0, |m, &b| m << 1 | u8::from(b));
-        self.send(Event::Key { id, key: wire, mods, ch }, cx);
+        // Enter and Escape; plain arrows, letters, digits, space and the rest too, for a
+        // program that asked for keys: the play it answers with a frame.
+        let Some((wire, ch)) = apps::wire_key(key) else { return false };
+        let plain = self.play.keys && id == 0 && wire as u8 > 3 && !chord;
+        if !(chord || wire as u8 <= 2 || plain) {
+            return false;
+        }
+        self.send(Event::Key { id, key: wire, mods: apps::wire_mods(mods), ch }, cx);
         if plain {
             self.play.sent(self.waiting);
         }
@@ -269,25 +270,14 @@ impl Remote {
     /// echoes the Enter or Tab just handled.
     fn type_text(&mut self, s: &str, last: Option<Key>, cx: &mut Cx<'_>) -> bool {
         let echo = matches!((last, s), (Some(Key::Enter), "\n" | "\r\n") | (Some(Key::Tab), "\t"));
-        let (id, t) = (self.texts.focus, &mut self.texts);
-        let area = t.areas.iter_mut().find(|a| a.0 == id).map(|a| !echo && a.1.insert(s));
-        let edited = match t.codes.iter_mut().find(|c| c.0 == id) {
-            Some(c) => !echo && c.1.insert(s),
-            None if area.is_some() => area == Some(true),
-            None => t.inputs.iter_mut().find(|i| i.0 == id).is_some_and(|i| {
-                let n = i.1.len();
-                i.1.extend(s.chars().filter(|c| !c.is_control()));
-                i.1.truncate(if i.1.len() > ui::CODE_MAX { n } else { i.1.len() });
-                i.2 = i.2.wrapping_add(u32::from(i.1.len() != n));
-                i.1.len() != n
-            }),
-        };
-        edited && self.changed(id, cx)
+        let id = self.texts.focus;
+        self.texts.insert(s, echo) && self.changed(id, cx)
     }
 
     /// Output (the last kept for a failure) and the exit: clean or killed closes, failed says
     /// why.
     fn io(&mut self, cx: &mut Cx<'_>) -> bool {
+        self.tty.iter_mut().for_each(|t| t.io(cx, self.pid));
         let Some(pid) = self.pid else { return false };
         let out = cx.kernel.take_output(pid);
         if !out.is_empty() {
@@ -322,7 +312,11 @@ impl Remote {
                 Request::Feedback { kind, text, context } => cx.feedback(&kind, &text, context),
                 r @ (Request::Act { .. } | Request::Status { .. }) => cx.agent(r),
                 // The OS's own windows' alone (Watch and End go to the hub); others', dropped.
-                r if !self.trusted && r.own() => {}
+                r if self.own.is_none() && r.own() => {}
+                Request::Tty { cols, rows } => {
+                    self.tty.iter_mut().for_each(|t| t.tty(cx, self.pid, cols, rows))
+                }
+                Request::Input { data } => self.tty.iter().for_each(|t| t.input(cx, &data)),
                 Request::Reset => cx.reset(),
                 Request::Pref { key, value } if key == "theme" => cx.set_theme(&value),
                 Request::Pref { key, value } => cx.pref(&key, &value),
@@ -342,7 +336,7 @@ impl App for Remote {
     }
 
     fn wants_text_input(&self) -> bool {
-        self.texts.focus != 0
+        self.texts.focus != 0 || self.tty.is_some()
     }
 
     fn preferred_size(&self) -> Option<(f32, f32)> {
@@ -422,6 +416,12 @@ impl App for Remote {
                     self.send(tick, cx);
                 }
                 false
+            }
+            // The Terminal's own keys, text and wheel are its program's.
+            AppEvent::Key { .. } | AppEvent::Text(_) | AppEvent::Wheel { .. }
+                if self.tty.is_some() =>
+            {
+                apps::input(&ev).is_some_and(|ev| self.send(ev, cx))
             }
             AppEvent::Key { key, mods } => self.key(key, mods, cx),
             AppEvent::Text(s) => self.type_text(&s, last, cx),
