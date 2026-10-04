@@ -5,11 +5,15 @@
 //!
 //! Preopens: fd 3 is `.` (the cwd), then each top-level directory (roots `["/"]`) or each root,
 //! then /dev. Paths resolve lexically (`..` stops at "/"); main checks the roots. fds are paths:
-//! each file call is one wire op (a WRITE 64 KiB at most). /dev is local: `null`, `tty` (the
-//! console: a read waits for its input), `consctl` (words written set its mode: `rawon`,
-//! `rawoff`, `echooff`, `echoon`, each fd from cooked with echo), `winsize`
-//! (`"<cols> <rows>\n"`), `draw` (a write is one uiwire frame) and `events` (a read is one
-//! event). Not yet: poll_oneoff, NONBLOCK.
+//! each file call is one wire op (a WRITE 64 KiB at most). fds 0 and 1 are as the Start says:
+//! the console, a file, a pipe (in a job: each read one PIPE_READ, each write one PIPE_WRITE) or,
+//! for stdout, nothing; fd 2 is the console. /dev is local: `null`, `tty` (the console: a read
+//! waits for its input), `consctl` (words written set its mode: `rawon`, `rawoff`, `echooff`,
+//! `echoon`, each fd from cooked with echo), `winsize` (`"<cols> <rows>\n"`), `draw` (a write
+//! is one uiwire frame), `events` (a read is one event) and `job` (a write is one
+//! [`wire::Job`], started as the writer's children; a read waits for it to end and says its
+//! status, `"<n>\n"`, then reads end of file until the next write). Not yet: poll_oneoff,
+//! NONBLOCK.
 
 #![forbid(unsafe_code)]
 
@@ -119,19 +123,21 @@ enum Kind {
     Draw,
     Events,
     Consctl,
+    Pipe,
+    Job,
 }
 
 /// The devices of /dev, in listing order, and what each is.
-const DEVS: [&str; 6] = ["consctl", "draw", "events", "null", "tty", "winsize"];
+const DEVS: [&str; 7] = ["consctl", "draw", "events", "job", "null", "tty", "winsize"];
 #[rustfmt::skip]
-const DEV_KINDS: [Kind; 6] =
-    [Kind::Consctl, Kind::Draw, Kind::Events, Kind::Null, Kind::Console, Kind::Winsize];
+const DEV_KINDS: [Kind; 7] =
+    [Kind::Consctl, Kind::Draw, Kind::Events, Kind::Job, Kind::Null, Kind::Console, Kind::Winsize];
 /// What /dev/consctl takes: words that set (even) or clear (odd) a mode bit.
 const CTL: [(&str, u8); 4] =
     [("rawon", MODE_RAW), ("rawoff", MODE_RAW), ("echooff", MODE_NOECHO), ("echoon", MODE_NOECHO)];
 
 /// An open fd: its kind, absolute path (`/dev/tty` for a console) and offset (/dev/consctl:
-/// the mode's bits).
+/// the mode's bits; /dev/job: the job started and not yet waited for, 0 for none).
 #[derive(Debug)]
 struct Fd {
     kind: Kind,
@@ -140,7 +146,7 @@ struct Fd {
     pre: String,
     pos: u64,
     append: bool,
-    /// /dev/events: the part of an event the guest has not read yet.
+    /// /dev/events: the part of an event the guest has not read yet; /dev/job: of the status.
     buf: Vec<u8>,
     /// A directory's `(filetype, name)` entries as of fd_readdir at cookie 0, `.` and `..` first.
     list: Vec<(u8, String)>,
@@ -166,9 +172,11 @@ pub struct Proc {
 impl Proc {
     /// The process `start` describes. Env: `HOME`, `USER=guest`, `PWD`, `PATH` and, with a tty,
     /// `TERM=xterm-256color`, `COLUMNS`, `LINES`; each `K=V` of `start.env` replaces its key or is
-    /// appended. fds 0 to 2 are the console, but a redirected stdout (OPEN CREAT, TRUNC unless
-    /// appending); then the preopens. EINVAL for an env entry without key or `=`, or a NUL in any
-    /// string; E2BIG past [`wire::MAX_START`]; a failed OPEN's or LIST's errno.
+    /// appended. fds 0 to 2 are the console, but stdin from a file (an OPEN: it must be one) or a
+    /// pipe, and stdout to a file (OPEN CREAT, TRUNC unless appending), a pipe or nothing; then
+    /// the preopens. EINVAL for an env entry without key or `=`, or a NUL in any string; E2BIG
+    /// past [`wire::MAX_START`]; EISDIR for a stdin that is a directory; a failed OPEN's or
+    /// LIST's errno.
     pub fn new(start: &wire::Start, h: &mut dyn Host) -> Result<Proc, u16> {
         let home = Vfs::HOME;
         let mut env = vec![["HOME=", home].concat(), "USER=guest".into()];
@@ -187,9 +195,20 @@ impl Proc {
         }
         let (args, env) = (cstrs(&start.argv)?, cstrs(&env)?);
         let mut fds: Vec<_> = (0..3).map(|_| Some(Fd::new(Kind::Console, "/dev/tty"))).collect();
-        if let wire::Stdout::File { path, append } = &start.stdout {
-            open(h, O_CREAT | if *append { 0 } else { wire::O_TRUNC }, path)?;
-            fds[1] = Some(Fd { append: *append, ..Fd::new(Kind::File, path) });
+        match &start.stdin {
+            wire::Stdin::File(path) if open(h, 0, path)?.0 == 3 => return Err(EISDIR),
+            wire::Stdin::File(path) => fds[0] = Some(Fd::new(Kind::File, path)),
+            wire::Stdin::Pipe => fds[0] = Some(Fd::new(Kind::Pipe, "")),
+            wire::Stdin::Console => {}
+        }
+        match &start.stdout {
+            wire::Stdout::File { path, append } => {
+                open(h, O_CREAT | if *append { 0 } else { wire::O_TRUNC }, path)?;
+                fds[1] = Some(Fd { append: *append, ..Fd::new(Kind::File, path) });
+            }
+            wire::Stdout::Pipe => fds[1] = Some(Fd::new(Kind::Pipe, "")),
+            wire::Stdout::Null => fds[1] = Some(Fd::new(Kind::Null, "/dev/null")),
+            wire::Stdout::Console => {}
         }
         let roots = match &start.roots[..] {
             [root] if root == "/" => {
@@ -344,6 +363,7 @@ impl Proc {
             Kind::Dir => (3, ALL_RIGHTS, ALL_RIGHTS),
             Kind::File => (4, ALL_RIGHTS, 0),
             Kind::Console if !self.tty => (0, CONSOLE_RIGHTS, 0),
+            Kind::Pipe => (0, CONSOLE_RIGHTS, 0),
             _ => (2, CONSOLE_RIGHTS, 0),
         };
         let w = Writer::default().u8(kind).u8(0).u16(f.append.into()).u32(0).u64(base);
@@ -384,7 +404,20 @@ impl Proc {
             }
             (_, Some(_)) => return Err(ESPIPE),
             (Kind::Console, _) => call(h, &Msg::ConsRead { max }.encode())?,
+            (Kind::Pipe, _) => call(h, &Msg::PipeRead { max }.encode())?,
             (Kind::Null | Kind::Consctl, _) => Vec::new(),
+            // The status, once the job ended, as text; what is not read waits for the next read.
+            (Kind::Job, _) => {
+                if f.buf.is_empty() && f.pos != 0 {
+                    let status = call(h, &Msg::Wait { job: f.pos as u32 }.encode())?;
+                    let status = Reader(&status).u32().ok_or(EINVAL)? as i32;
+                    let text = [status.to_string().as_str(), "\n"].concat();
+                    (f.pos, f.buf) = (0, text.into_bytes());
+                }
+                let n = scatter(m, &list, &f.buf)?;
+                f.buf.drain(..n as usize);
+                return m.write(a[a.len() - 1] as u32, &n.to_le_bytes());
+            }
             (Kind::Winsize, _) => {
                 let ((cols, rows), at) = (h.winsize(), f.pos.min(16) as usize);
                 format!("{cols} {rows}\n").into_bytes().get(at..).unwrap_or_default().to_vec()
@@ -425,6 +458,22 @@ impl Proc {
             (_, Some(_)) => return Err(ESPIPE),
             (Kind::Console, _) => gather(m, &list, u32::MAX, &mut |b| h.console(b))?,
             (Kind::Null, _) => total,
+            (Kind::Pipe, _) => {
+                let mut data = Vec::new();
+                let n = gather(m, &list, CHUNK, &mut |b| data.extend_from_slice(b))?;
+                req(h, Msg::PipeWrite { data: &data })?;
+                n
+            }
+            // A whole job in one write; a read waits for it by its first pid.
+            (Kind::Job, _) if total as usize > wire::MAX_PAYLOAD => return Err(E2BIG),
+            (Kind::Job, _) => {
+                let mut job = Vec::new();
+                let n = gather(m, &list, total, &mut |b| job.extend_from_slice(b))?;
+                (n == total).then_some(()).ok_or(EFAULT)?;
+                let first = call(h, &Msg::Spawn { job: &job }.encode())?;
+                (f.pos, f.buf) = (u64::from(Reader(&first).u32().ok_or(EINVAL)?), Vec::new());
+                n
+            }
             (Kind::Consctl, _) => {
                 let mut text = Vec::new();
                 let n = gather(m, &list, CHUNK, &mut |b| text.extend_from_slice(b))?;

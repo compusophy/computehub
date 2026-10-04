@@ -53,7 +53,8 @@ fn spawn_asks_for_a_worker_and_starts_it_at_ready() {
     let pid = k.spawn(hello()).unwrap();
     assert_eq!((pid, k.take_effects()), (2, vec![Effect::Spawn { pid, sab: true }]));
     let (Spawn { argv, cwd, tty, stdout, roots, .. }, role) = (hello(), wire::Role::Process);
-    let msg = wire::Start { role, pid, tty, stdout, cwd, roots, argv, env: vec![] }.encode();
+    let stdin = wire::Stdin::Console;
+    let msg = wire::Start { role, pid, tty, stdin, stdout, cwd, roots, argv, env: vec![] }.encode();
     (0..2).for_each(|_| k.message(&mut fs, pid, &READY)); // A second READY starts nothing.
     let program = Load::Url("bin/toolbox.wasm".into());
     assert_eq!(k.take_effects(), [Effect::Start { pid, msg, program }]);
@@ -205,7 +206,7 @@ fn output_exits_kills_and_failures_wake_the_owner_and_reap_gives_each_status_onc
     k.message(&mut fs, pid, &Msg::ConsWrite { data: b"hi\n" }.encode());
     k.message(&mut fs, pid, &Msg::ConsWrite { data: b"there\n" }.encode());
     assert_eq!((k.take_woken(), k.take_woken()), (vec![5], vec![]));
-    assert_eq!((k.reap(pid), k.take_output(pid)), (None, b"hi\nthere\n".to_vec()));
+    assert_eq!((k.reap(pid), k.take_output(pid)), (None, b"hi\r\nthere\r\n".to_vec()));
     k.message(&mut fs, pid, &Msg::Exit { status: 3 }.encode());
     assert_eq!((k.take_effects(), k.take_woken()), (vec![Effect::Kill { pid }], vec![5]));
     // An ended process takes no more output and no kill.
@@ -227,8 +228,8 @@ fn output_exits_kills_and_failures_wake_the_owner_and_reap_gives_each_status_onc
     let (fx, kills) = (k.take_effects(), [a, b, c, d].map(|pid| Effect::Kill { pid }));
     assert_eq!((&fx[..4], fx.len(), k.take_woken()), (&kills[..], 5, vec![5]));
     assert!(matches!(&fx[4], Effect::Start { program: Load::Bytes(p), .. } if p == b"\0asm"));
-    assert_eq!(k.take_output(c), b"the OS was updated; reload the page\n");
-    assert_eq!(k.take_output(d), b"hello: not found\n");
+    assert_eq!(k.take_output(c), b"the OS was updated; reload the page\r\n");
+    assert_eq!(k.take_output(d), b"hello: not found\n", "no console: as written");
     assert_eq!([a, b, c, d].map(|pid| k.reap(pid)), [Some(130), Some(126), Some(126), Some(127)]);
 }
 

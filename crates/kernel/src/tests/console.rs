@@ -46,7 +46,7 @@ fn cooked_keys_become_lines_with_editing_echo_and_end_of_file() {
     // Enter (CR is LF) ends it: the read gets the line, at most `max` bytes at a time.
     k.input(pid, b"\r");
     assert_eq!((k.take_effects(), k.idle(pid)), (reply(pid, b"ac!\x1b[A\n"), false));
-    assert_eq!(k.take_output(pid), b"\n");
+    assert_eq!(k.take_output(pid), b"\r\n", "a cooked console's output: CR LF");
     k.input(pid, b"abcdef\n");
     let reads = [3, 9].map(|max| send(&mut k, &mut fs, pid, read(max)));
     assert_eq!(reads, [reply(pid, b"abc"), reply(pid, b"def\n")]);
@@ -60,7 +60,7 @@ fn cooked_keys_become_lines_with_editing_echo_and_end_of_file() {
     // Ctrl+C drops the line and what was queued, and ends nothing it holds.
     k.input(pid, b"z\rgone\x03");
     assert_eq!((k.take_effects(), k.procs()), (vec![], vec![(pid, "sh".into(), true)]));
-    assert_eq!(k.take_output(pid), b"abcdef\nxy\nz\ngone^C");
+    assert_eq!(k.take_output(pid), b"abcdef\r\nxy\r\nz\r\ngone^C");
     // Without echo, lines are still cooked.
     assert_eq!(send(&mut k, &mut fs, pid, mode(wire::MODE_NOECHO)), reply(pid, b""));
     k.input(pid, b"pw\x7fW\r");
