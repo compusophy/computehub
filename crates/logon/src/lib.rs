@@ -31,8 +31,9 @@
 #![forbid(unsafe_code)]
 
 mod paint;
-pub mod profiles;
 pub mod record;
+
+pub use ::profiles;
 
 use gfx::RectF;
 use home::menu::Menu;
@@ -201,8 +202,8 @@ pub struct Logon {
     ime: bool,
     retype: bool,
     hits: Vec<(RectF, Target)>,
-    /// Random bytes for the next new profile's face, renewed by `os` before every input.
-    pub fresh: [u8; 20],
+    /// Random bytes for the next new PIN's salt, renewed by `os` before every input.
+    pub fresh: [u8; 16],
 }
 
 impl Logon {
@@ -383,8 +384,7 @@ impl Logon {
             }
             _ if self.first.is_empty() => {}
             _ if self.typed == self.first => {
-                let salt: [u8; 16] = std::array::from_fn(|i| self.fresh[4 + i]);
-                let len = self.typed.len();
+                let (salt, len) = (self.fresh, self.typed.len());
                 self.derive(Pending::Set(len, salt), salt, profiles::ITERATIONS, outs);
             }
             _ => {
@@ -639,7 +639,7 @@ impl Logon {
         }
         // Refused now (a name taken, eight already) rather than after a PIN.
         let mut dry = Profiles::read(get(LIST).as_deref()).0;
-        let op = Op::Add { name: name.clone(), seed: 0, pin: None };
+        let op = Op::Add { name: name.clone(), pin: None };
         if let Err(why) = dry.apply(op, &|_| false) {
             return self.say(why, true);
         }
@@ -647,7 +647,8 @@ impl Logon {
         if self.secure { self.go(State::Ask) } else { self.add(None, now, get, outs) }
     }
 
-    /// Adds the profile named with `pin` (its face from fresh bytes), and signs in to it.
+    /// Adds the profile named with `pin` (its face the fewest dots no other has), and signs in
+    /// to it.
     fn add(
         &mut self,
         pin: Option<String>,
@@ -655,9 +656,8 @@ impl Logon {
         get: &dyn Fn(&str) -> Option<String>,
         outs: &mut Vec<Out>,
     ) {
-        let seed = u32::from_le_bytes([self.fresh[0], self.fresh[1], self.fresh[2], self.fresh[3]]);
         let name = self.naming.clone();
-        if self.change(Op::Add { name, seed, pin }, get, outs) {
+        if self.change(Op::Add { name, pin }, get, outs) {
             self.go(State::Pick);
             let id = self.list.list.last().map_or(0, |p| p.id);
             self.focus = self.list.list.len() - 1;

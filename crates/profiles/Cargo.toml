@@ -1,0 +1,15 @@
+[package]
+name = "compusophy-profiles"
+description = "compusophyOS's profiles: each its own home in the browser under its own storage keys, the device's list of them with faces, names and optional PIN records, and which one is signed in."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[lib]
+name = "profiles"
+
+[dependencies]
+compusophy-ui.workspace = true

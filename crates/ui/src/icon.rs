@@ -1,10 +1,10 @@
 //! Vector icons: the `icons` crate's [`Glyph`]s (and `.app` files' [`Mark`]s: the icon a file
 //! [`made`] for itself, else its [`sigil`]) drawn crisp at any size through
 //! [`TextSystem::draw_vector`], alone or on an app tile in a theme's colors
-//! ([`Theme::icon_colors`]).
+//! ([`Theme::icon_colors`]); and a person's [`face`].
 
 use gfx::{DrawList, RectF, Rgba};
-pub use icons::{Glyph, MARK_HOLE, Made, PHI, Point, cos, made, outline, rings, sigil, sin};
+pub use icons::{FACES, Glyph, MARK_HOLE, Made, PHI, Point, cos, made, outline, rings, sigil, sin};
 use text::TextSystem;
 
 use crate::Theme;
@@ -88,13 +88,17 @@ fn square(text: &TextSystem, r: RectF) -> RectF {
     RectF::new(at(r.x + r.w / 2.0), at(r.y + r.h / 2.0), s, s)
 }
 
-/// A person's face in the square `r` (centered in it, on device pixels): a round plate in the
-/// theme's tile colors for the hue of `seed` ([`crate::theme::app_tint`]), and on it the
-/// [`sigil`] of `seed`, 1/φ of its side. People are round; apps are rounded squares.
-pub fn avatar(list: &mut DrawList, text: &mut TextSystem, r: RectF, seed: u32, theme: &Theme) {
-    let t = square(text, r);
-    let ink = plate(list, text, (t, t.w / 2.0), crate::theme::app_tint(seed), theme);
-    text.draw_seeded(list, t.inset(t.w * (1.0 - 1.0 / PHI) / 2.0), seed, sigil, ink);
+/// Face `n` ([`icons::face`]) in the square centered in `r` (on device pixels): a ring a pixel
+/// wide in `ring`, holding its dots in `ink` (fills: no atlas). People are round; apps are
+/// rounded squares.
+pub fn face(list: &mut DrawList, text: &TextSystem, r: RectF, n: u8, [ring, ink]: [Rgba; 2]) {
+    let (s, dpr) = (square(text, r), text.dpr());
+    list.border(s, s.w / 2.0, dpr.round().max(1.0) / dpr, ring);
+    let (k, d) = (s.w / 2.0, s.w / 2.0 * icons::FACE_DOT);
+    icons::face(n, |x, y| {
+        let (x, y) = (s.x + k + x * k, s.y + k + y * k);
+        list.fill(RectF::new(x - d, y - d, 2.0 * d, 2.0 * d), d, ink);
+    });
 }
 
 /// The mark's reveal: band `k` (the center, then each of its seven rings of dots, the last

@@ -24,10 +24,11 @@ const AUTHOR: &str = "Made by compusophy. Apache-2.0.";
 const SOURCE: &str = "github.com/compusophy/computehub";
 /// Every crate and its role.
 #[rustfmt::skip]
-pub(crate) const STACK: [(&str, &str); 32] = [
+pub(crate) const STACK: [(&str, &str); 33] = [
     ("os", "The wasm entry: fonts, files, telemetry"),
     ("platform", "The browser boundary: canvas, WebGL2, input"),
     ("logon", "The welcome: the mark, the start's record, sign-in"),
+    ("profiles", "Profiles: their keys, faces, names and PINs"),
     ("shell", "The desktop: top bar, windows, keys"), ("home", "The home screen, dock and touch"),
     ("host", "Windows and the apps in them"), ("wm", "Window manager; deterministic"),
     ("apps", "The Terminal: a console and its screen"),

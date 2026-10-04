@@ -24,8 +24,8 @@
 //! The OS's own windows alone (Activity's and Settings', which run its `system` program) may
 //! watch the desktop's meters ([`Request::Watch`], answered by [`Event::Stats`] in the [`stat`]
 //! format), end a process ([`Request::End`]), set a preference ([`Request::Pref`]) and reset the
-//! device ([`Request::Reset`]), and hear what Settings shows ([`Event::Prefs`]); the desktop drops
-//! those requests from any other.
+//! device ([`Request::Reset`]), and hear what Settings shows ([`Event::Prefs`], [`Event::Face`]);
+//! the desktop drops those requests from any other.
 
 #![forbid(unsafe_code)]
 
@@ -266,6 +266,10 @@ pub enum Node {
     /// [`THEME_MIN`] to [`THEME_MAX`] px wide. Theme `i`, in the desktop's own order, is the
     /// button `id + i`.
     Themes { id: u32 },
+    /// The faces a profile can have (a ring holding no dots to nine), in even rows across the
+    /// width, [`FACE`] px each, face `i` the button `id + i`, face `on` (if any) ringed in the
+    /// accent.
+    Faces { id: u32, on: u8 },
     /// A raised card [`CARD_H`] tall across the width offering a choice: `text` (a second line,
     /// after a `\n`, small under the first), ringed and checked in the accent when it is `on`
     /// (the chosen one of a set); a click sends [`Event::Click`].
@@ -301,6 +305,8 @@ pub const WIDE: u16 = 520;
 /// A [`Node::Choice`]'s or [`Node::Switch`]'s height, and a [`Variant::Link`]'s.
 pub const CARD_H: u16 = 56;
 pub const LINK_H: u16 = 44;
+/// The side of a face of [`Node::Faces`].
+pub const FACE: u16 = 55;
 /// The narrowest and the widest card of [`Node::Themes`].
 pub const THEME_MIN: u16 = 150;
 pub const THEME_MAX: u16 = 216;
@@ -478,6 +484,9 @@ pub enum Event {
     /// shows, whether automatic error reports go, the backdrop's grain lives and the person's
     /// files are kept.
     Prefs { reports: bool, grain: bool, kept: bool },
+    /// The OS's own windows only, after the first Resize and on every change: the signed-in
+    /// profile's face ([`Node::Faces`]).
+    Face { face: u8 },
 }
 
 /// The public `encode` and `decode` of each message, from its `put` and `get`.
@@ -595,6 +604,7 @@ impl Node {
             }
             Self::Pages { id, on, labels } => o.head(22, *id, n).u8(*on).str(labels),
             Self::Themes { id } => o.head(23, *id, n),
+            Self::Faces { id, on } => o.head(29, *id, n).u8(*on),
             Self::Choice { id, on, text } => o.head(24, *id, n).u8((*on).into()).str(text),
             Self::Switch { id, on, label } => o.head(25, *id, n).u8((*on).into()).str(label),
             Self::Chart { id, hue, h, values } => {
@@ -664,6 +674,7 @@ impl Node {
                 (value <= 1000).then_some(Self::Meter { id, hue, value })?
             }
             28 => Self::Columns { id, on: r.u8()?, labels: r.str()? },
+            29 => Self::Faces { id, on: r.u8()? },
             _ => return None,
         };
         match &mut node {
@@ -818,6 +829,13 @@ impl Request {
     }
 }
 
+impl Request {
+    /// Whether only the OS's own windows may ask it: Watch, End, Pref and Reset.
+    pub fn own(&self) -> bool {
+        matches!(self, Self::Watch { .. } | Self::End { .. } | Self::Pref { .. } | Self::Reset)
+    }
+}
+
 impl Act {
     fn put(&self, o: &mut Out) {
         _ = match self {
@@ -881,6 +899,7 @@ impl Event {
             Self::Prefs { reports, grain, kept } => {
                 o.u8(17).u8((*reports).into()).u8((*grain).into()).u8((*kept).into())
             }
+            Self::Face { face } => o.u8(18).u8(*face),
         }
     }
 
@@ -913,6 +932,7 @@ impl Event {
             15 => Self::Tap { id: r.u32()?, cell: r.u32()? },
             16 => Self::Stats { data: r.bytes()?.to_vec() },
             17 => Self::Prefs { reports: r.bool()?, grain: r.bool()?, kept: r.bool()? },
+            18 => Self::Face { face: r.u8()? },
             _ => return None,
         })
     }

@@ -935,9 +935,11 @@ fn pages_are_a_column_or_tabs_and_cards_ring_what_is_chosen() {
     let out = |r: RectF| [r.x - 3.0, r.y - 3.0, r.w + 6.0, r.h + 6.0];
     assert_eq!(ring(&d), [out(d.hit(10).rect), out(d.hit(20).rect)]);
     assert!([30, 31].iter().all(|&id| d.hit(id).rect.w == d.hit(20).rect.w));
+    // Narrow, each tab its label's width and an even share of the rest, edge to edge.
     let d = draw_at(360.0, &nodes, &mut texts, &mut view, None);
-    let (a, b) = (d.hit(1).rect, d.hit(3).rect);
-    assert!(a.y == b.y && a.w == b.w && b.x > a.x && d.hit(10).rect.y > a.y + a.h, "{a:?} {b:?}");
+    let (a, b, c) = (d.hit(1).rect, d.hit(2).rect, d.hit(3).rect);
+    assert!(a.y == c.y && a.w > c.w && c.w > b.w && d.hit(10).rect.y > a.y + a.h, "{a:?} {c:?}");
+    assert!((a.x + a.w - b.x).abs() < 0.5 && (b.x + b.w - c.x).abs() < 0.5);
     // Three themes across, then fewer as the window narrows.
     let mut rows = |w| {
         let d = draw_at(w, &nodes[1..2], &mut texts, &mut view, None);
@@ -951,6 +953,17 @@ fn pages_are_a_column_or_tabs_and_cards_ring_what_is_chosen() {
     let marks: Vec<_> = marks(&nodes).chain(marks(&[&nodes[..1], &nodes[2..]].concat())).collect();
     let want = [(1, 2, 0), (2, 2, 1), (10, 4, 1), (11, 4, 0), (20, 4, 1), (30, 3, 0), (31, 9, 0)];
     assert!(want.iter().all(|m| marks.contains(m)), "{marks:?}");
+    // The faces, in even rows (two of five at 560 px), each 55 px; the one on ringed in the
+    // accent and chosen.
+    let faces = [Node::Faces { id: 50, on: 3 }];
+    let d = draw(&faces, &mut texts, &mut view, None);
+    let (first, sixth) = (d.hit(50).rect, d.hit(55).rect);
+    assert!(first.w == 55.0 && sixth.x == first.x && sixth.y == first.y + 55.0 + 13.0);
+    let on = d.hit(53).rect;
+    let lit = |b: &&&Instance| b.color == t.accent && b.rect == [on.x, on.y, on.w, on.h];
+    assert_eq!(d.of(Kind::Border).iter().filter(lit).count(), 1);
+    let marks: Vec<_> = sem(&faces, t).marks.into_iter().map(|m| (m.id, m.flags)).collect();
+    assert!(marks.len() == 10 && marks.contains(&(53, 1)) && marks.contains(&(50, 0)));
 }
 
 #[test]

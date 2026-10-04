@@ -3,16 +3,26 @@
 //! `localStorage` keys ([`key`], [`PER_PROFILE`]): profile 0's are the keys from before
 //! profiles (`compusophy.<k>`), so nothing was ever moved, and profile n's are
 //! `compusophy.<n>.<k>`. The device keeps the list ([`LIST`]), the profile that signed in last
-//! ([`LAST`]) and whether a welcome said hello ([`crate::SEEN`]).
+//! ([`LAST`]) and whether a welcome said hello (`logon::SEEN`).
 //!
-//! The list, `CSPR 1 <next id>`, then a line a profile: its id, its seed (8 hex: its face),
-//! `-` (or its PIN's record, [`Pin`]) and its name, the rest of the line. Absent, it is the
-//! implied `0 <fnv("guest")> - guest`, written only at the first change. Ids are never reused;
-//! a new profile also skips any id whose keys are still there, so no profile inherits another's
-//! files. Failures are coded: a damaged list is set aside (only profile 0 is offered), a newer
-//! one is read-only.
+//! The list, `CSPR 1 <next id>`, then a line a profile: its id, its face (8 hex: how many dots
+//! its ring holds, `ui::icon::face`), `-` (or its PIN's record, [`Pin`]) and its name, the rest
+//! of the line. Absent, it is the implied `0 00000000 - guest`, written only at the first
+//! change. A new profile takes the fewest dots no other has (guest none, the first one, the
+//! next two); Settings changes the signed-in one's ([`set_face`]). A face past the faces there
+//! are is from before faces were dots: the profile shows its id's, as many as there can be.
+//! Ids are never reused; a new profile also skips any id whose keys are still there, so no
+//! profile inherits another's files. Failures are coded: a damaged list is set aside (only
+//! profile 0 is offered), a newer one is read-only.
+
+#![forbid(unsafe_code)]
 
 use std::cell::Cell;
+
+use ui::icon::FACES;
+
+#[cfg(test)]
+mod tests;
 
 /// The device's keys: the list, a damaged one set aside, the profile that signed in last.
 pub const LIST: &str = "compusophy.profiles";
@@ -46,13 +56,42 @@ pub const GONE: &str = "That profile is gone.";
 pub const DAMAGED: &str = "Profiles did not read back (damaged); set aside";
 
 thread_local! {
-    /// The profile signed in to, once one is: the one whose keys [`own`] names.
+    /// The profile signed in to, once one is: the one whose keys [`own`] names; its face as the
+    /// list last had it.
     static ACTIVE: Cell<Option<u32>> = const { Cell::new(None) };
+    static FACE: Cell<u8> = const { Cell::new(0) };
 }
 
-/// Profile `id` is signed in to: its keys are [`own`]'s from now on.
-pub fn sign(id: u32) {
+/// Profile `id` is signed in to: its keys are [`own`]'s from now on, its face [`face`]'s as the
+/// stored list (`stored`) has it.
+pub fn sign(id: u32, stored: Option<&str>) {
     ACTIVE.with(|a| a.set(Some(id)));
+    tell(&Profiles::read(stored).0, id);
+}
+
+/// Profile `id`'s face, as `list` has it, is [`face`]'s.
+fn tell(list: &Profiles, id: u32) {
+    FACE.with(|f| f.set(list.get(id).map_or(0, |p| p.face)));
+}
+
+/// The signed-in profile's face (0 before a sign-in).
+pub fn face() -> u8 {
+    FACE.with(Cell::get)
+}
+
+/// The stored list (`stored`) with the signed-in profile's face `face` (a count of dots, fewer
+/// than [`FACES`]), and [`face()`] says so; none before a sign-in, nor for a damaged or newer
+/// list.
+pub fn set_face(stored: Option<&str>, face: &str) -> Option<String> {
+    let (mut list, why) = Profiles::read(stored);
+    let face = match face.as_bytes() {
+        [d @ b'0'..=b'9'] if why.is_none() && d - b'0' < FACES => d - b'0',
+        _ => return None,
+    };
+    let id = active()?;
+    list.apply(Op::Face(id, face), &|_| false).ok()?;
+    tell(&list, id);
+    Some(list.format())
 }
 
 /// The profile signed in to, if any.
@@ -76,16 +115,12 @@ pub fn own(k: &str) -> String {
     key(active().unwrap_or(0), k.strip_prefix("compusophy.").unwrap_or(k))
 }
 
-/// FNV-1a of `s`, as a `.app` file's sigil is seeded: profile 0's face is `guest`'s.
-pub fn fnv(s: &str) -> u32 {
-    s.bytes().fold(2_166_136_261, |h, b| (h ^ u32::from(b)).wrapping_mul(16_777_619))
-}
-
-/// One profile: its id, its face's seed, its PIN's record ([`Pin`]) if it has one, its name.
+/// One profile: its id, its face (how many dots), its PIN's record ([`Pin`]) if it has one, its
+/// name.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Profile {
     pub id: u32,
-    pub seed: u32,
+    pub face: u8,
     pub pin: Option<String>,
     pub name: String,
 }
@@ -100,8 +135,9 @@ pub struct Profiles {
 /// A change to the list.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Op {
-    Add { name: String, seed: u32, pin: Option<String> },
+    Add { name: String, pin: Option<String> },
     Rename(u32, String),
+    Face(u32, u8),
     SetPin(u32, Option<String>),
     Remove(u32),
 }
@@ -109,7 +145,7 @@ pub enum Op {
 impl Profiles {
     /// The one profile there is before any change: `guest`.
     pub fn implied() -> Profiles {
-        let guest = Profile { id: 0, seed: fnv("guest"), pin: None, name: "guest".into() };
+        let guest = Profile { id: 0, face: 0, pin: None, name: "guest".into() };
         Profiles { next: 1, list: vec![guest] }
     }
 
@@ -152,7 +188,7 @@ impl Profiles {
             out.push('\n');
             ui::push_num(&mut out, p.id as usize);
             out.push(' ');
-            (0..8).rev().for_each(|i| out.push(hex(p.seed >> (4 * i))));
+            (0..8).rev().for_each(|i| out.push(hex(u32::from(p.face) >> (4 * i))));
             out = out + " " + p.pin.as_deref().unwrap_or("-") + " " + &p.name;
         }
         out
@@ -171,15 +207,20 @@ impl Profiles {
             if list.iter().any(clash) { Err(TAKEN) } else { Ok(()) }
         };
         match op {
-            Op::Add { name, seed, pin } => {
+            Op::Add { name, pin } => {
                 if self.list.len() >= MAX {
                     return Err(FULL);
                 }
                 unique(&self.list, &name, None)?;
                 let id = (self.next..self.next.saturating_add(64)).find(|&id| !taken(id));
                 let id = id.filter(|&id| id < u32::MAX).ok_or(FULL)?;
+                let face = (0..FACES).find(|&f| self.list.iter().all(|p| p.face != f));
                 self.next = id + 1;
-                self.list.push(Profile { id, seed, pin, name });
+                self.list.push(Profile { id, face: face.unwrap_or(0), pin, name });
+                Ok(id)
+            }
+            Op::Face(id, face) => {
+                self.list.iter_mut().find(|p| p.id == id).ok_or(GONE)?.face = face;
                 Ok(id)
             }
             Op::Rename(id, name) => {
@@ -203,18 +244,21 @@ impl Profiles {
     }
 }
 
-/// A list line: `<id> <seed hex> <pin or -> <name>`.
+/// A list line: `<id> <face hex> <pin or -> <name>` (a face from before faces were dots shows
+/// its id's dots, as many as there can be).
 fn line(l: &str) -> Option<Profile> {
     let mut f = l.splitn(4, ' ');
-    let id = f.next()?.parse().ok()?;
-    let seed = f.next().filter(|s| s.len() == 8).and_then(|s| u32::from_str_radix(s, 16).ok())?;
+    let id: u32 = f.next()?.parse().ok()?;
+    let face = f.next().filter(|s| s.len() == 8).and_then(|s| u32::from_str_radix(s, 16).ok())?;
+    let most = u32::from(FACES) - 1;
+    let face = (if face <= most { face } else { id.min(most) }) as u8;
     let pin = Some(f.next()?).filter(|p| *p != "-");
     if pin.is_some_and(|p| Pin::read(p).is_none()) {
         return None;
     }
     let name = f.next()?;
     let pin = pin.map(str::to_string);
-    (clean(name).ok()? == name).then(|| Profile { id, seed, pin, name: name.into() })
+    (clean(name).ok()? == name).then(|| Profile { id, face, pin, name: name.into() })
 }
 
 /// A PIN as the list keeps it, never the PIN itself: `p1:<digits>:<iterations>:<salt>:<hash>`,

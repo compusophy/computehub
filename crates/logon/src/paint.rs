@@ -6,7 +6,7 @@ use gfx::{DrawList, Icon, RectF, Rgba};
 use home::menu::{Item, Menu};
 use host::motion::{Vis, ease, replay};
 use host::paint::{cap_baseline, faded, px, sheen};
-use ui::icon::{PHI, REVEAL_MS, avatar, mark_dots, sin};
+use ui::icon::{PHI, REVEAL_MS, face, mark_dots, sin};
 use ui::{FontId, TextStyle, TextSystem};
 
 use crate::record::{self, Record};
@@ -378,7 +378,7 @@ be undone.",
     }
 
     /// The circles from `y`, in rows centered under the name: each profile's face (its name
-    /// under it), then Add, a dim ring around a plus; the focus ring on the focused one. Where
+    /// under it), then Add, a ring around a plus; the focused one's ring in the accent. Where
     /// they end.
     fn paint_circles(&mut self, list: &mut DrawList, text: &mut TextSystem, y: f32) -> f32 {
         let (c, gap, per) = self.ring();
@@ -394,27 +394,26 @@ be undone.",
         y + self.rows_h()
     }
 
-    /// Circle `i` in the square `r`: a profile's face, or Add (a dim ring around a plus); the
-    /// focus ring if focused (a dim one under the pointer); its name under it.
+    /// Circle `i` in the square `r`: a profile's face, or Add (a ring around a plus), its ring a
+    /// pixel wide: the accent if focused, brighter under the pointer, else faint; its name under
+    /// it.
     fn circle(&mut self, list: &mut DrawList, text: &mut TextSystem, r: RectF, i: usize) {
         let (t, (c, gap, _)) = (self.theme(), self.ring());
         let label = TextStyle::new(FontId::Sans, 13.0, t.text_dim);
-        let name = match self.list.list.get(i) {
-            Some(p) => {
-                avatar(list, text, r, p.seed, t);
-                p.name.as_str()
-            }
+        let lit = match () {
+            _ if self.focus == i => t.accent,
+            _ if self.hover == Some(Target::Circle(i)) => t.text_dim,
+            _ => t.text_faint,
+        };
+        let p = self.list.list.get(i);
+        face(list, text, r, p.map_or(0, |p| p.face), [lit, t.text]);
+        let name = match p {
+            Some(p) => p.name.as_str(),
             None => {
-                list.border(r, c / 2.0, px(text, 1.5), t.text_faint);
-                list.icon(r.inset(c * 0.34), Icon::Plus, px(text, 2.0), t.text_dim);
+                list.icon(r.inset(c * 0.36), Icon::Plus, px(text, 1.0), t.text_dim);
                 "Add"
             }
         };
-        if self.focus == i {
-            self.ring_at(list, text, r, c / 2.0, t.accent);
-        } else if self.hover == Some(Target::Circle(i)) {
-            self.ring_at(list, text, r, c / 2.0, t.text_faint);
-        }
         let shown = text.ellipsize(name, label, c + gap - 4.0);
         let base = cap_baseline(text, r.y + c + 8.0, LINE_H, 13.0);
         let style = if self.focus == i { label.with_color(t.text) } else { label };

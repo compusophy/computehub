@@ -15,4 +15,5 @@ name = "logon"
 compusophy-gfx.workspace = true
 compusophy-host.workspace = true
 compusophy-home.workspace = true
+compusophy-profiles.workspace = true
 compusophy-ui.workspace = true

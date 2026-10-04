@@ -511,6 +511,7 @@ impl Lay<'_> {
             Node::Meter { .. } => (w, meters::METER_H),
             Node::Columns { .. } => (w, meters::HEAD_H),
             Node::Themes { .. } => (w, cards::themes_size(w).3),
+            Node::Faces { .. } => (w, cards::faces_size(w).1),
             Node::Pages { .. } => (0.0, 0.0),
             // As tall as its rows, and what it takes of a Fill's room.
             Node::Area { id, .. } => {
@@ -677,6 +678,7 @@ impl Lay<'_> {
             Node::Choice { id, on, text } => cards::choice(ui, WidgetId(*id), r, text, *on),
             Node::Switch { id, on, label } => cards::switch_card(ui, WidgetId(*id), r, label, *on),
             Node::Themes { id } => cards::themes(ui, *id, (x, y, w)),
+            Node::Faces { id, on } => cards::faces(ui, *id, *on, (x, y, w)),
             Node::Chart { hue, values, .. } => meters::chart(ui, r, *hue, values),
             Node::Meter { hue, value, .. } => meters::meter(ui, r, *hue, *value),
             Node::Columns { id, on, labels } => meters::columns(ui, *id, r, *on, labels),

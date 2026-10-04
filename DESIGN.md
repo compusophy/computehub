@@ -175,9 +175,11 @@ one. Forked crates keep their Apache-2.0 license and note their origin.
   `Ready in 412 ms · 218 KB`); a tap opens a card of the stages, the
   start's own 100 ms budget among them. Nothing is simulated, and waiting
   draws no frames. Every visit, the first too (guest alone), shows the
-  profiles as circles (people are round, apps rounded
-  squares: a sigil on its hue, from a random seed, so a rename keeps the
-  face), the one that signed in last in focus, then Add; a tap, or the
+  profiles as circles (people are round, apps rounded squares): each
+  face a ring a pixel wide holding dots, guest's none, and each profile
+  added the fewest no other has (one, then two...), set in Settings →
+  Profile among ten; the ring in the accent on the one in focus (the one
+  that signed in last), then Add, a ring around a plus; a tap, or the
   arrows and Enter, signs in. Holding a circle 500 ms (or a right-click)
   opens its menu: Rename, Set a PIN (or Change PIN, Remove PIN), Remove
   profile (confirmed, with its files' size; never the last). Escape always
@@ -326,8 +328,8 @@ one. Forked crates keep their Apache-2.0 license and note their origin.
   handler they are pads. **Editor** writes plain text, a new note in `~/notes`;
   Files and the Terminal's `edit` open files in it (a `.app` in Studio).
   **Welcome** (a program, its mark revealed by the desktop's clock)
-  is the first screen; **Settings** picks the theme, the AI model and
-  what is reported, and resets the device.
+  is the first screen; **Settings** picks the profile's face, the theme,
+  the AI model and what is reported, and resets the device.
 - **Activity**, the resource monitor. Performance: graphs of the last
   minute, a point a second (uiwire's `Chart`), of CPU (the desktop's and the
   programs' share of a core), memory, frames a second and the AI's tokens a
@@ -401,13 +403,13 @@ welcome as a first visit. Only the person can: the host drops a reset from a
 window the Assistant put input into, and the uiwire request is the OS's own
 windows' alone.
 
-**Profiles** (`logon::profiles`) are separate homes in one browser, one in
+**Profiles** (the `profiles` crate) are separate homes in one browser, one in
 memory per page (programs see the root `/`, so two homes in one VFS would
 read each other). Each keeps its files, theme, dock, home order, grain, AI
 model, report consent and outbox under its own keys: profile 0's are the
 keys from before profiles (`compusophy.<k>`), so nothing was moved, and
 profile n's are `compusophy.<n>.<k>`. The device keeps the list
-(`compusophy.profiles`: `CSPR 1 <next id>`, then `<id> <seed> <pin or -> <name>`
+(`compusophy.profiles`: `CSPR 1 <next id>`, then `<id> <face> <pin or -> <name>`
 a line; absent, the implied `guest`, written at the first change), the
 profile that signed in last and whether a welcome said hello; the tab keeps
 its session. Changes start from the list as stored, never from a copy, so

@@ -1,16 +1,17 @@
 //! The OS's own widgets, as Settings shows them: a window's pages ([`Node::Pages`]: a column at
 //! its left, or narrow a segmented control on top), raised cards lighter under the pointer and
 //! sunk when held (a [`Node::Choice`], ringed and checked when chosen; a [`Node::Switch`]; the
-//! desktop's themes, [`Node::Themes`], each a miniature of its desktop), and a link
-//! ([`uiwire::Variant::Link`]).
+//! desktop's themes, [`Node::Themes`], each a miniature of its desktop), a profile's faces
+//! ([`Node::Faces`]) and a link ([`uiwire::Variant::Link`]).
 //!
 //! [`Node::Pages`]: uiwire::Node::Pages
 //! [`Node::Choice`]: uiwire::Node::Choice
 //! [`Node::Switch`]: uiwire::Node::Switch
 //! [`Node::Themes`]: uiwire::Node::Themes
+//! [`Node::Faces`]: uiwire::Node::Faces
 
 use gfx::RectF;
-use ui::icon::Glyph;
+use ui::icon::{FACES, Glyph};
 use ui::{CARD_PAD, PAD, RADIUS_LG, RADIUS_SM, Rgba, Sense, THEMES, Theme, Ui, WidgetId, sem};
 
 use crate::cap_base;
@@ -24,6 +25,8 @@ const GAP: f32 = 16.0;
 const INSET: f32 = 6.0;
 const NAME_H: f32 = 34.0;
 const CHECK: &str = "\u{2713}";
+/// The gap between faces.
+const FACE_GAP: f32 = 13.0;
 
 /// Whether `id` is under the pointer, and whether it is also held.
 fn pointer(ui: &Ui<'_>, id: WidgetId) -> (bool, bool) {
@@ -163,13 +166,17 @@ pub(crate) fn pages(ui: &mut Ui<'_>, id: u32, on: u8, labels: &str) -> (RectF, f
         ui.fill(RectF::new(sep, r.y, line, r.h), 0.0, t.border);
         (RectF::new(sep + line, r.y, r.x + r.w - sep - line, r.h), MARGIN)
     };
-    let seg = (bar.w - 8.0) / labels.split('\n').count() as f32;
+    // A tab is its label's width and an even share of the rest, so a long label still fits.
+    let (body, n) = (t.body(), labels.split('\n').count() as f32);
+    let widths = labels.split('\n').map(|l| ui.text_system().measure(l, body)).sum::<f32>();
+    let (spare, mut x) = ((bar.w - 8.0 - widths) / n, bar.x + 4.0);
     for (i, label) in labels.split('\n').enumerate() {
-        let k = i as f32;
+        let (k, seg) = (i as f32, ui.text_system().measure(label, body) + spare);
         let at = match tab {
-            true => RectF::new(bar.x + 4.0 + k * seg, bar.y + 4.0, seg, bar.h - 8.0),
+            true => RectF::new(x, bar.y + 4.0, seg, bar.h - 8.0),
             false => RectF::new(r.x + 12.0, r.y + 12.0 + k * (ITEM_H + 2.0), NAV_W - 24.0, ITEM_H),
         };
+        x += seg;
         let at = ui.snapped(at);
         item(ui, WidgetId(id.wrapping_add(i as u32)), label, at, [usize::from(on) == i, tab]);
     }
@@ -194,6 +201,43 @@ fn item(ui: &mut Ui<'_>, id: WidgetId, label: &str, r: RectF, [on, tab]: [bool; 
     ui.text(x, base, label, style);
     ui.hit(id, r, Sense::Click);
     ui.mark(id, sem::TAB, if on { sem::SELECTED } else { 0 }, "");
+}
+
+/// The faces `w` wide: how many across (as many as fit, the rows even), and their height.
+pub(crate) fn faces_size(w: f32) -> (usize, f32) {
+    let (n, side) = (usize::from(FACES), f32::from(uiwire::FACE));
+    // `as` saturates (NaN is 0).
+    let rows = n.div_ceil((((w + FACE_GAP) / (side + FACE_GAP)) as usize).clamp(1, n));
+    (n.div_ceil(rows), rows as f32 * (side + FACE_GAP) - FACE_GAP)
+}
+
+/// The faces from `(x, y)`, `w` wide, face `i` the button `id + i`: a ring holding `i` dots,
+/// face `on`'s ring in the accent and its dots in the text color, as under the pointer (washed
+/// there); the rest faint.
+pub(crate) fn faces(ui: &mut Ui<'_>, id: u32, on: u8, (x, y, w): (f32, f32, f32)) {
+    let (cols, side, t) = (faces_size(w).0, f32::from(uiwire::FACE), ui.theme());
+    for i in 0..FACES {
+        let (k, wid) = (usize::from(i), WidgetId(id.wrapping_add(u32::from(i))));
+        let step = |n: usize| n as f32 * (side + FACE_GAP);
+        let r = ui.snapped(RectF::new(x + step(k % cols), y + step(k / cols), side, side));
+        let (hover, down) = pointer(ui, wid);
+        if hover {
+            ui.fill(r, side / 2.0, t.wash(down));
+        }
+        let lit = i == on || hover;
+        let ring = if i == on {
+            t.accent
+        } else if hover {
+            t.text_dim
+        } else {
+            t.text_faint
+        };
+        ui.face(r, i, [ring, if lit { t.text } else { t.text_dim }]);
+        ui.hit(wid, r, Sense::Click);
+        let mut dots = String::new();
+        ui::push_num(&mut dots, k);
+        ui.mark(wid, sem::OPTION, if i == on { sem::SELECTED } else { 0 }, &dots);
+    }
 }
 
 /// The theme cards `w` wide: how many across, a card's width, its miniature's height, and

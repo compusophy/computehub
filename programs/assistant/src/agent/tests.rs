@@ -292,7 +292,7 @@ fn a_scripted_model_turns_error_reports_off_on_a_real_desktop() {
     let m = messages(&d.bodies[3]);
     assert_eq!(m[1].1, "turn off error reports\n\n(screen omitted)");
     let tools: Vec<&str> = m.iter().filter(|m| m.0 == "tool").map(|m| m.1.as_str()).collect();
-    assert_eq!(tools[..2], ["ok: opened settings", "ok: clicked \u{201c}Privacy\u{201d} (e3)"]);
+    assert_eq!(tools[..2], ["ok: opened settings", "ok: clicked \u{201c}Privacy\u{201d} (e4)"]);
     assert!(
         tools[2].starts_with("ok: clicked \u{201c}Send error reports automatically\u{201d} (e")
     );
