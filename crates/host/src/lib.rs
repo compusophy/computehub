@@ -103,8 +103,9 @@ impl LocalTime {
 /// Something only the platform can do: fetch `url` (page-relative) for
 /// [`Host::fetched`] with `id`, what the kernel asked for (workers, timer),
 /// store a preference ([`ui::Request::Pref`]) in the page's storage, send
-/// feedback ([`ui::Request::Feedback`]), or sign out (the person's own act, from
-/// the desktop's menu: no app, and not the Assistant, can ask for it).
+/// feedback ([`ui::Request::Feedback`]), sign out (the person's own act, from
+/// the desktop's menu: no app, and not the Assistant, can ask for it), or erase all the device
+/// keeps ([`ui::Request::Reset`], never from a window the Assistant acted on).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Effect {
     Fetch { id: u32, url: String },
@@ -112,6 +113,7 @@ pub enum Effect {
     Pref { key: String, value: String },
     Feedback { kind: String, text: String, context: bool },
     SignOut,
+    Reset,
 }
 
 /// For the kernel: a worker's message or failure, the one-shot timer, the page hidden.
@@ -423,6 +425,10 @@ impl Host {
                 Request::Feedback { kind, text, context } => {
                     out.effects.push(Effect::Feedback { kind, text, context });
                 }
+                Request::Reset if !self.agent.touched.contains(&win) => {
+                    out.effects.push(Effect::Reset);
+                }
+                Request::Reset => {}
                 Request::Size(w, h) => {
                     let (r, size) = (rect.unwrap_or_default(), window_size((w.into(), h.into())));
                     let rect = size.map(|(w, h)| Rect::new(r.x, r.y, w, h));

@@ -33,6 +33,7 @@ pub enum Effect {
     Stream { id: u32, url: String, headers: Vec<(&'static str, String)>, body: Vec<u8> },
     Abort(u32),
     Remove(String),
+    Erase(String),
     Session { key: String, value: Option<String> },
     Reload,
     InputMode(bool),
@@ -142,6 +143,9 @@ impl Ctl {
         abort(id: u32) => Effect::Abort(id);
         /// Removes `key` from `localStorage`; failures are ignored.
         storage_remove(key: &str) => Effect::Remove(key.to_owned());
+        /// Removes every key that starts with `prefix` from `localStorage` and from
+        /// `sessionStorage`; failures are ignored.
+        storage_erase(prefix: &str) => Effect::Erase(prefix.to_owned());
         /// Stores `value` under `key` in `sessionStorage` (this tab's, which outlives its reloads),
         /// or removes it (`None`); failures are ignored.
         session_set(key: &str, value: Option<&str>) =>
@@ -183,6 +187,7 @@ impl Ctl {
         let queued = self.effects.iter().rev().find_map(|e| match e {
             Effect::Store { key: k, value } if k == key => Some(Some(value.clone())),
             Effect::Remove(k) if k == key => Some(None),
+            Effect::Erase(p) if key.starts_with(p.as_str()) => Some(None),
             _ => None,
         });
         if queued.is_some() || !cfg!(target_arch = "wasm32") {
@@ -195,6 +200,7 @@ impl Ctl {
     pub fn session_get(&self, key: &str) -> Option<String> {
         let queued = self.effects.iter().rev().find_map(|e| match e {
             Effect::Session { key: k, value } if k == key => Some(value.clone()),
+            Effect::Erase(p) if key.starts_with(p.as_str()) => Some(None),
             _ => None,
         });
         if queued.is_some() || !cfg!(target_arch = "wasm32") {

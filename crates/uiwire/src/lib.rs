@@ -23,8 +23,9 @@
 //!
 //! The OS's own windows alone (Activity's and Settings', which run its `system` program) may
 //! watch the desktop's meters ([`Request::Watch`], answered by [`Event::Stats`] in the [`stat`]
-//! format), end a process ([`Request::End`]) and set a preference ([`Request::Pref`]), and hear
-//! what Settings shows ([`Event::Prefs`]); the desktop drops those requests from any other.
+//! format), end a process ([`Request::End`]), set a preference ([`Request::Pref`]) and reset the
+//! device ([`Request::Reset`]), and hear what Settings shows ([`Event::Prefs`]); the desktop drops
+//! those requests from any other.
 
 #![forbid(unsafe_code)]
 
@@ -427,6 +428,10 @@ pub enum Request {
     /// them (`ai.model`, `reports`, `grain`; `theme` switches the desktop's theme). Dropped from
     /// any other window.
     Pref { key: String, value: String },
+    /// The OS's own windows only, and only the person's act: erase all the device keeps (every
+    /// profile's files, settings and PIN) and start again at the welcome, as a first visit.
+    /// Dropped from any other window, and from one the overlay acted on.
+    Reset,
 }
 
 /// Something that happened in the window, host to program.
@@ -784,6 +789,7 @@ impl Request {
             Self::Watch { on } => o.u8(12).u8((*on).into()),
             Self::End { pid } => o.u8(13).u32(*pid),
             Self::Pref { key, value } => o.u8(14).str(key).str(value),
+            Self::Reset => o.u8(15),
         }
     }
 
@@ -806,6 +812,7 @@ impl Request {
             12 => Self::Watch { on: r.bool()? },
             13 => Self::End { pid: r.u32()? },
             14 => Self::Pref { key: r.str()?, value: r.str()? },
+            15 => Self::Reset,
             _ => return None,
         })
     }

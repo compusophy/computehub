@@ -326,8 +326,8 @@ one. Forked crates keep their Apache-2.0 license and note their origin.
   handler they are pads. **Editor** writes plain text, a new note in `~/notes`;
   Files and the Terminal's `edit` open files in it (a `.app` in Studio).
   **Welcome** (a program, its mark revealed by the desktop's clock)
-  is the first screen; **Settings** picks the theme and
-  lists what compusophyOS is made of.
+  is the first screen; **Settings** picks the theme, the AI model and
+  what is reported, and resets the device.
 - **Activity**, the resource monitor. Performance: graphs of the last
   minute, a point a second (uiwire's `Chart`), of CPU (the desktop's and the
   programs' share of a core), memory, frames a second and the AI's tokens a
@@ -393,6 +393,13 @@ the newer files. Putting /home back runs at sign-in, after the welcome's
 first frame, at about 15 ms a MiB of /home in Chrome (noted as `home <KB>
 <ms>`). `localStorage` holds about 5 MB; IndexedDB or OPFS replace it when
 homes grow past that. Preferences and the theme are kept there too.
+
+Settings → Reset erases it all: once the person types `reset`, every
+`compusophy.` key goes from `localStorage` and `sessionStorage` (each
+profile's /home, preferences and PIN, the outbox) and the page reloads to the
+welcome as a first visit. Only the person can: the host drops a reset from a
+window the Assistant put input into, and the uiwire request is the OS's own
+windows' alone.
 
 **Profiles** (`logon::profiles`) are separate homes in one browser, one in
 memory per page (programs see the root `/`, so two homes in one VFS would

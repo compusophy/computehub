@@ -238,6 +238,9 @@ pub enum Request {
     /// The overlay acts, or says it works ([`uiwire::Request::Act`], [`uiwire::Request::Status`]);
     /// from any other app, refused.
     Agent(uiwire::Request),
+    /// Erase all the device keeps and start again as a first visit ([`uiwire::Request::Reset`]):
+    /// the person's own act, dropped from a window the overlay acted on.
+    Reset,
 }
 
 /// The preference naming the model the AI answers with ([`AiStatus::model`]).
@@ -293,6 +296,11 @@ impl<'a> Cx<'a> {
             self.grain = value != "off";
         }
         self.requests.push(Request::Pref { key: key.to_string(), value: value.to_string() });
+    }
+
+    /// Erases all the device keeps and starts again as a first visit ([`Request::Reset`]).
+    pub fn reset(&mut self) {
+        self.requests.push(Request::Reset);
     }
 
     /// Opens an app (a registry name or a `.app` path) in a new tiled window.

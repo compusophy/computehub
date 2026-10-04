@@ -123,7 +123,7 @@ fn every_kind_round_trips_and_nothing_else_decodes() {
     ];
     own.iter().for_each(|n| strict(n, Node::encode, Node::decode));
     let pref = Request::Pref { key: "grain".into(), value: "off".into() };
-    strict(&pref, Request::encode, Request::decode);
+    [pref, Request::Reset].iter().for_each(|r| strict(r, Request::encode, Request::decode));
     // Past a value's 1000, the canvas colors or a Chart's sizes, nothing decodes, nor checks.
     let chart = |hue, h, values: Vec<u16>| Node::Chart { id: 0, hue, h, values };
     let bad = [

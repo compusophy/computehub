@@ -184,9 +184,8 @@ fn the_welcome_then_the_desktop_start_at_the_first_usable_sizes() {
     assert_eq!(send(&mut desk, key("Enter/Enter", true)), ((true, true), fx.to_vec()));
     assert!(desk.logon.as_ref().is_some_and(Logon::leaving));
     let got = shell(&desk);
-    assert!(got.wm().layout().is_empty() && desk.parts.is_none());
+    assert!(got.wm().layout().is_empty() && desk.parts.is_none() && desk.saved == "Mono");
     assert_eq!(got.vfs().read(remote::STUDIO), Ok(&b"#!wasm bin/studio.wasm\n"[..]));
-    assert_eq!((got.theme_name(), desk.saved), ("Mono", "Mono"));
 }
 
 #[test]

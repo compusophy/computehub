@@ -137,6 +137,14 @@ fn ctl_queues_requests_in_order() {
     assert_eq!(ctl.effects(), want);
     let read = (ctl.storage_get("a"), ctl.session_get("s"), ctl.session_get("t"));
     assert_eq!(read, (None, Some("2".into()), None));
+    // An erase hides the queued writes under its prefix, local and session, and no others.
+    ctl.storage_set("ab", "3");
+    ctl.storage_set("b", "4");
+    ctl.session_set("as", Some("5"));
+    ctl.storage_erase("a");
+    let read = (ctl.storage_get("ab"), ctl.storage_get("b"), ctl.session_get("as"));
+    assert_eq!(read, (None, Some("4".into()), None));
+    assert_eq!(ctl.effects().last(), Some(&Effect::Erase("a".into())));
     let mut bytes = [0; 4];
     assert_eq!((ctl.timings(), ctl.random(&mut bytes), ctl.secure()), (vec![], false, false));
 }

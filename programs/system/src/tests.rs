@@ -746,3 +746,25 @@ fn settings_sets_themes_models_and_switches_and_hears_the_desktop() {
     assert_eq!(w.click(REPORTS)[0].requests, pref("reports", "off"));
     assert_eq!(w.click(FEEDBACK)[0].requests, [Request::Open { name: "feedback".into() }]);
 }
+
+#[test]
+fn settings_resets_only_once_the_word_is_typed() {
+    use crate::settings::{ERASE, NAV, SAY, WORD};
+    let mut w = Win::new("/bin/settings");
+    let f = w.last(&[resize(720), Event::Click { id: NAV + 3 }]);
+    let erase = |f: &Frame| {
+        all(&f.nodes).into_iter().find_map(|n| match n {
+            Node::Button { id: ERASE, variant, .. } => Some(*variant),
+            _ => None,
+        })
+    };
+    assert_eq!(erase(&f), Some(Variant::Normal));
+    // Erase and Enter do nothing until the word is typed (in any case, spaces around it).
+    let typed = |t: &str| Event::Change { id: WORD, version: 1, text: t.into() };
+    let f = w.send(&[typed("rese"), Event::Click { id: ERASE }, Event::Submit { id: WORD }]);
+    assert!(f.iter().all(|f| f.requests.is_empty()));
+    let f = w.last(&[typed(" Reset ")]);
+    assert_eq!((erase(&f), SAY), (Some(Variant::Danger), "reset"));
+    assert_eq!(w.click(ERASE)[0].requests, [Request::Reset]);
+    assert_eq!(w.last(&[Event::Submit { id: WORD }]).requests, [Request::Reset]);
+}
