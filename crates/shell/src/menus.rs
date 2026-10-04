@@ -1,24 +1,27 @@
 //! Context menus: which one a secondary press opens, what their items do (the dock's favorites
-//! they change: `home::dock::Dock::keep`).
+//! they change: `home::dock::Dock::keep`; the person's own apps they delete, asked again first).
 
 use gfx::DrawList;
 use home::menu::{Item, Menu};
 use ui::Theme;
+use vfs::Vfs;
 use wm::{Cmd, State, WinId};
 
 use crate::desktop::Target;
 use crate::{Response, Shell};
 
 /// What a menu item does to the menu's app: open a new window of it, show it (its window, else a
-/// new one), add it to the dock (or remove it), close its windows; or show the Assistant, show a
-/// built-in app, open a terminal, command the menu's window (minimize, toggle maximize,
-/// close), or sign out.
+/// new one), add it to the dock (or remove it), close its windows, delete it (asking again
+/// first; then its windows close, the dock lets it go and its file goes); or show the
+/// Assistant, show a built-in app, open a terminal, command the menu's window (minimize, toggle
+/// maximize, close), or sign out.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum Act {
     Open,
     Show,
     Keep(bool),
     Close,
+    Delete(bool),
     Ask,
     Go(&'static str),
     Terminal,
@@ -54,7 +57,7 @@ impl Shell {
 
     /// The menu for `hit` at `at` (the desktop's, the Assistant's tile's, an app's for an icon or
     /// a dock tile, or a window's), with its app and window. The Assistant is no dock's: its
-    /// icon's menu only opens it.
+    /// icon's menu only opens it. Only the person's own apps (`~/apps/*.app`) can be deleted.
     fn menu_for(&mut self, hit: Target, at: (f32, f32), touch: bool) -> Option<Open> {
         let menu = |s: &mut Shell, items: &[Item<Act>]| {
             Menu::new(items, at, s.size, touch, &mut s.host.text)
@@ -82,7 +85,8 @@ impl Shell {
             _ => return None,
         };
         let kept = self.dock.favs.contains(&name);
-        let items = [
+        let mine = name.strip_prefix(Vfs::HOME).is_some_and(|p| p.starts_with("/apps/"));
+        let mut items = [
             match running {
                 true => ("New window", "", Some(Act::Open)),
                 false => ("Open", "", Some(Act::Show)),
@@ -92,8 +96,16 @@ impl Shell {
                 false => ("Add to dock", "", Some(Act::Keep(true))),
             },
             ("Close", "", Some(Act::Close)),
+            ("", "", None),
+            ("Delete", "", Some(Act::Delete(false))),
         ];
-        let n = if name == host::ASSISTANT { 1 } else { 2 + usize::from(running) };
+        // Not running: no Close, Delete (if any) right after the line.
+        if !running {
+            items.swap(2, 4);
+            items.swap(2, 3);
+        }
+        let n = 2 + usize::from(running) + 2 * usize::from(mine);
+        let n = if name == host::ASSISTANT { 1 } else { n };
         Some((menu(self, &items[..n]), name, None))
     }
 
@@ -105,9 +117,20 @@ impl Shell {
             Act::Open => self.host.open(&name, None, out),
             Act::Show => self.host.show(&name, out),
             Act::Keep(keep) => self.dock.keep(&name, keep, &mut self.pending),
-            Act::Close => {
+            // Asked again where it was: a press anywhere else keeps it.
+            Act::Delete(false) => {
+                let again = [("Delete for good", "No undo", Some(Act::Delete(true)))];
+                let (at, touch) = ((menu.rect.x, menu.rect.y), menu.row > 40.0);
+                let menu = Menu::new(&again, at, self.size, touch, &mut self.host.text);
+                (self.menu, out.redraw) = (Some((menu, name, None)), true);
+            }
+            Act::Close | Act::Delete(true) => {
                 for w in self.host.windows_of(&name) {
                     self.host.apply(Cmd::Close(w));
+                }
+                if matches!(act, Act::Delete(true)) {
+                    self.dock.keep(&name, false, &mut self.pending);
+                    let _ = self.host.vfs.remove(&name, false);
                 }
             }
             Act::Ask => self.host.show("assistant", out),

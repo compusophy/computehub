@@ -263,8 +263,7 @@ fn windows_open_placed_for_the_screen_and_stay_full_on_a_phone() {
     s.say(1, "open studio");
     assert_eq!(s.rect(2), Some(Rect::new(28, 72, 1088, 589)));
     // Alone, it opens maximized; restored, it is large and centered, not small.
-    s.k(Char('q'), "a");
-    s.k(Char('q'), "a");
+    let _ = [0; 2].map(|_| s.k(Char('q'), "a"));
     s.rest(1000.0);
     s.k(Enter, "a");
     let p = s.placement(WinId(3)).map(|p| (p.state, p.rect));
@@ -426,8 +425,7 @@ fn the_dock_opens_minimizes_and_focuses_and_keeps_the_persons_favorites() {
     s.click(s.item("Open"));
     s.right(s.tile_at(1));
     assert_eq!(s.labels(), ["New window", "Remove from dock", "Close"]);
-    s.k(Down, "");
-    s.k(Enter, "");
+    let _ = [Down, Enter].map(|k| s.k(k, ""));
     assert_eq!(s.names(), ["studio", "studio"]);
     s.right(s.tile_at(1));
     s.click(s.item("Close"));
@@ -745,12 +743,15 @@ fn the_home_screen_shows_every_app_and_the_top_bar_its_buttons() {
     (s.dock.favs, _) = (vec![c.clone()], s.host.vfs.write(&c, b"// icon: dot 9 9 3").unwrap());
     let r = (s.input(Input::PointerLeave).redraw, s.grid.icons[8].mark, s.marks.clone());
     assert_eq!(r, (true, m.map(Mark::Made), vec![m.map(Mark::Made), None]), "its icon, grid, dock");
+    // Its menu deletes it, asked again: its file, its tile and its icon go.
+    s.right(cell(8));
+    assert_eq!(s.labels(), ["Open", "Remove from dock", "", "Delete"]);
+    let _ = (s.click(s.item("Delete")), s.click(s.item("Delete for good")), s.to(cell(0)));
+    assert!(!s.host.vfs.exists(&c) && s.dock.favs.is_empty() && s.labels_home().len() == 8);
     // The mark shows Welcome; the right buttons Feedback (a bug) and Settings.
     s.click((27.0, 22.0));
     assert_eq!(s.wm().focused(), Some(WinId(1)));
-    s.click((1280.0 - 71.0, 22.0));
-    s.click((1280.0 - 27.0, 22.0));
-    s.click((1280.0 - 27.0, 22.0));
+    let _ = [71.0, 27.0, 27.0].map(|x| s.click((1280.0 - x, 22.0)));
     assert_eq!(s.names(), ["welcome", "feedback", "settings"]);
 }
 
@@ -787,8 +788,7 @@ fn icons_move_and_open_by_the_pointer_and_the_keys() {
     assert!(s.k(Enter, "").consumed && s.grid.selected.is_empty());
     assert_eq!((s.names(), s.overlay.open), (vec!["welcome", "studio"], true));
     // An app that takes the focus ends it (a selected icon clicked, a binding): Enter is the app's.
-    s.k(Char('q'), "a");
-    s.k(Char('q'), "a");
+    let _ = [0; 2].map(|_| s.k(Char('q'), "a"));
     s.drag((5.0, 50.0), (95.0, 260.0));
     s.click(cell(2));
     log.take();
