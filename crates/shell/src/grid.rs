@@ -24,7 +24,7 @@ impl Shell {
     /// Opens the app `name`, or the folder it names.
     pub(crate) fn launch(&mut self, name: &str, out: &mut Response) {
         match home::folders::index(name) {
-            Some(k) => (self.grid.open, out.redraw) = (Some(k), true),
+            Some(k) => self.grid.open = Some(k),
             None => self.host.show(name, out),
         }
     }
@@ -83,13 +83,14 @@ impl Shell {
         self.grid.draw(list, &mut self.host.text, theme, now, hover, self.pointer);
     }
 
-    /// The open folder, over everything but menus; the app under the pointer washed (more while
-    /// pressed).
+    /// The open folder, over everything but menus and the mark (which answers above it); the app
+    /// or the mark under the pointer washed (more while pressed).
     pub(crate) fn draw_folder(&mut self, list: &mut DrawList, theme: &Theme) {
         let hover = match self.hover {
             Some(Target::Inside(i)) => Some((i, self.armed == self.hover)),
             _ => None,
         };
+        let hover = (hover, self.bar_hover());
         self.grid.draw_open(list, &mut self.host.text, theme, self.size, hover);
     }
 

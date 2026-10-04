@@ -11,6 +11,7 @@ use host::{Effect, Entry};
 use ui::icon::{Glyph, PHI};
 use ui::{AppIcon, FontId, Rgba, TextStyle, TextSystem, Theme};
 
+use crate::bar;
 use crate::icons::{self, CELL, State};
 
 /// The preference that keeps the folders, and the folders' names.
@@ -123,17 +124,19 @@ pub fn at(size: (f32, f32), n: usize, x: f32, y: f32) -> Option<Option<usize>> {
     p.contains(x, y).then(|| (0..n).find(|&i| cell(p, n, i).contains(x, y)))
 }
 
-/// Folder `k` of `apps` open on a screen of `size`: the screen dimmed, the panel raised over it,
-/// its name, its apps (`hover`: the one under the pointer, and whether held).
+/// Folder `k` of `apps` open on a screen of `size`: the screen dimmed but the top bar's mark,
+/// which answers above it (`bar`: the bar's button under the pointer), the panel raised over
+/// it, its name, its apps (`hover`: the one under the pointer, and whether held).
 pub fn draw(
     list: &mut DrawList,
     text: &mut TextSystem,
     theme: &Theme,
     (size, k, apps): ((f32, f32), usize, &[Entry]),
-    hover: Option<(usize, bool)>,
+    (hover, bar): (Option<(usize, bool)>, bar::Hover),
 ) {
     let (n, base) = (apps.len(), theme.base);
     list.fill(RectF::new(0.0, 0.0, size.0, size.1), 0.0, Rgba(base.0, base.1, base.2, 153));
+    bar::button(list, text, theme, bar::buttons(size.0)[0], bar);
     let p = panel(size, n);
     list.shadow_offset(p, RADIUS, 34.0, 8.0, theme.shadow);
     list.fill(p, RADIUS, theme.surface);

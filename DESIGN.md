@@ -198,8 +198,14 @@ one. Forked crates keep their Apache-2.0 license and note their origin.
   desktop's menu) keeps /home at once, forgets the tab's profile and
   reloads; if the files could not be kept, a card offers Stay or Sign out
   anyway. Welcome no longer opens by itself.
-- **Top bar** (44 px): the mark at the left opens Welcome; the date and
-  time sit in the middle; Feedback (a bug) and Settings at the right.
+- **Top bar** (44 px): the mark at the left is Show desktop (mod+D too):
+  it minimizes every window that shows, each into its tile, and closes an
+  open folder or menu (it answers above them too); pressed again with no
+  window shown since, it brings those windows back in their stacking
+  order, the top focused (once another shows, the next press minimizes
+  again). The date and time sit in the middle; Feedback (a bug) and
+  Settings at the right. A tooltip under each button names it. Welcome is
+  in the System folder.
 - **Windows** float in a stack; focus is the top of it. A 40 px titlebar
   carries minimize, maximize and close at the right, as on Windows. Drag a
   titlebar to move (a maximized or snapped window comes back to its normal
@@ -218,8 +224,9 @@ one. Forked crates keep their Apache-2.0 license and note their origin.
   Productivity (the Editor, Files) at first; an app's menu moves it (Move
   to: a folder, or the home screen; `home::folders`, kept as `folders`). A
   folder that holds any is an icon of its first four apps' tiles, and opens
-  as a panel over the dimmed screen, its apps four across: a click opens
-  one, and anywhere else (or Escape) closes it. Each icon sits in a cell of
+  as a panel over the dimmed screen (all but the top bar's mark, which
+  still answers), its apps four across: a click opens one, and anywhere
+  else (or Escape) closes it. Each icon sits in a cell of
   a grid: down the columns from the top
   left on a wide screen, in rows of four on a phone; there is no other
   list. A `.app` file's icon is the one its header draws (`// icon:` under
@@ -255,10 +262,13 @@ one. Forked crates keep their Apache-2.0 license and note their origin.
   uses the desktop for the person. A finger's tap leaves the keyboard down
   until its field is tapped. A dot under the tile while the overlay shows
   (the accent's while it has the keys). While it works the overlay is a
-  pill, one line of what it does and Stop, and the dot beats; each act
-  flashes what it touched, and the person's own press, key or wheel stops
-  it. A program that failed starts again at the next summon. Later it
-  listens.
+  pill, one line of what it does and Stop (whose press reaches across the
+  pill's height), and the dot beats; each act flashes what it touched.
+  Only Stop, or Escape while the overlay has the keys, stops it: the
+  person's own presses, keys and wheel go where they go beside its acts
+  (one on the bare desktop leaves the pill in view), and an act on a
+  window they closed fails as gone. A program that failed starts again at
+  the next summon. Later it listens.
 - **Dock**: the person's own, left-aligned from the bottom-left corner:
   nothing in it at first ("Add to dock" from any app's menu, or its icon
   dragged onto the row, which opens a gap under the pointer, the icon
@@ -280,6 +290,7 @@ one. Forked crates keep their Apache-2.0 license and note their origin.
   |---|---|
   | mod+Space, mod+A | show or hide the Assistant |
   | mod+Enter | open a terminal |
+  | mod+D | show the desktop, or bring back what it minimized |
   | mod+Q | close the focused window |
   | mod+Up | maximize or restore |
   | mod+Down | restore a maximized window, else minimize |

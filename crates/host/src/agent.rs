@@ -17,7 +17,9 @@
 //!   then; the platform's timer is armed for the deadline, and again whenever it fires before it
 //!   (the page keeps the sooner of two). One act at a time; only the overlay may act
 //!   ([`acted::REFUSED`] otherwise) and nothing acts on it. A task ending (the overlay's status
-//!   no longer working, or the person taking over) drops the act settling for it.
+//!   no longer working, or the person stopping it: [`Host::halt`]) drops the act settling for
+//!   it. The person's own presses, keys and wheel never stop it: they go where they go beside
+//!   its acts, and an act on a window they closed settles as [`acted::GONE`].
 
 use std::mem;
 
@@ -104,7 +106,8 @@ impl Host {
         }
     }
 
-    /// The person took over: a working overlay hears [`Event::Halt`], its act settling dropped.
+    /// The person stopped the task (Escape while the overlay has the keys): a working overlay
+    /// hears [`Event::Halt`], its act settling dropped.
     pub fn halt(&mut self, out: &mut Response) {
         if mem::take(&mut self.agent.working) {
             self.agent.pending = None;

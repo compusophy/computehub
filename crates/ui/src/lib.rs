@@ -161,8 +161,8 @@ pub enum AppEvent {
     Io,
     /// A prompt for the Assistant, as if typed and sent.
     Ask(String),
-    /// For the overlay: an act settled, or the person took over ([`uiwire::Event::Acted`],
-    /// [`uiwire::Event::Halt`]).
+    /// For the overlay: an act settled, or the person stopped its task
+    /// ([`uiwire::Event::Acted`], [`uiwire::Event::Halt`]).
     Agent(uiwire::Event),
 }
 

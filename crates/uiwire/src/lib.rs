@@ -18,8 +18,8 @@
 //!
 //! The overlay (the Assistant over the desktop) may also act as a person would: [`Request::Act`]
 //! is answered by one [`Event::Acted`] once the screen settles, carrying the [`scene`] as it is
-//! then; [`Event::Halt`] says the person took over. A request carries its [`Act`] as the act's
-//! own bytes, so only the overlay links the act's encoder and only the desktop its decoder.
+//! then; [`Event::Halt`] says the person stopped its task. A request carries its [`Act`] as the
+//! act's own bytes, so only the overlay links the act's encoder and only the desktop its decoder.
 //!
 //! The OS's own windows alone (Activity's and Settings', which run its `system` program) may
 //! watch the desktop's meters ([`Request::Watch`], answered by [`Event::Stats`] in the [`stat`]
@@ -443,8 +443,8 @@ pub enum Request {
     /// The overlay only: do the act `act` encodes ([`Act::encode`]); one at a time, answered by
     /// [`Event::Acted`].
     Act { id: u32, act: Vec<u8> },
-    /// The overlay only: whether it works on a task (the desktop shows it, and the person's
-    /// own input outside the overlay then halts it).
+    /// The overlay only: whether it works on a task (the desktop shows it as a pill; beyond the
+    /// program's own Stop, only Escape while the overlay has the keys stops it: [`Event::Halt`]).
     Status { working: bool },
     /// Send [`Event::Tick`] about every `ms` while the window shows (0: stop).
     Timer { ms: u32 },
@@ -503,7 +503,8 @@ pub enum Event {
     /// Act `id` settled with `code` ([`acted`]) and the host's `note`; `scene` is the screen
     /// now ([`scene::Scene`] bytes).
     Acted { id: u32, code: u16, note: String, scene: Vec<u8> },
-    /// The person took over (a press, key or wheel outside the overlay): stop acting.
+    /// The person stopped the task by Escape while the overlay has the keys (the pill's Stop is
+    /// the program's own button; no other press, key or wheel of theirs stops it): stop acting.
     Halt,
     /// `ms` passed since the last tick ([`Request::Timer`]).
     Tick { ms: u32 },
