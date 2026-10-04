@@ -2,7 +2,7 @@ use super::terminal::grid_size;
 use super::*;
 use gfx::{DrawList, Instance, Kind, RectF, Rgba};
 use ui::icon::Glyph;
-use ui::{App, AppEvent, Cx, FontId, Hit, Key, Mods, Request, TextSystem, Ui, UiState, WidgetId};
+use ui::{App, AppEvent, Cx, FontId, Hit, Key, Mods, Request, TextSystem, Ui, UiState};
 use ui::{THEMES, Theme};
 use vfs::Vfs;
 
@@ -12,10 +12,9 @@ const MONO: &[u8] = include_bytes!("../../../assets/fonts/deferred/JetBrainsMono
 const SYM_A: &[u8] = include_bytes!("../../../assets/fonts/lazy/symbols-a.ttf");
 const NO: Mods = Mods { shift: false, ctrl: false, alt: false, meta: false };
 const CTRL: Mods = Mods { ctrl: true, ..NO };
-/// The content size of an 80 x 24 terminal at dpr 1, and its prompt.
+/// The content size of an 80 x 24 terminal at dpr 1.
 const W80: f32 = 668.0;
 const H24: f32 = 436.0;
-const PROMPT: &str = "guest@compusophy:~$";
 const MIDNIGHT: &Theme = &THEMES[0];
 
 /// An app with the VFS, kernel and AI status its [`Cx`]s are made from (kept as the host
@@ -46,34 +45,15 @@ impl<A: App> Sim<A> {
     fn key(&mut self, key: Key, mods: Mods) -> String {
         self.ev(AppEvent::Key { key, mods })
     }
-    fn keys(&mut self, keys: &[Key]) {
-        keys.iter().for_each(|&k| _ = self.key(k, NO));
-    }
     fn text(&mut self, s: &str) -> String {
         self.ev(AppEvent::Text(s.into()))
     }
     fn wheel(&mut self, dy: f32) -> bool {
         self.both(AppEvent::Wheel { x: 0.0, y: 0.0, dy }).0
     }
-    fn click(&mut self, id: u32) -> String {
-        self.ev(AppEvent::Click(WidgetId(id)))
-    }
 }
 
 impl Sim<Terminal> {
-    /// A terminal resized to `w` x `h` (its first event asks for fonts), drawn there if `drawn`.
-    fn term(w: f32, h: f32, drawn: bool) -> Sim<Terminal> {
-        let mut s = Sim::new(Terminal::default());
-        assert_eq!(s.ev(AppEvent::Resized { w, h }), "fonts");
-        if drawn {
-            draw(&mut s.app, &mut text_system(), RectF::new(0.0, 0.0, w, h), MIDNIGHT);
-        }
-        s
-    }
-    /// Types `s` and Enter.
-    fn line(&mut self, s: &str) -> String {
-        self.text(s) + &self.key(Key::Enter, NO)
-    }
     /// The scrollback and the screen as text.
     fn all(&self) -> String {
         let t = &self.app.term;
@@ -87,11 +67,6 @@ impl Sim<Terminal> {
     }
     fn row(&self, r: u16) -> String {
         text(self.app.term.row(r))
-    }
-    /// The cursor, and its row as text.
-    fn at(&self) -> (u16, u16, String) {
-        let (r, c) = self.app.term.cursor();
-        (r, c, self.row(r))
     }
 }
 
@@ -130,109 +105,135 @@ fn text_system() -> TextSystem {
 fn of(list: &DrawList, kind: Kind) -> impl Iterator<Item = &Instance> {
     list.instances().iter().filter(move |i| i.kind == kind as u8 as f32)
 }
-fn hit(hits: &[Hit], id: u32) -> Hit {
-    *hits.iter().find(|h| h.id == WidgetId(id)).expect("no such hit")
+
+/// A terminal on an isolated kernel whose /bin holds the shell, resized to 80 x 24 (its first
+/// event asks for fonts): the shell's pid, past its READY, and its console set `raw`.
+fn console(raw: bool) -> (Sim<Terminal>, u32) {
+    use ui::kernel::wire::{self, Msg};
+    let mut s = Sim::new(Terminal::default());
+    s.kernel.set_isolated(true);
+    s.fs.mkdir("/bin").and(s.fs.write(SHELL, b"#!wasm bin/sh.wasm\n")).unwrap();
+    assert_eq!(s.ev(AppEvent::Resized { w: W80, h: H24 }), "fonts");
+    let pid = s.app.pid.expect("the shell runs");
+    s.kernel.message(&mut s.fs, pid, &[wire::READY, wire::VERSION]);
+    s.kernel.message(&mut s.fs, pid, &Msg::ConsMode { bits: u8::from(raw) }.encode());
+    s.kernel.take_effects();
+    (s, pid)
+}
+
+impl Sim<Terminal> {
+    /// What the shell writes, as its worker sends it; the requests the Terminal then makes.
+    fn wrote(&mut self, pid: u32, data: &[u8]) -> String {
+        use ui::kernel::wire::Msg;
+        self.kernel.message(&mut self.fs, pid, &Msg::ConsWrite { data }.encode());
+        self.ev(AppEvent::Io)
+    }
+    /// What the shell's next read of its console gets.
+    fn read(&mut self, pid: u32) -> Vec<u8> {
+        use ui::kernel::{Effect, wire::Msg};
+        self.kernel.message(&mut self.fs, pid, &Msg::ConsRead { max: 4096 }.encode());
+        let reply = self.kernel.take_effects().into_iter().find_map(|e| match e {
+            Effect::Reply { data, .. } => Some(data),
+            _ => None,
+        });
+        reply.expect("input waiting")
+    }
 }
 
 #[test]
-fn terminal_line_editing_history_wheel_wrapping_and_greeting_at_first_grid() {
-    let mut s = Sim::term(W80, H24, true);
-    s.has("compusophyOS terminal — type 'help'.\nguest@compusophy:~$");
-    s.line("echo one");
-    s.line("cd /tmp");
-    s.text("draft");
-    let mut seen = Vec::new();
-    for key in [Key::Up, Key::Up, Key::Up, Key::Down, Key::Down] {
-        s.key(key, NO);
-        seen.push(s.at().2.replace("guest@compusophy:/tmp$ ", ""));
-    }
-    assert_eq!(seen.join(","), "cd /tmp,echo one,echo one,cd /tmp,draft");
-    s.keys(&[Key::Home, Key::Right, Key::Delete]);
-    s.text("X");
-    assert_eq!(s.at().1, 25);
+fn the_terminal_starts_the_shell_on_its_console_at_its_first_size() {
+    use ui::kernel::{Effect, Load, wire};
+    let mut s = Sim::new(Terminal::default());
+    s.kernel.set_isolated(true);
+    s.fs.mkdir("/bin").and(s.fs.write(SHELL, b"#!wasm bin/sh.wasm\n")).unwrap();
+    assert_eq!((s.ev(AppEvent::Focus(true)), s.app.pid), ("fonts".into(), None), "no size yet");
+    s.ev(AppEvent::Resized { w: W80, h: H24 });
+    assert_eq!(s.kernel.procs(), [(2, "sh".into(), true)]);
+    s.kernel.message(&mut s.fs, 2, &[wire::READY, wire::VERSION]);
+    let start = s.kernel.take_effects().into_iter().find_map(|e| match e {
+        Effect::Start { msg, program: Load::Url(url), .. } => {
+            Some((wire::Start::decode(&msg), url))
+        }
+        _ => None,
+    });
+    let (start, url) = start.expect("a Start");
+    let start = start.unwrap();
+    assert_eq!(
+        (url.as_str(), start.argv, start.tty),
+        ("bin/sh.wasm", vec!["sh".into()], Some((80, 24)))
+    );
+    assert_eq!((start.cwd.as_str(), start.roots), (Vfs::HOME, vec!["/".into()]));
+    // One shell, whatever sizes follow; a new size reaches its console.
+    s.ev(AppEvent::Resized { w: W80 - 80.0, h: H24 });
+    assert_eq!((s.kernel.procs().len(), s.app.term.cols()), (1, 70));
+    let words = s.kernel.take_effects();
+    assert!(words.contains(&Effect::Word { pid: 2, index: wire::COLS, value: 70 }), "{words:?}");
+    // A shell that cannot start says why, on screen.
+    let mut s = Sim::new(Terminal::default());
+    s.fs.mkdir("/bin").and(s.fs.write(SHELL, b"#!wasm bin/sh.wasm\n")).unwrap();
+    s.ev(AppEvent::Resized { w: W80, h: H24 });
+    s.has("sh: programs need a cross-origin isolated page (COOP/COEP headers)");
+    let mut s = Sim::new(Terminal::default());
+    s.kernel.set_isolated(true);
+    s.ev(AppEvent::Resized { w: W80, h: H24 });
+    assert_eq!((s.row(0), s.app.pid), ("sh: not found".into(), None));
+}
+
+#[test]
+fn keys_and_pastes_go_to_the_console_as_xterm_sends_them() {
+    let (mut s, pid) = console(true);
+    s.key(Key::Up, NO);
     s.key(Key::Char('c'), CTRL);
-    s.has("guest@compusophy:/tmp$ dXaft^C\nguest@compusophy:/tmp$");
-    s.text("pwd");
-    s.key(Key::Char('l'), CTRL);
-    assert_eq!(s.all(), "guest@compusophy:/tmp$ pwd");
+    s.key(Key::Char('x'), NO); // Comes as text.
+    s.key(Key::Other, NO);
+    s.text("é");
+    assert!(!s.both(AppEvent::Text("\n".into())).0, "Enter came as a key already");
     s.key(Key::Enter, NO);
-    s.line("history");
-    s.has("/tmp\nguest@compusophy:/tmp$ history\n   1  echo one\n   2  cd /tmp");
-    // Enter reported as text too is no second Enter; a pasted line runs.
-    assert!(!s.both(AppEvent::Text("\n".into())).0);
-    s.text("echo pasted\necho tw");
-    assert!(s.all().ends_with("pasted\nguest@compusophy:/tmp$ echo tw"));
-    // The shell reaches the desktop: a theme, an app.
-    s.key(Key::Char('c'), CTRL);
-    assert_eq!(s.line("theme dawn") + "," + &s.line("open settings"), "theme Dawn,open settings");
-    // The wheel scrolls back by whole rows; a key snaps back.
-    (0..30).for_each(|i| _ = s.line(&format!("echo line {i}")));
+    s.text("a\nb");
+    s.key(Key::Home, Mods { shift: true, ..NO });
+    assert_eq!(s.read(pid), "\x1b[A\x03é\ra\rb\x1b[1;2H".as_bytes());
+    // Application cursor keys, and a bracketed paste, as the program asked.
+    s.app.term.feed(b"\x1b[?1h\x1b[?2004h");
+    s.key(Key::Left, NO);
+    s.text("p\x1bq");
+    assert_eq!(s.read(pid), b"\x1bOD\x1b[200~pq\x1b[201~");
+}
+
+#[test]
+fn the_terminal_shows_its_programs_answers_their_queries_and_does_their_asks() {
+    use ui::kernel::wire::Msg;
+    // Cooked, the kernel puts a CR before each LF; raw, output is as written.
+    let (mut s, pid) = console(false);
+    assert_eq!(s.wrote(pid, b"one\ntwo"), "");
+    assert_eq!((s.row(0), s.row(1), s.app.term.cursor()), ("one".into(), "two".into(), (1, 3)));
+    let (mut s, pid) = console(true);
+    s.wrote(pid, b"x\ny");
+    assert_eq!((s.row(1), s.app.term.cursor()), (" y".into(), (1, 2)));
+    // A query's answer goes back to the console.
+    s.wrote(pid, b"\x1b[6n");
+    assert_eq!(s.read(pid), b"\x1b[2;3R");
+    // Asks: an app opens, a known theme applies.
+    let asks = b"\x1b]1729;open;editor:/tmp/a\x07\x1b]1729;theme;Dawn\x07\x1b]1729;theme;Sepia\x07";
+    assert_eq!(s.wrote(pid, asks), "open editor:/tmp/a; theme Dawn");
+    // The wheel scrolls back by whole rows; text snaps back.
+    (0..40).for_each(|i| _ = s.wrote(pid, format!("line {i}\r\n").as_bytes()));
     let sb = s.app.term.scrollback_len();
-    assert!(sb > 30, "{sb}");
-    assert!(s.wheel(-17.0 * 3.0) && s.app.scroll == 3);
+    assert!(sb > 10 && s.wheel(-17.0 * 3.0) && s.app.scroll == 3, "{sb}");
     assert!(!s.wheel(8.5), "half a row");
     assert!(s.wheel(8.5) && s.app.scroll == 2);
     assert!(s.wheel(-1e9) && s.app.scroll == sb);
     assert!(!s.wheel(f32::NAN) && s.app.scroll == sb);
-    assert!(s.both(AppEvent::Key { key: Key::Char('x'), mods: NO }).0);
-    assert_eq!(s.app.scroll, 0, "a key snaps back");
+    assert!(s.both(AppEvent::Text("x".into())).0 && s.app.scroll == 0, "text snaps back");
     s.app.term.feed(b"\x1b[?1049h");
     assert!(!s.wheel(-34.0), "no scrollback on the alternate screen");
-    // It wraps like the screen.
-    let mut s = Sim::term(28.0 + 8.0 * 30.0, H24, true);
-    let top = s.at().0;
-    s.text("abcdefghijklmnop"); // the prompt is 20 wide
-    assert_eq!(s.at(), (top + 1, 6, "klmnop".into()));
-    s.keys(&[Key::Left; 8]);
-    s.text("X");
-    assert_eq!(s.at(), (top, 29, "guest@compusophy:~$ abcdefghXi".into()));
-    s.keys(&[Key::Right]);
-    assert_eq!(s.at(), (top + 1, 0, "jklmnop".into()), "the next row");
-    s.keys(&[Key::Delete; 7]);
-    assert_eq!(s.at(), (top + 1, 0, String::new()), "a full row: the next");
-    s.key(Key::Enter, NO);
-    assert_eq!(s.row(top + 1), "abcdefghXi: command not found", "no gap");
-    assert_eq!(s.at(), (top + 2, 20, PROMPT.into()));
-    // At a phone's width (25 columns) the greeting breaks between words.
-    let s = Sim::term(230.0, 400.0, true);
-    assert_eq!(s.app.term.cols(), 25);
-    assert_eq!([s.row(0), s.row(1)], ["compusophyOS terminal —", "type 'help'."]);
-    assert_eq!(s.at(), (2, 20, PROMPT.into()));
-    // A key before any draw greets first.
-    let mut s = Sim::term(W80, H24, false);
-    s.text("ls");
-    let rows: String = (0..3).map(|r| s.row(r).replace(' ', "")).collect();
-    assert!(rows.contains("compusophyOSterminal—type'help'."), "{rows}");
-    assert_eq!(s.at().2, PROMPT.to_string() + " ls");
-}
-
-#[test]
-fn terminal_runs_programs_in_the_foreground() {
-    use ui::kernel::{Effect, wire::Msg};
-    let mut s = Sim::term(W80, H24, true);
-    s.kernel.set_isolated(true);
-    s.fs.mkdir("/bin").and(s.fs.write("/bin/hi", b"#!wasm bin/toolbox.wasm")).unwrap();
-    let worker = |s: &mut Sim<Terminal>, pid, msg: Msg<'_>| {
-        s.kernel.message(&mut s.fs, pid, &msg.encode());
-        s.both(AppEvent::Io).0
-    };
-    // Output comes on Io, `\n` as CR LF, above the typed-ahead line; the exit status shows.
-    s.line("hi");
-    s.text("ab");
-    assert!(worker(&mut s, 2, Msg::ConsWrite { data: b"one\ntwo" }));
-    s.has("$ hi\none\ntwoab");
-    assert!(worker(&mut s, 2, Msg::Exit { status: 3 }));
-    assert_eq!(s.at().2, "3 guest@compusophy:~$ ab");
-    // Ctrl+C ends a program at once.
-    s.key(Key::Char('c'), CTRL);
-    s.line("hi");
-    s.key(Key::Char('c'), CTRL);
-    s.has("$ hi\n^C\n130 guest@compusophy:~$");
-    assert!(s.kernel.take_effects().contains(&Effect::Kill { pid: 3 }));
-    s.line("hi");
-    // Raw output keeps `\n` as it is.
-    s.app.output(b"x\ny", true, None);
-    assert_eq!(s.at(), (s.at().0, 2, " y".into()));
+    // The shell's clean end closes the window; a failure stays, saying so.
+    s.kernel.message(&mut s.fs, pid, &Msg::Exit { status: 0 }.encode());
+    assert_eq!((s.ev(AppEvent::Io), s.app.pid), ("CloseSelf".into(), None));
+    let (mut s, pid) = console(false);
+    s.wrote(pid, b"half");
+    s.kernel.message(&mut s.fs, pid, &Msg::Exit { status: 3 }.encode());
+    assert_eq!(s.ev(AppEvent::Io), "");
+    assert_eq!([s.row(0), s.row(1)], ["half", "[sh stopped with status 3]"]);
 }
 
 #[test]
@@ -283,36 +284,8 @@ fn inks(list: &DrawList) -> Vec<Rgba> {
     of(list, Kind::Glyph).map(|i| i.color).collect()
 }
 
-/// Checks that every glyph of `list` is in a readable ink of `t` (never the faint one), text on
-/// the accent, or an app icon's ink (the theme previews' Assistant: each theme's own), and every
-/// shape lies on device pixels.
-fn refined(list: &DrawList, t: &Theme, dpr: f32, what: &str) {
-    use kit::*;
-    let icons = [TERMINAL, SETTINGS];
-    let mut ok = vec![t.text, t.text_dim, t.accent, t.accent_text];
-    ok.extend(icons.map(|i| t.icon_colors(i.hue)[2]));
-    ok.extend(THEMES.iter().map(|th| th.icon_colors(th.accent)[2]));
-    inks(list).iter().for_each(|i| assert!(ok.contains(i), "{what} in {}: ink {i:?}", t.name));
-    let on = |v: f32| ((v * dpr) - (v * dpr).round()).abs() < 1e-3;
-    let kinds = [Kind::Fill, Kind::Border, Kind::Gradient].map(|k| k as u8 as f32);
-    for i in list.instances().iter().filter(|i| kinds.contains(&i.kind)) {
-        let [x, y, w, h] = i.rect;
-        assert!([x, y, x + w, y + h].into_iter().all(on), "{what} in {}: {i:?} at {dpr}", t.name);
-    }
-}
-
-/// Whether `list` has the scroll thumb: a 3 px fill in the faint ink.
-fn thumb(list: &DrawList, t: &Theme) -> bool {
-    of(list, Kind::Fill).any(|i| i.color == t.text_faint && i.rect[2] == 3.0)
-}
-
-/// The ids of `hits`, in order.
-fn ids(hits: &[Hit]) -> Vec<u32> {
-    hits.iter().map(|h| h.id.0).collect()
-}
-
 #[test]
-fn apps_have_grids_titles_icons_and_sizes_and_are_refined_in_every_theme() {
+fn the_terminal_has_a_grid_a_title_an_icon_and_a_size_and_draws_in_every_theme() {
     let sizes = [(W80, H24), (0.0, -5.0), (f32::NAN, f32::INFINITY)];
     assert_eq!(sizes.map(|(w, h)| grid_size(w, h, 8.0, 17.0)), [(80, 24), (1, 1), (1, 500)]);
     let mut t = Terminal::default();
@@ -320,167 +293,28 @@ fn apps_have_grids_titles_icons_and_sizes_and_are_refined_in_every_theme() {
     t.term.feed(b"\x1b]2;notes\x07");
     assert_eq!(t.title(), "Terminal — notes");
     assert!(t.wants_text_input() && open("launcher").is_none(), "the shell owns the launcher");
-    // About, Feedback, Files and Welcome are programs now (the system crate), not built in.
-    assert_eq!(NAMES, ["terminal", "settings"]);
-    let programs = ["about", "feedback", "files", "files:~/apps", "welcome"];
+    // About, Feedback, Files, Settings and Welcome are programs (the system crate), not built in.
+    assert_eq!(NAMES, ["terminal"]);
+    let programs = ["about", "feedback", "files", "files:~/apps", "settings", "welcome"];
     assert!(programs.iter().all(|n| open(n).is_none()));
-    let want = [
-        (Glyph::Terminal, 0x2dd4bf, (W80, H24), false),
-        (Glyph::Cog, 0x94a3b8, (720.0, 520.0), true),
-    ];
-    for (name, (glyph, hue, size, compact)) in NAMES.iter().zip(want) {
-        let (app, icon) = (open(name).unwrap(), ui::AppIcon { glyph, hue: Rgba::hex(hue) });
-        assert_eq!((app.icon(), app.preferred_size(), app.compact()), (icon, Some(size), compact));
-    }
+    let (app, icon) = (
+        open("terminal").unwrap(),
+        ui::AppIcon { glyph: Glyph::Terminal, hue: Rgba::hex(0x2dd4bf) },
+    );
+    assert_eq!((app.icon(), app.preferred_size(), app.compact()), (icon, Some((W80, H24)), false));
     for dpr in [1.0, 1.5, 2.0] {
         let mut ts = text_system();
         ts.set_dpr(dpr);
-        for (theme, &name) in THEMES.iter().flat_map(|t| NAMES.iter().map(move |n| (t, n))) {
-            let mut app = open(name).unwrap();
+        for theme in &THEMES {
+            let mut app = open("terminal").unwrap();
             for (w, h) in [(720.0, 520.0), (360.0, 640.0)] {
                 let r = RectF::new(0.0, 36.0, w, h);
                 // Under the pointer and held: the first widget.
                 let hits = frame(app.as_mut(), &mut ts, r, UiState::default(), theme).1;
                 let id = hits.first().map(|h| h.id);
                 let state = UiState { hover: id, pressed: id, focused: true, now_ms: 1e4 };
-                let (list, _) = frame(app.as_mut(), &mut ts, r, state, theme);
-                assert!(!list.is_empty(), "{name}");
-                if name != "terminal" {
-                    refined(&list, theme, dpr, name);
-                }
+                assert!(!frame(app.as_mut(), &mut ts, r, state, theme).0.is_empty());
             }
         }
     }
-}
-
-#[test]
-fn settings_switches_pages_and_themes_the_default_first() {
-    let mut ts = text_system();
-    let mut s = Sim::new(Settings::default());
-    assert!(s.app.title() == "Settings" && s.app.compact());
-    let r = RectF::new(0.0, 36.0, 720.0, 520.0);
-    for (i, theme) in THEMES.iter().enumerate() {
-        let (list, hits) = draw(&mut s.app, &mut ts, r, theme);
-        assert_eq!(ids(&hits), [1, 2, 3, 12, 10, 11, 32], "nav, Mono and the others, the grain");
-        // The current theme's card wears a 2 px accent ring outside it.
-        let card = hit(&hits, 10 + i as u32).rect;
-        let ring = |b: &&Instance| b.color == theme.accent && b.p0 == 2.0;
-        let rings: Vec<_> = of(&list, Kind::Border).filter(ring).collect();
-        assert_eq!(rings.len(), 1, "{}", theme.name);
-        assert_eq!(rings[0].rect, [card.x - 3.0, card.y - 3.0, card.w + 6.0, card.h + 6.0]);
-        // Each miniature shows its own theme's light, whatever the current, and its Assistant's
-        // sparkle in its own ink.
-        let lit = |t: &Theme| t.glows.iter().filter(|g| g.color.3 > 0).count();
-        assert_eq!(of(&list, Kind::Glow).count(), THEMES.iter().map(lit).sum::<usize>());
-        assert!(THEMES.iter().all(|t| inks(&list).contains(&t.icon_colors(t.accent)[2])));
-    }
-    // Three across, then fewer as the window narrows.
-    let mut rows = |s: &mut Sim<Settings>, w| {
-        let hits = draw(&mut s.app, &mut ts, RectF::new(0.0, 0.0, w, 900.0), MIDNIGHT).1;
-        let cards: Vec<f32> = hits.iter().filter(|h| h.id.0 / 10 == 1).map(|h| h.rect.y).collect();
-        1 + cards.windows(2).filter(|p| p[1] > p[0]).count()
-    };
-    assert_eq!([rows(&mut s, 720.0), rows(&mut s, 560.0), rows(&mut s, 360.0)], [1, 2, 2]);
-    assert_eq!([s.click(10), s.click(12)].join(","), "theme Midnight,theme Mono");
-    // A narrow window has tabs instead of the nav, and both still switch.
-    assert!(!s.both(AppEvent::Click(WidgetId(1))).0, "already there");
-    let tabs = draw(&mut s.app, &mut ts, RectF::new(0.0, 0.0, 360.0, 640.0), MIDNIGHT).1;
-    let (a, b) = (hit(&tabs, 1).rect, hit(&tabs, 3).rect);
-    assert!(a.y == b.y && a.w == b.w && b.x > a.x, "{a:?} {b:?}");
-    assert!(s.both(AppEvent::Click(WidgetId(3))).0 && s.app.page == 2);
-}
-
-#[test]
-fn settings_switches_the_living_grain() {
-    let (mut fs, mut kernel, mut ts) = (Vfs::new(), ui::kernel::Kernel::new(), text_system());
-    let mut app = Settings::default();
-    // The switch shows what the host says, and flips it: the preference and what apps see.
-    for (grain, want) in [(true, "pref grain=off"), (false, "pref grain=on")] {
-        let mut cx = Cx::new(&mut fs, &mut kernel, 0.0);
-        cx.grain = grain;
-        let r = RectF::new(0.0, 36.0, 720.0, 520.0);
-        app.event(AppEvent::Focus(true), &mut cx);
-        let list = draw(&mut app, &mut ts, r, MIDNIGHT).0;
-        let on = of(&list, Kind::Fill).any(|i| i.rect[2] == 34.0 && i.color == MIDNIGHT.accent);
-        assert!(on == grain && app.event(AppEvent::Click(WidgetId(32)), &mut cx));
-        let reqs: Vec<String> = cx.take_requests().iter().map(show).collect();
-        assert_eq!((reqs.join("; ").as_str(), cx.grain, app.still), (want, !grain, grain));
-    }
-}
-
-#[test]
-fn settings_privacy_switches_reports_and_leads_to_feedback() {
-    let (mut ts, mut s) = (text_system(), Sim::new(Settings::default()));
-    assert!(s.both(AppEvent::Click(WidgetId(3))).0 && s.app.page == 2);
-    let r = RectF::new(0.0, 36.0, 720.0, 520.0);
-    let track = |list: &DrawList| {
-        let t = of(list, Kind::Fill).find(|i| i.rect[2] == 34.0 && i.rect[3] == 21.0);
-        t.expect("the switch").color
-    };
-    let (list, hits) = draw(&mut s.app, &mut ts, r, MIDNIGHT);
-    assert_eq!(ids(&hits), [1, 2, 3, 30, 31]);
-    assert_eq!(track(&list), MIDNIGHT.accent, "on until said otherwise");
-    assert!(inks(&list).len() > 300, "what a report holds");
-    // As the AI reads it: the page's tab selected, the switch on, the line a link.
-    let mut marks = |s: &mut Sim<Settings>| {
-        let (mut rec, st) = (DrawList::recording(), UiState::default());
-        s.app.draw(&mut Ui::new(&mut rec, &mut ts, r, &mut Vec::new(), st, MIDNIGHT));
-        let sem = rec.take_sem().unwrap();
-        assert!(sem.runs.iter().any(|r| r.text == "Send error reports automatically"));
-        sem.marks.iter().map(|m| (m.id, m.role, m.flags)).collect::<Vec<_>>()
-    };
-    assert_eq!(marks(&mut s), [(1, 2, 0), (2, 2, 0), (3, 2, 1), (30, 3, 2), (31, 9, 0)]);
-    // The switch sets the preference and shows it at once.
-    assert_eq!(s.click(30), "pref reports=off");
-    assert!(s.app.reports_off && s.ai.reports_off && marks(&mut s)[3] == (30, 3, 0));
-    assert_eq!(track(&draw(&mut s.app, &mut ts, r, MIDNIGHT).0), MIDNIGHT.surface_lo);
-    // The host hears it only from the page, later: until its word changes, ours stands.
-    s.ai.reports_off = false;
-    assert!(!s.both(AppEvent::Focus(true)).0 && s.app.reports_off);
-    s.ai.reports_off = true;
-    assert!(s.both(AppEvent::Focus(true)).0 && s.app.reports_off);
-    s.ai.reports_off = false;
-    assert!(s.both(AppEvent::Focus(true)).0 && !s.app.reports_off, "changed elsewhere");
-    assert_eq!(s.click(30), "pref reports=off");
-    assert_eq!(s.click(30), "pref reports=on");
-    assert_eq!(s.click(31), "open feedback");
-    // Narrow, it all wraps and scrolls.
-    let r = RectF::new(0.0, 0.0, 360.0, 300.0);
-    let list = draw(&mut s.app, &mut ts, r, MIDNIGHT).0;
-    assert!(thumb(&list, MIDNIGHT) && s.wheel(100.0));
-}
-
-#[test]
-fn settings_offers_the_free_ai_models_and_marks_the_one_in_use() {
-    let (mut ts, mut s) = (text_system(), Sim::new(Settings::default()));
-    assert!(s.both(AppEvent::Click(WidgetId(2))).0 && s.app.page == 1);
-    // The nav, then a row per model: no fields, so no text input. The ring marks the model in
-    // use (none named yet: the default).
-    let mut look = |s: &mut Sim<Settings>, w| {
-        let (list, hits) = draw(&mut s.app, &mut ts, RectF::new(0.0, 36.0, w, 520.0), MIDNIGHT);
-        let ids: Vec<u32> = hits.iter().map(|h| h.id.0).collect();
-        let ring = |b: &&Instance| b.color == MIDNIGHT.accent && b.p0 == 2.0;
-        let rings: Vec<[f32; 4]> = of(&list, Kind::Border).filter(ring).map(|b| b.rect).collect();
-        let around = |id| {
-            let r = hit(&hits, id).rect;
-            [r.x - 3.0, r.y - 3.0, r.w + 6.0, r.h + 6.0]
-        };
-        let on = (20..22).filter(|&id| rings == [around(id)]).collect::<Vec<u32>>();
-        (ids, on, hits)
-    };
-    let (ids, on, hits) = look(&mut s, 720.0);
-    assert_eq!((ids, on), (vec![1, 2, 3, 20, 21], vec![20]));
-    assert!(!s.app.wants_text_input());
-    let (a, b) = (hit(&hits, 20).rect, hit(&hits, 21).rect);
-    assert!(a.x == b.x && a.w == b.w && b.y >= a.y + a.h && a.w <= 440.0, "{a:?} {b:?}");
-    // A click sets the preference; the status follows at once, and the ring.
-    assert_eq!(s.click(21), "pref ai.model=zai/glm-5.3-flash");
-    assert!(s.ai.model == "zai/glm-5.3-flash" && s.app.model == s.ai.model);
-    assert_eq!(look(&mut s, 720.0).1, [21]);
-    // A model from the host shows at the app's next event; narrow, the rows fill the width.
-    s.ai.model = "zai/glm-5.3".into();
-    assert!(s.both(AppEvent::Focus(true)).0, "a new status redraws");
-    assert!(!s.both(AppEvent::Focus(true)).0);
-    let (_, on, hits) = look(&mut s, 360.0);
-    assert!(on == [20] && hit(&hits, 20).rect.w == 320.0, "{hits:?}");
 }

@@ -1,7 +1,6 @@
-//! The `system` program (see the library): About, Editor, Feedback, Files, Welcome or Activity,
-//! as its name says. Run in a terminal (on any of its std fds: `about > out.txt` too), it says
-//! how to open its
-//! window instead. Exit status: 0 when its window closes or its events end (or after the hint),
+//! The `system` program (see the library): About, Editor, Feedback, Files, Welcome, Activity or
+//! Settings, as its name says. Run in a terminal (on any of its std fds: `about > out.txt` too),
+//! it says how to open its window instead. Exit status: 0 when its window closes or its events end (or after the hint),
 //! 1 when its devices fail, 2 for a name or arguments it does not know.
 
 #![forbid(unsafe_code)]
@@ -12,7 +11,9 @@ use std::process::ExitCode;
 fn main() -> ExitCode {
     let argv: Vec<String> = std::env::args().collect();
     let Some((name, mut view)) = system::view(&argv) else {
-        eprintln!("usage: about | editor [file] | feedback | files [dir] | welcome | activity");
+        eprintln!(
+            "usage: about | editor [file] | feedback | files [dir] | welcome | activity | settings"
+        );
         return ExitCode::from(2);
     };
     // A terminal's tty on any std fd, not a window's console: no window would ever hear from it.

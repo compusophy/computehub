@@ -1,12 +1,12 @@
-//! About, Editor, Feedback, Files, Welcome and Activity: compusophyOS's system apps as one
-//! wasm32-wasip1 GUI program (`dist/bin/system.wasm`) on the [`uiwire`] protocol, fetched when
-//! one first opens and never with the boot download. It runs the app its name says, as the /bin
-//! markers `about`, `editor`, `feedback`, `files`, `welcome` and `activity` run it ([`view`]):
-//! [`About`], [`Editor`] (on a file, if one follows), [`Feedback`], [`Files`] (at a folder, if
-//! one follows), [`Welcome`] or [`Activity`]. [`serve`] runs one until its window closes; run in
-//! a terminal, which has no window for it, it says how to open one ([`hint`]). Files and Editor
-//! reach files through a [`Disk`]: [`Fs`] in the program (`std::fs`, which WASI serves from the
-//! desktop's VFS), a VFS in tests.
+//! About, Editor, Feedback, Files, Welcome, Activity and Settings: compusophyOS's system apps as
+//! one wasm32-wasip1 GUI program (`dist/bin/system.wasm`) on the [`uiwire`] protocol, fetched
+//! when one first opens and never with the boot download. It runs the app its name says, as the
+//! /bin markers `about`, `editor`, `feedback`, `files`, `welcome`, `activity` and `settings` run
+//! it ([`view`]): [`About`], [`Editor`] (on a file, if one follows), [`Feedback`], [`Files`] (at a
+//! folder, if one follows), [`Welcome`], [`Activity`] or [`Settings`]. [`serve`] runs one until
+//! its window closes; run in a terminal, which has no window for it, it says how to open one
+//! ([`hint`]). Files and Editor reach files through a [`Disk`]: [`Fs`] in the program
+//! (`std::fs`, which WASI serves from the desktop's VFS), a VFS in tests.
 
 #![forbid(unsafe_code)]
 
@@ -15,6 +15,7 @@ mod activity;
 mod editor;
 mod feedback;
 mod files;
+mod settings;
 #[cfg(test)]
 mod tests;
 mod welcome;
@@ -26,6 +27,7 @@ pub use activity::Activity;
 pub use editor::Editor;
 pub use feedback::Feedback;
 pub use files::Files;
+pub use settings::Settings;
 use uiwire::client::Client;
 use uiwire::{Event, Frame, Node, Style};
 pub use vfs::Entry;
@@ -104,7 +106,7 @@ impl Disk for Fs {
 
 /// The app `argv` names by its first word's file name (less a `.wasm`; `system <app> ...` names
 /// it next), and the app: About, Editor (a new note, or the file after it), Feedback, Files at
-/// home or at the folder after it, Welcome or Activity. `None` for any other.
+/// home or at the folder after it, Welcome, Activity or Settings. `None` for any other.
 pub fn view(argv: &[String]) -> Option<(&'static str, Box<dyn View>)> {
     let base = |s: &str| {
         let name = s.rsplit('/').next().unwrap_or(s);
@@ -124,6 +126,7 @@ pub fn view(argv: &[String]) -> Option<(&'static str, Box<dyn View>)> {
         ("files", [dir]) => ("files", Box::new(Files::new(dir))),
         ("welcome", []) => ("welcome", Box::new(Welcome::default())),
         ("activity", []) => ("activity", Box::new(Activity::default())),
+        ("settings", []) => ("settings", Box::new(Settings::default())),
         _ => return None,
     })
 }

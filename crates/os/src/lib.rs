@@ -123,6 +123,7 @@ impl Desktop {
         for name in APPLETS {
             let _ = vfs.write(&["/bin/", name].concat(), b"#!wasm bin/toolbox.wasm\n");
         }
+        let _ = vfs.write(apps::SHELL, b"#!wasm bin/sh.wasm\n");
         let _ = vfs.write(remote::STUDIO, b"#!wasm bin/studio.wasm\n");
         let _ = vfs.write(remote::ASSISTANT, b"#!wasm bin/assistant.wasm\n");
         for (name, ..) in remote::SYSTEM {

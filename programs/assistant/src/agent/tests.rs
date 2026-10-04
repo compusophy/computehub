@@ -33,6 +33,67 @@ impl App for Hand {
     }
 }
 
+/// Settings as the desktop runs it, in-process: the system program's frames drawn by uiview, its
+/// requests honored as the desktop honors its window's, and what Settings shows told on a change.
+#[derive(Default)]
+struct Own {
+    app: system::Settings,
+    nodes: Vec<Node>,
+    texts: uiview::Texts,
+    view: uiview::View,
+    told: Option<[bool; 3]>,
+}
+
+/// No files: Settings reaches none.
+struct NoDisk;
+
+impl system::Disk for NoDisk {
+    fn list(&mut self, _: &str) -> std::io::Result<Vec<system::Entry>> {
+        Err(std::io::ErrorKind::NotFound.into())
+    }
+    fn read(&mut self, _: &str) -> std::io::Result<Vec<u8>> {
+        Err(std::io::ErrorKind::NotFound.into())
+    }
+    fn write(&mut self, _: &str, _: &[u8]) -> std::io::Result<()> {
+        Err(std::io::ErrorKind::PermissionDenied.into())
+    }
+}
+
+impl App for Own {
+    fn title(&self) -> String {
+        "Settings".into()
+    }
+    fn draw(&mut self, ui: &mut Ui<'_>) {
+        uiview::draw(ui, &self.nodes, &mut self.texts, &mut self.view);
+    }
+    fn event(&mut self, ev: AppEvent, cx: &mut Cx<'_>) -> bool {
+        use system::View;
+        let now = [!cx.ai.reports_off, cx.grain, !cx.ai.unkept];
+        if self.told.replace(now) != Some(now) {
+            let [reports, grain, kept] = now;
+            self.app.event(&Event::Prefs { reports, grain, kept }, &mut NoDisk);
+        }
+        let ev = match ev {
+            AppEvent::Resized { w, h } => Event::Resize { w: w as u16, h: h as u16 },
+            AppEvent::Click(ui::WidgetId(id)) => Event::Click { id },
+            AppEvent::Agent(ev) => ev,
+            _ => Event::Focus { on: true },
+        };
+        self.app.event(&ev, &mut NoDisk);
+        let frame = self.app.frame();
+        for r in frame.requests {
+            match r {
+                Request::Pref { key, value } if key == "theme" => cx.set_theme(&value),
+                Request::Pref { key, value } => cx.pref(&key, &value),
+                Request::Open { name } => cx.open(&name),
+                _ => {}
+            }
+        }
+        self.nodes = frame.nodes;
+        true
+    }
+}
+
 /// A 1440 x 900 desktop in Mono with Settings and a terminal to open, its overlay running; what
 /// the model was asked, what the desktop did, and each act's flash.
 struct Desk {
@@ -49,6 +110,7 @@ fn desk() -> Desk {
     let (o, h) = (out.clone(), heard.clone());
     let registry: Registry = Box::new(move |name| match name {
         "assistant" => Some(Box::new(Hand(o.clone(), h.clone())) as Box<dyn App>),
+        "settings" => Some(Box::new(Own::default())),
         name => apps::open(name),
     });
     let (wm, text) = (Wm::new(Rect::new(0, 44, 1440, 771)), TextSystem::new(SANS.to_vec()));

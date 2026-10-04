@@ -86,6 +86,7 @@ fn events() -> Vec<Event> {
         Event::Ask { text: "a dice roller".into() },
         Event::Focus { on: true },
         Event::Focus { on: false },
+        Event::Prefs { reports: true, grain: false, kept: true },
     ]
 }
 
@@ -109,6 +110,17 @@ fn every_kind_round_trips_and_nothing_else_decodes() {
     nodes.for_each(|n| strict(n, Node::encode, Node::decode));
     frame.requests.iter().for_each(|r| strict(r, Request::encode, Request::decode));
     events().iter().for_each(|e| strict(e, Event::encode, Event::decode));
+    // The OS's own: its pages, themes, choices, switches and links, and a preference set.
+    let own = [
+        Node::Pages { id: 1, on: 2, labels: "Appearance\nAI\nPrivacy".into() },
+        Node::Themes { id: 10 },
+        Node::Choice { id: 20, on: true, text: "GLM 5.3\nbest answers".into() },
+        Node::Switch { id: 30, on: false, label: "Living grain".into() },
+        Node::Button { id: 31, variant: Variant::Link, label: "Send feedback".into() },
+    ];
+    own.iter().for_each(|n| strict(n, Node::encode, Node::decode));
+    let pref = Request::Pref { key: "grain".into(), value: "off".into() };
+    strict(&pref, Request::encode, Request::decode);
 }
 
 #[test]
@@ -121,7 +133,7 @@ fn codes_and_layout_are_as_documented() {
     let variant = n(&|n| Variant::from_u8(n).map(|v| v as u8));
     let (class, key) =
         (n(&|n| Class::from_u8(n).map(|v| v as u8)), n(&|n| Key::from_u8(n).map(|v| v as u8)));
-    assert_eq!(([style, variant, class, key], Key::from_u8(0)), ([11, 6, 8, 8], None));
+    assert_eq!(([style, variant, class, key], Key::from_u8(0)), ([12, 7, 8, 8], None));
     // Little-endian, in field order.
     let (requests, button) = (vec![Request::Size { w: 0x0506, h: 7 }], "ok".into());
     let nodes = vec![Node::Button { id: 9, variant: Variant::Primary, label: button }];
@@ -227,8 +239,8 @@ fn malformations_fail() {
     );
     assert!([0, 21, 255].iter().all(|&kind| Node::decode(&[kind, 0, 0, 0, 0, 0, 0]).is_none()));
     // Codes: style, variant, selected, line-number and on flags, span class.
-    assert!(Node::decode(&[3, 0, 0, 0, 0, 0, 0, 11, 0, 0, 0, 0]).is_none());
-    assert!(Node::decode(&[4, 0, 0, 0, 0, 0, 0, 6, 0, 0, 0, 0]).is_none());
+    assert!(Node::decode(&[3, 0, 0, 0, 0, 0, 0, 12, 0, 0, 0, 0]).is_none());
+    assert!(Node::decode(&[4, 0, 0, 0, 0, 0, 0, 7, 0, 0, 0, 0]).is_none());
     assert!(Node::decode(&[15, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0]).is_none());
     assert!(Node::decode(&[10, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2]).is_none());
     assert!(Node::decode(&set(code("ab", &[]).encode(), 11, 2)).is_none());

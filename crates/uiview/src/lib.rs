@@ -9,12 +9,14 @@
 //! clock at its first draw), frames asked for only meanwhile ([`View::animating`]). In a window
 //! narrower than [`NARROW`] (a phone's) chips and quiet buttons are touch targets, [`TOUCH`] tall.
 //! Grids and Canvases are boards: they take the room the other widgets leave ([`SQUARE`]), and
-//! with an id they are pads ([`Sense::Pad`]) a press or a drag taps ([`Play::tap`]).
+//! with an id they are pads ([`Sense::Pad`]) a press or a drag taps ([`Play::tap`]). A frame
+//! whose first node is its Pages lays the rest out beside or under them.
 
 #![forbid(unsafe_code)]
 
 mod area;
 mod canvas;
+mod cards;
 #[cfg(test)]
 mod tests;
 mod texts;
@@ -49,7 +51,7 @@ pub use ui::icon::REVEAL_MS;
 /// How a window is scrolled: pixels down, and the content's and the view's height as last drawn;
 /// whether a view at the bottom stays there as the content grows (the Assistant's transcript);
 /// each Scroll as last drawn; the page clock when a revealed glyph first drew; each board (a Grid
-/// or a Canvas) with an id as last drawn.
+/// or a Canvas) with an id as last drawn; the page its Pages last lit.
 #[derive(Debug, Default)]
 pub struct View {
     pub scroll: f32,
@@ -58,6 +60,7 @@ pub struct View {
     pub scrolls: Vec<Scrolled>,
     pub reveal: Option<f64>,
     pub grids: Vec<Board>,
+    pub page: u8,
 }
 
 /// A board (a Grid or a Canvas) with an id as last drawn: its id, its place among the frame's
@@ -257,11 +260,22 @@ pub fn wheel(texts: &mut Texts, view: &mut View, x: f32, y: f32, dy: f32) -> boo
     mem::replace(at, to) != to
 }
 
-/// Lays out `nodes` in `ui`'s rect and draws them, scrolled as `view` says (see the crate docs).
+/// Lays out `nodes` in `ui`'s rect and draws them, scrolled as `view` says (see the crate docs):
+/// beside or under the window's pages if the first is its Pages, a new page at the top.
 pub fn draw(ui: &mut Ui<'_>, nodes: &[Node], texts: &mut Texts, view: &mut View) {
-    let r = ui.rect();
-    let (w, inner) = ((r.w - 2.0 * PAD).max(0.0), r.h - 2.0 * PAD);
-    let (t, now, touch) = (ui.theme(), ui.state().now_ms, r.w < NARROW);
+    let whole = ui.rect();
+    let (r, left, nodes) = match nodes {
+        [Node::Pages { id, on, labels }, rest @ ..] => {
+            if mem::replace(&mut view.page, *on) != *on {
+                view.scroll = 0.0;
+            }
+            let (r, left) = cards::pages(ui, *id, *on, labels);
+            (r, left, rest)
+        }
+        _ => (whole, PAD, nodes),
+    };
+    let (w, inner) = ((r.w - left - PAD).max(0.0), r.h - 2.0 * PAD);
+    let (t, now, touch) = (ui.theme(), ui.state().now_ms, whole.w < NARROW);
     let old = mem::take(&mut view.scrolls);
     #[rustfmt::skip]
     let mut lay = Lay { t, texts, sizes: Vec::new(), extents: Vec::new(), extra: 0.0, fills: 0,
@@ -296,7 +310,9 @@ pub fn draw(ui: &mut Ui<'_>, nodes: &[Node], texts: &mut Texts, view: &mut View)
         (y, a.follow) = (y.max(PAD + bottom - r.h).min(PAD + top), false);
     }
     view.scroll = y.min(view.heights.0 - r.h).max(0.0);
-    lay.draw_stack(ui, nodes, (r.x + PAD, r.y + PAD - view.scroll), SPACING);
+    ui.push_clip(r);
+    lay.draw_stack(ui, nodes, (r.x + left, r.y + PAD - view.scroll), SPACING);
+    ui.pop_clip();
     ui.thumb(r, view.scroll, view.heights.0);
     (view.scrolls, view.reveal, view.grids) = (lay.scrolls, lay.reveal, lay.grids);
 }
@@ -315,6 +331,7 @@ fn style_of(style: Style, t: &Theme) -> TextStyle {
         Style::Success => t.body().with_color(t.ansi[2]),
         Style::Accent => t.body().with_color(t.accent),
         Style::Display => TextStyle::new(FontId::SansBold, 34.0, t.text),
+        Style::Warning => t.small().with_color(t.danger),
     }
 }
 
@@ -479,6 +496,7 @@ impl Lay<'_> {
             Node::Button { variant: Variant::Quiet, label, .. } => {
                 (quiet_width(ts, t, label), if self.touch { TOUCH } else { BUTTON_H })
             }
+            Node::Button { variant: Variant::Link, .. } => (w, f32::from(uiwire::LINK_H)),
             Node::Button { label, .. } => (ui::button_width(ts, t, label), BUTTON_H),
             Node::Spacer { px: side } | Node::Glyph { size: side, .. } => {
                 (f32::from(*side), f32::from(*side))
@@ -487,6 +505,9 @@ impl Lay<'_> {
             Node::Item { .. } => (w, ITEM_H),
             Node::Entry { .. } => (w, ENTRY_H),
             Node::Toggle { .. } => (w, TOGGLE_H),
+            Node::Choice { .. } | Node::Switch { .. } => (w, f32::from(uiwire::CARD_H)),
+            Node::Themes { .. } => (w, cards::themes_size(w).3),
+            Node::Pages { .. } => (0.0, 0.0),
             // As tall as its rows, and what it takes of a Fill's room.
             Node::Area { id, .. } => {
                 let (y, a) = (self.y, self.texts.areas.iter_mut().find(|a| a.0 == *id));
@@ -611,6 +632,7 @@ impl Lay<'_> {
                     Variant::Danger => ui.button_danger(id, label),
                     Variant::Chip | Variant::On => chip(ui, id, r, label, *variant == Variant::On),
                     Variant::Quiet => quiet(ui, id, r, label),
+                    Variant::Link => cards::link(ui, id, r, label),
                 }
             }),
             Node::Input { id, placeholder, .. } => {
@@ -648,8 +670,11 @@ impl Lay<'_> {
                 entry(ui, WidgetId(*id), r, (*glyph, *hue), [text, detail], *more)
             }
             Node::Toggle { id, on, label } => toggle(ui, WidgetId(*id), r, label, *on),
+            Node::Choice { id, on, text } => cards::choice(ui, WidgetId(*id), r, text, *on),
+            Node::Switch { id, on, label } => cards::switch_card(ui, WidgetId(*id), r, label, *on),
+            Node::Themes { id } => cards::themes(ui, *id, (x, y, w)),
             Node::Separator => ui.fill(RectF { h: ui.px(1.0), ..r }, 0.0, t.border),
-            Node::Spacer { .. } => {}
+            Node::Spacer { .. } | Node::Pages { .. } => {}
             Node::Grid { id, cols, cells, texts } => {
                 // The square measured: the rows share the height.
                 let cols = (*cols).max(1);
@@ -933,20 +958,11 @@ fn entry(
 /// and its knob right when `on`, else sunken with its knob left; washed under the pointer; a
 /// click hit.
 fn toggle(ui: &mut Ui<'_>, id: WidgetId, r: RectF, label: &str, on: bool) {
-    let (t, s, line) = (ui.theme(), ui.state(), ui.px(1.0));
+    let (t, s) = (ui.theme(), ui.state());
     if s.hover == Some(id) {
         ui.fill(r, RADIUS_SM, t.wash(s.pressed == Some(id)));
     }
-    let track = RectF::new(r.x + r.w - 8.0 - 34.0, r.y + (r.h - 21.0) / 2.0, 34.0, 21.0);
-    let track = ui.snapped(track);
-    let (fill, knob) = if on { (t.accent, t.accent_text) } else { (t.surface_lo, t.text_dim) };
-    ui.fill(track, 10.5, fill);
-    if !on {
-        ui.border(track, 10.5, line, t.border);
-    }
-    let x = if on { track.x + track.w - 18.0 } else { track.x + 3.0 };
-    let dot = ui.snapped(RectF::new(x, track.y + 3.0, 15.0, 15.0));
-    ui.fill(dot, dot.w / 2.0, knob);
+    let track = cards::switch(ui, r, 8.0, on);
     let body = t.body();
     let shown = ui.text_system().ellipsize(label, body, (track.x - r.x - 21.0).max(0.0));
     let base = cap_base(ui, r.y, r.h, body);

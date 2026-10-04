@@ -4,7 +4,7 @@
 # web/index.html, the deferred fonts in dist/fonts/deferred/, the lazy fonts
 # in dist/fonts/ and the font licenses in dist/licenses/; then the program
 # worker (the cpu crate, its glue and web/worker.js) in dist/cpu/ and the
-# programs (the toolbox, studio, assistant and system crates, for wasm32-wasip1)
+# programs (the sh, toolbox, studio, assistant and system crates, for wasm32-wasip1)
 # in dist/bin/.
 # scripts/budget.sh measures the result;
 # `cargo run -p serve --release -- dist 8080` serves it.
@@ -156,12 +156,12 @@ wasm-bindgen "${bindgen[@]}" --out-dir dist/cpu --out-name cpu "$target_dir/wasm
 optimize dist/cpu/cpu_bg.wasm
 cp web/worker.js dist/cpu/
 # The programs, each fetched when it first runs: std binaries for WASI, the
-# test programs (toolbox.wasm), Studio (studio.wasm), the Assistant
-# (assistant.wasm) and About, Feedback and Files (system.wasm), in one cargo run.
+# shell (sh.wasm), the test programs (toolbox.wasm), Studio (studio.wasm), the Assistant
+# (assistant.wasm) and the system apps (system.wasm), in one cargo run.
 rustup target list --installed 2>/dev/null | tr -d '\r' | grep -qx wasm32-wasip1 || { echo "ERROR: run: rustup target add wasm32-wasip1" >&2; exit 1; }
-cargo build -p compusophy-toolbox -p compusophy-studio -p compusophy-assistant -p compusophy-system --bins --release --target wasm32-wasip1
+cargo build -p compusophy-sh -p compusophy-toolbox -p compusophy-studio -p compusophy-assistant -p compusophy-system --bins --release --target wasm32-wasip1
 mkdir -p dist/bin
-for p in toolbox studio assistant system; do
+for p in sh toolbox studio assistant system; do
   cp "$target_dir/wasm32-wasip1/release/$p.wasm" dist/bin/
   optimize "dist/bin/$p.wasm"
 done

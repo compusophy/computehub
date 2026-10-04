@@ -58,8 +58,7 @@ crates/      the OS (boot, kernel, worker); speaks to programs by WASI, uiwire
   ui/        immediate-mode widgets, themes, the App trait, Cx, the Code
              editor (re-exports text)
   vt/        VT/xterm escape parser        term/  terminal screen model
-  guest/     the guest shell the Terminal runs
-  apps/      Settings, Terminal (built in)
+  apps/      Terminal (built in), a console
   uiwire/    remote UI protocol: GUI programs send widget trees, get events
   uiview/    draws them with ui; holds edited text
   host/      wm + one app per window; agent; grabs, squeeze; motion, frames
@@ -70,8 +69,8 @@ crates/      the OS (boot, kernel, worker); speaks to programs by WASI, uiwire
              frames on demand, localStorage, workers, beacon
   os/        wasm entry: fonts, VFS, registry, prefs, event glue, Remote (a
              program's window), ai, report (telemetry), home (/home kept)
-  kernel/    deterministic: wire protocol, process table, consoles
-             and file server (main), snap (/home), module
+  kernel/    deterministic: wire protocol, process table, consoles,
+             jobs, file server (main), snap (/home), module
   wasi/      the kernel's worker half: WASI preview 1 Proc, fds, /dev
   cpu/       the program worker (cdylib; dist/cpu/): loader, WASI imports
 programs/    wasm32-wasip1 programs (dist/bin/), the app language they share
@@ -80,7 +79,8 @@ programs/    wasm32-wasip1 programs (dist/bin/), the app language they share
   studio/    make apps by describing them; runs `.app` files
   coder/     Studio's coding agent: write, test, fix by edits, keep the best
   assistant/ the Assistant: the overlay AI using the desktop
-  system/    About, Editor, Feedback, Files, Welcome, Activity (one program)
+  system/    About, Editor, Feedback, Files, Welcome, Activity, Settings
+  sh/        the shell: line editor, commands, jobs
   toolbox/   test programs, one binary
 assets/fonts/  the fonts (see Fonts below)
 api/           server functions (Vercel, Node): ai.mjs, feedback.mjs
@@ -143,4 +143,4 @@ first opens). Subsets and OFL texts: `assets/fonts/README.md`.
 - Git: plain `git commit`, no user.name/email overrides. Authors:
   `compusophy`. No email address in any file.
 - No absolute home-directory paths in committed files or `dist/` (caps.sh
-  and build-web.sh check; the VFS's own guest home is allowed in the wasm).
+  and build-web.sh check; the VFS's guest home may be in the wasm).

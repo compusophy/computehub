@@ -151,9 +151,14 @@ impl Perform for Sink<'_> {
         t.dirty = true;
     }
 
-    /// Only the title (OSC 0 and 2) is used; the icon name, links, color
-    /// queries and the clipboard (52, for safety) are ignored.
+    /// The title (OSC 0 and 2) and asks of the desktop (1729) are used; the icon name, links,
+    /// color queries and the clipboard (52, for safety) are ignored.
     fn osc(&mut self, p: &[&[u8]]) {
+        let text =
+            |b: &[u8]| String::from_utf8_lossy(b).chars().filter(|c| !c.is_control()).collect();
+        if p.len() > 2 && p[0] == b"1729" && self.0.asks.len() < crate::MAX_ASKS {
+            return self.0.asks.push((text(p[1]), text(&p[2..].join(&b';'))));
+        }
         if p.len() < 2 || !(p[0] == b"0" || p[0] == b"2") {
             return;
         }

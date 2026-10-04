@@ -45,6 +45,8 @@ impl Host for Fake {
             match e {
                 Effect::Reply { errno, data, .. } if reply.is_none() => reply = Some((errno, data)),
                 Effect::Draw { frame, .. } => self.frames.push(frame),
+                // A job's workers, asked for and ended.
+                Effect::Spawn { .. } | Effect::Kill { .. } => {}
                 e => panic!("unexpected {e:?}"),
             }
         }
@@ -72,8 +74,8 @@ impl Host for Fake {
 fn start(tty: Option<(u16, u16)>, env: &[&str]) -> Start {
     let strings = |l: &[&str]| l.iter().map(|s| s.to_string()).collect();
     let (stdout, cwd, roots) = (wire::Stdout::Console, "/tmp".into(), vec!["/".into()]);
-    let (argv, env) = (strings(&["hello", "a", "b c"]), strings(env));
-    Start { role: Role::Process, pid: 2, tty, stdout, cwd, roots, argv, env }
+    let (argv, env, stdin) = (strings(&["hello", "a", "b c"]), strings(env), wire::Stdin::Console);
+    Start { role: Role::Process, pid: 2, tty, stdin, stdout, cwd, roots, argv, env }
 }
 
 /// A process, its memory, and its worker.
@@ -97,6 +99,16 @@ impl T {
         h.k.message(&mut h.fs, h.pid, &[wire::READY, wire::VERSION]);
         h.k.take_effects();
         T { p: Proc::new(&s, &mut h).unwrap(), m: vec![0; MEM as usize], h }
+    }
+    /// Process `pid`, a child, past its READY: its worker's Proc, the worker acting for it.
+    fn child(&mut self, pid: u32) -> Proc {
+        self.h.pid = pid;
+        self.h.k.message(&mut self.h.fs, pid, &[wire::READY, wire::VERSION]);
+        let start = self.h.k.take_effects().into_iter().find_map(|e| match e {
+            Effect::Start { msg, .. } => Start::decode(&msg),
+            _ => None,
+        });
+        Proc::new(&start.expect("a Start"), &mut self.h).unwrap()
     }
     /// The errno of `f(a)`; panics on an exit.
     fn ok(&mut self, f: usize, a: &[u64]) -> u16 {
@@ -419,7 +431,8 @@ fn readdir_reads_every_page_cuts_at_the_buffer_and_never_skips_entries_removed_m
 fn dev_holds_null_tty_winsize_draw_and_events() {
     let mut t = T::new(Some((80, 24)), &[]);
     let devs: Vec<_> = t.readdir(7, 1_000, 0).0.into_iter().map(|e| (e.2, e.3)).collect();
-    let names = ["draw", "events", "null", "tty", "winsize"].map(|n| (2, n.to_string()));
+    let names = ["consctl", "draw", "events", "job", "null", "tty", "winsize"];
+    let names = names.map(|n| (2, n.into()));
     assert_eq!(devs, [vec![(3, ".".into()), (3, "..".into())], names.to_vec()].concat());
     let bad = [("nope", 0), ("null", CREAT | EXCL), ("tty", DIR)].map(|(d, o)| t.open(7, d, o, 0));
     assert_eq!(bad, [Err(ENOENT), Err(EEXIST), Err(ENOTDIR)]);
@@ -451,6 +464,23 @@ fn dev_holds_null_tty_winsize_draw_and_events() {
     assert_eq!((t.io(FD_READ, events, 9, &[]), t.got(2)), ((0, 2), b"ef".to_vec()));
     assert_eq!((t.io(FD_READ, events, 9, &[]), t.got(2)), ((0, 2), b"gh".to_vec()));
     assert_eq!(t.h.ops, [wire::EVENTS; 2]);
+    // The console's input comes as the kernel cooks it; consctl's words set its mode, each fd
+    // from cooked with echo, and read as nothing.
+    t.h.k.input(t.h.pid, b"hi\r");
+    assert_eq!((t.io(FD_READ, 0, 9, &[]), t.got(3)), ((0, 3), b"hi\n".to_vec()));
+    let ctl = t.open(7, "consctl", 0, 0).unwrap();
+    let ctl_write = |t: &mut T, words: &[u8]| {
+        t.put(BUF, words);
+        let e = t.io(FD_WRITE, ctl, words.len() as u64, &[]).0;
+        (e, t.h.k.mode(t.h.pid))
+    };
+    let mode = |raw, echo| kernel::Mode { raw, echo };
+    assert_eq!(ctl_write(&mut t, b"rawon echooff\n"), (0, mode(true, false)));
+    assert_eq!(ctl_write(&mut t, b" rawoff"), (0, mode(false, false)));
+    assert_eq!(ctl_write(&mut t, b"echoon raw"), (EINVAL, mode(false, false)));
+    assert_eq!(ctl_write(&mut t, b"echoon"), (0, mode(false, true)));
+    assert_eq!(t.io(FD_READ, ctl, 9, &[]), (0, 0));
+    assert_eq!(&t.h.ops[2..], [wire::CONS_READ, wire::CONS_MODE, wire::CONS_MODE, wire::CONS_MODE]);
 }
 
 #[test]
@@ -481,4 +511,55 @@ fn random_calls_never_panic() {
         }
         (t.h.out, t.h.frames) = (vec![], vec![]);
     }
+}
+
+#[test]
+fn a_job_written_to_dev_job_runs_its_pipes_and_a_read_says_its_status() {
+    let mut fs = Vfs::new();
+    fs.mkdir("/bin").and(fs.write("/bin/rev", b"#!wasm bin/toolbox.wasm\n")).unwrap();
+    fs.write("/tmp/in", b"abc").unwrap();
+    let mut t = T::with(fs, start(Some((80, 24)), &[]));
+    // /dev is the last preopen.
+    let job = t.open(t.p.fds.len() as u64 - 1, "job", 0, 0).unwrap();
+    assert_eq!(t.io(FD_READ, job, 9, &[]), (0, 0), "no job: nothing to wait for");
+    let write = |t: &mut T, stages: &[&str], stdin| {
+        let stages = stages.iter().map(|p| (*p, vec!["rev".into()])).collect();
+        let (data, stdout) = (&b"hi"[..], wire::Stdout::Console);
+        let bytes = wire::Job { cwd: "/tmp", stdin, stdout, stages, data }.encode();
+        t.put(BUF, &bytes);
+        t.io(FD_WRITE, job, bytes.len() as u64, &[])
+    };
+    assert_eq!(write(&mut t, &["/bin/nope"], wire::Stdin::Pipe).0, ENOENT);
+    let n = write(&mut t, &["/bin/rev", "/bin/rev"], wire::Stdin::Pipe).1;
+    assert!(n > 20, "the whole job in one write");
+    // The first reads the job's bytes, then an end of file; what it writes the second reads.
+    let mut first = t.child(3);
+    let call = |p: &mut Proc, t: &mut T, f, fd, len| {
+        t.put(0, &[BUF as u32, len].map(u32::to_le_bytes).concat());
+        (p.call(f, &[fd, 0, 1, 64], &mut t.m, &mut t.h).unwrap(), t.num(64, 4))
+    };
+    assert_eq!((call(&mut first, &mut t, FD_READ, 0, 9), t.got(2)), ((0, 2), b"hi".to_vec()));
+    assert_eq!(call(&mut first, &mut t, FD_READ, 0, 9), (0, 0));
+    t.put(BUF, b"ih");
+    assert_eq!(call(&mut first, &mut t, FD_WRITE, 1, 2), (0, 2));
+    assert_eq!((first.call(FD_FDSTAT_GET, &[1, 0], &mut t.m, &mut t.h), t.num(0, 1)), (Ok(0), 0));
+    t.h.k.message(&mut t.h.fs, 3, &Msg::Exit { status: 0 }.encode());
+    let mut second = t.child(4);
+    assert_eq!((call(&mut second, &mut t, FD_READ, 0, 9), t.got(2)), ((0, 2), b"ih".to_vec()));
+    assert_eq!(call(&mut second, &mut t, FD_READ, 0, 9), (0, 0), "its writer ended");
+    assert_eq!(call(&mut second, &mut t, FD_WRITE, 1, 2), (0, 2));
+    assert_eq!(t.h.out.concat(), b"ih", "the last stage's stdout is the console");
+    t.h.k.message(&mut t.h.fs, 4, &Msg::Exit { status: 3 }.encode());
+    // The job's status is the last stage's, read once as text.
+    t.h.pid = 2;
+    assert_eq!((t.io(FD_READ, job, 1, &[]), t.got(1)), ((0, 1), b"3".to_vec()));
+    assert_eq!((t.io(FD_READ, job, 9, &[]), t.got(1)), ((0, 1), b"\n".to_vec()));
+    assert_eq!(t.io(FD_READ, job, 9, &[]), (0, 0));
+    // Stdin from a file (never a directory); stdout to nothing.
+    let (stdin, stdout) = (wire::Stdin::File("/tmp/in".into()), wire::Stdout::Null);
+    let mut t = T::with(t.h.fs, Start { stdin, stdout, ..start(None, &[]) });
+    assert_eq!((t.io(FD_READ, 0, 9, &[]), t.got(3)), ((0, 3), b"abc".to_vec()));
+    assert_eq!((t.io(FD_WRITE, 1, 3, &[]), t.h.out.len()), ((0, 3), 0));
+    let dir = Start { stdin: wire::Stdin::File("/tmp".into()), ..start(None, &[]) };
+    assert_eq!(Proc::new(&dir, &mut t.h).err(), Some(EISDIR));
 }

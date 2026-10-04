@@ -2,13 +2,13 @@
 //! copy of std. It runs the applet named by the file name of argv\[0\] (less a `.wasm`), or by
 //! argv\[1\] when argv\[0\] names the toolbox itself; the /bin marker of every applet points here.
 //! The exit status is the applet's: 127 for no applet, and 1 for one not built yet (all but
-//! `hello`, `spin` and `fstest`), which says so.
+//! `hello`, `rev`, `wc`, `spin` and `fstest`), which says so.
 
 #![forbid(unsafe_code)]
 
 mod fstest;
 
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 use std::process::ExitCode;
 
 /// Every applet, in the order `toolbox` lists them.
@@ -18,7 +18,8 @@ const APPLETS: [&str; 9] =
 fn main() -> ExitCode {
     let argv: Vec<String> = std::env::args().collect();
     let (name, args) = applet(&argv);
-    ExitCode::from(run(name, args, &mut io::stdout().lock(), &mut io::stderr().lock()))
+    let (mut out, mut err) = (io::stdout().lock(), io::stderr().lock());
+    ExitCode::from(run(name, args, &mut io::stdin().lock(), &mut out, &mut err))
 }
 
 /// The applet `argv` names and its arguments, its own name first.
@@ -36,11 +37,18 @@ fn base(path: &str) -> &str {
     name.strip_suffix(".wasm").unwrap_or(name)
 }
 
-/// Runs applet `name` on `args` (its own name first); its exit status.
-fn run(name: &str, args: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8 {
+/// Runs applet `name` on `args` (its own name first) and its input; its exit status.
+fn run(
+    name: &str,
+    args: &[String],
+    inp: &mut dyn Read,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> u8 {
     let words = args.get(1..).unwrap_or(&[]);
     match name {
         "hello" => hello(words, out, err),
+        "rev" | "wc" => filter(name, words, inp, out, err),
         "spin" => spin(),
         "fstest" => fstest::fstest(args, out),
         _ if APPLETS.contains(&name) => {
@@ -67,6 +75,44 @@ fn hello(words: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8 {
     }
 }
 
+/// `rev`: each line of the input, its characters reversed. `wc [-l|-w|-c]`: the input's lines,
+/// words and bytes, or the one count asked for. 1 if the input cannot be read or the output
+/// written, 2 for an option `wc` does not know.
+fn filter(
+    name: &str,
+    words: &[String],
+    inp: &mut dyn Read,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> u8 {
+    let mut data = Vec::new();
+    if let Err(e) = inp.read_to_end(&mut data) {
+        let _ = writeln!(err, "{name}: {e}");
+        return 1;
+    }
+    let text = String::from_utf8_lossy(&data);
+    let said = match (name, words.first().map(String::as_str)) {
+        ("rev", _) => text.lines().map(|l| l.chars().rev().collect::<String>() + "\n").collect(),
+        (_, None) => {
+            format!("{} {} {}\n", text.lines().count(), text.split_whitespace().count(), data.len())
+        }
+        (_, Some("-l")) => format!("{}\n", text.lines().count()),
+        (_, Some("-w")) => format!("{}\n", text.split_whitespace().count()),
+        (_, Some("-c")) => format!("{}\n", data.len()),
+        (_, Some(other)) => {
+            let _ = writeln!(err, "wc: unknown option {other}; use -l, -w or -c");
+            return 2;
+        }
+    };
+    match out.write_all(said.as_bytes()).and_then(|()| out.flush()) {
+        Ok(()) => 0,
+        Err(e) => {
+            let _ = writeln!(err, "{name}: {e}");
+            1
+        }
+    }
+}
+
 /// `spin`: loops forever without a syscall, to test that the kernel kills a
 /// guest mid-loop (Ctrl+C gives 130, closing the window 137).
 fn spin() -> ! {
@@ -83,11 +129,16 @@ mod tests {
         s.split(' ').map(String::from).collect()
     }
 
-    /// Runs `argv` as `main` would: (status, stdout, stderr).
+    /// Runs `argv` as `main` would, on no input: (status, stdout, stderr).
     fn exec(argv: &[String]) -> (u8, String, String) {
+        piped(argv, "")
+    }
+
+    /// The same on `input`.
+    fn piped(argv: &[String], input: &str) -> (u8, String, String) {
         let (mut out, mut err) = (Vec::new(), Vec::new());
         let (name, rest) = applet(argv);
-        let status = run(name, rest, &mut out, &mut err);
+        let status = run(name, rest, &mut input.as_bytes(), &mut out, &mut err);
         let text = |b: Vec<u8>| String::from_utf8(b).unwrap();
         (status, text(out), text(err))
     }
@@ -113,7 +164,8 @@ mod tests {
         assert_eq!(hello(&args("a"), &mut full, &mut err), 1);
         assert_eq!(err, b"hello: failed to write whole buffer\n");
         // Unbuilt applets exit 1, and unknown ones 127.
-        for name in APPLETS.iter().filter(|n| !["hello", "spin", "fstest"].contains(n)) {
+        for name in APPLETS.iter().filter(|n| !["hello", "rev", "wc", "spin", "fstest"].contains(n))
+        {
             let msg = format!("{name}: not built yet\n");
             assert_eq!(exec(&[(*name).to_owned()]), (1, String::new(), msg));
             assert_eq!(exec(&args(&format!("/bin/{name} x"))).0, 1);
@@ -123,5 +175,16 @@ mod tests {
         assert_eq!((status, out.as_str()), (127, ""));
         assert_eq!(err, format!("toolbox: no applet \"nope\"; {list}"));
         assert_eq!((exec(&args("toolbox")).0, exec(&[]).0), (127, 127));
+    }
+
+    #[test]
+    fn rev_and_wc_read_their_input() {
+        let ok = |s: &str| (0, s.to_owned(), String::new());
+        assert_eq!(piped(&args("rev"), "abc\nhé\n\n"), ok("cba\néh\n\n"));
+        assert_eq!(piped(&args("wc"), "one two\nthree\n"), ok("2 3 14\n"));
+        let counts = ["-l", "-w", "-c"].map(|f| piped(&args(&format!("wc {f}")), "a b\n").1);
+        assert_eq!(counts, ["1\n", "2\n", "4\n"]);
+        assert_eq!(piped(&args("wc -x"), "").0, 2);
+        assert_eq!((exec(&args("rev")), exec(&args("wc"))), (ok(""), ok("0 0 0\n")));
     }
 }

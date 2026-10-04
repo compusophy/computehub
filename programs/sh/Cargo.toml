@@ -1,0 +1,23 @@
+[package]
+name = "compusophy-sh"
+description = "compusophyOS sh: the shell the Terminal runs, a wasm32-wasip1 program on its console (a line editor, Unix-like commands over the files, programs joined by pipes as the kernel's jobs). Fetched when a terminal first opens, never with the boot download; built into dist/bin/, never committed."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[lib]
+name = "sh"
+
+[[bin]]
+name = "sh"
+path = "src/main.rs"
+
+[dependencies]
+compusophy-vfs.workspace = true
+
+# The kernel reads the jobs the shell writes: its decoder checks the encoding.
+[dev-dependencies]
+compusophy-kernel.workspace = true

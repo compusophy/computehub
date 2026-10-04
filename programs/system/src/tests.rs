@@ -970,3 +970,31 @@ fn files_ai_and_numbers_read_as_people_say_them() {
         ["under $0.01", "under $0.01", "about $0.01", "about $0.02", "about $1.25"]
     );
 }
+
+#[test]
+fn settings_sets_themes_models_and_switches_and_hears_the_desktop() {
+    use crate::settings::{FEEDBACK, LIVING, MODEL, MODELS, NAV, REPORTS, THEME, UNKEPT};
+    let mut w = Win::new("/bin/settings");
+    let pref = |k: &str, v: &str| vec![Request::Pref { key: k.into(), value: v.into() }];
+    let on = |f: &Frame, want| {
+        all(&f.nodes).into_iter().any(|n| match n {
+            Node::Switch { id, on, .. } | Node::Choice { id, on, .. } => *on && *id == want,
+            _ => false,
+        })
+    };
+    let told = |reports, grain, kept| Event::Prefs { reports, grain, kept };
+    let f = w.last(&[resize(720), told(true, true, true)]);
+    assert!(matches!(f.nodes[0], Node::Pages { on: 0, .. }) && on(&f, LIVING));
+    assert_eq!(w.click(THEME + 1)[0].requests, pref("theme", "Dawn"));
+    // Ours stands until the desktop's word changes: told again what it said, the grain stays off.
+    let f = w.send(&[Event::Click { id: LIVING }, told(true, true, true)]);
+    assert!(f.len() == 1 && f[0].requests == pref("grain", "off") && !on(&f[0], LIVING));
+    assert!(on(&w.last(&[told(true, false, true), told(true, true, true)]), LIVING));
+    let f = w.last(&[Event::Click { id: NAV + 1 }, Event::Config { model: MODELS[1].1.into() }]);
+    assert_eq!([on(&f, MODEL), on(&f, MODEL + 1)], [false, true]);
+    assert_eq!(w.click(MODEL)[0].requests, pref("ai.model", MODELS[0].1));
+    let f = w.last(&[Event::Click { id: NAV + 2 }, told(true, true, false)]);
+    assert!(texts(&f.nodes).contains(&UNKEPT) && on(&f, REPORTS));
+    assert_eq!(w.click(REPORTS)[0].requests, pref("reports", "off"));
+    assert_eq!(w.click(FEEDBACK)[0].requests, [Request::Open { name: "feedback".into() }]);
+}

@@ -910,3 +910,45 @@ fn trees_draw_with_the_toolkit_and_fills_take_the_rest() {
     let taller = [Node::Spacer { px: 1500 }, input("")];
     assert_eq!(draw(&taller, &mut t, &mut view, None).hits[0].rect.y, 400.0 - PAD - FIELD_H);
 }
+
+#[test]
+fn pages_are_a_column_or_tabs_and_cards_ring_what_is_chosen() {
+    let t = &THEMES[0];
+    let nodes = vec![
+        Node::Pages { id: 1, on: 1, labels: "Appearance\nAI\nPrivacy".into() },
+        Node::Themes { id: 10 },
+        Node::Choice { id: 20, on: true, text: "GLM 5.3\nbest answers".into() },
+        Node::Switch { id: 30, on: false, label: "Living grain".into() },
+        Node::Button { id: 31, variant: Variant::Link, label: "Send feedback".into() },
+    ];
+    let (mut texts, mut view) = (Texts::default(), View::default());
+    // Wide, a column with the rest right of it; narrow, tabs side by side with the rest under.
+    let d = draw_at(720.0, &nodes, &mut texts, &mut view, None);
+    let (a, b) = (d.hit(1).rect, d.hit(2).rect);
+    assert!(a.x == b.x && b.y > a.y && d.hit(10).rect.x > a.x + a.w, "{a:?} {b:?}");
+    // The current theme (the first card's, Midnight's) and the chosen model wear the accent's
+    // ring 3 px out; the switch and the link fill the width.
+    let ring = |d: &Drawn| -> Vec<[f32; 4]> {
+        let ring = |b: &&&Instance| b.color == t.accent && b.p0 == 2.0;
+        d.of(Kind::Border).iter().filter(ring).map(|b| b.rect).collect()
+    };
+    let out = |r: RectF| [r.x - 3.0, r.y - 3.0, r.w + 6.0, r.h + 6.0];
+    assert_eq!(ring(&d), [out(d.hit(10).rect), out(d.hit(20).rect)]);
+    assert!([30, 31].iter().all(|&id| d.hit(id).rect.w == d.hit(20).rect.w));
+    let d = draw_at(360.0, &nodes, &mut texts, &mut view, None);
+    let (a, b) = (d.hit(1).rect, d.hit(3).rect);
+    assert!(a.y == b.y && a.w == b.w && b.x > a.x && d.hit(10).rect.y > a.y + a.h, "{a:?} {b:?}");
+    // Three themes across, then fewer as the window narrows.
+    let mut rows = |w| {
+        let d = draw_at(w, &nodes[1..2], &mut texts, &mut view, None);
+        let mut ys: Vec<u32> = (10..13).map(|id| d.hit(id).rect.y as u32).collect();
+        (ys.sort(), ys.dedup(), ys.len()).2
+    };
+    assert_eq!([rows(600.0), rows(400.0), rows(200.0)], [1, 2, 3]);
+    // As the AI reads them: the page's tab selected, the theme and model chosen, the switch off,
+    // a link (what lies below the window unmarked: without the themes, all of it shows).
+    let marks = |nodes: &[Node]| sem(nodes, t).marks.into_iter().map(|m| (m.id, m.role, m.flags));
+    let marks: Vec<_> = marks(&nodes).chain(marks(&[&nodes[..1], &nodes[2..]].concat())).collect();
+    let want = [(1, 2, 0), (2, 2, 1), (10, 4, 1), (11, 4, 0), (20, 4, 1), (30, 3, 0), (31, 9, 0)];
+    assert!(want.iter().all(|m| marks.contains(m)), "{marks:?}");
+}

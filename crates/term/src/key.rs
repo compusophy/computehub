@@ -60,9 +60,21 @@ pub fn encode_key(key: Key, mods: KeyMods, app_cursor: bool) -> Vec<u8> {
 }
 
 /// The bytes that paste `text`: line breaks become `\r` (as Enter) and ESC is
-/// dropped, so the text cannot end a bracketed paste (`bracketed`) early.
+/// dropped, so the text cannot end a bracketed paste (`bracketed`) early. A loop
+/// over bytes, not `str::replace`: a substring search costs the boot 2 KB.
 pub fn paste(text: &str, bracketed: bool) -> Vec<u8> {
-    let text = text.replace("\r\n", "\r").replace('\n', "\r").replace('\x1b', "");
-    let [open, close] = if bracketed { ["\x1b[200~", "\x1b[201~"] } else { ["", ""] };
-    [open, &text, close].concat().into_bytes()
+    let [open, close]: [&[u8]; 2] = if bracketed { [b"\x1b[200~", b"\x1b[201~"] } else { [b""; 2] };
+    let mut out = open.to_vec();
+    let mut after_cr = false;
+    for &b in text.as_bytes() {
+        match b {
+            b'\n' if after_cr => {}
+            b'\n' => out.push(b'\r'),
+            0x1B => {}
+            b => out.push(b),
+        }
+        after_cr = b == b'\r';
+    }
+    out.extend_from_slice(close);
+    out
 }

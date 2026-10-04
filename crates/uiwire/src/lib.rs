@@ -21,9 +21,10 @@
 //! then; [`Event::Halt`] says the person took over. A request carries its [`Act`] as the act's
 //! own bytes, so only the overlay links the act's encoder and only the desktop its decoder.
 //!
-//! Activity's window alone may watch the desktop's meters ([`Request::Watch`], answered by
-//! [`Event::Stats`] in the [`stat`] format) and end a process ([`Request::End`]); the desktop
-//! drops both from any other window.
+//! The OS's own windows alone (Activity's and Settings', which run its `system` program) may
+//! watch the desktop's meters ([`Request::Watch`], answered by [`Event::Stats`] in the [`stat`]
+//! format), end a process ([`Request::End`]) and set a preference ([`Request::Pref`]), and hear
+//! what Settings shows ([`Event::Prefs`]); the desktop drops those requests from any other.
 
 #![forbid(unsafe_code)]
 
@@ -70,13 +71,16 @@ macro_rules! codes {
 
 codes! {
     /// How a [`Node::Text`] is set (Dim is secondary text, Accent is body text in the accent,
-    /// Display a first screen's name, larger than a Title). Text wraps to the width.
+    /// Display a first screen's name, larger than a Title, Warning small print in the error
+    /// color). Text wraps to the width.
     Style { Body = 0, Title = 1, Heading = 2, Subheading = 3, Small = 4, Mono = 5, Dim = 6,
-        Error = 7, Success = 8, Accent = 9, Display = 10, }
+        Error = 7, Success = 8, Accent = 9, Display = 10, Warning = 11, }
     /// How a [`Node::Button`] looks: an ordinary, the main or a destructive action, a chip
-    /// (a small, quiet suggestion), a chip that is on (the chosen one of a set), or quiet (its
-    /// label alone, dim until the pointer is over it: a crumb, a toolbar's).
-    Variant { Normal = 0, Primary = 1, Danger = 2, Chip = 3, On = 4, Quiet = 5, }
+    /// (a small, quiet suggestion), a chip that is on (the chosen one of a set), quiet (its
+    /// label alone, dim until the pointer is over it: a crumb, a toolbar's), or a link (its
+    /// label in the accent and a chevron after it, in a row [`LINK_H`] tall across the width,
+    /// washed under the pointer: it leads elsewhere).
+    Variant { Normal = 0, Primary = 1, Danger = 2, Chip = 3, On = 4, Quiet = 5, Link = 6, }
     /// The highlight class of a [`Span`]; Error is drawn underlined.
     Class { Plain = 0, Keyword = 1, String = 2, Number = 3, Comment = 4, Name = 5, Punct = 6,
         Error = 7, }
@@ -249,7 +253,34 @@ pub enum Node {
     /// press on it, and the pointer dragged onto another unit while pressed, sends
     /// [`Event::Tap`] with `cell` the unit's `y * w + x`.
     Canvas { id: u32, w: u16, h: u16, draws: Vec<Draw> },
+    /// A frame's first node only (elsewhere nothing): the window's pages, `labels` one a line,
+    /// page `i` the button `id + i` and page `on` lit; a column at the window's left and a line
+    /// right of it when the window is [`WIDE`] or wider, else a segmented control across its
+    /// top. The frame's other nodes are laid out beside or under it, and scroll there; a new
+    /// `on` starts them at the top.
+    Pages { id: u32, on: u8, labels: String },
+    /// The desktop's themes as cards, each a miniature of its desktop over its name (the
+    /// current one ringed and checked in the accent): the default first, as many across as fit
+    /// [`THEME_MIN`] to [`THEME_MAX`] px wide. Theme `i`, in the desktop's own order, is the
+    /// button `id + i`.
+    Themes { id: u32 },
+    /// A raised card [`CARD_H`] tall across the width offering a choice: `text` (a second line,
+    /// after a `\n`, small under the first), ringed and checked in the accent when it is `on`
+    /// (the chosen one of a set); a click sends [`Event::Click`].
+    Choice { id: u32, on: bool, text: String },
+    /// A raised card [`CARD_H`] tall across the width saying `label`, with a switch at its right
+    /// that is `on`; a click sends [`Event::Click`] (the program flips it).
+    Switch { id: u32, on: bool, label: String },
 }
+
+/// The narrowest window whose [`Node::Pages`] are a column.
+pub const WIDE: u16 = 520;
+/// A [`Node::Choice`]'s or [`Node::Switch`]'s height, and a [`Variant::Link`]'s.
+pub const CARD_H: u16 = 56;
+pub const LINK_H: u16 = 44;
+/// The narrowest and the widest card of [`Node::Themes`].
+pub const THEME_MIN: u16 = 150;
+pub const THEME_MAX: u16 = 216;
 
 /// The highest color of a [`Node::Grid`]'s square.
 pub const GRID_COLOR: u8 = 8;
@@ -370,6 +401,10 @@ pub enum Request {
     /// Activity's window only: end process `pid` now (status 137, as a kill). Dropped from any
     /// other window.
     End { pid: u32 },
+    /// The OS's own windows only: set the preference `key` to `value`, as the desktop stores
+    /// them (`ai.model`, `reports`, `grain`; `theme` switches the desktop's theme). Dropped from
+    /// any other window.
+    Pref { key: String, value: String },
 }
 
 /// Something that happened in the window, host to program.
@@ -412,6 +447,10 @@ pub enum Event {
     Tap { id: u32, cell: u32 },
     /// The desktop's meters now ([`Request::Watch`]): [`stat::Stats`] bytes.
     Stats { data: Vec<u8> },
+    /// The OS's own windows only, after the first Resize and on every change: what Settings
+    /// shows, whether automatic error reports go, the backdrop's grain lives and the person's
+    /// files are kept.
+    Prefs { reports: bool, grain: bool, kept: bool },
 }
 
 /// The public `encode` and `decode` of each message, from its `put` and `get`.
@@ -525,6 +564,10 @@ impl Node {
                     }
                 })
             }
+            Self::Pages { id, on, labels } => o.head(22, *id, n).u8(*on).str(labels),
+            Self::Themes { id } => o.head(23, *id, n),
+            Self::Choice { id, on, text } => o.head(24, *id, n).u8((*on).into()).str(text),
+            Self::Switch { id, on, label } => o.head(25, *id, n).u8((*on).into()).str(label),
         };
         self.children().iter().for_each(|child| child.put(o));
     }
@@ -571,6 +614,10 @@ impl Node {
                 Self::Grid { id, cols, cells, texts }
             }
             21 => Self::read_canvas(r, id)?,
+            22 => Self::Pages { id, on: r.u8()?, labels: r.str()? },
+            23 => Self::Themes { id },
+            24 => Self::Choice { id, on: r.bool()?, text: r.str()? },
+            25 => Self::Switch { id, on: r.bool()?, label: r.str()? },
             _ => return None,
         };
         match &mut node {
@@ -688,6 +735,7 @@ impl Request {
             Self::Keys { on } => o.u8(11).u8((*on).into()),
             Self::Watch { on } => o.u8(12).u8((*on).into()),
             Self::End { pid } => o.u8(13).u32(*pid),
+            Self::Pref { key, value } => o.u8(14).str(key).str(value),
         }
     }
 
@@ -709,6 +757,7 @@ impl Request {
             11 => Self::Keys { on: r.bool()? },
             12 => Self::Watch { on: r.bool()? },
             13 => Self::End { pid: r.u32()? },
+            14 => Self::Pref { key: r.str()?, value: r.str()? },
             _ => return None,
         })
     }
@@ -774,6 +823,9 @@ impl Event {
             Self::Tick { ms } => o.u8(14).u32(*ms),
             Self::Tap { id, cell } => o.u8(15).u32(*id).u32(*cell),
             Self::Stats { data } => o.u8(16).bytes(data),
+            Self::Prefs { reports, grain, kept } => {
+                o.u8(17).u8((*reports).into()).u8((*grain).into()).u8((*kept).into())
+            }
         }
     }
 
@@ -805,6 +857,7 @@ impl Event {
             14 => Self::Tick { ms: r.u32()? },
             15 => Self::Tap { id: r.u32()?, cell: r.u32()? },
             16 => Self::Stats { data: r.bytes()?.to_vec() },
+            17 => Self::Prefs { reports: r.bool()?, grain: r.bool()?, kept: r.bool()? },
             _ => return None,
         })
     }

@@ -2,44 +2,68 @@ use super::Rng;
 use crate::wire::*;
 
 fn start() -> Start {
-    let (stdout, cwd, roots) = (Stdout::Console, "/tmp/x".into(), vec!["/".into()]);
+    let (stdin, stdout, cwd) = (Stdin::Console, Stdout::Console, "/tmp/x".into());
     let (argv, env) = (["hello", "a b", "é"].map(String::from).to_vec(), vec!["K=V".into()]);
-    Start { role: Role::Process, pid: 7, tty: Some((80, 24)), stdout, cwd, roots, argv, env }
+    let (role, roots) = (Role::Process, vec!["/".into()]);
+    Start { role, pid: 7, tty: Some((80, 24)), stdin, stdout, cwd, roots, argv, env }
 }
 #[rustfmt::skip]
-fn msgs() -> [Msg<'static>; 17] {
+fn msgs() -> [Msg<'static>; 21] {
     [Msg::Ready { version: VERSION }, Msg::Open { oflags: O_CREAT | O_EXCL, path: "/tmp/a" },
         Msg::Read { off: 1 << 40, max: 65_536, path: "/tmp/a" }, Msg::List { skip: 3, path: "/" },
         Msg::Write { off: APPEND, path: "/tmp/a", data: b"hi" }, Msg::Mkdir { path: "/tmp/d" },
         Msg::Remove { kind: KIND_DIR, path: "/tmp/d" }, Msg::Rename { from: "/a", to: "/b" },
         Msg::SetLen { len: 9, path: "/a" }, Msg::ConsBell, Msg::ConsWrite { data: b"out\n" },
         Msg::ConsRead { max: 4096 }, Msg::ConsMode { bits: MODE_RAW | MODE_NOECHO },
-        Msg::HomeState { state: HOME_SAVED, note: "saved" }, Msg::Exit { status: -1 },
-        Msg::Reply { errno: ENOENT, data: b"\x01" }, Msg::Save]
+        Msg::Spawn { job: b"\x02\0/a" }, Msg::Wait { job: 9 }, Msg::PipeRead { max: 7 },
+        Msg::PipeWrite { data: b"|" }, Msg::HomeState { state: HOME_SAVED, note: "saved" },
+        Msg::Exit { status: -1 }, Msg::Reply { errno: ENOENT, data: b"\x01" }, Msg::Save]
 }
 
 #[test]
 fn start_round_trips_and_rejects_every_truncation_and_bad_field() {
     let stdout = Stdout::File { path: "/tmp/out".into(), append: true };
     let (role, pid, cwd, roots) = (Role::Home, HOME_PID, "/home".into(), vec!["/home".into()]);
-    let home = Start { role, pid, tty: None, stdout, cwd, roots, argv: vec![], env: vec![] };
+    let (stdin, argv, env) = (Stdin::File("/tmp/in".into()), vec![], vec![]);
+    let home = Start { role, pid, tty: None, stdin, stdout, cwd, roots, argv, env };
     let truncated = Start { stdout: Stdout::File { path: "/x".into(), append: false }, ..start() };
-    for s in [start(), home, truncated] {
+    let piped = Start { stdin: Stdin::Pipe, stdout: Stdout::Pipe, ..start() };
+    for s in [start(), home, truncated, piped, Start { stdout: Stdout::Null, ..start() }] {
         let b = s.encode();
         assert_eq!(Start::decode(&b), Some(s));
         (0..b.len()).for_each(|n| assert_eq!(Start::decode(&b[..n]), None, "prefix {n}"));
         assert_eq!(Start::decode(&[b.as_slice(), &[0]].concat()), None);
     }
-    assert_eq!(start().encode()[..12], [VERSION, 0, 7, 0, 0, 0, 1, 80, 0, 24, 0, 0]);
+    assert_eq!(start().encode()[..15], [VERSION, 0, 7, 0, 0, 0, 1, 80, 0, 24, 0, 0, 0, 0, 0]);
     let b = start().encode();
     let f = Start { stdout: Stdout::File { path: "/x".into(), append: false }, ..start() }.encode();
+    let i = Start { stdin: Stdin::File("/x".into()), ..start() }.encode();
     let with = |b: &[u8], i: usize, v: u8| Start::decode(&[&b[..i], &[v], &b[i + 1..]].concat());
-    // version, role, flags, stdout kind; console stdout (0) with a path.
-    let bad = [with(&b, 0, 2), with(&b, 1, 2), with(&b, 6, 2), with(&b, 11, 3), with(&f, 11, 0)];
+    // version, role, flags, stdin and stdout kinds; a path with a kind that has none.
+    let bad = [with(&b, 0, 1), with(&b, 1, 2), with(&b, 6, 2), with(&b, 11, 3), with(&b, 14, 5)];
     assert_eq!(bad, [None, None, None, None, None]);
+    assert_eq!([with(&f, 14, 0), with(&f, 14, 3), with(&i, 11, 2)], [None, None, None]);
     // From the cwd on: "/a", or two bytes that are not UTF-8, then no lists.
-    let cwd = |c: [u8; 2]| Start::decode(&[&b[..14], &[2, 0], &c, &[0; 6]].concat());
+    let cwd = |c: [u8; 2]| Start::decode(&[&b[..17], &[2, 0], &c, &[0; 6]].concat());
     assert_eq!((cwd(*b"/a").map(|s| s.cwd), cwd([0xFF, 0xFE])), (Some("/a".into()), None));
+}
+
+#[test]
+fn jobs_round_trip_their_stages_and_bytes() {
+    let argv = |s: &str| s.split(' ').map(String::from).collect::<Vec<_>>();
+    let stages = vec![("/bin/a", argv("a -x")), ("/bin/b", vec![]), ("/bin/c", argv("c"))];
+    let (stdin, stdout) = (Stdin::Pipe, Stdout::File { path: "/tmp/o".into(), append: true });
+    let job = Job { cwd: "/tmp", stdin, stdout, stages, data: b"bytes\0in" };
+    let b = job.encode();
+    assert_eq!(Job::decode(&b), Some(job.clone()));
+    // The bytes are the rest: a cut one is fewer bytes, a cut stage is none.
+    let head = b.len() - 8;
+    assert_eq!(Job::decode(&b[..head + 3]).map(|j| j.data), Some(&b"byt"[..]));
+    (0..head).for_each(|n| assert_eq!(Job::decode(&b[..n]), None, "prefix {n}"));
+    let none =
+        Job { stdin: Stdin::Console, stdout: Stdout::Null, stages: vec![], data: b"", ..job };
+    assert_eq!(none.encode(), [4, 0, b'/', b't', b'm', b'p', 0, 0, 0, 4, 0, 0, 0, 0]);
+    assert_eq!(Job::decode(&none.encode()), Some(none));
 }
 
 #[test]
@@ -47,7 +71,14 @@ fn messages_round_trip_and_truncated_or_bad_ones_never_decode_as_them() {
     for m in msgs() {
         let b = m.encode();
         assert_eq!(Msg::decode(&b), Some(m));
-        let rest = matches!(m, Msg::Write { .. } | Msg::ConsWrite { .. } | Msg::Reply { .. });
+        let rest = matches!(
+            m,
+            Msg::Write { .. }
+                | Msg::ConsWrite { .. }
+                | Msg::Reply { .. }
+                | Msg::Spawn { .. }
+                | Msg::PipeWrite { .. }
+        );
         for n in 0..b.len() {
             let got = Msg::decode(&b[..n]);
             assert!(got != Some(m) && (rest || got.is_none()), "{m:?} prefix {n}");
@@ -90,7 +121,7 @@ fn random_bytes_never_panic() {
             let at = rng.next() as usize % b.len();
             b[at] = rng.next() as u8;
         }
-        let _ = (Msg::decode(&b), Start::decode(&b));
+        let _ = (Msg::decode(&b), Start::decode(&b), Job::decode(&b));
     }
 }
 

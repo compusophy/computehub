@@ -1,3 +1,5 @@
+mod console;
+mod jobs;
 mod module;
 mod shared;
 mod snap;
