@@ -163,7 +163,11 @@ one. Forked crates keep their Apache-2.0 license and note their origin.
 - **Starting**: a new tab opens on the welcome, the boot's own first frame
   (`logon`; no program, no worker): compusophy's mark comes in once from
   the center out (618 ms, 365 round fills), the clock sits in the bar's
-  place, and the name follows when its font lands. The mark is art; the
+  place, and the name follows when its font lands. The column steps down
+  from the mark by powers of φ: a 144 px mark (89, 55 on smaller screens),
+  the name s/φ³ under it and as large, the circles (55 px, 1/φ apart) φ²
+  that under the name, the whole at the golden section of the room, φ
+  times as much space under it as over it. The mark is art; the
   record is truth: under them a hairline holds one segment per stage of
   the real start as the browser timed it (the page, compusophyOS's
   download, its start to the first frame, the deferred fonts), at its

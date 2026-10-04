@@ -19,12 +19,14 @@ pub(crate) const TRACK: f32 = 55.0;
 pub(crate) const TOUCH: f32 = 44.0;
 const GAP: f32 = 13.0;
 const COLUMN: f32 = 466.0;
-/// The mark's sides, largest first (the house's Fibonacci sizes), the gap under it, the
-/// name's line and the gap under that.
-const SIDES: [f32; 4] = [233.0, 144.0, 89.0, 55.0];
-const UNDER_MARK: f32 = 34.0;
-const NAME_H: f32 = 41.0;
-const UNDER_NAME: f32 = 21.0;
+/// The mark's sides, largest first (Fibonacci): every measure of the column above the block
+/// follows from the side by powers of φ ([`head`]); the name's least size; Inter's cap height
+/// in ems.
+const SIDES: [f32; 3] = [144.0, 89.0, 55.0];
+const NAME_LEAST: f32 = 21.0;
+const CAP: f32 = 0.727;
+/// A circle's side (a person's face, Add): 1/φ² of the largest mark, and a touch target.
+const CIRCLE: f32 = 55.0;
 /// A label's line, a line of prose, a circle's label under it, a PIN's dot.
 const LINE_H: f32 = 15.0;
 const PROSE_H: f32 = 20.0;
@@ -58,21 +60,31 @@ enum Look {
     Danger,
 }
 
-/// Where the column lands: the mark's square (none if it does not fit), the name's line, the
-/// block's top, whether the record shows.
+/// Where the column lands: the mark's square (none if it does not fit), the name's baseline
+/// and size, the block's top, whether the record shows.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Layout {
     pub(crate) mark: Option<RectF>,
-    pub(crate) name: Option<f32>,
+    pub(crate) name: Option<(f32, f32)>,
     pub(crate) block: f32,
     pub(crate) record: bool,
 }
 
+/// What a mark of side `s` sets above the block, each a power of φ of it: the name's size
+/// (s/φ³, [`NAME_LEAST`] at least), the gap from the mark to the name's capitals (s/φ³ too: the
+/// two are one sign), and from the name's baseline to the block, φ² that (the sign and the
+/// choice under it, apart).
+fn head(s: f32) -> (f32, f32, f32) {
+    let cube = PHI * PHI * PHI;
+    let (size, gap) = ((s / cube).round().max(NAME_LEAST), (s / cube).round());
+    (size, gap, (gap * PHI * PHI).round())
+}
+
 impl Logon {
-    /// The circles' side and gap (a phone's smaller), and how many fit in a row.
+    /// The circles' side and gap (1/φ of the side; a phone's 21), and how many fit in a row.
     fn ring(&self) -> (f32, f32, usize) {
         let narrow = home::narrow(self.size.0);
-        let (c, gap) = if narrow { (55.0, 21.0) } else { (89.0, 34.0) };
+        let (c, gap) = (CIRCLE, if narrow { 21.0 } else { 34.0 });
         let room = (self.size.0 - 32.0).min(COLUMN);
         (c, gap, (((room + gap) / (c + gap)) as usize).max(1))
     }
@@ -135,9 +147,9 @@ be undone.",
     /// Where the column goes for the block: the mark is the largest of [`SIDES`] at most 1/φ²
     /// of the screen's shorter side that lets the column fit between the clock band and the
     /// record (if none, no mark; if the column still does not fit, no name: the block always
-    /// shows), centered on the golden point (0.382 of the height), moved up only as far as the
-    /// column needs. The record shows if the block fits above it, and not while a name is
-    /// typed (a phone's keyboard needs the room).
+    /// shows), the name and the gaps by [`head`]; the column at the golden section of the room
+    /// it leaves, φ times as much under it as over it. The record shows if the block fits above
+    /// it, and not while a name is typed (a phone's keyboard needs the room).
     pub(crate) fn layout(&self, text: &mut TextSystem) -> Layout {
         let ((w, h), block) = (self.size, self.block_h(text));
         let typing = matches!(self.state, State::Name(_) | State::NewPin(_) | State::Pin(..));
@@ -145,19 +157,27 @@ be undone.",
         // A pixel clear of the record's band: snapped to device pixels, the two never touch.
         let bottom = h - if record { TRACK + GAP + 1.0 } else { GAP };
         let room = bottom - BAND;
-        let head = UNDER_MARK + NAME_H + UNDER_NAME;
-        let fits = |s: f32| s <= w.min(h) / (PHI * PHI) && s + head + block <= room;
+        let tall = |s: f32| {
+            let (size, over, under) = head(s);
+            over + (CAP * size).round() + under
+        };
+        let fits = |s: f32| s <= w.min(h) / (PHI * PHI) && s + tall(s) + block <= room;
         let side = SIDES.into_iter().find(|&s| fits(s));
-        let name = side.is_some() || NAME_H + UNDER_NAME + block <= room;
-        let column = side.map_or(0.0, |s| s + UNDER_MARK)
-            + if name { NAME_H + UNDER_NAME } else { 0.0 }
+        let least = SIDES[SIDES.len() - 1];
+        let (size, over, under) = head(side.unwrap_or(least));
+        let name = side.is_some() || tall(least) - over + block <= room;
+        let column = side.map_or(0.0, |s| s + over)
+            + if name { (CAP * size).round() + under } else { 0.0 }
             + block;
-        let center = (0.382 * h).round();
-        let top = side.map_or(center - column / 2.0, |s| center - s / 2.0);
-        let top = top.min(bottom - column).max(BAND).round();
+        let top = (BAND + (room - column).max(0.0) / (PHI * PHI)).round();
         let mark = side.map(|s| RectF::new(((w - s) / 2.0).round(), top, s, s));
-        let name = name.then(|| top + side.map_or(0.0, |s| s + UNDER_MARK));
-        Layout { mark, name, block: name.map_or(top, |n| n + NAME_H + UNDER_NAME), record }
+        let base = name.then(|| top + side.map_or(0.0, |s| s + over) + (CAP * size).round());
+        Layout {
+            mark,
+            name: base.map(|b| (b, size)),
+            block: base.map_or(top, |b| b + under),
+            record,
+        }
     }
 
     /// The living grain's pattern at `now` (a new one each [`GRAIN_MS`] while it lives: the
@@ -278,11 +298,11 @@ be undone.",
             home::bar::draw_clock(list, text, t, w, time);
         }
         // The name, in SemiBold once it lands (Regular if it failed), fading in.
-        if let (Some(y), Some((ok, at))) = (lay.name, rec.fonts[0]) {
+        if let (Some((base, size)), Some((ok, at))) = (lay.name, rec.fonts[0]) {
             let font = if ok { FontId::SansBold } else { FontId::Sans };
             let a = if self.reduced { 1.0 } else { ease(((now - at) / FADE) as f32) };
-            let style = TextStyle::new(font, 34.0, faded(t.text, a));
-            centered(list, text, (w / 2.0, cap_baseline(text, y, NAME_H, 34.0)), NAME, style);
+            let style = TextStyle::new(font, size, faded(t.text, a));
+            centered(list, text, (w / 2.0, text.snap(base)), NAME, style);
         }
         let (mut y, cx) = (lay.block, w / 2.0);
         let small = TextStyle::new(FontId::Sans, 12.0, t.text_dim);
@@ -378,7 +398,7 @@ be undone.",
     /// focus ring if focused (a dim one under the pointer); its name under it.
     fn circle(&mut self, list: &mut DrawList, text: &mut TextSystem, r: RectF, i: usize) {
         let (t, (c, gap, _)) = (self.theme(), self.ring());
-        let label = TextStyle::new(FontId::Sans, 12.0, t.text_dim);
+        let label = TextStyle::new(FontId::Sans, 13.0, t.text_dim);
         let name = match self.list.list.get(i) {
             Some(p) => {
                 avatar(list, text, r, p.seed, t);
@@ -396,7 +416,7 @@ be undone.",
             self.ring_at(list, text, r, c / 2.0, t.text_faint);
         }
         let shown = text.ellipsize(name, label, c + gap - 4.0);
-        let base = cap_baseline(text, r.y + c + 8.0, LINE_H, 12.0);
+        let base = cap_baseline(text, r.y + c + 8.0, LINE_H, 13.0);
         let style = if self.focus == i { label.with_color(t.text) } else { label };
         centered(list, text, (r.x + c / 2.0, base), &shown, style);
         self.hits.push((RectF::new(r.x, r.y, c, c + LABEL), Target::Circle(i)));

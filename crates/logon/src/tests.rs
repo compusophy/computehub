@@ -151,7 +151,7 @@ const TWO: &str = "CSPR 1 3\n0 be5cdbf3 - guest\n2 0c55aa31 - ana";
 fn the_hairline_keeps_gaps_and_lands_on_device_pixels() {
     for dpr in [1.0, 2.0, 3.5] {
         let (l, list, _) = drawn((1280.0, 800.0), dpr, &[(SEEN, "1")]);
-        // The segments: the text_dim fills on the track's line, as wide as the mark (233).
+        // The segments: the text_dim fills on the track's line, as wide as the mark (144).
         let dim = l.theme().text_dim;
         let segs: Vec<[f32; 4]> = list
             .instances()
@@ -160,16 +160,16 @@ fn the_hairline_keeps_gaps_and_lands_on_device_pixels() {
             .map(|i| i.rect)
             .collect();
         assert_eq!(segs.len(), 4, "{dpr}");
-        let x0 = ((1280.0 - 233.0) / 2.0 * dpr).round() / dpr;
+        let x0 = ((1280.0 - 144.0) / 2.0 * dpr).round() / dpr;
         let spans = [(0.0, 7.0), (22.0, 57.0), (57.0, 98.0), (98.0, 104.0)];
         for (s, (from, to)) in segs.iter().zip(spans) {
             let on = |v: f32| ((v * dpr).round() - v * dpr).abs() < 1e-3;
             assert!(on(s[0]) && on(s[0] + s[2]) && on(s[1]), "{dpr} {s:?}");
-            let near = |v: f32, ms: f32| (v - (x0 + ms / 104.0 * 233.0)).abs() <= 1.0 / dpr + 1e-3;
+            let near = |v: f32, ms: f32| (v - (x0 + ms / 104.0 * 144.0)).abs() <= 1.0 / dpr + 1e-3;
             assert!(near(s[0], from) && near(s[0] + s[2], to), "{dpr} {s:?}");
         }
         // The gap the browser spent parsing stays: about 15% of the line.
-        assert!(segs[1][0] - (segs[0][0] + segs[0][2]) > 0.13 * 233.0, "{dpr}");
+        assert!(segs[1][0] - (segs[0][0] + segs[0][2]) > 0.13 * 144.0, "{dpr}");
     }
 }
 
@@ -471,12 +471,26 @@ fn frames_come_only_while_something_moves() {
 }
 
 #[test]
+fn the_column_steps_down_from_the_mark_by_powers_of_phi() {
+    // The name s/φ³ under the mark and as large; the circles φ² that under the name; the room
+    // left φ times as much under the column (to the record, 14 px over its hairline) as over it.
+    let (l, _, mut t) = drawn((1280.0, 800.0), 1.0, &[(SEEN, "1")]);
+    let lay = l.layout(&mut t);
+    assert_eq!(
+        (lay.mark.map(|m| m.w), lay.name, lay.block),
+        (Some(144.0), Some((368.0, 34.0)), 457.0)
+    );
+    let (over, under) = (165.0 - BAND, 800.0 - TRACK - 14.0 - (457.0 + l.block_h(&mut t)));
+    assert!((under / over - 1.618).abs() < 0.02, "{over} {under}");
+}
+
+#[test]
 fn the_column_fits_every_screen() {
     // (w, h), then a return's mark (its side and top): as large as the screen and column allow.
     #[rustfmt::skip]
-    let table = [((1280.0, 800.0), Some((233.0, 190.0))), ((1440.0, 900.0), Some((233.0, 228.0))),
-        ((411.0, 794.0), Some((144.0, 231.0))), ((794.0, 411.0), Some((89.0, 45.0))),
-        ((320.0, 568.0), Some((89.0, 173.0))), ((794.0, 200.0), None)];
+    let table = [((1280.0, 800.0), Some((144.0, 165.0))), ((1440.0, 900.0), Some((144.0, 203.0))),
+        ((411.0, 794.0), Some((144.0, 163.0))), ((794.0, 411.0), Some((89.0, 59.0))),
+        ((320.0, 568.0), Some((89.0, 119.0))), ((794.0, 200.0), None)];
     for ((w, h), want) in table {
         for dpr in [1.0, 2.0, 3.5] {
             for kv in [&[][..], &[(SEEN, "1")][..], &[(LIST, TWO)][..]] {
