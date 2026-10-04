@@ -1,6 +1,6 @@
 //! compusophyOS's wasm entry: `start` runs a desktop on [`platform::run`] with the boot font, a
-//! [`Vfs`] holding the `/bin` markers and Studio's samples, and a [`Registry`] of [`apps::open`]
-//! then [`remote::open`] (the GUI programs: About, Feedback, Files, Welcome, Studio, the
+//! [`Vfs`] holding the `/bin` markers and Studio's samples, and a [`Registry`] of
+//! [`remote::open`] (the GUI programs: the Terminal, About, Feedback, Files, Welcome, Studio, the
 //! Assistant, `.app` files). A new tab's first size shows the welcome ([`logon`]: the mark, the
 //! record of this start, sign-in); a reload of a signed-in tab goes straight on. The [`Shell`]
 //! (and /home put back) waits for a sign-in and a size that leaves a work area; until then
@@ -59,9 +59,10 @@ pub const THEME_KEY: &str = "compusophy.theme";
 pub const ALL: &str = "compusophy.";
 /// The preferences kept as `compusophy.<key>`: the AI model (which the AI hub keeps, see [`ai`]),
 /// the dock's favorites (registry names, comma-separated), `"1"` once Welcome was shown on a
-/// first visit, `"off"` to stop automatic error reports, the home screen's order (as the dock's)
-/// and `"off"` to still the grain. Other keys are dropped.
-pub const PREFS: [&str; 6] = [ui::AI_MODEL, "dock", "seen", "reports", "home.order", ui::GRAIN];
+/// first visit, `"off"` to stop automatic error reports, the home screen's order (as the dock's),
+/// `"off"` to still the grain and the folders' apps. Other keys are dropped.
+pub const PREFS: [&str; 7] =
+    [ui::AI_MODEL, "dock", "seen", "reports", "home.order", ui::GRAIN, "folders"];
 /// The applets of `bin/toolbox.wasm`, each a `/bin` marker file (as are the GUI programs:
 /// [`remote::STUDIO`] for `bin/studio.wasm`, and those of [`remote::SYSTEM`] for one
 /// `bin/system.wasm`).
@@ -127,6 +128,7 @@ impl Desktop {
             let _ = vfs.write(&["/bin/", name].concat(), b"#!wasm bin/toolbox.wasm\n");
         }
         let _ = vfs.write(apps::SHELL, b"#!wasm bin/sh.wasm\n");
+        let _ = vfs.write(remote::TERMINAL, b"#!wasm bin/terminal.wasm\n");
         let _ = vfs.write(remote::STUDIO, b"#!wasm bin/studio.wasm\n");
         let _ = vfs.write(remote::ASSISTANT, b"#!wasm bin/assistant.wasm\n");
         for (name, ..) in remote::SYSTEM {
@@ -426,9 +428,7 @@ impl Desktop {
         if self.deferred.is_none() {
             self.deferred = Some([true; 2]);
             self.record.first(ctl.monotonic_ms(), ctl.timings());
-            for (id, _, url) in DEFERRED {
-                ctl.fetch(id, url);
-            }
+            DEFERRED.iter().for_each(|d| ctl.fetch(d.0, d.2));
         }
         self.flush(ctl, false);
     }
@@ -587,7 +587,8 @@ fn prefs(ctl: &Ctl) -> shell::Prefs {
     let get = |key: &str| ctl.storage_get(&logon::own(key));
     let (theme, seen) = (get("theme").unwrap_or_default(), ctl.storage_get(logon::SEEN).is_some());
     let (grain_off, isolated) = (get(ui::GRAIN).as_deref() == Some("off"), ctl.isolated());
-    shell::Prefs { theme, dock: get("dock"), home: get("home.order"), seen, grain_off, isolated }
+    let (dock, home, folders) = (get("dock"), get("home.order"), get("folders"));
+    shell::Prefs { theme, dock, home, folders, seen, grain_off, isolated }
 }
 
 /// Where a report comes from: the device, the theme, the windows open.
@@ -627,7 +628,7 @@ fn local(t: platform::LocalTime) -> LocalTime {
 
 /// Makes apps by name: the built-ins, then the GUI programs and `.app` files.
 fn registry(ai: ai::Ai) -> Registry {
-    Box::new(move |name| apps::open(name).or_else(|| remote::open(name, &ai)))
+    Box::new(move |name| remote::open(name, &ai))
 }
 
 /// `a` then `b`, as one response.

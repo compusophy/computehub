@@ -17,8 +17,6 @@ members = [
     "crates/icons",
     "crates/ui",
     "crates/apps",
-    "crates/vt",
-    "crates/term",
     "crates/kernel",
     "crates/wasi",
     "crates/cpu",
@@ -35,6 +33,9 @@ members = [
     "programs/system",
     "programs/activity",
     "programs/sh",
+    "programs/vt",
+    "programs/term",
+    "programs/terminal",
     "programs/toolbox",
     "tools/serve",
 ]
@@ -66,8 +67,9 @@ compusophy-text = { path = "crates/text", version = "0.1.0" }
 compusophy-icons = { path = "crates/icons", version = "0.1.0" }
 compusophy-ui = { path = "crates/ui", version = "0.1.0" }
 compusophy-apps = { path = "crates/apps", version = "0.1.0" }
-compusophy-vt = { path = "crates/vt", version = "0.1.0" }
-compusophy-term = { path = "crates/term", version = "0.1.0" }
+compusophy-vt = { path = "programs/vt", version = "0.1.0" }
+compusophy-term = { path = "programs/term", version = "0.1.0" }
+compusophy-terminal = { path = "programs/terminal", version = "0.1.0" }
 compusophy-kernel = { path = "crates/kernel", version = "0.1.0" }
 compusophy-wasi = { path = "crates/wasi", version = "0.1.0" }
 compusophy-uiwire = { path = "crates/uiwire", version = "0.1.0" }

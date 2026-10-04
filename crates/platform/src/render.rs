@@ -55,7 +55,7 @@ impl Renderer {
         attrs.set_power_preference(WebGlPowerPreference::LowPower);
         let gl: Gl = canvas
             .get_context_with_context_options("webgl2", &attrs)
-            .map_err(|e| ["getContext(\"webgl2\") threw: ", &crate::js_text(&e)].concat())?
+            .map_err(|e| String::from("getContext(\"webgl2\") threw: ") + &crate::js_text(&e))?
             .ok_or("WebGL2 is not available")?
             .unchecked_into();
 
@@ -217,7 +217,7 @@ fn link(gl: &Gl) -> Result<WebGlProgram, String> {
         } else {
             ("shader program failed to link: ", gl.get_program_info_log(&program))
         };
-        Err([what, &log.unwrap_or_default()].concat())
+        Err(String::from(what) + &log.unwrap_or_default())
     };
     gl.delete_shader(Some(&vs));
     gl.delete_shader(Some(&fs));

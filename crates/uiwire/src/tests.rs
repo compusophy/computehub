@@ -88,6 +88,11 @@ fn events() -> Vec<Event> {
         Event::Focus { on: false },
         Event::Prefs { reports: true, grain: false, kept: true },
         Event::Face { face: 3 },
+        Event::Output { data: b"\x1b[1mhi\r\n".to_vec() },
+        Event::Text { text: "ls -l".into() },
+        Event::Wheel { dy: -34 },
+        Event::Ended { status: 127 },
+        Event::Key { id: 0, key: Key::F, mods: 0, ch: '\u{c}' },
     ]
 }
 
@@ -116,6 +121,8 @@ fn every_kind_round_trips_and_nothing_else_decodes() {
         Node::Pages { id: 1, on: 2, labels: "Appearance\nAI\nPrivacy".into() },
         Node::Themes { id: 10 },
         Node::Faces { id: 50, on: 4 },
+        Node::Screen { id: 1, cols: 2, rows: 1, cursor: Some((0, 1)), cells: vec![7; 26] },
+        Node::Screen { id: 1, cols: 1, rows: 1, cursor: None, cells: vec![0; 13] },
         Node::Choice { id: 20, on: true, text: "GLM 5.3\nbest answers".into() },
         Node::Switch { id: 30, on: false, label: "Living grain".into() },
         Node::Button { id: 31, variant: Variant::Link, label: "Send feedback".into() },
@@ -125,7 +132,11 @@ fn every_kind_round_trips_and_nothing_else_decodes() {
     ];
     own.iter().for_each(|n| strict(n, Node::encode, Node::decode));
     let pref = Request::Pref { key: "grain".into(), value: "off".into() };
-    [pref, Request::Reset].iter().for_each(|r| strict(r, Request::encode, Request::decode));
+    let tty = [Request::Tty { cols: 80, rows: 24 }, Request::Input { data: b"ls\r".to_vec() }];
+    [pref, Request::Reset]
+        .iter()
+        .chain(&tty)
+        .for_each(|r| strict(r, Request::encode, Request::decode));
     // Past a value's 1000, the canvas colors or a Chart's sizes, nothing decodes, nor checks.
     let chart = |hue, h, values: Vec<u16>| Node::Chart { id: 0, hue, h, values };
     let bad = [
@@ -153,7 +164,7 @@ fn codes_and_layout_are_as_documented() {
     let variant = n(&|n| Variant::from_u8(n).map(|v| v as u8));
     let (class, key) =
         (n(&|n| Class::from_u8(n).map(|v| v as u8)), n(&|n| Key::from_u8(n).map(|v| v as u8)));
-    assert_eq!(([style, variant, class, key], Key::from_u8(0)), ([12, 7, 8, 8], None));
+    assert_eq!(([style, variant, class, key], Key::from_u8(0)), ([12, 7, 8, 16], None));
     // Little-endian, in field order.
     let (requests, button) = (vec![Request::Size { w: 0x0506, h: 7 }], "ok".into());
     let nodes = vec![Node::Button { id: 9, variant: Variant::Primary, label: button }];
@@ -283,7 +294,7 @@ fn malformations_fail() {
         Event::decode(&b)
     };
     assert!(key(8, 15, 'x' as u32).is_some());
-    assert!(key(0, 0, 0).is_none() && key(9, 0, 0).is_none());
+    assert!(key(0, 0, 0).is_none() && key(17, 0, 0).is_none());
     assert!(key(1, 16, 0).is_none() && key(1, 0, 0xD800).is_none());
     assert!(Event::decode(&[17]).is_none() && Request::decode(&[14, 0, 0, 0, 0]).is_none());
     assert!(Event::decode(&[11, 2]).is_none() && Event::decode(&[11, 1]).is_some());

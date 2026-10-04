@@ -57,8 +57,7 @@ crates/      the OS (boot, kernel, worker); talks WASI and uiwire
   icons/     the mark, glyphs and made icons as vector outlines (`ui::icon`)
   ui/        immediate-mode widgets, themes, the App trait, Cx, the Code
              editor (re-exports text)
-  vt/        VT/xterm escape parser        term/  terminal screen model
-  apps/      Terminal (built in), a console
+  apps/      a terminal's console: its shell, its keys
   uiwire/    remote UI protocol: GUI programs send widget trees, get events
   uiview/    draws them with ui; edited text
   host/      wm + one app per window; agent; grabs, squeeze; motion, frames
@@ -82,6 +81,7 @@ programs/    wasm32-wasip1 programs (dist/bin/) and their app language
   assistant/ the Assistant: the overlay AI using the desktop
   system/    About, Editor, Feedback, Files, Welcome, Settings
   activity/  the resource monitor
+  terminal/  the Terminal; vt/ term/: its parser, screen model
   sh/        the shell: line editor, commands, jobs
   toolbox/   test programs, one binary
 assets/fonts/  the fonts (see Fonts below)

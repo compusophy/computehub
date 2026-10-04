@@ -460,7 +460,7 @@ fn icons_draw_selected_lifted_and_as_marks() {
     let (mut list, mut text, t) = (DrawList::new(), text(), &THEMES[1]);
     let r = icons::cell(0, RectF::new(0.0, 44.0, 1280.0, 671.0), false);
     let state = icons::State { selected: true, ..Default::default() };
-    icons::draw(&mut list, &mut text, t, r, (AppIcon::default(), None, "Clock"), state);
+    icons::draw(&mut list, &mut text, t, r, (AppIcon::default(), None, "Clock", &[]), state);
     assert!(fills(&list, t.accent.with_alpha(31)));
     let kind = |l: &DrawList, k: Kind| {
         l.instances()
@@ -472,14 +472,14 @@ fn icons_draw_selected_lifted_and_as_marks() {
     let mut lifted = DrawList::new();
     let state = icons::State { lift: 1.0, ..Default::default() };
     let sigil = Some(&Mark::Sigil(7));
-    icons::draw(&mut lifted, &mut text, t, r, (AppIcon::default(), sigil, "Clock"), state);
+    icons::draw(&mut lifted, &mut text, t, r, (AppIcon::default(), sigil, "Clock", &[]), state);
     let (tile, big) = (kind(&list, Kind::Gradient)[0].0, kind(&lifted, Kind::Gradient)[0].0);
     assert!(big > tile && kind(&lifted, Kind::Shadow).len() > kind(&list, Kind::Shadow).len());
     let glyph = |l: &DrawList| kind(l, Kind::Glyph).into_iter().find(|g| g.0 > 20.0).map(|g| g.1);
     assert_ne!(glyph(&lifted), glyph(&list));
     let made = Mark::Made(ui::icon::Made::parse(b"ring 12 12 8").unwrap());
     let mut own = DrawList::new();
-    icons::draw(&mut own, &mut text, t, r, (AppIcon::default(), Some(&made), "Clock"), state);
+    icons::draw(&mut own, &mut text, t, r, (AppIcon::default(), Some(&made), "Clock", &[]), state);
     assert_eq!(kind(&own, Kind::Gradient), kind(&lifted, Kind::Gradient));
     assert!(glyph(&own).is_some() && glyph(&own) != glyph(&lifted) && glyph(&own) != glyph(&list));
     icons::draw_box(&mut list, &text, t, (300.0, 200.0), (100.0, 400.0));
@@ -500,7 +500,7 @@ fn entries(names: &[&str]) -> Vec<Entry> {
 
 /// The built-in apps' grid on a 1280 x 800 desktop in the `stored` order, listed and at rest.
 fn grid(stored: Option<&str>) -> Grid {
-    let (mut g, mut fx) = (Grid::new(stored), Vec::new());
+    let (mut g, mut fx) = (Grid::new(stored, Some("")), Vec::new());
     (g.area, g.narrow) = (AREA, false);
     assert!(g.list(1, || entries(&APPS), &mut fx) && fx.is_empty());
     assert!(!g.list(1, || unreachable!(), &mut fx));
@@ -609,7 +609,7 @@ fn a_phone_keeps_icons_where_dropped_and_a_wide_screen_its_own_arrangement() {
         let r = icons::cell(i, g.area, g.narrow);
         (r.x + r.w / 2.0, r.y + 30.0)
     };
-    let (mut g, mut fx) = (Grid::new(Some("files,studio")), Vec::new());
+    let (mut g, mut fx) = (Grid::new(Some("files,studio"), Some("")), Vec::new());
     (g.area, g.narrow) = (phone, true);
     g.list(1, || entries(&APPS), &mut fx);
     g.sync(0.0, true);
@@ -627,7 +627,7 @@ fn a_phone_keeps_icons_where_dropped_and_a_wide_screen_its_own_arrangement() {
     let kept = kept.as_str();
     assert_eq!(fx, [pref(kept)]);
     // Reloaded, every icon is where it was. A new app takes the first free cell, Studio's old.
-    let mut h = Grid::new(Some(kept));
+    let mut h = Grid::new(Some(kept), Some(""));
     (h.area, h.narrow) = (phone, true);
     let all: Vec<&str> = APPS.iter().copied().chain(["/apps/clock.app"]).collect();
     h.list(1, || entries(&APPS), &mut fx);
@@ -710,4 +710,49 @@ fn a_box_selects_icons_which_open_and_move_together_and_a_finger_picks_one_up() 
     assert!(g.carry.as_ref().is_some_and(|c| c.lifted && !c.moved && c.touch));
     assert!(!g.carry_to(Some((mid(0).0 + 16.0, mid(0).1))));
     assert!(g.carry_to(Some((mid(0).0 + 17.0, mid(0).1))));
+}
+
+#[test]
+fn folders_hold_their_apps_show_as_one_icon_and_open_as_a_panel() {
+    use super::folders::{self, Folders, NAMES};
+    // Before any move, System holds the OS's own apps and Productivity the Editor and Files.
+    let (mut g, mut fx) = (Grid::new(None, None), Vec::new());
+    (g.area, g.narrow) = (AREA, false);
+    assert!(g.list(1, || entries(&APPS), &mut fx));
+    assert_eq!(labels(&g), ["Studio", "Assistant", "Terminal", "System", "Productivity"]);
+    let names = |apps: &[Entry]| apps.iter().map(|e| e.name.clone()).collect::<Vec<_>>();
+    assert_eq!(
+        names(g.inside(&g.icons[3].name)),
+        ["activity", "settings", "feedback", "about", "welcome"]
+    );
+    assert_eq!(
+        (folders::index("folder:2"), folders::index("folder:3"), folders::index("x")),
+        (Some(2), None, None)
+    );
+    // A move is kept (a line an app), lists again, and an emptied folder goes, closing if open.
+    g.open = Some(2);
+    g.folders.put("studio", 1, &mut fx);
+    ["editor", "files"].iter().for_each(|a| g.folders.put(a, 3, &mut fx));
+    let kept = "0 activity\n0 settings\n0 feedback\n0 about\n0 welcome\n1 studio\n";
+    assert_eq!(fx.last(), Some(&Effect::Pref { key: folders::PREF.into(), value: kept.into() }));
+    assert!(g.list(1, || entries(&APPS), &mut fx) && g.open.is_none());
+    // (each where it was; those back from a folder in the first free cells).
+    assert_eq!(labels(&g), ["Assistant", "Terminal", "System", "Files", "Editor", "Games"]);
+    assert_eq!(Folders::new(Some(kept)).of, g.folders.of, "it reads back");
+    assert_eq!(Folders::new(Some("9 x\n0\n1 studio")).of, [("studio".to_string(), 1)]);
+    // The panel: centered, four across (fewer if fewer), its name's band over them.
+    let p = folders::panel((1280.0, 800.0), 5);
+    assert_eq!((p.w, p.x + p.w / 2.0, p.y + p.h / 2.0), (4.0 * 89.0 + 42.0, 640.0, 400.0));
+    let c = folders::cell(p, 5, 4);
+    assert_eq!(folders::at((1280.0, 800.0), 5, c.x + 1.0, c.y + 1.0), Some(Some(4)));
+    assert_eq!(folders::at((1280.0, 800.0), 5, p.x + 2.0, p.y + 2.0), Some(None));
+    assert_eq!(folders::at((1280.0, 800.0), 5, 4.0, 4.0), None);
+    assert!(folders::panel((375.0, 800.0), 9).w <= 375.0 - 32.0, "on a phone, inside the screen");
+    // Drawn: the folder's tile holds its apps' tiles; open, its name and its apps over the dim.
+    let (mut list, mut t) = (DrawList::new(), text());
+    g.sync(0.0, true);
+    g.draw(&mut list, &mut t, &THEMES[0], 0.0, None, None);
+    g.open = Some(0);
+    g.draw_open(&mut list, &mut t, &THEMES[0], (1280.0, 800.0), Some((0, false)));
+    assert!(fills(&list, THEMES[0].base.with_alpha(153)) && NAMES[0] == "System");
 }

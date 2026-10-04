@@ -111,7 +111,7 @@ fn names_open_studio_and_the_first_size_starts_it() {
     assert_eq!(argv("studio"), studio("Studio"));
     assert_eq!(argv("studio:counter.app"), studio("Studio \u{2014} counter.app"));
     assert_eq!(argv("/tmp/x.app"), Some(("x.app".into(), APP_ICON, None)));
-    assert!(["studio:", "terminal", ".apps", ""].iter().all(|n| open(n).is_none()));
+    assert!(["studio:", ".apps", ""].iter().all(|n| open(n).is_none()));
     assert_eq!(argv("assistant"), Some(("Assistant".into(), ASSISTANT_ICON, Some((560.0, 600.0)))));
     // About, Feedback and Files: bin/system.wasm, as their markers name it.
     let sys = |n: &str| open(n).map(|a| (a.title(), a.icon(), a.preferred_size(), a.compact()));
@@ -147,7 +147,7 @@ fn names_open_studio_and_the_first_size_starts_it() {
     // Activity runs the OS's own program, whatever its marker says. Its window may watch, end a
     // process (Studio's here, whose window a kill, 137, closes; Activity's runs on) and reset.
     let mut s = Sys::new(false);
-    s.r = Remote { trusted: true, ..Remote::new(STUDIO, vec!["activity".into()], &Ai::default()) };
+    s.r = Remote { own: Some(OWN), ..Remote::new(STUDIO, vec!["activity".into()], &Ai::default()) };
     s.ev(AppEvent::Resized { w: 1.0, h: 1.0 });
     s.k.message(&mut s.fs, 2, &wire::Msg::Ready { version: wire::VERSION }.encode());
     let url = ui::kernel::Load::Url("bin/system.wasm".into());
@@ -191,7 +191,7 @@ fn clicks_keys_and_requests_go_through() {
     // Chords and Escape and Enter are keys; plain keys are not.
     assert!(!s.ev(key(Key::Char('s'), "c")));
     let plain = [key(Key::Char('s'), ""), key(Key::Enter, ""), key(Key::Space, "ms")];
-    plain.into_iter().chain([key(Key::F(5), "c")]).for_each(|ev| _ = s.ev(ev));
+    plain.into_iter().chain([key(Key::F(5), "")]).for_each(|ev| _ = s.ev(ev));
     let k = |key, mods, ch| Event::Key { id: 0, key, mods, ch };
     let (char, ms) = (uiwire::Key::Char, mods::META | mods::SHIFT);
     let keys = [k(char, mods::CTRL, 's'), k(uiwire::Key::Enter, 0, '\0'), k(char, ms, ' ')];

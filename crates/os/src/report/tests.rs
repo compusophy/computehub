@@ -1,6 +1,6 @@
 use super::*;
 use crate::apply;
-use crate::tests::{Msg, desktop, sh};
+use crate::tests::{desktop, screen};
 use platform::{App as _, Effect as Fx, Event};
 use shell::Effect;
 
@@ -87,8 +87,7 @@ fn reports_wait_in_the_outbox_until_the_inbox_takes_them() {
     assert!(json.contains("windows  2 open") && sig_of(json).len() == 16, "{json}");
     assert_eq!(ctl.storage_get(OUTBOX).as_deref(), Some(json.as_str()));
     // No inbox yet (503): it stays, held; the next report sends both, the first as it was.
-    assert!(r.ended(&mut ctl, *id, 503));
-    assert!(r.retell() && r.status(Default::default()).held);
+    assert!(r.ended(&mut ctl, *id, 503) && r.retell() && r.status(Default::default()).held);
     assert!(!r.ended(&mut ctl, 7, 200), "not a report's stream");
     let mut ctl = Ctl::default();
     r.feedback("bug", "It froze", false);
@@ -124,9 +123,8 @@ fn errors_are_reported_once_a_session_unless_reports_are_off() {
     r.pump(&mut ctl, phone);
     // A program that fails twice is one report; AI: 429 only noted, 503 and no answer reported.
     [7, 9].into_iter().for_each(|pid| r.proc_failed(pid, "/bin/hello"));
-    for (status, error) in [(200, ""), (429, ""), (503, ""), (0, "network"), (0, "network")] {
-        r.ai_ended(status, error);
-    }
+    let ended = [(200, ""), (429, ""), (503, ""), (0, "network"), (0, "network")];
+    ended.into_iter().for_each(|(status, error)| r.ai_ended(status, error));
     r.pump(&mut ctl, phone);
     let titles: Vec<String> = streamed(&ctl).iter().map(|s| s.1.clone()).collect();
     let has = |t: &str| titles.iter().any(|j| j.contains(&["\"title\":\"", t, "\""].concat()));
@@ -168,9 +166,9 @@ fn errors_are_reported_once_a_session_unless_reports_are_off() {
 
 #[test]
 fn the_desktop_sends_feedback_and_reports_failures_and_tells_apps() {
-    // A terminal's shell opens a file in Editor.
+    // A terminal opens a file in Editor (as its shell asked it to).
     let mut desk = desktop(true);
-    sh(&mut desk, Msg::ConsWrite { data: b"\x1b]1729;open;editor:~/diary-2026.txt\x07" });
+    screen(&mut desk, vec![uiwire::Request::Open { name: "editor:~/diary-2026.txt".into() }]);
     // Feedback an app asked for leaves at the flush after it, with what is open: apps, no files.
     let mut ctl = Ctl::default();
     let fx = Effect::Feedback { kind: "bug".into(), text: "Dock flickers".into(), context: true };

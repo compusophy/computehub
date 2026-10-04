@@ -64,8 +64,9 @@ pub const GRAIN_MS: f64 = 125.0;
 type Widget = (WinId, WidgetId);
 
 /// What the page keeps for the shell between visits: the theme's name (else the default, Mono),
-/// the dock's favorites and where the home screen's icons sit, as stored (the `dock` and
-/// `home.order` preferences; `None` for none), whether Welcome was shown on a first visit (the
+/// the dock's favorites, where the home screen's icons sit and which folder holds which apps, as
+/// stored (the `dock`, `home.order` and `folders` preferences; `None` for none, the first
+/// folders for `folders`), whether Welcome was shown on a first visit (the
 /// `seen` preference) and whether the grain is still (the `grain` preference `"off"`); and
 /// whether the page is cross-origin isolated, which programs need: the kernel knows before
 /// Welcome, a program, opens.
@@ -74,6 +75,7 @@ pub struct Prefs {
     pub theme: String,
     pub dock: Option<String>,
     pub home: Option<String>,
+    pub folders: Option<String>,
     pub seen: bool,
     pub grain_off: bool,
     pub isolated: bool,
@@ -155,7 +157,7 @@ impl Shell {
         let size = (coord(w).max(0.0), coord(h).max(0.0));
         let host = Host::new(Wm::new(work_area(size)), text, vfs, reg, &prefs.theme);
         let dock = home::dock::Dock::new(prefs.dock.as_deref());
-        let grid = home::grid::Grid::new(prefs.home.as_deref());
+        let grid = home::grid::Grid::new(prefs.home.as_deref(), prefs.folders.as_deref());
         let mut shell = Shell { host, pending: Vec::new(), size, pointer: None, hover: None,
             armed: None, app_hover: None, app_press: None, down: None, grab: None, last_title: None,
             ime: None, focus: None, cursor: Cursor::Default, clock: None, dock, tiles: Vec::new(),
@@ -389,6 +391,7 @@ impl Shell {
                 self.draw_agent(list, &theme, now);
                 self.draw_bar(list, &theme);
                 self.draw_carried(list, &theme);
+                self.draw_folder(list, &theme);
                 self.draw_menu(list, &theme);
                 self.draw_tooltip(list, &theme, now);
                 if !self.host.text.take_atlas_reset() {

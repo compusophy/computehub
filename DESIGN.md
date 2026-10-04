@@ -104,9 +104,9 @@ frame: os → shell::draw → gfx::DrawList → platform::Renderer: one draw cal
 | `gfx` | draw lists as one instance buffer, the glyph atlas, the WebGL2 shaders |
 | `text` | font slots and fallbacks, measuring, wrapping, glyphs on the atlas |
 | `ui` | immediate-mode widgets, the themes, the `App` trait and `Cx` |
-| `vt`, `term` | VT/xterm escape parser; terminal screen model |
+| `terminal`, `vt`, `term` | the Terminal: an xterm screen, a wasip1 GUI program off the boot download; its escape parser and screen model |
 | `sh` | the shell the Terminal runs: a wasip1 program on its console |
-| `apps` | the Terminal: a console and its screen |
+| `apps` | a terminal's console in the boot: its shell, and its window's keys, text and wheel as events |
 | `system` | About, Editor, Feedback, Files, Welcome and Settings, and it serves Activity: one wasip1 GUI program (`dist/bin/system.wasm`), off the boot download |
 | `activity` | Activity, the resource monitor: graphs of CPU, memory, frames and the AI over the last minute, storage, a table of what runs |
 | `studio` | the applang editor, and `AppHost`, which runs `.app` files |
@@ -213,8 +213,14 @@ one. Forked crates keep their Apache-2.0 license and note their origin.
   and move the least to fit inside it. Every change is a `wm::Cmd`, so
   window state replays and hashes.
 - **Home screen**: every app is an icon behind the windows (Studio,
-  Assistant, Terminal, Files, Editor, Settings, Feedback, About, Welcome,
-  then each `~/apps/*.app`), each in a cell of a grid: down the columns from the top
+  Assistant, Terminal, then each `~/apps/*.app`), or in a **folder**:
+  System (Activity, Settings, Feedback, About, Welcome), Games and
+  Productivity (the Editor, Files) at first; an app's menu moves it (Move
+  to: a folder, or the home screen; `home::folders`, kept as `folders`). A
+  folder that holds any is an icon of its first four apps' tiles, and opens
+  as a panel over the dimmed screen, its apps four across: a click opens
+  one, and anywhere else (or Escape) closes it. Each icon sits in a cell of
+  a grid: down the columns from the top
   left on a wide screen, in rows of four on a phone; there is no other
   list. A `.app` file's icon is the one its header draws (`// icon:` under
   its first comment: line, loop, fill, ring, dot and arc on a 24 x 24 grid,
@@ -302,14 +308,19 @@ one. Forked crates keep their Apache-2.0 license and note their origin.
   hit regions of the last frame.
 - Apps reach outside themselves only through the `ui::Cx` of an event: the
   VFS, the page clock, and requests (open or close a window, load the
-  fallback fonts, switch the theme). `os` owns the registry: `apps::open`
-  makes `terminal`; `remote::open` makes the GUI programs' windows: `about`,
-  `editor`, `editor:<path>`, `feedback`, `files`, `files:<dir>`, `welcome`,
-  `activity` and `settings` (the `system` program), `assistant`, `studio`,
+  fallback fonts, switch the theme). `os` owns the registry: `remote::open`
+  makes the GUI programs' windows: `terminal`, `about`, `editor`,
+  `editor:<path>`, `feedback`, `files`, `files:<dir>`, `welcome`, `activity`
+  and `settings` (the `system` program), `assistant`, `studio`,
   `studio:<path>` and any `*.app` path.
-- **Terminal**: a console, as Plan 9's windows are: `vt` + `term` + a cell
-  renderer, its keys going to the kernel's console as xterm sends them and
-  what runs on it drawn. It runs `/bin/sh` (the `sh` program: `ls`, `cd`,
+- **Terminal**: a program like any other (`terminal`: `vt` + `term`), off
+  the boot download. Its window holds a console (`apps::Console`): the
+  shell on the kernel's console the size the program asks for
+  (`Request::Tty`), what it types going in (`Request::Input`), what the
+  shell writes and its end coming back as events, and the window's keys,
+  text and wheel too; the program draws its screen as a `Node::Screen` of
+  8 x 17 px cells, which the desktop paints (`ui::screen`). It runs
+  `/bin/sh` (the `sh` program: `ls`, `cd`,
   `cat`, `mkdir`, `mv`, `open`, `edit`, `run`, `theme`, ..., and programs
   joined by `|`, with `<` and `>`), which edits its line on a raw console
   and runs programs as the kernel's jobs on a cooked one. What only the
@@ -471,5 +482,6 @@ in its home; names in it, and roots per profile, wait for R2.
   first frame. With the canvas, the welcome, profiles and the PIN it held
   229,101 of 229,376 bytes; Settings and the Terminal's shell then became
   programs (2026-10-03), the kernel gaining consoles, jobs and pipes:
-  225,896, about 3.4 KB of headroom. Everything else should be a program,
+  225,896, about 3.4 KB of headroom. The Terminal itself became one
+  (2026-10-04, about 12 KB), so folders fit: 219,359. Everything else should be a program,
   fetched when it first runs, at the cost of needing an isolated page.

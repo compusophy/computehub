@@ -12,6 +12,7 @@ use host::motion::{Tween, Vis};
 use host::{Effect, Entry};
 use ui::{Key, Mods, TextSystem, Theme};
 
+use crate::folders::{self, Folders};
 use crate::icons::{self, State};
 use crate::place::{self, Dims, Place};
 
@@ -76,10 +77,13 @@ pub enum Press {
 /// listed, by the icons' order; before, as stored) and where each shows (a cell's position in
 /// reading order: [`place::resolve`]), the files' generation they were listed at,
 /// the icons selected, carried, the selection box's corner, where each icon slides, and the
-/// area it lays out in (whether a phone's).
+/// area it lays out in (whether a phone's); the folders, each one's apps, and the one open.
 #[derive(Default)]
 pub struct Grid {
     pub icons: Vec<Entry>,
+    pub folders: Folders,
+    pub inside: [Vec<Entry>; 3],
+    pub open: Option<usize>,
     pub places: Vec<Place>,
     pub spots: Vec<usize>,
     listed: Option<u64>,
@@ -92,9 +96,11 @@ pub struct Grid {
 }
 
 impl Grid {
-    /// A grid where a stored preference keeps the icons (none: the apps' own order, packed).
-    pub fn new(stored: Option<&str>) -> Grid {
-        Grid { places: place::parse(stored.unwrap_or("")), ..Grid::default() }
+    /// A grid where stored preferences keep the icons (none: the apps' own order, packed) and
+    /// the folders (none: the first ones).
+    pub fn new(stored: Option<&str>, folders: Option<&str>) -> Grid {
+        let (places, folders) = (place::parse(stored.unwrap_or("")), Folders::new(folders));
+        Grid { places, folders, ..Grid::default() }
     }
 
     /// The grid's shape in its area.
@@ -109,22 +115,26 @@ impl Grid {
         self.spots = place::resolve(&self.places[..n], self.dims());
     }
 
-    /// Lists `apps` again if the files changed since (`generation`), each where it was kept, new
-    /// ones in the first free cells; one new since the first listing keeps where the icons show
-    /// (the preference to `fx`), so it stays there. Whether it listed.
+    /// Lists `apps` again if the files (`generation`) or the folders changed since, those in
+    /// folders as their folders' icons, each where it was kept, new ones in the first free
+    /// cells; one new since the first listing keeps where the icons show (the preference to
+    /// `fx`), so it stays there. A folder left empty closes. Whether it listed.
     pub fn list(
         &mut self,
         generation: u64,
         apps: impl FnOnce() -> Vec<Entry>,
         fx: &mut Vec<Effect>,
     ) -> bool {
-        let first = self.listed.is_none();
-        if self.listed.replace(generation) == Some(generation) {
+        let (first, now) = (self.listed.is_none(), generation ^ self.folders.changes << 40);
+        if self.listed.replace(now) == Some(now) {
             return false;
         }
         let names = |icons: &[Entry]| icons.iter().map(|e| e.name.clone()).collect::<Vec<_>>();
         let before = names(&self.icons);
-        let (icons, places, new) = place::arrange(&self.places, apps(), |e| &e.name);
+        let (top, inside) = self.folders.group(apps());
+        self.inside = inside;
+        self.open = self.open.filter(|&k| !self.inside[k].is_empty());
+        let (icons, places, new) = place::arrange(&self.places, top, |e| &e.name);
         (self.icons, self.places) = (icons, places);
         self.lay();
         if !first && new {
@@ -300,6 +310,26 @@ impl Grid {
         }
     }
 
+    /// The apps of the folder an icon named `name` opens (none for an app's).
+    pub fn inside(&self, name: &str) -> &[Entry] {
+        folders::index(name).map_or(&[], |k| &self.inside[k])
+    }
+
+    /// The open folder over a screen of `size` (`hover`: the app under the pointer, and whether
+    /// held), if one is open.
+    pub fn draw_open(
+        &self,
+        list: &mut DrawList,
+        text: &mut TextSystem,
+        theme: &Theme,
+        size: (f32, f32),
+        hover: Option<(usize, bool)>,
+    ) {
+        if let Some(k) = self.open {
+            folders::draw(list, text, theme, (size, k, &self.inside[k]), hover);
+        }
+    }
+
     /// Starts the icons' pending slides as a frame begins.
     pub fn arm(&mut self, now: f64) {
         self.cells.iter_mut().for_each(|c| c.arm(now));
@@ -327,7 +357,8 @@ impl Grid {
             let r = slid.unwrap_or_else(|| icons::cell(cell, self.area, self.narrow));
             let hover = hover.filter(|h| h.0 == i).map(|h| h.1);
             let state = State { hover, selected: self.selected.contains(&e.name), lift: 0.0 };
-            icons::draw(list, text, theme, r, (e.icon, e.mark.as_ref(), &e.label), state);
+            let inside = self.inside(&e.name);
+            icons::draw(list, text, theme, r, (e.icon, e.mark.as_ref(), &e.label, inside), state);
         }
         if let (Some(from), Some(at)) = (self.lasso, at) {
             icons::draw_box(list, text, theme, from, at);
@@ -346,8 +377,8 @@ impl Grid {
         for (k, (i, r)) in self.carried(at).into_iter().enumerate().rev() {
             let e = &self.icons[i];
             let label = if k == 0 { e.label.as_str() } else { "" };
-            let state = State { lift: 1.0, ..State::default() };
-            icons::draw(list, text, theme, r, (e.icon, e.mark.as_ref(), label), state);
+            let (state, inside) = (State { lift: 1.0, ..State::default() }, self.inside(&e.name));
+            icons::draw(list, text, theme, r, (e.icon, e.mark.as_ref(), label, inside), state);
         }
     }
 

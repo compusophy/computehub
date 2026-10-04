@@ -62,6 +62,11 @@ impl Attrs {
     pub const fn contains(self, other: Attrs) -> bool {
         self.0 & other.0 == other.0
     }
+
+    /// The flags as bits, bold the lowest.
+    pub const fn bits(self) -> u16 {
+        self.0
+    }
 }
 
 #[rustfmt::skip]

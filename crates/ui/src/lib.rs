@@ -16,6 +16,7 @@
 
 mod code;
 pub mod icon;
+pub mod screen;
 pub mod theme;
 mod widgets;
 

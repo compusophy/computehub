@@ -1,0 +1,25 @@
+[package]
+name = "compusophy-terminal"
+description = "compusophyOS's Terminal: an xterm screen of the shell the desktop runs on a console for its window, a wasm32-wasip1 GUI program drawn as a uiwire screen. Fetched when a terminal first opens, never with the boot download; built into dist/bin/, never committed."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[lib]
+name = "terminal"
+
+[[bin]]
+name = "terminal"
+path = "src/main.rs"
+
+[dependencies]
+compusophy-term.workspace = true
+compusophy-uiwire.workspace = true
+
+# The desktop's drawing of the screen, to see a frame as it shows.
+[dev-dependencies]
+compusophy-gfx.workspace = true
+compusophy-ui.workspace = true
