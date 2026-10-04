@@ -1,8 +1,9 @@
 //! Studio's frames: one column at every width. With nothing open, only the prompt, centered.
 //! Else what the program's first comment says, the app (or its code, or while it is made the
-//! program streaming in), a status with `</>`, and the prompt with Make (Stop while making).
+//! program streaming in), a status with `</>` (and Send to compusophy after a make that failed,
+//! or by the app's fault), and the prompt with Make (Stop while making).
 
-use crate::edit::{MAKE, STOP, TOGGLE, spans};
+use crate::edit::{MAKE, SEND, STOP, TOGGLE, spans};
 use crate::make::now;
 use crate::{Studio, file_name, text};
 use coder::ai::clip;
@@ -126,6 +127,10 @@ impl Studio {
             None => self.status.clone(),
         };
         let mut line = vec![text(status.0, &status.1), flex()];
+        line.extend(self.offer().filter(|_| making.is_none()).map(|sent| match sent {
+            false => button(SEND, Variant::Chip, "Send to compusophy"),
+            true => text(Style::Small, "Sent"),
+        }));
         if !self.text.is_empty() && self.make.is_none() {
             line.push(button(TOGGLE, Variant::Quiet, "</>"));
         }

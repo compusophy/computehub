@@ -1,7 +1,7 @@
 use super::*;
-use crate::edit::{CODE, MAKE, PROMPT, STOP, TOGGLE, spans};
+use crate::edit::{CODE, MAKE, PROMPT, SEND, STOP, TOGGLE, spans};
 use crate::run::{EDIT, TOO_BIG};
-use coder::ai::{CORPUS, HOME, MAX_BODY};
+use coder::ai::{CORPUS, DEFAULT_MODEL, HOME, MAX_BODY};
 use coder::json::{Json, quote};
 use coder::receipt::MAKES;
 use std::collections::BTreeMap;
@@ -192,6 +192,14 @@ fn status(f: &Frame) -> &str {
         Some(Node::Text { text, .. }) => text,
         other => panic!("{other:?}"),
     }
+}
+/// The feedback a frame sends: its kind, text, and whether with the desktop's context.
+fn told(f: &Frame) -> Vec<(&str, &str, bool)> {
+    let sent = f.requests.iter().filter_map(|r| match r {
+        Request::Feedback { kind, text, context } => Some((kind.as_str(), text.as_str(), *context)),
+        _ => None,
+    });
+    sent.collect()
 }
 fn classes<'t>(text: &'t str, spans: &[uiwire::Span]) -> Vec<(&'t str, Class)> {
     let at = |s: &uiwire::Span| &text[s.start as usize..(s.start + s.len) as usize];
@@ -385,6 +393,74 @@ fn a_new_app_that_never_compiles_leaves_its_draft_marked() {
     assert!(status(&f).starts_with("saved ~/apps/tally.app") && has(&f, "Tally"));
 }
 
+#[test]
+fn a_failed_make_offers_to_tell_compusophy_once() {
+    let mut w = Win::new(&[], Mem::new());
+    let f = w.last(&[WIDE]);
+    let (_, id, _) = w.make(&f, "tic tac toe");
+    // A program past 8 KB that never compiles: the report carries its start.
+    let long = [BROKEN, "// ", &"pad ".repeat(2500), "\n"].concat();
+    let mut frames = w.answer(id, &app(&long));
+    for _ in 0..2 {
+        let id = ai(frames.last().unwrap()).0;
+        frames.extend(w.answer(id, &app(&long)));
+    }
+    frames.extend(w.frames(&[click(TOGGLE), click(TOGGLE)]));
+    let f = frames.last().unwrap();
+    assert_eq!(status(f), "couldn't \u{b7} E0302 line 2");
+    // Nothing goes without the tap.
+    assert!(has(f, "Send to compusophy") && frames.iter().all(|f| told(f).is_empty()));
+    let f = w.last(&[click(SEND)]);
+    let [("bug", text, false)] = told(&f)[..] else { panic!("{:?}", f.requests) };
+    let head = format!(
+        "Studio make failed: tic tac toe\n\nAsked: tic tac toe\nA new app, by {DEFAULT_MODEL}\n\
+         Ended: couldn't \u{b7} E0302 line 2\nProblem: E0302 2:7 "
+    );
+    assert!(text.starts_with(&head), "{text}");
+    assert!(text.contains("\nStopped by: E0919\n\nRequests:\n1. write: "));
+    assert!(text.contains(", left E0302\n2. fix: ") && text.contains("\n3. rewrite: "));
+    let src = "\n\nThe program it ended with (3 lines):\n```app\nstate n = 0;\nlabel nope;\n// pad";
+    assert!(text.contains(", estimated") && text.contains(src) && text.ends_with("\u{2026}\n```"));
+    assert!(text.len() < 10 * 1024 && has(&f, "Sent") && !has(&f, "Send to compusophy"));
+    // Never twice; a make that runs clean offers nothing.
+    assert!(w.send(&[click(SEND)]).is_none());
+    let f = w.last(&[click(MAKE)]);
+    assert!(!has(&f, "Sent") && !has(&f, "Send to compusophy"));
+    let f = w.answer(ai(&f).0, &app(COUNTER)).pop().unwrap();
+    assert!(status(&f).starts_with("ready") && !has(&f, "Sent") && !has(&f, "Send to"));
+    // When applang can make nothing close, it is an idea, with the model's why.
+    let mut w = Win::new(&[], Mem::new());
+    let f = w.last(&[WIDE]);
+    let (_, id, _) = w.make(&f, "a web browser");
+    w.answer(id, "```app\n// applang has no network.\n```\n");
+    let f = w.last(&[click(SEND)]);
+    let [("idea", text, false)] = told(&f)[..] else { panic!("{:?}", f.requests) };
+    assert!(text.contains("\nEnded: can't make that\nProblem: applang has no network.\n"));
+    assert!(text.ends_with("\n\nNo program came back."), "{text}");
+}
+
+#[test]
+fn an_app_that_faults_in_studio_offers_its_fault_once() {
+    let src = "state n = 0;\nlabel \"n = \" + n;\nbutton \"inc\" { n = n + 1; }\n\
+               button \"spin\" { repeat 1000000 { n = n + 1; } }\n";
+    let mut w = Win::new(&["edit", "/apps/spin.app"], with(&[("/apps/spin.app", src)]));
+    assert!(!has(&w.last(&[WIDE]), "Send to compusophy"));
+    let f = w.last(&[click(APP + 1)]);
+    assert!(has(&f, "E0206 4:") && has(&f, "Send to compusophy") && told(&f).is_empty());
+    // Not with the code, where the app and its fault are not.
+    assert!(!has(&w.last(&[click(TOGGLE)]), "Send to"));
+    assert!(has(&w.last(&[click(TOGGLE)]), "Send to compusophy"));
+    let f = w.last(&[click(SEND)]);
+    let [("bug", text, false)] = told(&f)[..] else { panic!("{:?}", f.requests) };
+    assert!(text.starts_with("Studio app faulted: spin.app\n\nFault: E0206 4:"), "{text}");
+    assert!(text.ends_with(&format!("\n\nThe program (4 lines):\n```app\n{src}```")));
+    assert!(has(&f, "Sent") && w.send(&[click(SEND)]).is_none());
+    // A clean event takes the fault away; the same fault again went already.
+    assert!(!has(&w.last(&[click(APP)]), "Sent"));
+    let f = w.last(&[click(APP + 1)]);
+    assert!(has(&f, "Sent") && !has(&f, "Send to"));
+}
+
 /// A program that compiles but faults as it first renders (E0203 at line 4).
 const AVG: &str =
     "// Avg: what you add, averaged.\nstate t = 0;\nstate c = 0;\nlabel \"avg \" + t / c;\n";
@@ -555,7 +631,7 @@ fn studio_ids_stay_below_the_apps_and_the_overlay_finds_them() {
     unique.sort();
     unique.dedup();
     assert_eq!(unique.len(), ids.len(), "{ids:?}");
-    assert!([MAKE, STOP, TOGGLE, PROMPT, CODE].iter().all(|id| *id < APP));
+    assert!([MAKE, STOP, TOGGLE, SEND, PROMPT, CODE].iter().all(|id| *id < APP));
     assert_eq!(
         (STOP, PROMPT, CODE),
         (coder::ids::STOP, coder::ids::PROMPT, coder::ids::PROMPT_END)

@@ -2,6 +2,7 @@
 //! make, [`crate::view`] draws it.
 
 use crate::make::Making;
+use crate::report::Report;
 use crate::{Disk, Live, View};
 use applang::Span;
 use coder::ai::{DEFAULT_MODEL, clip, free_path, problem, shown, slug};
@@ -12,10 +13,12 @@ use std::io::ErrorKind;
 use uiwire::{Event, Frame, Key, Request, Style, mods};
 
 /// Studio's own widgets, all below [`crate::APP`], where the app's begin: Make, Stop (the
-/// overlay finds these as [`coder::ids`]), the code view's toggle, the prompt and the code.
+/// overlay finds these as [`coder::ids`]), the code view's toggle, Send to compusophy, the
+/// prompt and the code.
 pub(crate) const MAKE: u32 = 1;
 pub(crate) const STOP: u32 = coder::ids::STOP;
 pub(crate) const TOGGLE: u32 = 3;
+pub(crate) const SEND: u32 = 4;
 /// The prompt Input is this plus how many times Studio set its text, and the Code this plus how
 /// many times Studio replaced the program: a fresh id takes the frame's text.
 pub(crate) const PROMPT: u32 = coder::ids::PROMPT;
@@ -63,6 +66,10 @@ pub struct Studio {
     pub(crate) caption: String,
     /// The make's status as the last frame showed it (it moves with each line the draft gains).
     pub(crate) seen: String,
+    /// What Send to compusophy sends: a failed make's report, until the next make; and the
+    /// app's fault that went last, so that one never goes twice.
+    pub(crate) report: Option<Report>,
+    pub(crate) told: String,
     /// The content size, as the last Resize said.
     pub(crate) width: u16,
     pub(crate) height: u16,
@@ -233,6 +240,7 @@ impl View for Studio {
             Some(&Event::Submit { id }) if id == self.prompt_id() => self.make(disk),
             Some(&Event::Click { id: STOP }) => self.stop(disk),
             Some(&Event::Click { id: TOGGLE }) if some => self.toggle(disk),
+            Some(&Event::Click { id: SEND }) => return self.send() || fresh,
             // Every Change gets a frame: the desktop sends the next one then.
             Some(ev @ Event::Change { .. }) => self.change(ev, disk),
             Some(&Event::Key { id, key: Key::Enter, mods, .. }) if cmd(mods) => {

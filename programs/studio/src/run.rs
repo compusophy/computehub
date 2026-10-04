@@ -105,6 +105,17 @@ impl Live {
         self.app.is_ok()
     }
 
+    /// The fault showing under the app (a handler's or render's), or why it started afresh;
+    /// none for a program that does not compile.
+    pub(crate) fn fault(&self) -> Option<&str> {
+        self.fault.as_deref().or(self.afresh.as_deref())
+    }
+
+    /// The program it runs.
+    pub(crate) fn src(&self) -> &str {
+        &self.src
+    }
+
     /// What it wants of the window: a tick every so many ms (0: none), and plain keys.
     pub fn play(&mut self) -> (u32, bool) {
         self.app.as_mut().map_or((0, false), |app| (app.timer(), app.keys()))
