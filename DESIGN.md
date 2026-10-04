@@ -106,8 +106,8 @@ frame: os → shell::draw → gfx::DrawList → platform::Renderer: one draw cal
 | `ui` | immediate-mode widgets, the themes, the `App` trait and `Cx` |
 | `vt`, `term` | VT/xterm escape parser; terminal screen model |
 | `guest` | the shell the Terminal runs over the VFS |
-| `apps` | Terminal, Settings |
-| `system` | About, Editor, Feedback, Files, Welcome and Activity: one wasip1 GUI program (`dist/bin/system.wasm`), off the boot download |
+| `apps` | the Terminal |
+| `system` | About, Editor, Feedback, Files, Welcome, Activity and Settings: one wasip1 GUI program (`dist/bin/system.wasm`), off the boot download |
 | `studio` | the applang editor, and `AppHost`, which runs `.app` files |
 | `coder` | the coding agent Studio runs: write, check (compile, smoke on 3 seeds), fix by SEARCH/REPLACE edits, keep the best so far, stop by budget; sans-IO, replayable |
 | `uiwire`, `uiview` | the remote UI protocol GUI programs speak; the desktop's half, which draws their trees |

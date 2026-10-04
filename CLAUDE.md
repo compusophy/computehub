@@ -59,7 +59,7 @@ crates/      the OS (boot, kernel, worker); speaks to programs by WASI, uiwire
              editor (re-exports text)
   vt/        VT/xterm escape parser        term/  terminal screen model
   guest/     the guest shell the Terminal runs
-  apps/      Settings, Terminal (built in)
+  apps/      Terminal (built in)
   uiwire/    remote UI protocol: GUI programs send widget trees, get events
   uiview/    draws them with ui; holds edited text
   host/      wm + one app per window; agent; grabs, squeeze; motion, frames
@@ -80,7 +80,7 @@ programs/    wasm32-wasip1 programs (dist/bin/), the app language they share
   studio/    make apps by describing them; runs `.app` files
   coder/     Studio's coding agent: write, test, fix by edits, keep the best
   assistant/ the Assistant: the overlay AI using the desktop
-  system/    About, Editor, Feedback, Files, Welcome, Activity (one program)
+  system/    About, Editor, Feedback, Files, Welcome, Activity, Settings (one program)
   toolbox/   test programs, one binary
 assets/fonts/  the fonts (see Fonts below)
 api/           server functions (Vercel, Node): ai.mjs, feedback.mjs
