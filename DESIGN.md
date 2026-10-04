@@ -259,6 +259,16 @@ one. Forked crates keep their Apache-2.0 license and note their origin.
   flashes what it touched, and the person's own press, key or wheel stops
   it. A program that failed starts again at the next summon. Later it
   listens.
+  Its card keeps **chats**, 8 at most (a ninth drops the oldest), each
+  with its own transcript and memory (its last 4 tasks), so a request
+  carries only its own chat's past. They sit just above the prompt, where
+  the card's view stays, in rows as its width holds them: a chip per chat
+  named by its first prompt (the current one lit; a click switches), New
+  chat, and Compact once the chat remembers two tasks, which has the model,
+  with no tools, condense it into a note of 600 bytes at most that stands
+  for its memory until the next (the pill and Stop meanwhile; a failure
+  leaves the memory). They are kept in `~/.assistant/chats`, a line format
+  read defensively, 256 KiB at most.
 - **Dock**: the person's own, left-aligned from the bottom-left corner:
   nothing in it at first ("Add to dock" from any app's menu, or its icon
   dragged onto the row, which opens a gap under the pointer, the icon
