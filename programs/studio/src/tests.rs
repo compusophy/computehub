@@ -686,6 +686,59 @@ fn a_canvas_draws_in_its_window_and_a_tap_says_where() {
 }
 
 #[test]
+fn every_shape_and_every_game_reaches_the_window() {
+    let canvases = |f: &Frame| -> Vec<(u32, u16, u16, Vec<uiwire::Draw>)> {
+        let canvas = |n: &Node| match n {
+            Node::Canvas { id, w, h, draws } => Some((*id, *w, *h, draws.clone())),
+            _ => None,
+        };
+        all(&f.nodes).into_iter().filter_map(canvas).collect()
+    };
+    // Each shape the language draws goes out as its own, pixels' cells a char each.
+    let src = "fn scene() { rect(0, 0, 4, 4, 1); circle(8, 8, 2, 2); ring(8, 8, 3, 1, 3);
+        line(0, 0, 9, 9, 1, 4); text(\"a\", 5, 5, 3, 9); sprite([\"1.1\"], 0, 10, 1);
+        pixels([0, -1, 11, 2], 10, 10, 2, 1); } canvas 20, 20, scene();";
+    let path = "/apps/shapes.app";
+    let f = Win::new(&["run", path], with(&[(path, src)])).last(&[WIDE]);
+    let shown = canvases(&f).remove(0).3;
+    use uiwire::Shape::{Circle, Line, Pixels, Rect, Ring, Sprite, Text};
+    let shapes: Vec<_> = shown.iter().map(|d| d.shape).collect();
+    assert_eq!(shapes, [Rect, Circle, Ring, Line, Text, Sprite, Pixels]);
+    assert_eq!((shown[6].at, shown[6].text.as_str()), ([10, 10, 2, 1, 0], "0.b2"));
+    // The examples (snake's board is pixels) and applang's games start, take a tap and tick
+    // with no fault, every frame decoding.
+    let games = [
+        include_str!("../../applang/tests/paint.app"),
+        include_str!("../../applang/tests/blocks.app"),
+        include_str!("../../applang/tests/tictactoe.app"),
+        include_str!("../../applang/tests/breakout.app"),
+    ];
+    let mut seen = Vec::new();
+    for (i, src) in applang::SHOTS.map(|s| s.1).into_iter().chain(games).enumerate() {
+        let path = format!("/apps/game{i}.app");
+        let mut w = Win::new(&["run", &path], with(&[(&path, src)]));
+        let f = w.last(&[WIDE]);
+        let mut evs: Vec<_> = all(&f.nodes)
+            .into_iter()
+            .filter_map(|n| if let Node::Button { id, .. } = n { Some(click(*id)) } else { None })
+            .collect();
+        for (id, w, h, _) in canvases(&f).into_iter().filter(|c| c.0 != 0) {
+            evs.push(Event::Tap { id, cell: u32::from(h / 2) * u32::from(w) + u32::from(w / 3) });
+        }
+        evs.extend(vec![Event::Tick { ms: 200 }; 12]);
+        for f in w.frames(&evs) {
+            let fault = |n: &&Node| matches!(n, Node::Text { style: Style::Error, .. });
+            assert!(!all(&f.nodes).iter().any(fault), "game {i}: {f:?}");
+            seen.extend(canvases(&f).into_iter().flat_map(|c| c.3).map(|d| d.shape));
+        }
+    }
+    // (Catch's stars, sprites, fall by its random; tic-tac-toe's rings wait for O.)
+    for shape in [Rect, Circle, Line, Text, Pixels] {
+        assert!(seen.contains(&shape), "{shape:?}");
+    }
+}
+
+#[test]
 fn runs_of_one_app_keep_each_others_saved_states() {
     // Its window and Studio's preview: what one wrote comes back before the other's next event
     // but a tick, whose write keeps what it did not change (and another version's states).

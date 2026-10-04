@@ -63,17 +63,18 @@ fn turn(x: int, y: int) {
   }
 }
 
-// A tap at square (x, y) turns toward it, across or down, whichever is farther.
+// A tap at square (x, y) turns toward it, across or down, whichever is farther of the ways
+// that are not straight back.
 fn toward(x: int, y: int) {
   if len(xs) == 0 { return; }
   let ax = x - xs[len(xs) - 1];
   let ay = y - ys[len(ys) - 1];
+  if ax * dx < 0 { ax = 0; }
+  if ay * dy < 0 { ay = 0; }
   if abs(ax) > abs(ay) {
-    if ax > 0 { turn(1, 0); } else { turn(-1, 0); }
-  } else if ay > 0 {
-    turn(0, 1);
-  } else if ay < 0 {
-    turn(0, -1);
+    turn(ax / abs(ax), 0);
+  } else if ay != 0 {
+    turn(0, ay / abs(ay));
   }
 }
 

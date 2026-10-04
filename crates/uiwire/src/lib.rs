@@ -1,5 +1,5 @@
 //! The remote UI protocol: a GUI program writes its window as a widget tree,
-//! never pixels (one [`Frame`] per `write()` to `/dev/draw`); the desktop draws
+//! never a bitmap (one [`Frame`] per `write()` to `/dev/draw`); the desktop draws
 //! it in its own toolkit and theme and answers with [`Event`]s (one per `read()`
 //! of `/dev/events`, over 64 KiB in 64 KiB parts). [`client`] wraps both.
 //!
@@ -347,9 +347,9 @@ pub const CANVAS_COLOR: u8 = 11;
 pub const MAX_SIDE: u16 = 1024;
 /// The most ink a [`Node::Canvas`] holds ([`Draw::ink`]).
 pub const MAX_INK: usize = 4096;
-/// The most cells a Pixels has a row and a column, and that a [`Node::Canvas`]'s Pixels hold
-/// in all.
+/// The most cells a Pixels has a row, and the most rows.
 pub const PIXELS_SIDE: usize = 64;
+/// The most cells a [`Node::Canvas`]'s Pixels hold in all.
 pub const MAX_PIXELS: usize = 16_384;
 /// A Pixels' cell of color `i` is the char `PAINT[i]`; `.` is none.
 pub const PAINT: &[u8; 12] = b"0123456789ab";

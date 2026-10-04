@@ -403,6 +403,14 @@ fn the_snake_shot_steers_by_its_states_and_rests_when_still() {
     // A tap left of the head, at square (0, 6), turns it left.
     assert_eq!(ev(&mut a, Event::Tap { id: 0, cell: (6 * 8 + 3) * 160 + 3 }), None);
     assert_eq!((at(&a, 4), at(&a, 5)), (vec![-1], vec![0]));
+    // Going right from (5, 7): a tap straight behind turns nothing; one farther behind than
+    // above, at (0, 5), turns up.
+    let mut b = snake(2);
+    click(&mut b, 1);
+    for (y, way) in [(7, [1, 0]), (5, [0, -1])] {
+        assert_eq!(ev(&mut b, Event::Tap { id: 0, cell: (y * 8 + 3) * 160 + 3 }), None);
+        assert_eq!([at(&b, 4)[0], at(&b, 5)[0]], way);
+    }
     // Food never starts on the body (seeds 132, 246 and 495 once put it there).
     for seed in 1..600 {
         let mut a = snake(seed);

@@ -331,10 +331,7 @@ one. Forked crates keep their Apache-2.0 license and note their origin.
   AI, checks each reply and fixes it by edits, showing what moves (thinking,
   writing 48 lines, fixing line 43, testing); `studio::AppHost` runs a `.app`
   in its own window. Its prompt asks every app for its icon line (one card,
-  and one in each example), which a change keeps, and asks that whatever is
-  to be seen (a game, a board, drawing, animation, a clock, a chart) be
-  drawn on a canvas, never spelled out in labels and buttons: its first
-  example is snake on pixels.
+  and one in each example), which a change keeps.
   Made apps draw: `canvas W, H, scene();` is a picture
   of square units (y down, scaled to fit) that `scene` draws with rect,
   circle, ring, line, text, sprite and pixels in the theme's 12 colors, sent
@@ -343,11 +340,16 @@ one. Forked crates keep their Apache-2.0 license and note their origin.
   stays pure. `pixels(cells, x, y, w, side)` draws a list of ints as
   squares `side` units wide, `w` a row, -1 none and 0 to 11 a color:
   boards, paintings, life. Pixels are whole rows, 64 x 64 at most and
-  16,384 in a render, or a coded fault (E0224); the desktop fills each
-  row's run of one color once, and the AI reads where they are and their
-  size, never each square. A canvas's handler sees the tap's `x` and `y`.
-  Grids and canvases are boards: they take the room the window's other
-  widgets leave, and with a handler they are pads.
+  16,384 in a render, or a coded fault (E0224). Each row's run of one
+  color is one fill on the desktop and one ink of the render's 4,096 (with
+  each shape, sprite square and text character), so a plain 64 x 64 board
+  fits where a busy one faults (E0222). The AI reads where pixels are and
+  their size, never each square. A canvas's handler sees the tap's `x` and
+  `y`. Grids and canvases are boards: they take the room the window's
+  other widgets leave, and with a handler they are pads. Studio's prompt
+  asks that whatever is to be seen (a game, a board, drawing, animation, a
+  clock, a chart) be drawn on a canvas, never spelled out in labels and
+  buttons: its first example is snake on pixels.
   **Editor** writes plain text, a new note in `~/notes`;
   Files and the Terminal's `edit` open files in it (a `.app` in Studio).
   **Welcome** (a program, its mark revealed by the desktop's clock)
@@ -454,7 +456,7 @@ in its home; names in it, and roots per profile, wait for R2.
   joins processes to a Terminal, cooked or raw (`/dev/consctl`), and
   `/dev/job` starts programs joined by pipes. OPFS keeps the VFS and the
   desktop across reloads. The virtual
-  GPU is the draw protocol: processes send display lists, never pixels,
+  GPU is the draw protocol: processes send display lists, never a bitmap,
   and the one instanced renderer draws them, so a program can draw from
   another device just as well.
 - **R3, AI.** An agent whose tools are the OS's capabilities (open apps,
