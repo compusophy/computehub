@@ -409,15 +409,19 @@ fn the_screen_reads_as_text_whose_refs_last_the_session() {
     grid.marks[0] = Mark { id: 1, role: 10, flags: 0, value: "2 columns\n01\n80".into() };
     let text = render(&Scene { focus: 2, wins: vec![grid], ..Scene::default() }, &mut refs, 0).0;
     assert!(text.contains("e1 grid \"Privacy\" squares \"2 columns\\n01\\n80\"\n"), "{text}");
-    // A canvas shows the text drawn on it, its size and its shapes; a click at x and y taps the
-    // unit there, y * w + x.
+    // A canvas shows the text drawn on it, its size and its shapes (pixels as where they are and
+    // their size, which the system prompt tells the model); a click at x and y taps the unit
+    // there, y * w + x.
     let mut canvas = page(2, true);
-    let value = "300 x 200 units\nring 150 150 30 8 4".into();
+    let value =
+        "300 x 200 units\nring 150 150 30 8 4\npixels 0 0, 8 x 4 squares of 10 units".into();
     canvas.marks[0] = Mark { id: 1, role: 11, flags: 0, value };
     let scene = Scene { focus: 2, wins: vec![canvas], ..Scene::default() };
     let (screen, shown) = render(&scene, &mut refs, 0);
-    let want = "e1 canvas \"Privacy\" shapes \"300 x 200 units\\nring 150 150 30 8 4\"\n";
+    let want = "e1 canvas \"Privacy\" shapes \"300 x 200 units\\nring 150 150 30 8 4\\npixels 0 0, \
+                8 x 4 squares of 10 units\"\n";
     assert!(screen.contains(want), "{screen}");
+    assert!(SYSTEM.contains("sprite x y side, pixels x y, w x h squares of s units;"));
     #[rustfmt::skip]
     let t = Task { prompt: String::new(), over: 0, steps: Vec::new(), screen, scene, shown,
         wait: Wait::User, calls: 0, acts: 0, fails: 0, repeat: (0, 0), approved: false,
@@ -504,8 +508,8 @@ fn failures_go_back_coded_and_three_end_the_task() {
 }
 
 #[test]
-fn the_person_takes_over_answers_questions_and_feedback_waits_for_a_yes() {
-    // Halt mid-task: it stops, cancelling what the model was asked, and says so.
+fn halt_stops_answers_questions_and_what_sends_or_ends_waits_for_a_yes() {
+    // Halt (Escape) mid-task: it stops, cancelling what the model was asked, and says so.
     let mut a = Agent::default();
     ask(&mut a, "anything");
     let look = a
@@ -564,11 +568,22 @@ fn the_person_takes_over_answers_questions_and_feedback_waits_for_a_yes() {
     let click = Call { name: "click".into(), args: r#"{"ref":"e2"}"#.into(), ..typed.clone() };
     let refused = a.prepare(&t, &click).unwrap_err();
     assert_eq!(refused, "E0916: refused: Activity ends programs; ask_user first");
+    // And a press of Studio's Send to compusophy, which sends off the device; not its others.
+    let send = coder::ids::SEND;
+    (t.scene.wins[0].app, t.scene.wins[0].hits[1].id) = ("studio".into(), send);
+    t.shown = render(&t.scene, &mut a.refs, 1).1;
+    let n = t.shown.iter().find(|e| e.id == send).unwrap().n;
+    let press = Call { args: format!("{{\"ref\":\"e{n}\"}}"), ..click.clone() };
+    let refused = a.prepare(&t, &press).unwrap_err();
+    assert_eq!(refused, "E0916: refused: Send to compusophy sends off the device; ask_user first");
+    let switch = Call { args: r#"{"ref":"e3"}"#.into(), ..click.clone() };
+    assert!(matches!(a.prepare(&t, &switch), Ok((Act::Click { win: 1, id: 30 }, ..))));
     let look =
         Call { name: "scroll".into(), args: r#"{"window":"w1","amount":90}"#.into(), ..click };
     assert!(matches!(a.prepare(&t, &look), Ok((Act::Scroll { win: 1, id: 0, dy: 90 }, ..))));
     t.approved = true;
     assert!(matches!(a.prepare(&t, &typed), Ok((Act::Type { win: 1, .. }, ..))));
+    assert!(matches!(a.prepare(&t, &press), Ok((Act::Click { win: 1, id }, ..)) if id == send));
     // A text past what one act types: its first part goes, nothing added, and the model hears so.
     let long = format!(r#"{{"ref":"e2","text":"{}"}}"#, "x".repeat(MAX_TYPED + 1));
     let long = a.prepare(&t, &Call { args: long, ..typed.clone() }).unwrap();
@@ -616,14 +631,39 @@ fn the_pill_keys_receipts_and_ai_errors() {
     assert!(a.event(&Event::Resize { w: 560, h: 90 }));
     let prompt = |f: &Frame| matches!(f.nodes.last(), Some(Node::Row { children, .. }) if matches!(children[0], Node::Input { .. }));
     assert!(prompt(&a.frame()));
-    // Working, the pill, whatever its size: one line of what it does, and Stop.
+    // Working, the pill, whatever its size: one line of what it does (a Strip, which takes the
+    // room Stop leaves), and Stop.
     ask(&mut a, "go");
     assert!(!a.event(&Event::Resize { w: 560, h: 480 }));
     let f = a.frame();
     let line =
         Node::Text { id: 0, style: Style::Body, text: "Looking at the screen\u{2026}".into() };
+    let line = Node::Strip { id: 0, gap: 0, children: vec![line] };
     let stop = Node::Button { id: STOP, variant: Variant::Normal, label: "Stop".into() };
     assert_eq!(f.nodes, [Node::Row { id: 0, gap: 12, children: vec![line, stop] }]);
+    // Drawn as the desktop draws the pill, Stop keeps to its right edge whatever the line says,
+    // and a line too long for it stays one line (so Stop stays at the top of the content).
+    let stop = |doing: &str| {
+        let mut ts = TextSystem::new(SANS.to_vec()).unwrap();
+        let (mut list, mut hits) = (gfx::DrawList::new(), Vec::new());
+        let (r, theme, state) =
+            (gfx::RectF::new(0.0, 0.0, 420.0, 72.0), &ui::THEMES[0], ui::UiState::default());
+        let (mut texts, mut view, nodes) =
+            (uiview::Texts::default(), uiview::View::default(), [pill(doing)]);
+        uiview::draw(
+            &mut Ui::new(&mut list, &mut ts, r, &mut hits, state, theme),
+            &nodes,
+            &mut texts,
+            &mut view,
+        );
+        let r = hits.iter().find(|h| h.id == ui::WidgetId(STOP)).unwrap().rect;
+        (r.x + r.w, r.y)
+    };
+    let long = "Clicking \u{201c}Send error reports automatically when something fails\u{201d}";
+    for doing in ["Thinking\u{2026}", "Looking at the screen\u{2026}", long] {
+        let (right, top) = stop(doing);
+        assert!((right - (420.0 - ui::PAD)).abs() < 1.0 && top == ui::PAD, "{right} {top}");
+    }
     // An AI error ends the task, coded, with Retry: the card again, its prompt with the keys.
     // Retry asks again.
     let look = f
@@ -744,9 +784,7 @@ fn compact_condenses_the_chat_into_a_note_and_a_failure_keeps_the_memory() {
     // Compacting is the pill with Stop; Stop cancels it and the memory stays.
     a.event(&Event::Click { id: COMPACT });
     let f = a.frame();
-    let line = Node::Text { id: 0, style: Style::Body, text: "Compacting the chat\u{2026}".into() };
-    let stop = Node::Button { id: STOP, variant: Variant::Normal, label: "Stop".into() };
-    assert_eq!(f.nodes, [Node::Row { id: 0, gap: 12, children: vec![line, stop] }]);
+    assert_eq!(f.nodes, [pill("Compacting the chat\u{2026}")]);
     let ai = |f: &Frame| {
         f.requests.iter().find_map(|r| match r {
             Request::Ai { id, .. } => Some(*id),

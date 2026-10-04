@@ -56,6 +56,7 @@ dependencies = [
  "compusophy-chats",
  "compusophy-coder",
  "compusophy-files",
+ "compusophy-gfx",
  "compusophy-host",
  "compusophy-system",
  "compusophy-ui",

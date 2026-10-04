@@ -277,8 +277,9 @@ one. Forked crates keep their Apache-2.0 license and note their origin.
   defensively, 256 KiB at most. A finger's tap leaves the keyboard down
   until its field is tapped. A dot under the tile while the overlay shows
   (the accent's while it has the keys). While it works the overlay is a
-  pill, one line of what it does and Stop (whose press reaches across the
-  pill's height), and the dot beats; each act flashes what it touched.
+  pill: one line of what it does, and Stop at its right edge however the
+  line changes (its press reaches across the pill's height); the dot
+  beats, and each act flashes what it touched.
   Only Stop, or Escape while the overlay has the keys, stops it: the
   person's own presses, keys and wheel go where they go beside its acts
   (one on the bare desktop leaves the pill in view), and an act on a
@@ -363,7 +364,8 @@ one. Forked crates keep their Apache-2.0 license and note their origin.
   program came back), and the app's last fault in Studio's preview (kept
   under the app until another shows or the program changes), offer Send to
   compusophy by the status; an app in its own window offers none. The tap
-  is the consent; each goes once (`Request::Feedback`, never the desktop's
+  is the consent (the Assistant presses it only after the person's yes, as
+  in Feedback); each goes once (`Request::Feedback`, never the desktop's
   context): what was asked, how it ended (its code and problem, the make's
   own code for why it stopped, each request's kind, tokens, time and the
   problem it left) and the program, clipped to 8 KB, so compusophy sees

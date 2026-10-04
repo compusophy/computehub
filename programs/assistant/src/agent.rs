@@ -18,13 +18,14 @@
 //!   acts, or a request past the free AI's [`MAX_MESSAGES`] (the memory goes first) or, folded,
 //!   [`MAX_BODY`] (E0921), an AI error (E0901 to E0905, with Retry), and Stop: the pill's, or
 //!   Escape ([`Event::Halt`]).
-//! - **Guard.** Acts into Feedback (the one app that sends what it holds off the device), and
-//!   presses in Activity (which ends programs), wait for the person's yes through `ask_user`. A
-//!   call that sends a report or replaces what is kept asks for its own: `send_feedback` always,
-//!   `write_file` replacing a file or writing outside the home. What would go shows whole (the
-//!   report, or the text), the question under it; the call runs only on a yes to it, and any
-//!   other answer goes back to the model, nothing done. A yes is yes words alone ("yes", "ok,
-//!   send it", "sure, why not"), so an answer that asks for a change, or says no, is none.
+//! - **Guard.** Acts into Feedback (which sends what it holds off the device), a press of
+//!   Studio's Send to compusophy ([`coder::ids::SEND`], which does too), and presses in Activity
+//!   (which ends programs) wait for the person's yes through `ask_user`. A call that sends a
+//!   report or replaces what is kept asks for its own: `send_feedback` always, `write_file`
+//!   replacing a file or writing outside the home. What would go shows whole (the report, or the
+//!   text), the question under it; the call runs only on a yes to it, and any other answer goes
+//!   back to the model, nothing done. A yes is yes words alone ("yes", "ok, send it", "sure, why
+//!   not"), so an answer that asks for a change, or says no, is none.
 //! - **Files.** `list_files`, `read_file` and `write_file` reach the program's own files, from
 //!   the home (the [`files`] crate); they are not acts, so the screen stays as it was.
 //! - **Feedback.** What the person needs and no tool does, the model tells compusophy, who builds
@@ -32,8 +33,8 @@
 //!   `Assistant:`, with the desktop's context) through the page's outbox, as the Feedback app's
 //!   reports go. So the Assistant asks for the tools it lacks.
 //! - **Shown.** While it works it says so ([`Request::Status`]): the desktop makes it a pill, and
-//!   it draws one, one line of what it does and Stop, whatever its size. Each task ends with its
-//!   receipt: steps and tokens.
+//!   it draws one, one line of what it does and Stop at its right edge, whatever its size. Each
+//!   task ends with its receipt: steps and tokens.
 //! - **Chats.** Each conversation has its own transcript and memory (its last [`MEMORY`] tasks,
 //!   a compacted note first, one of them), so one task's context never weighs on another's: the
 //!   card switches between them, starts, deletes and compacts them ([`chats`], [`compact`]);
@@ -90,10 +91,10 @@ reply's text and call send_feedback with an idea for compusophy, who builds this
 asked, what you tried, and the tool you lacked and how you would use it; send feedback too \
 when they ask you to. Settings has pages Profile (the user's face: a ring \
 of dots), Appearance (themes), AI (the model), Privacy (error reports) and Reset (the user's \
-alone). A canvas is a picture in units (its size first, x right \
-and y down); it lists its \
+alone). A canvas is a picture in units (its size first, x right and y down); it lists its \
 shapes as rect x y w h color, circle x y r color, ring x y r width color, line x1 y1 x2 y2 width \
-color, text \"value\" x y size color, sprite x y side; click a point of it by x and y.";
+color, text \"value\" x y size color, sprite x y side, pixels x y, w x h squares of s units; \
+click a point of it by x and y.";
 
 /// The tools, in OpenAI's function calling form.
 pub const TOOLS: &str = r#"[{"type":"function","function":{"name":"open_app","description":"Open an app, or bring its window to the front. Names are listed under Apps.","parameters":{"type":"object","properties":{"name":{"type":"string"}},"required":["name"],"additionalProperties":false}}},{"type":"function","function":{"name":"click","description":"Press an element: a button, tab, switch, option, item, link or field; a square of a grid, by its cell; or a point of a canvas, by its x and y.","parameters":{"type":"object","properties":{"ref":{"type":"string","description":"An element ref from the latest screen, like e4."},"cell":{"type":"integer","minimum":0,"description":"For a grid: the square, counted from 0 along its rows."},"x":{"type":"integer","minimum":0,"description":"For a canvas: the point's x, in its units."},"y":{"type":"integer","minimum":0,"description":"For a canvas: the point's y, in its units."}},"required":["ref"],"additionalProperties":false}}},{"type":"function","function":{"name":"type_text","description":"Focus a field and type text into it. submit presses Enter after.","parameters":{"type":"object","properties":{"ref":{"type":"string"},"text":{"type":"string","maxLength":4000},"submit":{"type":"boolean"}},"required":["ref","text"],"additionalProperties":false}}},{"type":"function","function":{"name":"press_key","description":"Press a key in a window (default: the focused one): enter, escape, tab, backspace, delete, up, down, left, right, home, end, pageup, pagedown, f1-f12, a letter or digit; with modifiers like ctrl+s or shift+tab.","parameters":{"type":"object","properties":{"key":{"type":"string"},"window":{"type":"string","description":"A window like w2."}},"required":["key"],"additionalProperties":false}}},{"type":"function","function":{"name":"scroll","description":"Scroll a window's content, or the element under ref. Positive amount scrolls down, in pixels.","parameters":{"type":"object","properties":{"window":{"type":"string"},"ref":{"type":"string"},"amount":{"type":"integer","minimum":-3000,"maximum":3000}},"required":["window","amount"],"additionalProperties":false}}},{"type":"function","function":{"name":"window","description":"Focus, close, minimize, maximize or restore a window.","parameters":{"type":"object","properties":{"window":{"type":"string"},"action":{"type":"string","enum":["focus","close","minimize","maximize","restore"]}},"required":["window","action"],"additionalProperties":false}}},{"type":"function","function":{"name":"set_theme","description":"Switch the desktop's theme.","parameters":{"type":"object","properties":{"name":{"type":"string","enum":["Midnight","Dawn","Mono"]}},"required":["name"],"additionalProperties":false}}},{"type":"function","function":{"name":"wait","description":"Let time pass (a program finishing, output arriving), then see the screen.","parameters":{"type":"object","properties":{"ms":{"type":"integer","minimum":0,"maximum":5000}},"required":["ms"],"additionalProperties":false}}},{"type":"function","function":{"name":"ask_user","description":"Ask the user a question and stop until they answer. Required before an app deletes, overwrites or sends anything off the device.","parameters":{"type":"object","properties":{"question":{"type":"string"}},"required":["question"],"additionalProperties":false}}},{"type":"function","function":{"name":"list_files","description":"List a folder of the user's files: its folders (ending in /) and files with their sizes.","parameters":{"type":"object","properties":{"path":{"type":"string","description":"From the user's home: ~, ~/notes or notes/todo.txt."}},"required":["path"],"additionalProperties":false}}},{"type":"function","function":{"name":"read_file","description":"Read a text file of the user's: at most its first 16 KB.","parameters":{"type":"object","properties":{"path":{"type":"string","description":"From the user's home: ~, ~/notes or notes/todo.txt."}},"required":["path"],"additionalProperties":false}}},{"type":"function","function":{"name":"write_file","description":"Create a text file, or replace one whole (there is no append), making the folders above it. Replacing a file, or writing outside ~, shows the user the text and asks their yes itself.","parameters":{"type":"object","properties":{"path":{"type":"string","description":"From the user's home: ~, ~/notes or notes/todo.txt."},"text":{"type":"string","maxLength":3000}},"required":["path","text"],"additionalProperties":false}}},{"type":"function","function":{"name":"send_feedback","description":"Send compusophy, who builds this OS, a report: an idea (a tool or ability you lacked) or a bug. It shows the user the report and sends it only on their yes, which it asks itself; what is open and recent events go with it, never files.","parameters":{"type":"object","properties":{"kind":{"type":"string","enum":["idea","bug"]},"text":{"type":"string","maxLength":3000,"description":"First line a short title; then what the user asked, what you tried, and the tool you lacked and how you would have used it."}},"required":["kind","text"],"additionalProperties":false}}}]"#;
@@ -680,12 +681,14 @@ impl Agent {
             e.ok_or_else(|| result(acted::OFF_SCREEN, "", s))
         };
         let pick = |k: &str| need(k).and_then(|r| elem(&r).map(|e| (r, e)));
-        // Feedback sends what it holds off the device, and a press in Activity may end a program
-        // (a scroll there only reads): only once the person said yes.
-        let guard = |win: u32, scroll: bool| {
+        // Feedback sends what it holds off the device, as Studio's Send to compusophy (widget
+        // `id`) does, and a press in Activity may end a program (a scroll there only reads):
+        // only once the person said yes.
+        let guard = |win: u32, id: u32, scroll: bool| {
             let app = t.scene.wins.iter().find(|w| w.id == win).map_or("", |w| w.app.as_str());
             let why = match app {
                 "feedback" => "Feedback sends what it holds off the device",
+                "studio" if id == coder::ids::SEND => "Send to compusophy sends off the device",
                 "activity" if !scroll => "Activity ends programs",
                 _ => return Ok(()),
             };
@@ -713,7 +716,7 @@ impl Agent {
             }
             "click" => {
                 let (r, e) = pick("ref")?;
-                guard(e.win, false)?;
+                guard(e.win, e.id, false)?;
                 // A grid's square is tapped by its number, a canvas's unit by its x and y.
                 let point = (num(&c.args, "x"), num(&c.args, "y"));
                 let act = match (num(&c.args, "cell").map(u32::try_from), point) {
@@ -737,7 +740,7 @@ impl Agent {
             }
             "type_text" => {
                 let ((r, e), text) = (pick("ref")?, need("text")?);
-                guard(e.win, false)?;
+                guard(e.win, e.id, false)?;
                 let submit = Json::parse(&c.args).and_then(|v| v.get("submit").cloned())
                     == Some(Json::Bool(true));
                 // Its first part, if it is longer than one act types, and the model told so.
@@ -762,7 +765,7 @@ impl Agent {
                     Some(s) => win(&s)?.id,
                     None => t.scene.focus,
                 };
-                guard(w, false)?;
+                guard(w, 0, false)?;
                 (
                     Act::Key { win: w, code, mods },
                     format!("Pressing {spec}"),
@@ -772,7 +775,7 @@ impl Agent {
             }
             "scroll" => {
                 let w = win(&need("window")?)?;
-                guard(w.id, true)?;
+                guard(w.id, 0, true)?;
                 let id = match get("ref").map(|r| elem(&r).map(|e| (r, e))).transpose()? {
                     Some((_, e)) if e.win == w.id => e.id,
                     Some((r, _)) => return Err(format!("E0918: {r} is not in w{}", w.id)),
@@ -882,9 +885,7 @@ impl Agent {
                 Some(_) => "Compacting the chat\u{2026}".into(),
                 None => self.doing(),
             };
-            let line = text(Style::Body, &clip(&doing, 64));
-            let stop = button(STOP, Variant::Normal, "Stop");
-            nodes.push(Node::Row { id: 0, gap: 12, children: vec![line, stop] });
+            nodes.push(pill(&doing));
         } else {
             if self.turns.is_empty() {
                 nodes.push(text(
@@ -938,6 +939,16 @@ pub fn serve<R: Read, W: Write>(
             keep(&text);
         }
     }
+}
+
+/// The pill's one row: what it is `doing`, then Stop. The line is a Strip, which takes the room
+/// Stop leaves, so Stop keeps to the pill's right edge however the line changes; the line stays
+/// one line, and one too long for the pill slides its start out of view.
+fn pill(doing: &str) -> Node {
+    let line = Node::Text { id: 0, style: Style::Body, text: clip(doing, 64) };
+    let line = Node::Strip { id: 0, gap: 0, children: vec![line] };
+    let stop = Node::Button { id: STOP, variant: Variant::Normal, label: "Stop".into() };
+    Node::Row { id: 0, gap: 12, children: vec![line, stop] }
 }
 
 /// An act's result for the model: what it did, or its coded failure.

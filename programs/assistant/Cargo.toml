@@ -22,8 +22,9 @@ compusophy-files.workspace = true
 compusophy-uiwire.workspace = true
 
 # A real desktop for the agent to drive in tests: the host, Settings (the system program, drawn
-# as the desktop draws it) and its toolkit.
+# as the desktop draws it) and its toolkit, and the draw list the pill is drawn into.
 [dev-dependencies]
+compusophy-gfx.workspace = true
 compusophy-host.workspace = true
 compusophy-system.workspace = true
 compusophy-uiview.workspace = true
