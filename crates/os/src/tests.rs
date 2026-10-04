@@ -1,4 +1,5 @@
 use super::*;
+pub(crate) use kernel::wire::{Msg, O_CREAT};
 use platform::Effect as Fx;
 
 const SEMI: &[u8] = include_bytes!("../../../assets/fonts/deferred/Inter-SemiBold.ttf");
@@ -37,21 +38,22 @@ fn fresh() -> Desktop {
     Desktop::new().expect("the boot font loads")
 }
 
-/// A desktop at 1280 x 800 (a signed-in tab's reload), a terminal in front if `terminal`.
+/// A desktop at 1280 x 800 (a signed-in tab's reload), with a terminal (its shell pid 2) if asked.
 pub(crate) fn desktop(terminal: bool) -> Desktop {
     let (mut desk, mut ctl) = (fresh(), Ctl::default());
     ctl.session_set(logon::SESSION, Some("0"));
     desk.event(resize(1280.0, 800.0), &mut ctl);
     if terminal {
+        desk.shell.as_mut().expect("made").kernel_mut().set_isolated(true);
         send(&mut desk, key("Enter/Enter/a", true));
     }
     desk
 }
 
-/// What `desk` asks of the page as the window in front (a terminal) runs `line`.
-pub(crate) fn run(desk: &mut Desktop, line: &str) -> Vec<Fx> {
-    send(desk, Event::Text(line.into()));
-    send(desk, key("Enter/Enter", true)).1
+/// What `desk` asks of the page, but replies, as the terminal's shell sends `msg`.
+pub(crate) fn sh(desk: &mut Desktop, msg: Msg<'_>) -> Vec<Fx> {
+    let fx = send(desk, Event::Proc { pid: 2, msg: msg.encode() }).1;
+    fx.into_iter().filter(|f| !matches!(f, Fx::Reply { .. })).collect()
 }
 
 /// A frame as [`App::frame`] draws it, without a renderer, and what it asked.
@@ -75,10 +77,9 @@ fn focused_middle(desk: &Desktop) -> (f32, f32) {
 
 #[test]
 fn events_map_to_inputs_and_keys_by_code_or_by_meaning() {
-    // By code, or with no code (phone keyboards, remote desktops) by key;
-    // NumLock-off keypad keys by the key they name; with Ctrl, Alt or Meta an
-    // ASCII letter by meaning (AZERTY's Z at KeyW, Dvorak's C at KeyI),
-    // anything else (Cyrillic, Option symbols, digits, AltGr text) by position.
+    // By code, or with no code (phone keyboards, remote desktops) by key; NumLock-off keypad keys
+    // by the key they name; with Ctrl, Alt or Meta an ASCII letter by meaning (AZERTY's Z at KeyW,
+    // Dvorak's C at KeyI), anything else (Cyrillic, Option symbols, digits, AltGr text) by place.
     let table = "KeyA=Char('a') KeyZ=Char('z') Digit0=Char('0') Digit9=Char('9') Numpad7=Char('7') \
         Enter=Enter NumpadEnter=Enter Escape=Escape Backspace=Backspace Delete=Delete Tab=Tab \
         Space=Space ArrowLeft=Left ArrowRight=Right ArrowUp=Up ArrowDown=Down Home=Home End=End \
@@ -347,7 +348,8 @@ fn programs_reach_the_kernel_and_its_effects_the_page() {
     // /bin holds each applet's marker; kernel events before the shell are dropped.
     let mut desk = fresh();
     let vfs = &desk.parts.as_ref().expect("unused").1;
-    assert_eq!(vfs.list("/bin").map(|l| l.len()), Ok(18));
+    assert_eq!(vfs.list("/bin").map(|l| l.len()), Ok(19));
+    assert_eq!(vfs.read("/bin/sh").unwrap(), b"#!wasm bin/sh.wasm\n");
     assert_eq!(vfs.read("/bin/selftest").unwrap(), b"#!wasm bin/toolbox.wasm\n");
     assert_eq!(vfs.read("/bin/assistant").unwrap(), b"#!wasm bin/assistant.wasm\n");
     assert_eq!(vfs.read("/bin/settings").unwrap(), b"#!wasm bin/system.wasm\n");
@@ -381,11 +383,10 @@ fn programs_reach_the_kernel_and_its_effects_the_page() {
     // are dropped, as are streams nobody asked for.
     let pref = |key: &str, value: &str| Effect::Pref { key: key.into(), value: value.into() };
     let mut ctl = Ctl::default();
-    effect(pref("ai.model", "zai/glm-5.3-flash"), &mut ctl, &desk.ai);
-    effect(pref("ai.nope", "x"), &mut ctl, &desk.ai);
-    for (k, v) in [("dock", "studio,files"), ("seen", "1"), ("reports", "off"), ("theme", "x")] {
-        effect(pref(k, v), &mut ctl, &desk.ai);
-    }
+    #[rustfmt::skip]
+    let asked = [("ai.model", "zai/glm-5.3-flash"), ("ai.nope", "x"), ("dock", "studio,files"),
+        ("seen", "1"), ("reports", "off"), ("theme", "x")];
+    asked.into_iter().for_each(|(k, v)| effect(pref(k, v), &mut ctl, &desk.ai));
     let store = |k: &str, v: &str| Fx::Store { key: k.into(), value: v.into() };
     #[rustfmt::skip]
     let stored = [store(ai::MODEL, "zai/glm-5.3-flash"), store("compusophy.dock", "studio,files"),
@@ -402,19 +403,19 @@ fn home_and_the_meters_keep_to_the_one_shot_timer() {
     // At once, then by the one-shot timer, armed again if it fires early (here every wake does:
     // the page clock reads 0); hiding keeps it at once. Once another tab kept its own: never.
     let mut desk = desktop(true);
-    let changes = [run(&mut desk, "touch a"), run(&mut desk, "touch b")];
+    let touch =
+        |d: &mut Desktop, f| sh(d, Msg::Open { oflags: O_CREAT, path: &[Vfs::HOME, f].concat() });
+    let changes = [touch(&mut desk, "/a"), touch(&mut desk, "/b")];
     assert_eq!(changes, [vec![], vec![Fx::Wake(1001)]]);
     assert_eq!(send(&mut desk, Event::Wake).1, [Fx::Wake(1001)]);
     assert_eq!([send(&mut desk, Event::Hidden).1, send(&mut desk, Event::Wake).1], [[], []]);
     let mut ctl = Ctl::default();
     ctl.storage_set(home::MARK, "another tab's");
-    run(&mut desk, "touch c");
+    touch(&mut desk, "/c");
     desk.event(Event::Hidden, &mut ctl);
-    assert!(desk.home.unkept && run(&mut desk, "touch d").is_empty());
-    // A watcher (Activity's process; hello's here) hears the meters at once, in its read of its
-    // events, and the timer is (already) armed for a look a second on; nothing more is due yet.
-    desk.shell.as_mut().expect("made").kernel_mut().set_isolated(true);
-    run(&mut desk, "hello");
+    assert!(desk.home.unkept && touch(&mut desk, "/d").is_empty());
+    // A watcher (Activity's process; the shell's here) hears the meters at once, in its read of
+    // its events, and the timer is (already) armed for a look a second on; nothing more is due.
     (desk.ai.0.borrow_mut().watch, desk.ai.0.borrow_mut().fresh) = (Some(2), true);
     let read = |d: &mut Desktop| send(d, Event::Proc { pid: 2, msg: vec![0x21, 0, 0, 1, 0] }).1;
     let (fx, stats) = (read(&mut desk), |d: &Vec<u8>| d.get(5..).and_then(stat::Stats::decode));

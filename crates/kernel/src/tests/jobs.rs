@@ -14,13 +14,9 @@ impl Sh {
     fn new() -> Sh {
         let (mut k, mut fs) =
             (Kernel { isolated: true, owner: 5, ..Kernel::default() }, Vfs::new());
-        fs.mkdir("/bin").unwrap();
-        for (path, data) in
-            [("/bin/a", "#!wasm bin/toolbox.wasm\n"), ("/bin/b", "#!wasm /tmp/w.wasm")]
-        {
-            fs.write(path, data.as_bytes()).unwrap();
-        }
-        fs.write("/tmp/w.wasm", b"\0asm").and(fs.write("/tmp/f", b"text")).unwrap();
+        fs.mkdir("/bin").and(fs.write("/bin/a", b"#!wasm bin/toolbox.wasm\n")).unwrap();
+        fs.write("/bin/b", b"#!wasm /tmp/w.wasm").and(fs.write("/tmp/w.wasm", b"\0asm")).unwrap();
+        fs.write("/tmp/f", b"text").unwrap();
         let (argv, program) = (vec!["sh".into()], Program::Url("bin/toolbox.wasm".into()));
         let (cwd, stdout, roots) = ("/".into(), Stdout::Console, vec!["/".into()]);
         let sh = k.spawn(Spawn { argv, program, cwd, tty: Some((80, 24)), stdout, roots }).unwrap();
@@ -71,25 +67,13 @@ fn a_job_starts_its_stages_piped_on_the_console_and_its_wait_gets_the_last_statu
     let (sh, j) = (s.sh, s.spawn(&ab));
     assert_eq!(j, (0, 3u32.to_le_bytes().to_vec()), "the job is its first pid");
     let starts = s.ready(&[3, 4]);
-    let want = |pid, argv: &str, stdin, stdout| Start {
-        role: wire::Role::Process,
-        pid,
-        tty: Some((100, 30)),
-        stdin,
-        stdout,
-        cwd: "/tmp".into(),
-        roots: vec!["/".into()],
-        argv: argv.split(' ').map(String::from).collect(),
-        env: vec![],
-    };
-    assert_eq!(
-        starts[0],
-        (want(3, "a 1", Stdin::Pipe, Stdout::Pipe), Load::Url("bin/toolbox.wasm".into()))
-    );
-    assert_eq!(
-        starts[1],
-        (want(4, "b", Stdin::Pipe, Stdout::Console), Load::Bytes(b"\0asm".into()))
-    );
+    #[rustfmt::skip]
+    let want = |pid, argv: &str, stdin, stdout| Start { role: wire::Role::Process, pid,
+        tty: Some((100, 30)), stdin, stdout, cwd: "/tmp".into(), roots: vec!["/".into()],
+        argv: argv.split(' ').map(String::from).collect(), env: vec![] };
+    let (url, wasm) = (Load::Url("bin/toolbox.wasm".into()), Load::Bytes(b"\0asm".into()));
+    assert_eq!(starts[0], (want(3, "a 1", Stdin::Pipe, Stdout::Pipe), url));
+    assert_eq!(starts[1], (want(4, "b", Stdin::Pipe, Stdout::Console), wasm));
     // The first reads the job's bytes, then an end of file; the second waits for the first's.
     let reads = [3, 3, 4].map(|pid| s.send(pid, Msg::PipeRead { max: 64 }));
     assert_eq!(reads, [vec![reply(3, b"in")], vec![reply(3, b"")], vec![]]);
@@ -98,16 +82,12 @@ fn a_job_starts_its_stages_piped_on_the_console_and_its_wait_gets_the_last_statu
     s.send(3, Msg::ConsWrite { data: b"a:" });
     s.send(4, Msg::ConsWrite { data: b"b!" });
     assert_eq!((s.k.take_output(sh), s.k.take_woken()), (b"a:b!".to_vec(), vec![5]));
-    assert!(
-        s.send(sh, Msg::Wait { job: 3 }).is_empty()
-            && s.send(4, Msg::PipeRead { max: 9 }).is_empty()
-    );
+    assert!(s.send(sh, Msg::Wait { job: 3 }).is_empty());
+    assert!(s.send(4, Msg::PipeRead { max: 9 }).is_empty());
     // The writer's end is its reader's end of file; the last's status is the job's, and both go.
     assert_eq!(s.send(3, Msg::Exit { status: 9 }), [Effect::Kill { pid: 3 }, reply(4, b"")]);
-    assert_eq!(
-        s.send(4, Msg::Exit { status: 2 }),
-        [Effect::Kill { pid: 4 }, reply(sh, &2i32.to_le_bytes())]
-    );
+    let end = [Effect::Kill { pid: 4 }, reply(sh, &2i32.to_le_bytes())];
+    assert_eq!(s.send(4, Msg::Exit { status: 2 }), end);
     assert_eq!(s.k.procs(), [(sh, "sh".into(), true)]);
     assert_eq!(s.send(sh, Msg::Wait { job: 3 }), [err(sh, wire::ECHILD)]);
 }
@@ -151,10 +131,8 @@ fn ctrl_c_ends_the_job_on_the_console_and_a_mode_it_set() {
     s.k.input(sh, b"x\x03");
     let i = 130i32.to_le_bytes();
     assert_eq!(s.k.take_effects(), [Effect::Kill { pid: 4 }, reply(sh, &i)]);
-    assert_eq!(
-        (s.k.take_output(sh), s.k.procs()),
-        (b"x^C".to_vec(), vec![(sh, "sh".into(), true)])
-    );
+    assert_eq!(s.k.take_output(sh), b"x^C");
+    assert_eq!(s.k.procs(), [(sh, "sh".into(), true)]);
 }
 
 #[test]
@@ -181,23 +159,13 @@ fn a_job_starts_whole_or_not_at_all() {
     // Under narrower roots, only what is under them.
     let mut s = Sh::new();
     let (argv, program) = (vec!["sh".into()], Program::Url("bin/toolbox.wasm".into()));
-    let roots = vec!["/tmp".into()];
-    let sh = s.k.spawn(Spawn {
-        argv,
-        program,
-        cwd: "/tmp".into(),
-        tty: None,
-        stdout: Stdout::Console,
-        roots,
-    });
-    let sh = sh.unwrap();
+    let (cwd, stdout, roots) = ("/tmp".into(), Stdout::Console, vec!["/tmp".into()]);
+    let sh = s.k.spawn(Spawn { argv, program, cwd, tty: None, stdout, roots }).unwrap();
     s.k.message(&mut s.fs, sh, &[wire::READY, wire::VERSION]);
     s.k.take_effects();
     let ask = |s: &mut Sh, path| {
-        s.send(
-            sh,
-            Msg::Spawn { job: &job(&[(path, "w")], Stdin::Console, Stdout::Console, b"").encode() },
-        )
+        let one = job(&[(path, "w")], Stdin::Console, Stdout::Console, b"").encode();
+        s.send(sh, Msg::Spawn { job: &one })
     };
     assert_eq!(ask(&mut s, "/bin/a"), [err(sh, wire::ENOTCAPABLE)]);
     let started = ask(&mut s, "/tmp/w.wasm");

@@ -430,6 +430,20 @@ fn fuzz() {
 }
 
 #[test]
+fn programs_ask_the_desktop_in_an_osc_of_their_own() {
+    // `OSC 1729 ; verb ; arg`: the arg keeps its `;`, controls go; a bare verb asks nothing.
+    let mut t = term(10, 2, "\x1b]1729;open;editor:/a;b\x07\x1b]1729;theme;Mono\x1b\\");
+    t.feed(b"\x1b]1729;bare\x07");
+    let want = [("open", "editor:/a;b"), ("theme", "Mono")].map(|(v, a)| (v.into(), a.into()));
+    assert_eq!(t.take_asks(), want);
+    assert!(t.take_asks().is_empty() && t.row(0)[0] == Cell::BLANK && t.cursor() == (0, 0));
+    // Unread, at most 16 wait; a reset keeps them.
+    (0..20).for_each(|_| t.feed(b"\x1b]1729;open;x\x07"));
+    t.feed(b"\x1bc");
+    assert_eq!(t.take_asks().len(), 16);
+}
+
+#[test]
 fn rotate_is_rotate_left() {
     for (len, k) in (0..9u8).flat_map(|len| (0..=len).map(move |k| (len, k))) {
         let (mut a, mut b): (Vec<u8>, Vec<u8>) = ((0..len).collect(), (0..len).collect());

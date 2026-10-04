@@ -9,6 +9,8 @@
 //! reach the scrollback, at most [`SCROLLBACK`]. Resize does not reflow; it keeps the cursor's
 //! row on screen. OSC 52 is ignored, titles lose controls, [`paste`] strips ESC, REP stops at
 //! the line's end, unread replies are capped; mouse, focus and synchronized output are recorded.
+//! `OSC 1729 ; verb ; arg` is compusophyOS's own: the program asks the desktop for something
+//! ([`Term::take_asks`]).
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
@@ -30,6 +32,8 @@ const MAX_ROWS: u16 = 500;
 const MAX_TITLE: usize = 256;
 /// Unread reply bytes kept; later replies are dropped until they are taken.
 const MAX_REPLIES: usize = 1 << 16;
+/// Unread asks kept; later ones are dropped until they are taken.
+const MAX_ASKS: usize = 16;
 
 /// A cell's foreground or background color: the theme's `Default`, an xterm palette index
 /// (0-15 the ANSI colors, then the cube and grays) or a 24-bit color.
@@ -106,6 +110,7 @@ pub struct Term {
     // `last`: the last printed character, for REP (any control clears it); `dirty`: something
     // visible changed during the current `feed`.
     last: Option<char>, title: String, replies: Vec<u8>, generation: u64, dirty: bool,
+    asks: Vec<(String, String)>,
 }
 
 /// Blanks the wide character the boundary before column `x` would cut.
@@ -154,6 +159,9 @@ impl Term {
     pub fn title(&self) -> &str { &self.title }
     /// Takes the answers to status, attribute and mode queries owed to the program's input.
     pub fn take_replies(&mut self) -> Vec<u8> { mem::take(&mut self.replies) }
+    /// Takes what the program asked of the desktop (`OSC 1729 ; verb ; arg`), as (verb, arg)
+    /// without controls, oldest first.
+    pub fn take_asks(&mut self) -> Vec<(String, String)> { mem::take(&mut self.asks) }
     /// The number of scrollback rows.
     pub fn scrollback_len(&self) -> usize { self.scrollback.len() }
     /// Scrollback row `i`, 0 the oldest, empty when out of range. Trailing blanks are trimmed
@@ -190,6 +198,7 @@ impl Term {
             autowrap: true, insert: false, app_cursor: false, cursor_visible: true,
             bracketed: false, mouse: 0, mouse_sgr: false, focus: false, sync: false, last: None,
             title: String::new(), replies: Vec::new(), generation: 0, dirty: false,
+            asks: Vec::new(),
         }
     }
 
@@ -407,12 +416,12 @@ impl Term {
         }
     }
 
-    /// RIS: the power-on state, keeping the size, scrollback, title, unread replies and
-    /// generation.
+    /// RIS: the power-on state, keeping the size, scrollback, title, unread replies and asks
+    /// and generation.
     fn reset(&mut self) {
         let fresh = Term::new(self.cols as u16, self.rows as u16);
         let old = mem::replace(self, fresh);
-        (self.scrollback, self.title) = (old.scrollback, old.title);
+        (self.scrollback, self.title, self.asks) = (old.scrollback, old.title, old.asks);
         (self.replies, self.generation) = (old.replies, old.generation);
     }
 

@@ -132,8 +132,7 @@ fn names_open_studio_and_the_first_size_starts_it() {
     s.k.message(&mut s.fs, 2, &wire::Msg::Ready { version: wire::VERSION }.encode());
     let (start, url) = (s.k.take_effects().pop(), ui::kernel::Load::Url("bin/studio.wasm".into()));
     assert!(matches!(start, Some(K::Start { pid: 2, program, .. }) if program == url));
-    // The size is its first event, the AI settings next; the same size again is not news,
-    // a new one is.
+    // The size is its first event, then the AI settings; the same size is no news, a new one is.
     s.ev(AppEvent::Resized { w: 640.0, h: 1e9 });
     s.ev(AppEvent::Resized { w: 500.0, h: 400.0 });
     let config = Event::Config { model: ai::DEFAULT_MODEL.into() };

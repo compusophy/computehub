@@ -1,6 +1,6 @@
 use super::*;
 use crate::apply;
-use crate::tests::{desktop, run};
+use crate::tests::{Msg, desktop, sh};
 use platform::{App as _, Effect as Fx, Event};
 use shell::Effect;
 
@@ -168,9 +168,9 @@ fn errors_are_reported_once_a_session_unless_reports_are_off() {
 
 #[test]
 fn the_desktop_sends_feedback_and_reports_failures_and_tells_apps() {
-    // A terminal opens a file in Editor.
+    // A terminal's shell opens a file in Editor.
     let mut desk = desktop(true);
-    run(&mut desk, "edit diary-2026.txt");
+    sh(&mut desk, Msg::ConsWrite { data: b"\x1b]1729;open;editor:~/diary-2026.txt\x07" });
     // Feedback an app asked for leaves at the flush after it, with what is open: apps, no files.
     let mut ctl = Ctl::default();
     let fx = Effect::Feedback { kind: "bug".into(), text: "Dock flickers".into(), context: true };

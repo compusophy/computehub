@@ -105,8 +105,8 @@ frame: os → shell::draw → gfx::DrawList → platform::Renderer: one draw cal
 | `text` | font slots and fallbacks, measuring, wrapping, glyphs on the atlas |
 | `ui` | immediate-mode widgets, the themes, the `App` trait and `Cx` |
 | `vt`, `term` | VT/xterm escape parser; terminal screen model |
-| `guest` | the shell the Terminal runs over the VFS |
-| `apps` | the Terminal |
+| `sh` | the shell the Terminal runs: a wasip1 program on its console |
+| `apps` | the Terminal: a console and its screen |
 | `system` | About, Editor, Feedback, Files, Welcome, Activity and Settings: one wasip1 GUI program (`dist/bin/system.wasm`), off the boot download |
 | `studio` | the applang editor, and `AppHost`, which runs `.app` files |
 | `coder` | the coding agent Studio runs: write, check (compile, smoke on 3 seeds), fix by SEARCH/REPLACE edits, keep the best so far, stop by budget; sans-IO, replayable |
@@ -293,14 +293,19 @@ one. Forked crates keep their Apache-2.0 license and note their origin.
 - Apps reach outside themselves only through the `ui::Cx` of an event: the
   VFS, the page clock, and requests (open or close a window, load the
   fallback fonts, switch the theme). `os` owns the registry: `apps::open`
-  makes `terminal` and `settings`; `remote::open` makes the GUI programs'
-  windows: `about`, `editor`, `editor:<path>`, `feedback`, `files`,
-  `files:<dir>`, `welcome` and `activity` (the `system` program), `assistant`,
-  `studio`, `studio:<path>` and any `*.app` path.
-- **Terminal**: `vt` + `term` + a cell renderer, running the `guest` shell
-  over the VFS (`ls`, `cd`, `cat`, `mkdir`, `mv`, `open`, `edit`, `run`,
-  `theme`, ...). `term` already speaks xterm, keys and replies included, for
-  the programs the kernel will run.
+  makes `terminal`; `remote::open` makes the GUI programs' windows: `about`,
+  `editor`, `editor:<path>`, `feedback`, `files`, `files:<dir>`, `welcome`,
+  `activity` and `settings` (the `system` program), `assistant`, `studio`,
+  `studio:<path>` and any `*.app` path.
+- **Terminal**: a console, as Plan 9's windows are: `vt` + `term` + a cell
+  renderer, its keys going to the kernel's console as xterm sends them and
+  what runs on it drawn. It runs `/bin/sh` (the `sh` program: `ls`, `cd`,
+  `cat`, `mkdir`, `mv`, `open`, `edit`, `run`, `theme`, ..., and programs
+  joined by `|`, with `<` and `>`), which edits its line on a raw console
+  and runs programs as the kernel's jobs on a cooked one. What only the
+  desktop can do the shell asks in its own escape, `OSC 1729 ; verb ; arg`
+  (`open` an app, switch the `theme`), as programs already ask a terminal
+  for its title.
 - **Studio** makes and edits applang apps: the `coder` loop asks the free
   AI, checks each reply and fixes it by edits, showing what moves (thinking,
   writing 48 lines, fixing line 43, testing); `studio::AppHost` runs a `.app`
@@ -404,9 +409,10 @@ in its home; names in it, and roots per profile, wait for R2.
 - **R2, the kernel: a virtual computer in the tab.** wasm processes are the
   virtual CPU: each a module with fuel, memory limits and a capability
   table, run in a worker. WASI-style syscalls over the VFS (open, read,
-  write, readdir, spawn), so existing programs compile to it. A TTY joins
-  a process to the Terminal (`term` already encodes keys and answers
-  queries). OPFS keeps the VFS and the desktop across reloads. The virtual
+  write, readdir, spawn), so existing programs compile to it. A console
+  joins processes to a Terminal, cooked or raw (`/dev/consctl`), and
+  `/dev/job` starts programs joined by pipes. OPFS keeps the VFS and the
+  desktop across reloads. The virtual
   GPU is the draw protocol: processes send display lists, never pixels,
   and the one instanced renderer draws them, so a program can draw from
   another device just as well.
@@ -441,8 +447,8 @@ in its home; names in it, and roots per profile, wait for R2.
   (readline's Alt+F still arrives). A way through for apps that want them
   waits on the Super key question.
 - **The boot budget** (224 KB since 2026-10-02) pays for what must draw the
-  first frame. With the canvas, the welcome, profiles and the PIN it holds
-  229,048 of 229,376 bytes: about 0.3 KB of headroom. Everything else
-  should be a program, fetched when it first runs (Studio and applang
-  already are; Settings, est. 4.7 KB, and the Terminal's guest shell, est.
-  5 KB, could be, at the cost of needing an isolated page to open).
+  first frame. With the canvas, the welcome, profiles and the PIN it held
+  229,101 of 229,376 bytes; Settings and the Terminal's shell then became
+  programs (2026-10-03), the kernel gaining consoles, jobs and pipes:
+  225,896, about 3.4 KB of headroom. Everything else should be a program,
+  fetched when it first runs, at the cost of needing an isolated page.

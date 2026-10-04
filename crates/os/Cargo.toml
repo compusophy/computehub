@@ -21,7 +21,6 @@ wasm-bindgen.workspace = true
 compusophy-ui.workspace = true
 compusophy-vfs.workspace = true
 compusophy-apps.workspace = true
-compusophy-guest.workspace = true
 compusophy-uiwire.workspace = true
 compusophy-uiview.workspace = true
 compusophy-logon.workspace = true

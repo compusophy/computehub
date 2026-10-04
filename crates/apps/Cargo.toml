@@ -1,6 +1,6 @@
 [package]
 name = "compusophy-apps"
-description = "compusophyOS built-in app: the Terminal."
+description = "compusophyOS built-in app: the Terminal, the console of the shell (/bin/sh, a program) it runs."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -15,7 +15,4 @@ name = "apps"
 compusophy-ui.workspace = true
 compusophy-gfx.workspace = true
 compusophy-term.workspace = true
-compusophy-guest.workspace = true
-
-[dev-dependencies]
 compusophy-vfs.workspace = true

@@ -1,14 +1,14 @@
-//! compusophyOS's built-in app: the [`Terminal`] (the guest shell on an xterm screen). It draws
-//! through [`ui::Ui`] in the frame's [`ui::Theme`] and reaches the world only through
-//! [`ui::Cx`]. About, Feedback, Files, Settings and Welcome are programs (the `system` crate), off
-//! the boot download.
+//! compusophyOS's built-in app: the [`Terminal`], an xterm screen that is the console of the
+//! shell it runs ([`SHELL`], a program: `programs/sh`). It draws through [`ui::Ui`] in the
+//! frame's [`ui::Theme`] and reaches the world only through [`ui::Cx`]. About, Feedback, Files,
+//! Settings and Welcome are programs too (the `system` crate), off the boot download.
 
 #![forbid(unsafe_code)]
 
 mod kit;
 mod terminal;
 
-pub use terminal::Terminal;
+pub use terminal::{SHELL, Terminal};
 
 /// The names [`open`] knows.
 pub const NAMES: &[&str] = &["terminal"];

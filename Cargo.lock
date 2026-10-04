@@ -36,7 +36,6 @@ name = "compusophy-apps"
 version = "0.1.0"
 dependencies = [
  "compusophy-gfx",
- "compusophy-guest",
  "compusophy-term",
  "compusophy-ui",
  "compusophy-vfs",
@@ -87,15 +86,6 @@ version = "0.1.0"
 [[package]]
 name = "compusophy-gfx"
 version = "0.1.0"
-
-[[package]]
-name = "compusophy-guest"
-version = "0.1.0"
-dependencies = [
- "compusophy-term",
- "compusophy-ui",
- "compusophy-vfs",
-]
 
 [[package]]
 name = "compusophy-home"
@@ -151,7 +141,6 @@ version = "0.1.0"
 dependencies = [
  "compusophy-apps",
  "compusophy-gfx",
- "compusophy-guest",
  "compusophy-logon",
  "compusophy-platform",
  "compusophy-shell",
@@ -171,6 +160,14 @@ dependencies = [
  "js-sys",
  "wasm-bindgen",
  "web-sys",
+]
+
+[[package]]
+name = "compusophy-sh"
+version = "0.1.0"
+dependencies = [
+ "compusophy-kernel",
+ "compusophy-vfs",
 ]
 
 [[package]]

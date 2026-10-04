@@ -224,7 +224,7 @@ impl Kernel {
     /// (`u32 max`) waits for an event and gets up to `max` bytes (and [`wire::MAX_PAYLOAD`]), the
     /// rest left for next time. CONS_READ waits for console input as EVENTS does for events (no
     /// console: end of file at once) and wakes the owner; CONS_MODE takes bits below 4 (ENOTTY
-    /// with no console). SPAWN starts a [`wire::Job`] ([`Kernel::jobs`]); WAIT waits for each
+    /// with no console). SPAWN starts a [`wire::Job`] whole or not at all; WAIT waits for each
     /// process of one of the asker's jobs to end, gets the last's status and forgets them
     /// (ECHILD: no such job). PIPE_READ waits for bytes in its stdin pipe, or an end of file
     /// once its writer ended; PIPE_WRITE adds to its reader's (EPIPE once that ended), and waits

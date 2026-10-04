@@ -1,27 +1,34 @@
-//! The Terminal: a [`term::Term`] drawn cell by cell, running the guest shell.
+//! The Terminal: a [`term::Term`] drawn cell by cell, the console of the shell it runs.
 
 use gfx::{DrawList, RectF, Rgba};
-use guest::Guest;
-use term::{Attrs, Cell, Color, Term};
-use ui::{App, AppEvent, AppIcon, Cx, FontId, Key, Sense, TextStyle, TextSystem, Theme};
+use term::{Attrs, Cell, Color, KeyMods, Term};
+use ui::kernel::{Spawn, wire};
+use ui::{App, AppEvent, AppIcon, Cx, FontId, Key, Sense, THEMES, TextStyle, TextSystem, Theme};
 use ui::{Ui, WidgetId};
+use vfs::Vfs;
 
 /// The grid's font size and its inset from the content edge, in pixels.
 const SIZE: f32 = 13.0;
 const INSET: f32 = 14.0;
-const BANNER: &str = "\x1b[1mcompusophyOS terminal\x1b[m — type 'help'.\n";
+/// The shell each terminal runs.
+pub const SHELL: &str = "/bin/sh";
 
-/// A terminal window running [`guest::Guest`]: a Mono 13 px grid (the same before that font
-/// arrives), [`Theme::ansi`] colors, a steady accent block cursor (an outline unfocused). The
-/// greeting waits for the first grid; the wheel scrolls back, any key snaps back. Programs the
-/// shell starts run in the foreground, their output on [`AppEvent::Io`].
+/// A terminal window: the console of [`SHELL`], started at the window's first size (in the
+/// guest's home, the whole tree its roots), drawn as a Mono 13 px grid (the same before that
+/// font arrives) in [`Theme::ansi`] colors with a steady accent block cursor (an outline
+/// unfocused). Keys and pastes go to the console as xterm sends them; what its programs write
+/// comes on [`AppEvent::Io`], the terminal's replies go back, and its asks (`OSC 1729`) are
+/// done: `open` an app, switch to a `theme`. The wheel scrolls back, any key snaps back. The
+/// shell's clean end closes the window; a failure, or a shell that cannot start, says why.
 #[derive(Debug)]
 pub struct Terminal {
     pub(crate) term: Term,
-    guest: Guest,
-    /// Whether it has had an event, and whether the greeting waits.
+    /// The shell while it runs, and the console size it was last told.
+    pub(crate) pid: Option<u32>,
+    told: (u16, u16),
+    /// Whether it has had an event, and a size (the shell starts at the first).
     started: bool,
-    greet: bool,
+    sized: bool,
     /// Cell width and row height, from the last draw.
     cell: (f32, f32),
     /// Rows scrolled back, and wheel movement short of a whole row.
@@ -38,74 +45,79 @@ pub(crate) fn grid_size(w: f32, h: f32, cell_w: f32, line_h: f32) -> (u16, u16) 
 
 impl Default for Terminal {
     fn default() -> Terminal {
-        let (term, guest, cell) = (Term::new(80, 24), Guest::new(), (8.0, 17.0));
-        Terminal { term, guest, started: false, greet: false, cell, scroll: 0, wheel: 0.0 }
+        let (term, pid, told, cell) = (Term::new(80, 24), None, (80, 24), (8.0, 17.0));
+        let (started, sized, scroll, wheel) = (false, false, 0, 0.0);
+        Terminal { term, pid, told, started, sized, cell, scroll, wheel }
     }
 }
 
 impl Terminal {
-    /// Shows `s`, `\n` as CR LF (ONLCR).
-    fn print(&mut self, s: &[u8]) {
-        for (i, line) in s.split(|&b| b == b'\n').enumerate() {
-            self.term.feed(&b"\r\n"[..2 * usize::from(i > 0)]);
-            self.term.feed(line);
+    /// Starts the shell on a console the grid's size, or says why it cannot run.
+    fn start(&mut self, cx: &mut Cx<'_>) {
+        let size = (self.term.cols(), self.term.rows());
+        let (argv, cwd, roots) = (vec!["sh".into()], Vfs::HOME.into(), vec!["/".into()]);
+        let stdout = wire::Stdout::Console;
+        let started = ui::kernel::program(cx.vfs, SHELL)
+            .map_err(|missing| if missing { "not found" } else { "cannot execute" })
+            .and_then(|program| {
+                cx.kernel.spawn(Spawn { argv, program, cwd, tty: Some(size), stdout, roots })
+            });
+        match started {
+            Ok(pid) => (self.pid, self.told) = (Some(pid), size),
+            Err(why) => self.say(&["sh: ", why]),
         }
     }
 
-    /// Shows what waited for the grid: the greeting, wrapped, and a prompt.
-    fn begin(&mut self) {
-        if std::mem::take(&mut self.greet) {
-            let mut text = String::new();
-            guest::wrap(BANNER, usize::from(self.term.cols()), &mut text);
-            self.print(text.as_bytes());
-            self.guest.render();
-            self.shell_output();
+    /// Shows a line of its own, on a row of its own.
+    fn say(&mut self, parts: &[&str]) {
+        let start = if self.term.cursor().1 > 0 { "\r\n" } else { "" };
+        self.term.feed([&[start][..], parts, &["\r\n"]].concat().concat().as_bytes());
+    }
+
+    /// The bytes of a key or a paste go to the console; whether that snapped back a scroll.
+    fn send(&mut self, bytes: &[u8], cx: &mut Cx<'_>) -> bool {
+        if let Some(pid) = self.pid.filter(|_| !bytes.is_empty()) {
+            cx.kernel.input(pid, bytes);
         }
-    }
-
-    /// Shows what the guest shell printed.
-    fn shell_output(&mut self) {
-        let out = std::mem::take(&mut self.guest.out);
-        self.print(out.as_bytes());
-    }
-
-    /// While a program runs: shows its output and, once it ended, the prompt.
-    /// No live resizes or terminal replies: the kernel ignores both until step 3.
-    fn io(&mut self, cx: &mut Cx<'_>) {
-        let Some(pid) = self.guest.running() else { return };
-        let (raw, out) = (cx.kernel.mode(pid).raw, cx.kernel.take_output(pid));
-        self.output(&out, raw, cx.kernel.reap(pid));
-    }
-
-    /// Shows a program's output, ONLCR unless `raw`, moving the typed-ahead
-    /// line below it; then the prompt if it ended with `status`.
-    pub(crate) fn output(&mut self, out: &[u8], raw: bool, status: Option<i32>) {
-        if !out.is_empty() || status.is_some() {
-            self.guest.hide();
-            self.shell_output();
-            if raw { self.term.feed(out) } else { self.print(out) }
-        }
-        let col = self.term.cursor().1;
-        match status {
-            Some(status) => self.guest.finished(status, col),
-            None if !out.is_empty() => self.guest.show(col),
-            None => {}
-        }
-        self.shell_output();
-    }
-
-    /// Resizes the grid, and the guest shell's idea of it.
-    fn fit(&mut self, (cols, rows): (u16, u16)) {
-        if (cols, rows) != (self.term.cols(), self.term.rows()) {
-            self.term.resize(cols, rows);
-            (self.guest.cols, self.guest.rows) = (self.term.cols(), self.term.rows());
-        }
-    }
-
-    /// After a key or text: shows the shell's output, snaps back; whether it was scrolled.
-    fn typed(&mut self) -> bool {
-        self.shell_output();
         std::mem::take(&mut self.scroll) > 0
+    }
+
+    /// What the programs wrote: shown, the terminal's replies sent back, its asks done; once
+    /// the shell ended, the window closes, or says the status it failed with.
+    fn io(&mut self, cx: &mut Cx<'_>) {
+        let Some(pid) = self.pid else { return };
+        let out = cx.kernel.take_output(pid);
+        self.term.feed(&out);
+        let replies = self.term.take_replies();
+        if !replies.is_empty() {
+            cx.kernel.input(pid, &replies);
+        }
+        for (verb, arg) in self.term.take_asks() {
+            match verb.as_str() {
+                "open" => cx.open(&arg),
+                "theme" if THEMES.iter().any(|t| t.name == arg) => cx.set_theme(&arg),
+                _ => {}
+            }
+        }
+        if (self.term.cols(), self.term.rows()) != self.told {
+            self.told = (self.term.cols(), self.term.rows());
+            cx.kernel.resize(pid, self.told.0, self.told.1);
+        }
+        match cx.kernel.reap(pid) {
+            Some(0) => cx.close_self(),
+            Some(status) => {
+                let mut n = String::new();
+                ui::push_num(&mut n, status as u32 as usize);
+                self.say(&["[sh stopped with status ", &n, "]"]);
+            }
+            None => return,
+        }
+        self.pid = None;
+    }
+
+    /// Resizes the grid.
+    fn fit(&mut self, (cols, rows): (u16, u16)) {
+        self.term.resize(cols, rows);
     }
 
     /// The wheel, in whole rows, scrolls back (not on the alternate screen).
@@ -178,6 +190,32 @@ impl Terminal {
     }
 }
 
+/// The xterm key for a key the desktop reports: printable text comes as text, so a letter, a
+/// digit or Space only with Ctrl.
+fn xterm(key: Key, ctrl: bool) -> Option<term::Key> {
+    use term::Key as K;
+    Some(match key {
+        Key::Enter => K::Enter,
+        Key::Escape => K::Escape,
+        Key::Backspace => K::Backspace,
+        Key::Delete => K::Delete,
+        Key::Tab => K::Tab,
+        Key::Left => K::Left,
+        Key::Right => K::Right,
+        Key::Up => K::Up,
+        Key::Down => K::Down,
+        Key::Home => K::Home,
+        Key::End => K::End,
+        Key::PageUp => K::PageUp,
+        Key::PageDown => K::PageDown,
+        Key::Insert => K::Insert,
+        Key::F(n) => K::F(n),
+        Key::Char(c) if ctrl => K::Char(c),
+        Key::Space if ctrl => K::Char(' '),
+        Key::Char(_) | Key::Space | Key::Other => return None,
+    })
+}
+
 impl App for Terminal {
     fn title(&self) -> String {
         match self.term.title() {
@@ -195,7 +233,6 @@ impl App for Terminal {
         let (cw, lh) = (ts.cell_width(SIZE), ts.snap((SIZE * 1.3).round()));
         self.cell = (cw, lh);
         self.fit(grid_size(r.w, r.h, cw, lh));
-        self.begin();
         if self.term.alt_screen() {
             self.scroll = 0;
         }
@@ -208,27 +245,27 @@ impl App for Terminal {
         let before = self.term.generation();
         if !std::mem::replace(&mut self.started, true) {
             cx.load_fallback_fonts();
-            self.greet = true;
-        }
-        if let AppEvent::Key { .. } | AppEvent::Text(_) = ev {
-            self.begin();
         }
         let redraw = match ev {
-            AppEvent::Key { key: Key::Other, .. } => false,
+            AppEvent::Key { key, mods } => match xterm(key, mods.ctrl) {
+                Some(k) => {
+                    let m = KeyMods { shift: mods.shift, ctrl: mods.ctrl, alt: mods.alt };
+                    let bytes = term::encode_key(k, m, self.term.app_cursor_keys());
+                    self.send(&bytes, cx)
+                }
+                None => false,
+            },
             // Enter came as a key already, should the page also report it.
             AppEvent::Text(s) if matches!(s.as_str(), "\n" | "\r" | "\r\n") => false,
-            AppEvent::Key { key, mods } => {
-                self.guest.key(key, mods, cx);
-                self.typed()
-            }
-            AppEvent::Text(s) => {
-                self.guest.text(&s, cx);
-                self.typed()
-            }
+            AppEvent::Text(s) if s.chars().nth(1).is_none() => self.send(s.as_bytes(), cx),
+            AppEvent::Text(s) => self.send(&term::paste(&s, self.term.bracketed_paste()), cx),
             AppEvent::Wheel { dy, .. } => self.wheel(dy),
             AppEvent::Focus(_) => true,
             AppEvent::Resized { w, h } => {
                 self.fit(grid_size(w, h, self.cell.0, self.cell.1));
+                if !std::mem::replace(&mut self.sized, true) {
+                    self.start(cx);
+                }
                 true
             }
             AppEvent::Click(_) | AppEvent::PointerDown { .. } | AppEvent::Drag { .. } => false,

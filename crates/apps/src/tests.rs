@@ -12,10 +12,9 @@ const MONO: &[u8] = include_bytes!("../../../assets/fonts/deferred/JetBrainsMono
 const SYM_A: &[u8] = include_bytes!("../../../assets/fonts/lazy/symbols-a.ttf");
 const NO: Mods = Mods { shift: false, ctrl: false, alt: false, meta: false };
 const CTRL: Mods = Mods { ctrl: true, ..NO };
-/// The content size of an 80 x 24 terminal at dpr 1, and its prompt.
+/// The content size of an 80 x 24 terminal at dpr 1.
 const W80: f32 = 668.0;
 const H24: f32 = 436.0;
-const PROMPT: &str = "guest@compusophy:~$";
 const MIDNIGHT: &Theme = &THEMES[0];
 
 /// An app with the VFS, kernel and AI status its [`Cx`]s are made from (kept as the host
@@ -46,9 +45,6 @@ impl<A: App> Sim<A> {
     fn key(&mut self, key: Key, mods: Mods) -> String {
         self.ev(AppEvent::Key { key, mods })
     }
-    fn keys(&mut self, keys: &[Key]) {
-        keys.iter().for_each(|&k| _ = self.key(k, NO));
-    }
     fn text(&mut self, s: &str) -> String {
         self.ev(AppEvent::Text(s.into()))
     }
@@ -58,19 +54,6 @@ impl<A: App> Sim<A> {
 }
 
 impl Sim<Terminal> {
-    /// A terminal resized to `w` x `h` (its first event asks for fonts), drawn there if `drawn`.
-    fn term(w: f32, h: f32, drawn: bool) -> Sim<Terminal> {
-        let mut s = Sim::new(Terminal::default());
-        assert_eq!(s.ev(AppEvent::Resized { w, h }), "fonts");
-        if drawn {
-            draw(&mut s.app, &mut text_system(), RectF::new(0.0, 0.0, w, h), MIDNIGHT);
-        }
-        s
-    }
-    /// Types `s` and Enter.
-    fn line(&mut self, s: &str) -> String {
-        self.text(s) + &self.key(Key::Enter, NO)
-    }
     /// The scrollback and the screen as text.
     fn all(&self) -> String {
         let t = &self.app.term;
@@ -84,11 +67,6 @@ impl Sim<Terminal> {
     }
     fn row(&self, r: u16) -> String {
         text(self.app.term.row(r))
-    }
-    /// The cursor, and its row as text.
-    fn at(&self) -> (u16, u16, String) {
-        let (r, c) = self.app.term.cursor();
-        (r, c, self.row(r))
     }
 }
 
@@ -128,105 +106,134 @@ fn of(list: &DrawList, kind: Kind) -> impl Iterator<Item = &Instance> {
     list.instances().iter().filter(move |i| i.kind == kind as u8 as f32)
 }
 
-#[test]
-fn terminal_line_editing_history_wheel_wrapping_and_greeting_at_first_grid() {
-    let mut s = Sim::term(W80, H24, true);
-    s.has("compusophyOS terminal — type 'help'.\nguest@compusophy:~$");
-    s.line("echo one");
-    s.line("cd /tmp");
-    s.text("draft");
-    let mut seen = Vec::new();
-    for key in [Key::Up, Key::Up, Key::Up, Key::Down, Key::Down] {
-        s.key(key, NO);
-        seen.push(s.at().2.replace("guest@compusophy:/tmp$ ", ""));
+/// A terminal on an isolated kernel whose /bin holds the shell, resized to 80 x 24 (its first
+/// event asks for fonts): the shell's pid, past its READY, and its console set `raw`.
+fn console(raw: bool) -> (Sim<Terminal>, u32) {
+    use ui::kernel::wire::{self, Msg};
+    let mut s = Sim::new(Terminal::default());
+    s.kernel.set_isolated(true);
+    s.fs.mkdir("/bin").and(s.fs.write(SHELL, b"#!wasm bin/sh.wasm\n")).unwrap();
+    assert_eq!(s.ev(AppEvent::Resized { w: W80, h: H24 }), "fonts");
+    let pid = s.app.pid.expect("the shell runs");
+    s.kernel.message(&mut s.fs, pid, &[wire::READY, wire::VERSION]);
+    s.kernel.message(&mut s.fs, pid, &Msg::ConsMode { bits: u8::from(raw) }.encode());
+    s.kernel.take_effects();
+    (s, pid)
+}
+
+impl Sim<Terminal> {
+    /// What the shell writes, as its worker sends it; the requests the Terminal then makes.
+    fn wrote(&mut self, pid: u32, data: &[u8]) -> String {
+        use ui::kernel::wire::Msg;
+        self.kernel.message(&mut self.fs, pid, &Msg::ConsWrite { data }.encode());
+        self.ev(AppEvent::Io)
     }
-    assert_eq!(seen.join(","), "cd /tmp,echo one,echo one,cd /tmp,draft");
-    s.keys(&[Key::Home, Key::Right, Key::Delete]);
-    s.text("X");
-    assert_eq!(s.at().1, 25);
+    /// What the shell's next read of its console gets.
+    fn read(&mut self, pid: u32) -> Vec<u8> {
+        use ui::kernel::{Effect, wire::Msg};
+        self.kernel.message(&mut self.fs, pid, &Msg::ConsRead { max: 4096 }.encode());
+        let reply = self.kernel.take_effects().into_iter().find_map(|e| match e {
+            Effect::Reply { data, .. } => Some(data),
+            _ => None,
+        });
+        reply.expect("input waiting")
+    }
+}
+
+#[test]
+fn the_terminal_starts_the_shell_on_its_console_at_its_first_size() {
+    use ui::kernel::{Effect, Load, wire};
+    let mut s = Sim::new(Terminal::default());
+    s.kernel.set_isolated(true);
+    s.fs.mkdir("/bin").and(s.fs.write(SHELL, b"#!wasm bin/sh.wasm\n")).unwrap();
+    assert_eq!((s.ev(AppEvent::Focus(true)), s.app.pid), ("fonts".into(), None), "no size yet");
+    s.ev(AppEvent::Resized { w: W80, h: H24 });
+    assert_eq!(s.kernel.procs(), [(2, "sh".into(), true)]);
+    s.kernel.message(&mut s.fs, 2, &[wire::READY, wire::VERSION]);
+    let start = s.kernel.take_effects().into_iter().find_map(|e| match e {
+        Effect::Start { msg, program: Load::Url(url), .. } => {
+            Some((wire::Start::decode(&msg), url))
+        }
+        _ => None,
+    });
+    let (start, url) = start.expect("a Start");
+    let start = start.unwrap();
+    assert_eq!(
+        (url.as_str(), start.argv, start.tty),
+        ("bin/sh.wasm", vec!["sh".into()], Some((80, 24)))
+    );
+    assert_eq!((start.cwd.as_str(), start.roots), (Vfs::HOME, vec!["/".into()]));
+    // One shell, whatever sizes follow; a new size reaches its console.
+    s.ev(AppEvent::Resized { w: W80 - 80.0, h: H24 });
+    assert_eq!((s.kernel.procs().len(), s.app.term.cols()), (1, 70));
+    let words = s.kernel.take_effects();
+    assert!(words.contains(&Effect::Word { pid: 2, index: wire::COLS, value: 70 }), "{words:?}");
+    // A shell that cannot start says why, on screen.
+    let mut s = Sim::new(Terminal::default());
+    s.fs.mkdir("/bin").and(s.fs.write(SHELL, b"#!wasm bin/sh.wasm\n")).unwrap();
+    s.ev(AppEvent::Resized { w: W80, h: H24 });
+    s.has("sh: programs need a cross-origin isolated page (COOP/COEP headers)");
+    let mut s = Sim::new(Terminal::default());
+    s.kernel.set_isolated(true);
+    s.ev(AppEvent::Resized { w: W80, h: H24 });
+    assert_eq!((s.row(0), s.app.pid), ("sh: not found".into(), None));
+}
+
+#[test]
+fn keys_and_pastes_go_to_the_console_as_xterm_sends_them() {
+    let (mut s, pid) = console(true);
+    s.key(Key::Up, NO);
     s.key(Key::Char('c'), CTRL);
-    s.has("guest@compusophy:/tmp$ dXaft^C\nguest@compusophy:/tmp$");
-    s.text("pwd");
-    s.key(Key::Char('l'), CTRL);
-    assert_eq!(s.all(), "guest@compusophy:/tmp$ pwd");
+    s.key(Key::Char('x'), NO); // Comes as text.
+    s.key(Key::Other, NO);
+    s.text("é");
+    assert!(!s.both(AppEvent::Text("\n".into())).0, "Enter came as a key already");
     s.key(Key::Enter, NO);
-    s.line("history");
-    s.has("/tmp\nguest@compusophy:/tmp$ history\n   1  echo one\n   2  cd /tmp");
-    // Enter reported as text too is no second Enter; a pasted line runs.
-    assert!(!s.both(AppEvent::Text("\n".into())).0);
-    s.text("echo pasted\necho tw");
-    assert!(s.all().ends_with("pasted\nguest@compusophy:/tmp$ echo tw"));
-    // The shell reaches the desktop: a theme, an app.
-    s.key(Key::Char('c'), CTRL);
-    assert_eq!(s.line("theme dawn") + "," + &s.line("open settings"), "theme Dawn,open settings");
-    // The wheel scrolls back by whole rows; a key snaps back.
-    (0..30).for_each(|i| _ = s.line(&format!("echo line {i}")));
+    s.text("a\nb");
+    s.key(Key::Home, Mods { shift: true, ..NO });
+    assert_eq!(s.read(pid), "\x1b[A\x03é\ra\rb\x1b[1;2H".as_bytes());
+    // Application cursor keys, and a bracketed paste, as the program asked.
+    s.app.term.feed(b"\x1b[?1h\x1b[?2004h");
+    s.key(Key::Left, NO);
+    s.text("p\x1bq");
+    assert_eq!(s.read(pid), b"\x1bOD\x1b[200~pq\x1b[201~");
+}
+
+#[test]
+fn the_terminal_shows_its_programs_answers_their_queries_and_does_their_asks() {
+    use ui::kernel::wire::Msg;
+    // Cooked, the kernel puts a CR before each LF; raw, output is as written.
+    let (mut s, pid) = console(false);
+    assert_eq!(s.wrote(pid, b"one\ntwo"), "");
+    assert_eq!((s.row(0), s.row(1), s.app.term.cursor()), ("one".into(), "two".into(), (1, 3)));
+    let (mut s, pid) = console(true);
+    s.wrote(pid, b"x\ny");
+    assert_eq!((s.row(1), s.app.term.cursor()), (" y".into(), (1, 2)));
+    // A query's answer goes back to the console.
+    s.wrote(pid, b"\x1b[6n");
+    assert_eq!(s.read(pid), b"\x1b[2;3R");
+    // Asks: an app opens, a known theme applies.
+    let asks = b"\x1b]1729;open;editor:/tmp/a\x07\x1b]1729;theme;Dawn\x07\x1b]1729;theme;Sepia\x07";
+    assert_eq!(s.wrote(pid, asks), "open editor:/tmp/a; theme Dawn");
+    // The wheel scrolls back by whole rows; text snaps back.
+    (0..40).for_each(|i| _ = s.wrote(pid, format!("line {i}\r\n").as_bytes()));
     let sb = s.app.term.scrollback_len();
-    assert!(sb > 30, "{sb}");
-    assert!(s.wheel(-17.0 * 3.0) && s.app.scroll == 3);
+    assert!(sb > 10 && s.wheel(-17.0 * 3.0) && s.app.scroll == 3, "{sb}");
     assert!(!s.wheel(8.5), "half a row");
     assert!(s.wheel(8.5) && s.app.scroll == 2);
     assert!(s.wheel(-1e9) && s.app.scroll == sb);
     assert!(!s.wheel(f32::NAN) && s.app.scroll == sb);
-    assert!(s.both(AppEvent::Key { key: Key::Char('x'), mods: NO }).0);
-    assert_eq!(s.app.scroll, 0, "a key snaps back");
+    assert!(s.both(AppEvent::Text("x".into())).0 && s.app.scroll == 0, "text snaps back");
     s.app.term.feed(b"\x1b[?1049h");
     assert!(!s.wheel(-34.0), "no scrollback on the alternate screen");
-    // It wraps like the screen.
-    let mut s = Sim::term(28.0 + 8.0 * 30.0, H24, true);
-    let top = s.at().0;
-    s.text("abcdefghijklmnop"); // the prompt is 20 wide
-    assert_eq!(s.at(), (top + 1, 6, "klmnop".into()));
-    s.keys(&[Key::Left; 8]);
-    s.text("X");
-    assert_eq!(s.at(), (top, 29, "guest@compusophy:~$ abcdefghXi".into()));
-    s.keys(&[Key::Right]);
-    assert_eq!(s.at(), (top + 1, 0, "jklmnop".into()), "the next row");
-    s.keys(&[Key::Delete; 7]);
-    assert_eq!(s.at(), (top + 1, 0, String::new()), "a full row: the next");
-    s.key(Key::Enter, NO);
-    assert_eq!(s.row(top + 1), "abcdefghXi: command not found", "no gap");
-    assert_eq!(s.at(), (top + 2, 20, PROMPT.into()));
-    // At a phone's width (25 columns) the greeting breaks between words.
-    let s = Sim::term(230.0, 400.0, true);
-    assert_eq!(s.app.term.cols(), 25);
-    assert_eq!([s.row(0), s.row(1)], ["compusophyOS terminal —", "type 'help'."]);
-    assert_eq!(s.at(), (2, 20, PROMPT.into()));
-    // A key before any draw greets first.
-    let mut s = Sim::term(W80, H24, false);
-    s.text("ls");
-    let rows: String = (0..3).map(|r| s.row(r).replace(' ', "")).collect();
-    assert!(rows.contains("compusophyOSterminal—type'help'."), "{rows}");
-    assert_eq!(s.at().2, PROMPT.to_string() + " ls");
-}
-
-#[test]
-fn terminal_runs_programs_in_the_foreground() {
-    use ui::kernel::{Effect, wire::Msg};
-    let mut s = Sim::term(W80, H24, true);
-    s.kernel.set_isolated(true);
-    s.fs.mkdir("/bin").and(s.fs.write("/bin/hi", b"#!wasm bin/toolbox.wasm")).unwrap();
-    let worker = |s: &mut Sim<Terminal>, pid, msg: Msg<'_>| {
-        s.kernel.message(&mut s.fs, pid, &msg.encode());
-        s.both(AppEvent::Io).0
-    };
-    // Output comes on Io, `\n` as CR LF, above the typed-ahead line; the exit status shows.
-    s.line("hi");
-    s.text("ab");
-    assert!(worker(&mut s, 2, Msg::ConsWrite { data: b"one\ntwo" }));
-    s.has("$ hi\none\ntwoab");
-    assert!(worker(&mut s, 2, Msg::Exit { status: 3 }));
-    assert_eq!(s.at().2, "3 guest@compusophy:~$ ab");
-    // Ctrl+C ends a program at once.
-    s.key(Key::Char('c'), CTRL);
-    s.line("hi");
-    s.key(Key::Char('c'), CTRL);
-    s.has("$ hi\n^C\n130 guest@compusophy:~$");
-    assert!(s.kernel.take_effects().contains(&Effect::Kill { pid: 3 }));
-    s.line("hi");
-    // Raw output keeps `\n` as it is.
-    s.app.output(b"x\ny", true, None);
-    assert_eq!(s.at(), (s.at().0, 2, " y".into()));
+    // The shell's clean end closes the window; a failure stays, saying so.
+    s.kernel.message(&mut s.fs, pid, &Msg::Exit { status: 0 }.encode());
+    assert_eq!((s.ev(AppEvent::Io), s.app.pid), ("CloseSelf".into(), None));
+    let (mut s, pid) = console(false);
+    s.wrote(pid, b"half");
+    s.kernel.message(&mut s.fs, pid, &Msg::Exit { status: 3 }.encode());
+    assert_eq!(s.ev(AppEvent::Io), "");
+    assert_eq!([s.row(0), s.row(1)], ["half", "[sh stopped with status 3]"]);
 }
 
 #[test]

@@ -157,7 +157,7 @@ impl Remote {
             (self.argv.clone(), "/".into(), vec!["/".into()], wire::Stdout::Console);
         let program = match self.trusted {
             true => Ok(Program::Url(OWN.into())),
-            false => guest::program(cx.vfs, "/", &self.program),
+            false => ui::kernel::program(cx.vfs, &self.program),
         };
         let pid = program
             .map_err(|missing| if missing { "not found" } else { "cannot execute" })
