@@ -52,6 +52,7 @@ dependencies = [
 name = "compusophy-assistant"
 version = "0.1.0"
 dependencies = [
+ "compusophy-chats",
  "compusophy-coder",
  "compusophy-host",
  "compusophy-system",
@@ -60,6 +61,13 @@ dependencies = [
  "compusophy-uiwire",
  "compusophy-vfs",
  "compusophy-wm",
+]
+
+[[package]]
+name = "compusophy-chats"
+version = "0.1.0"
+dependencies = [
+ "compusophy-uiwire",
 ]
 
 [[package]]

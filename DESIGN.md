@@ -111,6 +111,7 @@ frame: os → shell::draw → gfx::DrawList → platform::Renderer: one draw cal
 | `activity` | Activity, the resource monitor: graphs of CPU, memory, frames and the AI over the last minute, storage, a table of what runs |
 | `studio` | the applang editor, and `AppHost`, which runs `.app` files |
 | `coder` | the coding agent Studio runs: write, check (compile, smoke on 3 seeds), fix by SEARCH/REPLACE edits, keep the best so far, stop by budget; sans-IO, replayable |
+| `assistant`, `chats` | the Assistant, the overlay AI that uses the desktop, a wasip1 GUI program off the boot download; its chats: each one's transcript and memory, their file, their row on its card |
 | `uiwire`, `uiview` | the remote UI protocol GUI programs speak; the desktop's half, which draws their trees |
 | `host` | the wm plus one app per window, the home screen's apps, windows held by the pointer, the keyboard's squeeze; motion, frame geometry |
 | `home` | the top bar, the home grid in the person's order (icons carried, the selection box), the bottom row (the person's dock at the left, the Assistant at the right), menus, touch |
@@ -252,23 +253,26 @@ one. Forked crates keep their Apache-2.0 license and note their origin.
   corner. It opens and hides the Assistant (Alt+Space too; its menu asks
   it), which is never a window: the overlay, a card above the tile, its
   right edge the tile's (a sheet on a phone, its edges the row's), that
-  uses the desktop for the person. A finger's tap leaves the keyboard down
+  uses the desktop for the person. Its card keeps **chats** (`chats`), each
+  with its own transcript and memory (its last 4 tasks), so a request
+  carries only its own chat's past; 8 at most, a new one past that letting
+  go the one left longest ago, never the one just left. One row over the
+  prompt, as much as the card's width holds (a phone's too): the current
+  chat's chip, lit, then the others' that fit (each named by its first
+  prompt) and "N more" for the rest, New chat, and Compact once the memory
+  passes 1 KiB, more than a note takes. A chip switches; the lit one, or
+  "N more", lists them all, with Delete chat (asked again). Compact has the
+  model, with no tools, condense the chat into a note of 600 bytes at most,
+  which takes the memory's first place (the 3 latest tasks follow it) until
+  the next folds it in; the pill and Stop meanwhile, and a failure leaves
+  the memory. Kept in `~/.assistant/chats`, a line format read
+  defensively, 256 KiB at most. A finger's tap leaves the keyboard down
   until its field is tapped. A dot under the tile while the overlay shows
   (the accent's while it has the keys). While it works the overlay is a
   pill, one line of what it does and Stop, and the dot beats; each act
   flashes what it touched, and the person's own press, key or wheel stops
   it. A program that failed starts again at the next summon. Later it
   listens.
-  Its card keeps **chats**, 8 at most (a ninth drops the oldest), each
-  with its own transcript and memory (its last 4 tasks), so a request
-  carries only its own chat's past. They sit just above the prompt, where
-  the card's view stays, in rows as its width holds them: a chip per chat
-  named by its first prompt (the current one lit; a click switches), New
-  chat, and Compact once the chat remembers two tasks, which has the model,
-  with no tools, condense it into a note of 600 bytes at most that stands
-  for its memory until the next (the pill and Stop meanwhile; a failure
-  leaves the memory). They are kept in `~/.assistant/chats`, a line format
-  read defensively, 256 KiB at most.
 - **Dock**: the person's own, left-aligned from the bottom-left corner:
   nothing in it at first ("Add to dock" from any app's menu, or its icon
   dragged onto the row, which opens a gap under the pointer, the icon

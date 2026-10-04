@@ -6,25 +6,25 @@
 //!
 //! - **Folding.** Only the latest result carries a screen; older ones keep their first line, and
 //!   the task's first screen is left out once steps follow it, so a step costs about the same
-//!   however many came before. The chat's last [`MEMORY`] tasks go along as plain prompts and
-//!   answers, a note of it first once it was compacted.
-//! - **Chats.** Each conversation has its own transcript and memory, so one task's context never
-//!   weighs on another's: the card switches between them, starts a new one, and compacts one
-//!   into a note the model writes ([`chats`]); they are kept across reloads.
+//!   however many came before. The last [`MEMORY`] tasks go along as plain prompts and answers.
 //! - **Recovery.** A failure goes back to the model as its coded result. Two in a row add a hint
 //!   and bound its thinking (1,024 tokens); three in a row, or the same call on the same screen
 //!   three times (E0924), end the task, as do [`MAX_STEPS`] model calls or [`MAX_ACTS`] acts, or a
 //!   request past the free AI's [`MAX_MESSAGES`] or [`MAX_BODY`] (E0921; the memory goes first),
-//!   an AI error (E0901 to E0905, with Retry), and Stop: the pill's, or the person's Stop or
-//!   Escape on the desktop ([`Event::Halt`]).
+//!   an AI error (E0901 to E0905, with Retry), and Stop: the pill's, or Escape ([`Event::Halt`]).
 //! - **Guard.** Acts into Feedback (the one app that sends what it holds off the device), and
 //!   presses in Activity (which ends programs), wait for the person's yes through `ask_user`.
 //! - **Shown.** While it works it says so ([`Request::Status`]): the desktop makes it a pill, and
 //!   it draws one, one line of what it does and Stop, whatever its size. Each task ends with its
 //!   receipt: steps and tokens.
+//! - **Chats.** Each conversation has its own transcript and memory (its last [`MEMORY`] tasks,
+//!   a compacted note first, one of them), so one task's context never weighs on another's: the
+//!   card switches between them, starts, deletes and compacts them ([`chats`], [`compact`]);
+//!   they are kept across reloads.
 
 use std::io::{self, ErrorKind, Read, Write};
 
+use chats::{Chats, Turn};
 use uiwire::client::Client;
 use uiwire::scene::Scene;
 use uiwire::{Act, Event, Frame, Node, Request, Style, Variant, WinOp, acted, mods};
@@ -34,7 +34,7 @@ use crate::calls::{Call, Calls};
 use crate::json::{Json, quote};
 use crate::look::{Elem, Refs, render};
 
-pub mod chats;
+pub mod compact;
 
 /// The most model calls and acts one task takes; the past tasks each request remembers.
 pub const MAX_STEPS: u32 = 20;
@@ -89,11 +89,10 @@ pub struct Agent {
     /// The current chat's transcript, and its last tasks as (prompt, answer).
     turns: Vec<Turn>,
     memory: Vec<(String, String)>,
-    /// The chats ([`chats`]): the others', and which is the current one; the card's width as
-    /// last told while it showed; a compaction asked for and its reply so far; whether the
-    /// chats changed since they were last kept.
-    chats: Vec<chats::Chat>,
-    chat: usize,
+    /// The chats, the others' transcripts and memory ([`chats`]); the card's width as last told
+    /// while it showed; a compaction asked for and its reply so far; whether the chats changed
+    /// since they were last kept.
+    chats: Chats,
     width: u16,
     compacting: Option<(u32, Calls)>,
     unkept: bool,
@@ -105,13 +104,6 @@ pub struct Agent {
     last_id: u32,
     requests: Vec<Request>,
     framed: bool,
-}
-
-/// A task as shown: its prompt, then what it did, asked and answered.
-#[derive(Debug, Default)]
-struct Turn {
-    prompt: String,
-    lines: Vec<(Style, String)>,
 }
 
 /// The task in hand: its prompt, the window it was opened over, the steps, the latest screen
@@ -153,8 +145,9 @@ struct Step {
 }
 
 impl Agent {
-    /// Handles one event; whether the window changed. The chats' go first.
+    /// Handles one event; whether the window changed.
     pub fn event(&mut self, ev: &Event) -> bool {
+        // The chats' events go first, and a compaction's.
         if let Some(changed) = self.chats_event(ev) {
             return changed;
         }
@@ -320,6 +313,7 @@ impl Agent {
         // The memory, as much as the free AI's count of messages leaves room for.
         let keep = (MAX_MESSAGES.saturating_sub(own(t)) / 2).min(self.memory.len());
         for (prompt, answer) in &self.memory[self.memory.len() - keep..] {
+            let prompt = if prompt.is_empty() { compact::SUM } else { prompt };
             m.extend([msg("user", prompt), msg("assistant", answer)]);
         }
         let first = if t.steps.is_empty() { t.screen.as_str() } else { "(screen omitted)" };
@@ -635,7 +629,7 @@ impl Agent {
     fn done(&mut self, answer: String) {
         if let Some(t) = &self.task {
             self.memory.push((t.prompt.clone(), answer.clone()));
-            self.forget();
+            chats::forget(&mut self.memory, MEMORY);
         }
         self.end(Style::Body, answer);
     }

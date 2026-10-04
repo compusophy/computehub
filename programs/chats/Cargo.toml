@@ -1,0 +1,15 @@
+[package]
+name = "compusophy-chats"
+description = "compusophyOS Assistant's chats: its conversations, each with its own transcript and memory; the line format that keeps them, and the card's row of them as uiwire nodes. Pure: no I/O."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[lib]
+name = "chats"
+
+[dependencies]
+compusophy-uiwire.workspace = true
