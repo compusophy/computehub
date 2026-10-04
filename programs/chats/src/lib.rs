@@ -6,8 +6,10 @@
 //!   current. Its transcript and memory are the Assistant's own while it is current. A new chat
 //!   past [`MAX`] lets the one left longest ago go, never the one just left; an empty one
 //!   switched away from goes.
-//! - **Memory.** A chat's last tasks as (prompt, answer). A compaction's note has no prompt (no
-//!   task's is empty): it stays first, one of them, until the next folds it in ([`forget`]).
+//! - **Memory.** A chat's last tasks as (prompt, answer), each text clipped as the file keeps it
+//!   ([`remember`]), so a chat's memory never outgrows a request. A compaction's note has no
+//!   prompt (no task's is empty): it stays first, one of them, until the next folds it in
+//!   ([`forget`]).
 //! - **Shown.** One row over the card's prompt, within its width ([`Chats::row`]): the current
 //!   chat's chip, lit, then the others' that fit, "N more" for the rest, New chat while the
 //!   current one holds anything, and Compact while its memory is past [`LEAN`] bytes, more than
@@ -17,8 +19,9 @@
 //! - **Kept.** [`Chats::encode`] and [`Chats::load`]: `compusophy chats 1`, then per chat, the
 //!   current one first, `c <name>`, `m <prompt>\t<answer>` per remembered task, `t <prompt>` per
 //!   turn and `l <style> <text>` per line of it; each text clipped, and `\`, newline, tab and CR
-//!   escaped as `\\`, `\n`, `\t`, `\r`; a chat's newest turns within 6 KiB. Read defensively: a
-//!   line unknown or past a bound is skipped, and a file past [`MAX_FILE`] bytes is not read.
+//!   escaped as `\\`, `\n`, `\t`, `\r`; a chat's newest turns within 6 KiB (the newest one
+//!   always, with its last lines that fit). Read defensively: each text clipped as it was kept, a
+//!   line unknown or past a bound skipped, and a file past [`MAX_FILE`] bytes not read.
 
 #![forbid(unsafe_code)]
 
@@ -254,19 +257,25 @@ impl Chats {
                 esc(&mut out, clip(answer, TASK));
                 out.push('\n');
             }
-            // The newest turns that fit, oldest first.
+            // The newest turns that fit, oldest first; each its last lines that fit alone, so
+            // the newest is never lost to its size.
             let (mut kept, mut size) = (Vec::new(), 0);
             for t in turns.iter().rev() {
                 let mut s = String::from("t ");
                 esc(&mut s, clip(&t.prompt, LINE));
-                let last = t.lines.get(t.lines.len().saturating_sub(LINES)..).unwrap_or_default();
-                for (style, line) in last {
-                    s += "\nl ";
-                    s += &(*style as u8).to_string();
-                    s.push(' ');
-                    esc(&mut s, clip(line, LINE));
-                }
                 s.push('\n');
+                let (mut last, mut n) = (Vec::new(), s.len());
+                for (style, line) in t.lines.iter().rev().take(LINES) {
+                    let mut l = ["l ", &(*style as u8).to_string(), " "].concat();
+                    esc(&mut l, clip(line, LINE));
+                    l.push('\n');
+                    n += l.len();
+                    if n > TURNS_KEPT {
+                        break;
+                    }
+                    last.push(l);
+                }
+                last.iter().rev().for_each(|l| s += l);
                 size += s.len();
                 if size > TURNS_KEPT {
                     break;
@@ -292,7 +301,7 @@ impl Chats {
                 break;
             }
             if kind == "c" {
-                let (n, name) = (list.len() as u32, clip(&unesc(rest), NAME).to_string());
+                let (n, name) = (list.len() as u32, back(rest, NAME));
                 list.push(Chat { n, name, ..Chat::default() });
                 skip = false;
                 continue;
@@ -301,13 +310,13 @@ impl Chats {
             match kind {
                 "m" if c.memory.len() < most.1 => {
                     if let Some((prompt, answer)) = rest.split_once('\t') {
-                        c.memory.push((unesc(prompt), unesc(answer)));
+                        c.memory.push((back(prompt, TASK), back(answer, TASK)));
                     }
                 }
                 "t" => {
                     skip = c.turns.len() == most.0;
                     if !skip {
-                        c.turns.push(Turn { prompt: unesc(rest), lines: Vec::new() });
+                        c.turns.push(Turn { prompt: back(rest, LINE), lines: Vec::new() });
                     }
                 }
                 "l" => {
@@ -315,7 +324,7 @@ impl Chats {
                     let style = code.parse().ok().and_then(Style::from_u8);
                     if let (Some(t), Some(style), false) = (c.turns.last_mut(), style, skip) {
                         if t.lines.len() < LINES {
-                            t.lines.push((style, unesc(s)));
+                            t.lines.push((style, back(s, LINE)));
                         }
                     }
                 }
@@ -328,6 +337,17 @@ impl Chats {
         chats.take(&mut turns, &mut memory);
         (!chats.list.is_empty()).then_some((chats, turns, memory))
     }
+}
+
+/// Remembers a task, `prompt` answered `answer`, each clipped to 1,000 bytes as the file keeps
+/// them (an ellipsis, within them, where cut); the memory is then its last `n` tasks ([`forget`]).
+pub fn remember(memory: &mut Memory, prompt: &str, answer: &str, n: usize) {
+    let cut = |s: &str| match s.len() > TASK {
+        true => [clip(s, TASK - '\u{2026}'.len_utf8()), "\u{2026}"].concat(),
+        false => s.to_string(),
+    };
+    memory.push((cut(prompt), cut(answer)));
+    forget(memory, n);
 }
 
 /// Keeps `memory` to its last `n` tasks, a note (the one with no prompt) first while it is there,
@@ -386,6 +406,11 @@ fn esc(out: &mut String, s: &str) {
             c => out.push(c),
         }
     }
+}
+
+/// `s` as the file holds it, read back: unescaped, clipped to `max` bytes as it was kept.
+fn back(s: &str, max: usize) -> String {
+    clip(&unesc(s), max).to_string()
 }
 
 /// `s` unescaped (see [`esc`]); a `\` before anything else is that thing.

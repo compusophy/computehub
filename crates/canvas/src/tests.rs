@@ -114,9 +114,14 @@ fn pixels_fill_a_run_of_a_color_once_on_device_pixels() {
         let unit = |u: f32| (at.x + u * k, at.y + u * k);
         assert!((a[0] - unit(2.0).0).abs() <= 0.5 && (d[1] + d[3] - unit(18.0).1).abs() <= 0.5);
         assert!((d[2] - 20.0 * k).abs() <= 1.0, "a row of one color is one fill: {d:?}");
-        // The AI reads its place and size, never its cells.
-        assert_eq!(sem.marks[0].value, "40 x 30 units\npixels 2 3, 4 x 3 squares of 5 units");
+        // The AI reads its place and size, then its squares, a row a line.
+        let said = "40 x 30 units\npixels 2 3, 4 x 3 squares of 5 units\n1122\n..b.\n3333";
+        assert_eq!(sem.marks[0].value, said);
     }
+    // Past SQUARES in all, a board is its place and size alone.
+    let big = shape(Shape::Pixels, 0, [0, 0, 64, 1, 0], &"1".repeat(64 * 16));
+    let (_, sem, _) = drawn(t, 1.0, r, (64, 64), &[px[0].clone(), big]);
+    assert!(sem.marks[0].value.ends_with("3333\npixels 0 0, 64 x 16 squares of 1 units"));
     // No side, or no cells: nothing drawn.
     for empty in [
         shape(Shape::Pixels, 0, [0, 0, 2, 0, 0], "11"),

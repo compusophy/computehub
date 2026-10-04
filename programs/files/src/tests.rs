@@ -46,8 +46,16 @@ fn the_tools_list_read_and_write_from_the_home_coded() {
     let q = asks(d, "/tmp/x", "hi");
     assert_eq!(q, Ok(Some("Write /tmp/x, outside your home, with these 2 bytes?".into())));
     // Failures, coded: nothing there, a folder for a file and a file for a folder, not text,
-    // not a path, the program's devices (a read there may never end).
+    // not a path, the program's devices (a read there may never end), the Assistant's own chats
+    // (every conversation's; a listing of the home leaves them out).
     d.write(&at("/raw"), &[0xff, 0]).unwrap();
+    d.write(
+        &at("/.assistant/chats"),
+        b"compusophy chats 1
+",
+    )
+    .unwrap();
+    assert!(!list(d, "~").unwrap().contains(".assistant") && list(d, "~").unwrap().contains("raw"));
     let errs = [
         read(d, "nope"),
         read(d, "notes"),
@@ -57,9 +65,13 @@ fn the_tools_list_read_and_write_from_the_home_coded() {
         read(d, "a\0b"),
         read(d, "/dev/events"),
         list(d, "~/../../dev"),
+        read(d, "~/.assistant/chats"),
+        write(d, &at("/x/../.assistant/chats"), ""),
     ];
     let codes = errs.map(|e| e.unwrap_err().get(..5).unwrap_or_default().to_string());
-    assert_eq!(codes, ["E0925", "E0926", "E0926", "E0926", "E0928", "E0918", "E0918", "E0918"]);
+    let paths = ["E0918"; 4];
+    assert_eq!(codes[..6], ["E0925", "E0926", "E0926", "E0926", "E0928", "E0918"]);
+    assert_eq!(codes[6..], paths);
     // A disk that refuses: E0927, and a write it cannot check for a file there never goes.
     let r: &mut dyn Disk = &mut Refusing;
     let refused = [read(r, "a.txt"), write(r, "a.txt", "x"), asks(r, "x", "").map(|_| "".into())];

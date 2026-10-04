@@ -390,8 +390,10 @@ fn a_new_app_that_never_compiles_leaves_its_draft_marked() {
     let f = w.last(&[click(TOGGLE)]);
     let (cid, _, src, spans) = code(&f);
     assert!(src == BROKEN && classes(src, spans).contains(&("nope", Class::Error)));
-    let f = w.last(&[change(cid, 2, "state n = 0;\nlabel \"Tally\";\nlabel n;\n"), click(TOGGLE)]);
-    assert!(status(&f).starts_with("saved ~/apps/tally.app") && has(&f, "Tally"));
+    // What its first comment says shows over it, the make's plan gone.
+    let tally = "// Tally: one number.\nstate n = 0;\nlabel \"Tally\";\nlabel n;\n";
+    let f = w.last(&[change(cid, 2, tally), click(TOGGLE)]);
+    assert!(status(&f).starts_with("saved ~/apps/tally.app") && has(&f, "Tally: one number."));
 }
 
 #[test]

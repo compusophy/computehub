@@ -3,8 +3,8 @@
 //! bytes, asks the model, with no tools, to condense the chat into a note of [`NOTE`] bytes at
 //! most. The note then stands for the memory as its one task with no prompt (asked as [`SUM`]),
 //! first while later tasks come and go, until the next Compact folds it in. A failure (E0901 to
-//! E0905, E0907, or E0929 for no note) leaves the memory as it was, and Compact there to ask
-//! again. Compacting shows as a task does, the pill with Stop. The chats stay as they are while
+//! E0905, E0907 for a reply out of room, a note cut short too, or E0929 for no note) leaves the
+//! memory as it was, and Compact there to ask again. Compacting shows as a task does, the pill with Stop. The chats stay as they are while
 //! a task is in hand; they are kept after each change ([`Agent::kept`]) and read at the start
 //! ([`Agent::load`]).
 
@@ -124,7 +124,8 @@ impl Agent {
         let (style, line, done) = match failure(status, error, &c.error) {
             Some((0, why)) => (Style::Dim, why, ""),
             Some((_, why)) => (Style::Error, why, ""),
-            None if note.is_empty() && c.finish == "length" => (Style::Error, ROOM.into(), ""),
+            // Out of room, even mid-note: a note cut short is none.
+            None if c.finish == "length" => (Style::Error, ROOM.into(), ""),
             None if note.is_empty() => (Style::Error, NONE.into(), ""),
             None => {
                 // Cut short, its ellipsis within the most.
@@ -161,12 +162,15 @@ impl Agent {
         std::mem::take(&mut self.unkept).then(|| self.chats.encode(&self.turns, &self.memory))
     }
 
-    /// Puts back the chats `text` keeps ([`Chats::load`]), if it holds them; never while a task
-    /// is in hand.
-    pub fn load(&mut self, text: &str) {
-        let loaded = Chats::load(text, (MAX_TURNS, MEMORY));
-        if let (false, Some((chats, turns, memory))) = (self.busy(), loaded) {
+    /// Puts back the chats `text` keeps ([`Chats::load`]), if it holds them (never while a task
+    /// is in hand); whether it does.
+    pub fn load(&mut self, text: &str) -> bool {
+        let Some((chats, turns, memory)) = Chats::load(text, (MAX_TURNS, MEMORY)) else {
+            return false;
+        };
+        if !self.busy() {
             (self.chats, self.turns, self.memory) = (chats, turns, memory);
         }
+        true
     }
 }

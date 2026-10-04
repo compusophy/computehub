@@ -5,7 +5,7 @@ use crate::make::Making;
 use crate::report::Report;
 use crate::{Disk, Live, View};
 use applang::Span;
-use coder::ai::{DEFAULT_MODEL, clip, free_path, problem, shown, slug};
+use coder::ai::{DEFAULT_MODEL, about, clip, free_path, problem, shown, slug};
 
 /// Why a new app was not saved.
 pub(crate) const TAKEN: &str = "not saved: every name for it in ~/apps is taken";
@@ -133,11 +133,13 @@ impl Studio {
         self.blocked.as_deref().or(lost)
     }
 
-    /// Takes `text` as the program: a fresh Code, and the preview running it.
+    /// Takes `text` as the program: a fresh Code, the preview running it, and what its first
+    /// comment says over it (a make then says its plan).
     pub(crate) fn replace(&mut self, text: String, disk: &mut dyn Disk) {
         self.edits = self.edits.wrapping_add(1);
         (self.version, self.dirty, self.lost, self.mark) = (1, false, false, None);
         self.preview(Live::new(&text, &self.path, disk));
+        self.caption = about(&text);
         self.text = text;
     }
 
@@ -184,8 +186,8 @@ impl Studio {
             }
             let live = Live::new(&self.text, &self.path, disk);
             let faults = live.faults();
-            // A program of the person's own: a make's report is not about it.
-            (self.mark, self.report) = (None, None);
+            // A program of the person's own: a make's report and plan are not about it.
+            (self.mark, self.report, self.caption) = (None, None, about(&self.text));
             self.preview(live);
             let done = if faults { "faults as it starts \u{b7} saved " } else { "saved " };
             self.status = self.save(disk, done);

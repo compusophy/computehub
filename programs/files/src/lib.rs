@@ -2,8 +2,9 @@
 //! person's files as a program's WASI filesystem holds them (the desktop's VFS, whose root `/`
 //! every program sees), through the [`Disk`] the system program's Files and Editor reach ([`Fs`]
 //! in a program, [`Mem`] in tests). A path goes from the home ([`Vfs::HOME`]; `~` names it, `/…`
-//! the root), never into /dev (the program's devices, where a read may wait forever), and a
-//! result names one in the home by `~`. A listing and a read reach the model clipped to
+//! the root), never into /dev (the program's devices, where a read may wait forever) nor the
+//! Assistant's own folder ([`OWN`]: its chats, every conversation's, which a listing leaves out),
+//! and a result names one in the home by `~`. A listing and a read reach the model clipped to
 //! [`MAX_READ`] bytes, saying so; only text is read. Failures are coded in the Assistant's series:
 //! E0918 a path that is none, E0925 nothing there, E0926 a folder where a file was named or a
 //! file where a folder was, E0927 what the filesystem refused, E0928 a file that is not text.
@@ -21,6 +22,8 @@ use vfs::{Vfs, VfsError};
 
 /// The most bytes of a file, or of a listing, the model is given.
 pub const MAX_READ: usize = 16 << 10;
+/// The Assistant's own folder in the home, where it keeps its chats: none of the user's files.
+pub const OWN: &str = "/.assistant";
 
 /// The files in memory: a VFS each clone shares (a test keeps one to look).
 #[derive(Clone, Debug, Default)]
@@ -51,16 +54,22 @@ fn kind(e: VfsError) -> io::Error {
     }
 }
 
-/// `path` from the home, absolute; E0918 if it is none, or in /dev.
+/// `path` from the home, absolute; E0918 if it is none, in /dev, or in the Assistant's [`OWN`].
 pub fn resolve(path: &str) -> Result<String, String> {
     let bad = |_| format!("E0918: {} is not a path", clip(path, 80));
     let p = Vfs::normalize(Vfs::HOME, path.trim()).map_err(bad)?;
-    match p.strip_prefix("/dev") {
-        Some(rest) if rest.is_empty() || rest.starts_with('/') => {
-            Err(format!("E0918: {p} is the program's devices, none of the user's files"))
-        }
-        _ => Ok(p),
+    let under =
+        |root: &str| p.strip_prefix(root).is_some_and(|r| r.is_empty() || r.starts_with('/'));
+    if under("/dev") {
+        return Err(format!("E0918: {p} is the program's devices, none of the user's files"));
     }
+    if under(&[Vfs::HOME, OWN].concat()) {
+        return Err(format!(
+            "E0918: {} is the Assistant's own chats, none of the user's files",
+            named(&p)
+        ));
+    }
+    Ok(p)
 }
 
 /// Absolute `path` as the model and the person read it: `~/…` in the home.
@@ -75,7 +84,8 @@ pub fn named(path: &str) -> String {
 /// size follows it).
 pub fn list(disk: &mut dyn Disk, path: &str) -> Result<String, String> {
     let p = resolve(path)?;
-    let entries = disk.list(&p).map_err(|e| failed(disk, &e, &p, true))?;
+    let mut entries = disk.list(&p).map_err(|e| failed(disk, &e, &p, true))?;
+    entries.retain(|e| p != Vfs::HOME || OWN.strip_prefix('/') != Some(e.name.as_str()));
     let count = match entries.len() {
         1 => "1 entry".into(),
         n => format!("{n} entries"),

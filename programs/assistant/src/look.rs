@@ -19,7 +19,7 @@ const ROLES: [&str; 12] = [
     "canvas",
 ];
 /// A canvas's role (`ui::sem::CANVAS`): its value is its size in units, then its shapes, a line
-/// each (pixels as `pixels X Y, W x H squares of S units`, never square by square).
+/// each (pixels as `pixels X Y, W x H squares of S units`, then on a small board its rows).
 pub const CANVAS: u8 = 11;
 /// The most refs a session keeps; past it they start over.
 const MAX_REFS: usize = 4096;
@@ -175,7 +175,8 @@ fn describe(role: &str, name: &str, mark: Option<&Mark>) -> String {
         // The text in its squares, then its columns and a row of square colors (0 empty) a line.
         "grid" => out += &format!(" {} squares {}", quoted(name), quoted(value)),
         // The text drawn on it, then its size in units and its shapes, a line each: pixels by
-        // where they are and their size, so a tap can aim at a square of them.
+        // where they are and their size, so a tap can aim at a square of them (and on a small
+        // board its squares, a row a line).
         "canvas" => out += &format!(" {} shapes {}", quoted(name), quoted(value)),
         _ if !name.is_empty() => out += &[" ", &quoted(name)].concat(),
         _ => {}

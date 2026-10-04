@@ -12,7 +12,8 @@
 //!   device pixel at least.
 //! - A Text is set in the boot's Inter on a ladder of sizes ([`LADDER`]), so a size that moves
 //!   frame by frame never fills the glyph atlas.
-//! - The mark lists Pixels by their place and size, never cell by cell.
+//! - The mark lists Pixels by their place and size, and while a canvas's come to [`SQUARES`] or
+//!   fewer, their squares too, a row a line, as a Grid's.
 
 #![forbid(unsafe_code)]
 
@@ -26,8 +27,9 @@ use uiwire::{Draw, PAINT, Shape};
 /// The px sizes a Text is set in: its size in px rounded down to one of these (the least at
 /// least).
 pub const LADDER: [f32; 11] = [8.0, 10.0, 12.0, 14.0, 16.0, 20.0, 24.0, 32.0, 40.0, 48.0, 64.0];
-/// The most draws a canvas's mark lists one by one.
+/// The most draws a canvas's mark lists one by one, and the most squares of its Pixels.
 const LISTED: usize = 64;
+pub const SQUARES: usize = 1024;
 /// Inter's cap height in ems: a Text centers its capitals on its point.
 const CAP: f32 = 0.727;
 
@@ -168,10 +170,11 @@ pub fn draw(ui: &mut Ui<'_>, r: RectF, id: u32, units: (u16, u16), draws: &[Draw
 }
 
 /// A canvas as the AI reads it: "W x H units", then a line a draw (its shape's name, then its
-/// text in quotes, its slots, its color; Pixels as "pixels X Y, W x H squares of S units"),
-/// [`LISTED`] at most and then how many more.
+/// text in quotes, its slots, its color; Pixels as "pixels X Y, W x H squares of S units", then
+/// its rows, a char a square as they came, while [`SQUARES`] in all are not passed), [`LISTED`]
+/// at most and then how many more.
 fn said((w, h): (u16, u16), draws: &[Draw]) -> String {
-    let mut v = String::new();
+    let (mut v, mut room) = (String::new(), SQUARES);
     let num = |v: &mut String, n: i32| {
         if n < 0 {
             v.push('-');
@@ -210,7 +213,7 @@ fn said((w, h): (u16, u16), draws: &[Draw]) -> String {
             num(&mut v, d.color.into());
         }
         if d.shape == Shape::Pixels {
-            // Where, its squares across and down and their side; never each square.
+            // Where, its squares across and down and their side; then, on a small board, each.
             let [x, y, across, side, _] = d.at.map(i32::from);
             let down = d.text.len() as i32 / across.max(1);
             v.push(' ');
@@ -220,6 +223,15 @@ fn said((w, h): (u16, u16), draws: &[Draw]) -> String {
                 v += then;
             }
             v += " units";
+            if d.text.len() <= room {
+                room -= d.text.len();
+                for (i, c) in d.text.chars().enumerate() {
+                    if i % across.max(1) as usize == 0 {
+                        v.push('\n');
+                    }
+                    v.push(c);
+                }
+            }
         }
     }
     if draws.len() > LISTED {

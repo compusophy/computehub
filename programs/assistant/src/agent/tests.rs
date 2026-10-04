@@ -171,6 +171,10 @@ impl Desk {
     }
 }
 
+/// The SSE event ending a reply out of room.
+const LENGTH: &str =
+    "data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"length\"}]}\n\n";
+
 /// An SSE event carrying `delta`.
 fn sse(delta: &str) -> String {
     format!("data: {{\"choices\":[{{\"index\":0,\"delta\":{delta}}}]}}\n\n")
@@ -257,6 +261,27 @@ fn shown(a: &mut Agent) -> String {
         _ => None,
     });
     texts.collect::<Vec<_>>().join("\n")
+}
+
+/// The ids of the act and of the request to the model that frame `f` asks, if it does.
+fn ids(f: &Frame) -> (Option<u32>, Option<u32>) {
+    let id = |ai: bool| {
+        f.requests.iter().find_map(|r| match r {
+            Request::Act { id, .. } if !ai => Some(*id),
+            Request::Ai { id, .. } if ai => Some(*id),
+            _ => None,
+        })
+    };
+    (id(false), id(true))
+}
+
+/// A task on `scene` as `a` sees it, opened over its focus, waiting on nothing.
+#[rustfmt::skip]
+fn on(a: &mut Agent, scene: Scene) -> Task {
+    let (screen, shown) = render(&scene, &mut a.refs, scene.focus);
+    Task { prompt: String::new(), over: scene.focus, steps: Vec::new(), screen, scene, shown,
+        wait: Wait::User, calls: 0, acts: 0, fails: 0, repeat: (0, 0), approved: false,
+        usage: (0, 0) }
 }
 
 #[test]
@@ -416,16 +441,13 @@ fn the_screen_reads_as_text_whose_refs_last_the_session() {
     let value =
         "300 x 200 units\nring 150 150 30 8 4\npixels 0 0, 8 x 4 squares of 10 units".into();
     canvas.marks[0] = Mark { id: 1, role: 11, flags: 0, value };
-    let scene = Scene { focus: 2, wins: vec![canvas], ..Scene::default() };
-    let (screen, shown) = render(&scene, &mut refs, 0);
+    let t = on(&mut Agent::default(), Scene { focus: 2, wins: vec![canvas], ..Scene::default() });
     let want = "e1 canvas \"Privacy\" shapes \"300 x 200 units\\nring 150 150 30 8 4\\npixels 0 0, \
                 8 x 4 squares of 10 units\"\n";
-    assert!(screen.contains(want), "{screen}");
-    assert!(SYSTEM.contains("sprite x y side, pixels x y, w x h squares of s units;"));
-    #[rustfmt::skip]
-    let t = Task { prompt: String::new(), over: 0, steps: Vec::new(), screen, scene, shown,
-        wait: Wait::User, calls: 0, acts: 0, fails: 0, repeat: (0, 0), approved: false,
-        usage: (0, 0) };
+    assert!(t.screen.contains(want), "{}", t.screen);
+    assert!(
+        SYSTEM.contains("pixels x y, w x h squares of s units (on a small board then its rows")
+    );
     let click = |args: &str| {
         let c = Call { id: "c".into(), name: "click".into(), args: args.into(), cut: false };
         Agent::default().prepare(&t, &c).map(|p| p.0)
@@ -512,116 +534,100 @@ fn halt_stops_answers_questions_and_what_sends_or_ends_waits_for_a_yes() {
     // Halt (Escape) mid-task: it stops, cancelling what the model was asked, and says so.
     let mut a = Agent::default();
     ask(&mut a, "anything");
-    let look = a
-        .frame()
-        .requests
-        .iter()
-        .find_map(|r| match r {
-            Request::Act { id, .. } => Some(*id),
-            _ => None,
-        })
-        .unwrap();
+    let look = ids(&a.frame()).0.unwrap();
     a.event(&Event::Acted { id: look, code: 0, note: "".into(), scene: Scene::default().encode() });
-    let id = a
-        .frame()
-        .requests
-        .iter()
-        .find_map(|r| match r {
-            Request::Ai { id, .. } => Some(*id),
-            _ => None,
-        })
-        .unwrap();
+    let id = ids(&a.frame()).1.unwrap();
     a.event(&Event::Halt);
     let f = a.frame();
     let (cancel, idle) = (Request::AiCancel { id }, Request::Status { working: false });
     assert_eq!(f.requests, [Request::Focus { id: a.input_id() }, cancel, idle]);
     assert!(shown(&mut a).ends_with("anything\nStopped.\n0 steps, 0 tokens in, 0 out"));
-    // Typing into Feedback waits for the person's yes, asked; then it goes.
-    let (mut d, mut a) = (desk(), Agent::default());
-    d.host.open("terminal", None, &mut Response::default());
-    let feedback = Win { id: 1, app: "feedback".into(), title: "Feedback".into(), ..page(1, true) };
-    let mut t = Task {
-        prompt: "x".into(),
-        over: 1,
-        screen: "".into(),
-        steps: Vec::new(),
-        scene: Scene { focus: 1, wins: vec![feedback], ..Scene::default() },
-        shown: Vec::new(),
-        wait: Wait::User,
-        calls: 0,
-        acts: 0,
-        fails: 0,
-        repeat: (0, 0),
-        approved: false,
-        usage: (0, 0),
+    // What sends off the device asks its own yes as it comes, naming the act and its window, the
+    // text it types over the question. A yes to another question lets nothing through, and the
+    // calls made after an ask_user wait for the model to hear the answer.
+    let feedback = Win { app: "feedback".into(), title: "Feedback".into(), ..page(1, true) };
+    let scene = Scene { focus: 1, wins: vec![feedback], ..Scene::default() };
+    let typed = || ("type_text", r#"{"ref":"e2","text":"secrets","submit":true}"#.to_string());
+    let model = |b: &Json| match last(b) {
+        l if l.starts_with("not run") => many(&[typed()]),
+        l if l.starts_with("the user answered: no") => many(&[typed(), typed()]),
+        _ => many(&[("ask_user", r#"{"question":"Shall I look closer?"}"#.into()), typed()]),
     };
-    t.shown = render(&t.scene, &mut a.refs, 1).1;
-    let typed = Call {
-        id: "c".into(),
-        name: "type_text".into(),
-        args: r#"{"ref":"e2","text":"hi"}"#.into(),
-        cut: false,
+    let types = |r: &[Request]| -> Vec<Act> {
+        let act = |r: &Request| match r {
+            Request::Act { act, .. } => Act::decode(act).filter(|a| matches!(a, Act::Type { .. })),
+            _ => None,
+        };
+        r.iter().filter_map(act).collect()
     };
-    assert!(a.prepare(&t, &typed).unwrap_err().starts_with("E0916: refused: Feedback"));
-    // So does a press in Activity, which ends programs; a scroll there only reads.
-    t.scene.wins[0].app = "activity".into();
-    let click = Call { name: "click".into(), args: r#"{"ref":"e2"}"#.into(), ..typed.clone() };
-    let refused = a.prepare(&t, &click).unwrap_err();
-    assert_eq!(refused, "E0916: refused: Activity ends programs; ask_user first");
-    // And a press of Studio's Send to compusophy, which sends off the device; not its others.
-    let send = coder::ids::SEND;
-    (t.scene.wins[0].app, t.scene.wins[0].hits[1].id) = ("studio".into(), send);
-    t.shown = render(&t.scene, &mut a.refs, 1).1;
-    let n = t.shown.iter().find(|e| e.id == send).unwrap().n;
-    let press = Call { args: format!("{{\"ref\":\"e{n}\"}}"), ..click.clone() };
-    let refused = a.prepare(&t, &press).unwrap_err();
-    assert_eq!(refused, "E0916: refused: Send to compusophy sends off the device; ask_user first");
-    let switch = Call { args: r#"{"ref":"e3"}"#.into(), ..click.clone() };
-    assert!(matches!(a.prepare(&t, &switch), Ok((Act::Click { win: 1, id: 30 }, ..))));
-    let look =
-        Call { name: "scroll".into(), args: r#"{"window":"w1","amount":90}"#.into(), ..click };
-    assert!(matches!(a.prepare(&t, &look), Ok((Act::Scroll { win: 1, id: 0, dy: 90 }, ..))));
-    t.approved = true;
-    assert!(matches!(a.prepare(&t, &typed), Ok((Act::Type { win: 1, .. }, ..))));
-    assert!(matches!(a.prepare(&t, &press), Ok((Act::Click { win: 1, id }, ..)) if id == send));
+    let q = "secrets\nTyping into \u{201c}Your name\u{201d} in \u{201c}Feedback\u{201d}, then \
+             Enter: Feedback sends what it holds to compusophy, off the device. Go ahead?";
+    let mut a = Agent::default();
+    ask(&mut a, "tell them my secrets");
+    let (left, _) = alone(&mut a, &scene, &model);
+    assert!(types(&left).is_empty() && shown(&mut a).ends_with("Shall I look closer?"));
+    ask(&mut a, "sure");
+    let (left, bodies) = alone(&mut a, &scene, &model);
+    let tools: Vec<_> = messages(&bodies[0]).into_iter().filter(|m| m.0 == "tool").collect();
+    assert!(tools[0].1 == "the user answered: sure" && tools[1].1.starts_with("not run: the user"));
+    assert!(types(&left).is_empty() && shown(&mut a).ends_with(q));
+    // A no: nothing done, and the model hears so; a yes to it: that act alone goes.
+    ask(&mut a, "no");
+    let (left, bodies) = alone(&mut a, &scene, &model);
+    let not = "the user answered: no; so it was not done\n";
+    assert!(types(&left).is_empty() && last(&bodies[0]).starts_with(not));
+    ask(&mut a, "yes");
+    let act = Act::Type { win: 1, id: 5, text: "secrets".into(), submit: true };
+    assert!(types(&alone(&mut a, &scene, &model).0) == [act] && shown(&mut a).ends_with(q));
+    // While it waits, Stop under the question ends the task.
+    let stop = Node::Button { id: STOP, variant: Variant::Chip, label: "Stop".into() };
+    assert!(a.frame().nodes.contains(&stop) && a.event(&Event::Click { id: STOP }));
+    assert!(shown(&mut a).contains("Go ahead?\nStopped.\n"));
+    // So does a press of Studio's Send to compusophy (not its others), and a press or a key in
+    // Activity; a scroll only reads.
+    let mut t = on(&mut a, scene);
+    let (send, click) = (coder::ids::SEND, |id| Act::Click { win: 1, id });
+    let (key, scroll) =
+        (Act::Key { win: 1, code: "Enter".into(), mods: 0 }, Act::Scroll { win: 1, id: 0, dy: 9 });
+    let asks =
+        [("studio", click(send)), ("activity", click(30)), ("activity", key)].map(|c| (c, true));
+    let not =
+        [("studio", click(30)), ("activity", scroll), ("settings", click(30))].map(|c| (c, false));
+    for ((app, act), asks) in asks.into_iter().chain(not) {
+        t.scene.wins[0].app = app.into();
+        assert_eq!(guard(&t, &act, "Pressing").is_some(), asks, "{app} {act:?}");
+    }
+    t.scene.wins[0].app = "studio".into();
+    let why = "it sends Studio's report of the app (the ask, the program) to compusophy, off the \
+               device. Go ahead?";
+    assert!(guard(&t, &click(send), "Clicking").unwrap().0.ends_with(why));
     // A text past what one act types: its first part goes, nothing added, and the model hears so.
+    let typing = Call { name: "type_text".into(), ..Call::default() };
     let long = format!(r#"{{"ref":"e2","text":"{}"}}"#, "x".repeat(MAX_TYPED + 1));
-    let long = a.prepare(&t, &Call { args: long, ..typed.clone() }).unwrap();
+    let long = a.prepare(&t, &Call { args: long, ..typing }).unwrap();
     let want = "typed into \u{201c}Your name\u{201d} (e2); only its first 4000 bytes";
     let x4000 = "x".repeat(MAX_TYPED);
     assert!(matches!(long.0, Act::Type { text, .. } if text == x4000) && long.2 == want);
-    t.scene.wins[0].app = "feedback".into();
     // A scroll names its window: an element of another window is not one of its.
     t.scene.wins.push(page(2, false));
     t.shown = render(&t.scene, &mut a.refs, 1).1;
     let e = t.shown.iter().find(|e| e.win == 2).unwrap().clone();
-    let scroll = |w: u32| Call {
-        id: "s".into(),
-        name: "scroll".into(),
-        args: format!("{{\"window\":\"w{w}\",\"ref\":\"e{}\",\"amount\":100}}", e.n),
-        cut: false,
-    };
+    let args = |w: u32| format!("{{\"window\":\"w{w}\",\"ref\":\"e{}\",\"amount\":100}}", e.n);
+    let scroll = |w: u32| Call { name: "scroll".into(), args: args(w), ..Call::default() };
     assert_eq!(a.prepare(&t, &scroll(1)).unwrap_err(), format!("E0918: e{} is not in w1", e.n));
     let act = Act::Scroll { win: 2, id: e.id, dy: 100 };
     assert!(matches!(a.prepare(&t, &scroll(2)), Ok((got, ..)) if got == act));
-    // ask_user: the question shows, the overlay is the person's again; their answer goes back.
+    // ask_user on a desktop: the question shows, the overlay is the person's again; their answer
+    // goes back, with the screen as it still is.
+    let (mut d, mut a) = (desk(), Agent::default());
     ask(&mut a, "send feedback");
-    let calls = Rc::new(RefCell::new(0));
-    d.run(&mut a, &|_| {
-        *calls.borrow_mut() += 1;
-        match *calls.borrow() {
-            1 => reply("", Some(("ask_user", r#"{"question":"Send it?"}"#))),
-            _ => reply("Sent.", None),
-        }
-    });
+    d.run(&mut a, &|_| reply("", Some(("ask_user", r#"{"question":"Send it?"}"#))));
     assert!(shown(&mut a).ends_with("Send it?") && !d.host.agent.working);
     ask(&mut a, "yes");
     d.run(&mut a, &|_| reply("Sent.", None));
     let tool = messages(d.bodies.last().unwrap()).into_iter().find(|m| m.0 == "tool").unwrap();
-    // With the screen, as it still is.
-    assert!(
-        tool.1.starts_with("the user answered: yes\nScreen ") && shown(&mut a).contains("Sent.")
-    );
+    let yes = "the user answered: yes\nScreen ";
+    assert!(tool.1.starts_with(yes) && shown(&mut a).contains("Sent."));
 }
 
 #[test]
@@ -666,24 +672,9 @@ fn the_pill_keys_receipts_and_ai_errors() {
     }
     // An AI error ends the task, coded, with Retry: the card again, its prompt with the keys.
     // Retry asks again.
-    let look = f
-        .requests
-        .iter()
-        .find_map(|r| match r {
-            Request::Act { id, .. } => Some(*id),
-            _ => None,
-        })
-        .unwrap();
+    let look = ids(&f).0.unwrap();
     a.event(&Event::Acted { id: look, code: 0, note: "".into(), scene: Scene::default().encode() });
-    let id = a
-        .frame()
-        .requests
-        .iter()
-        .find_map(|r| match r {
-            Request::Ai { id, .. } => Some(*id),
-            _ => None,
-        })
-        .unwrap();
+    let id = ids(&a.frame()).1.unwrap();
     a.event(&Event::AiEnd { id, status: 429, error: "".into() });
     let f = a.frame();
     assert!(prompt(&f) && f.requests.contains(&Request::Focus { id: a.input_id() }));
@@ -764,7 +755,7 @@ fn chats_keep_their_own_transcripts_and_memory_and_a_new_one_starts_empty() {
     assert_eq!(pair, (4, "turn on the grain", "The grain is on."));
     // Kept, then put back as they were.
     let (kept, mut b) = (a.kept().expect("changed"), Agent::default());
-    b.load(&kept);
+    assert!(b.load(&kept) && !b.load("compusophy chats 2\n"));
     assert_eq!((a.kept(), shown(&mut b), chips(&mut b)), (None, shown(&mut a), chips(&mut a)));
     // Nothing switches while a task is in hand.
     ask(&mut a, "wait");
@@ -781,32 +772,34 @@ fn compact_condenses_the_chat_into_a_note_and_a_failure_keeps_the_memory() {
     task(&mut d, &mut a, "switch to Dawn", &"Dawn it is. ".repeat(90));
     let both = [quiet(NEW, "New chat"), quiet(COMPACT, "Compact")];
     assert_eq!(chips(&mut a).0[1..], both);
-    // Compacting is the pill with Stop; Stop cancels it and the memory stays.
+    // Compacting is the pill with Stop; Stop (or Escape) cancels it and the memory stays.
+    let memory = a.memory.clone();
+    for halt in [Event::Click { id: STOP }, Event::Halt] {
+        a.event(&Event::Click { id: COMPACT });
+        let f = a.frame();
+        assert_eq!(f.nodes, [pill("Compacting the chat\u{2026}")]);
+        let id = ids(&f).1.unwrap();
+        assert!(!a.event(&Event::Ask { text: "meanwhile".into() }) && a.event(&halt));
+        let idle = Request::Status { working: false };
+        let cancel = [Request::Focus { id: a.input_id() }, Request::AiCancel { id }, idle];
+        assert_eq!((a.frame().requests, &a.memory), (cancel.into(), &memory));
+        assert!(shown(&mut a).ends_with("Compact\nStopped.\n0 tokens in, 0 out"));
+    }
+    // An AI error, coded, a reply with no note, and one out of room mid-note: the memory as it
+    // was, Compact still there.
     a.event(&Event::Click { id: COMPACT });
-    let f = a.frame();
-    assert_eq!(f.nodes, [pill("Compacting the chat\u{2026}")]);
-    let ai = |f: &Frame| {
-        f.requests.iter().find_map(|r| match r {
-            Request::Ai { id, .. } => Some(*id),
-            _ => None,
-        })
-    };
-    let id = ai(&f).unwrap();
-    assert!(!a.event(&Event::Ask { text: "meanwhile".into() }));
-    a.event(&Event::Click { id: STOP });
-    let idle = Request::Status { working: false };
-    let cancel = [Request::Focus { id: a.input_id() }, Request::AiCancel { id }, idle];
-    assert_eq!(a.frame().requests, cancel);
-    assert!(shown(&mut a).ends_with("Compact\nStopped.\n0 tokens in, 0 out"));
-    // An AI error, coded, and a reply with no note: the memory as it was, Compact still there.
-    a.event(&Event::Click { id: COMPACT });
-    let id = ai(&a.frame()).unwrap();
+    let id = ids(&a.frame()).1.unwrap();
     a.event(&Event::AiEnd { id, status: 429, error: "".into() });
     assert!(shown(&mut a).contains("Compact\nE0903 the free AI is busy"));
     a.event(&Event::Click { id: COMPACT });
     d.run(&mut a, &|_| reply("", None));
     let none = "E0929 the AI wrote no note; the memory is as it was\n1.2k tokens in, 30 out";
     assert!(shown(&mut a).ends_with(none) && chips(&mut a).0[1..] == both);
+    a.event(&Event::Click { id: COMPACT });
+    d.run(&mut a, &|_| sse(r#"{"content":"The user wanted the gr"}"#) + LENGTH);
+    let room =
+        "E0907 the AI ran out of room before its reply ended; ask for less\n0 tokens in, 0 out";
+    assert!(shown(&mut a).ends_with(room) && a.memory == memory && chips(&mut a).0[1..] == both);
     // The note: asked with no tools, with room past the free AI's 1,024 tokens of thinking, the
     // chat in it; clipped to its most, it stands for the memory.
     a.event(&Event::Click { id: COMPACT });
@@ -832,29 +825,34 @@ fn compact_condenses_the_chat_into_a_note_and_a_failure_keeps_the_memory() {
     assert_eq!(kept, (10, SUM, note.as_str(), "step 1"));
 }
 
-/// Serves `a` with no desktop: each look and act settles at once on an empty screen, and the
-/// model answers as `model` says. What else it asked, and the bodies the model was sent.
-fn alone(a: &mut Agent, model: &dyn Fn(&Json) -> String) -> (Vec<Request>, Vec<Json>) {
-    let (mut left, mut bodies) = (Vec::new(), Vec::new());
+/// Serves `a` with no desktop: each look and act settles at once on `scene`, and the model
+/// answers as `model` says. What it asked, and the bodies the model was sent.
+fn alone(
+    a: &mut Agent,
+    scene: &Scene,
+    model: &dyn Fn(&Json) -> String,
+) -> (Vec<Request>, Vec<Json>) {
+    let (mut asked, mut bodies) = (Vec::new(), Vec::new());
     loop {
         let mut events = Vec::new();
         for r in a.frame().requests {
-            match r {
+            match &r {
                 Request::Ai { id, body } => {
-                    let body = Json::parse(&body).expect("a JSON body");
-                    events.push(Event::AiData { id, data: model(&body).into_bytes() });
-                    events.push(Event::AiEnd { id, status: 200, error: "".into() });
+                    let body = Json::parse(body).expect("a JSON body");
+                    events.push(Event::AiData { id: *id, data: model(&body).into_bytes() });
+                    events.push(Event::AiEnd { id: *id, status: 200, error: "".into() });
                     bodies.push(body);
                 }
                 Request::Act { id, .. } => {
-                    let scene = Scene::default().encode();
-                    events.push(Event::Acted { id, code: 0, note: "".into(), scene });
+                    let scene = scene.encode();
+                    events.push(Event::Acted { id: *id, code: 0, note: "".into(), scene });
                 }
-                r => left.push(r),
+                _ => {}
             }
+            asked.push(r);
         }
         if events.is_empty() {
-            return (left, bodies);
+            return (asked, bodies);
         }
         events.iter().for_each(|e| _ = a.event(e));
     }
@@ -878,18 +876,18 @@ fn feedback_goes_to_compusophy_only_on_a_yes_to_it() {
     };
     let sent = |r: &[Request]| r.iter().filter(|r| matches!(r, Request::Feedback { .. })).count();
     // Asked first, the report shown as it would go, the question under it; nothing sent.
-    let (left, _) = alone(&mut a, &model);
+    let (left, _) = alone(&mut a, &Scene::default(), &model);
     let q = "Send this idea to compusophy, with what is open and recent events (never your files)?";
     let said = shown(&mut a);
     assert!(sent(&left) == 0 && said.ends_with(&[text, "\n", q].concat()), "{said}");
     // Any answer but a yes: nothing goes, and the model hears so (here it asks again).
     ask(&mut a, "please, leave my name out");
-    let (left, bodies) = alone(&mut a, &model);
+    let (left, bodies) = alone(&mut a, &Scene::default(), &model);
     let not = "the user answered: please, leave my name out; so it was not done\n";
     assert!(sent(&left) == 0 && last(&bodies[0]).starts_with(not));
     // A yes to it: it goes as shown, with the desktop's context; the model hears what went.
     ask(&mut a, "Yes, send it");
-    let (left, bodies) = alone(&mut a, &model);
+    let (left, bodies) = alone(&mut a, &Scene::default(), &model);
     let feedback = Request::Feedback { kind: "idea".into(), text: text.into(), context: true };
     assert_eq!((sent(&left), left.contains(&feedback)), (1, true));
     let went = "ok: sent compusophy your idea, \u{201c}Assistant: A clipboard tool\u{201d} (59 bytes, \
@@ -905,12 +903,17 @@ fn feedback_goes_to_compusophy_only_on_a_yes_to_it() {
     assert!(
         matches!(&long, Some(Ran::Failed(e)) if e.starts_with("E0918: the report is 8011 bytes"))
     );
-    // A yes is yes words alone: one that asks for a change, or says no, is none.
+    // A yes is yes words alone: one that asks for a change, says no or asks, is none.
     let yeses = ["yes", "OK, go", "Sure!", "y", "please do", "sure, why not", "yes, no problem"];
     assert!(yeses.into_iter().chain(["Sounds good", "send it", "yes\u{2014}do it"]).all(yes));
-    let nos = ["please don't", "no", "yes, but shorter", "not now", "what?", "ok hold on", ""];
+    let nos = ["please don't", "no", "yes, but shorter", "not now", "what?", "sure?", "send it?"];
     let more = ["please make it shorter", "please, I can't share that", "yeah nah", "ok, later"];
-    assert!(!nos.into_iter().chain(more).chain(["yes, and one about the dock"]).any(yes));
+    assert!(
+        !nos.into_iter()
+            .chain(more)
+            .chain(["yes, and one about the dock", "ok hold on", ""])
+            .any(yes)
+    );
 }
 
 #[test]
@@ -928,10 +931,10 @@ fn file_tools_ask_their_yes_fold_for_room_and_misses_go_on() {
     let q = "bye\nReplace ~/notes/a.txt (5 bytes) with these 3 bytes?";
     for answer in ["no, keep it", "yes"] {
         ask(&mut a, "say bye in notes/a.txt");
-        alone(&mut a, &model);
+        alone(&mut a, &Scene::default(), &model);
         assert!(shown(&mut a).ends_with(q) && file("/notes/a.txt") == Ok(b"hello".to_vec()));
         ask(&mut a, answer);
-        let (_, bodies) = alone(&mut a, &model);
+        let (_, bodies) = alone(&mut a, &Scene::default(), &model);
         let heard = "the user answered: no, keep it; so it was not done\n";
         assert!(answer == "yes" || last(&bodies[0]).starts_with(heard));
     }
@@ -949,7 +952,7 @@ fn file_tools_ask_their_yes_fold_for_room_and_misses_go_on() {
         _ => reply("Read them.", None),
     };
     ask(&mut a, "read them all");
-    let (_, bodies) = alone(&mut a, &model);
+    let (_, bodies) = alone(&mut a, &Scene::default(), &model);
     let (m, body) = (messages(&bodies[2]), encode(&bodies[2]));
     let folded =
         m.iter().filter(|m| m.1.ends_with("(the rest left out for room: call it again to see it)"));
@@ -971,7 +974,7 @@ fn a_cut_call_and_a_grid_clicked_whole_say_so() {
     let head =
         r#"{"index":0,"id":"w","function":{"name":"write_file","arguments":"{\"text\":\"ab"}"#;
     c.feed(sse(&["{\"tool_calls\":[", head, "}]}"].concat()).as_bytes());
-    c.feed(b"data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"length\"}]}\n\n");
+    c.feed(LENGTH.as_bytes());
     let args = quote(&"x".repeat(crate::calls::MAX_ARGS + 1));
     let call = format!(r#"{{"index":0,"id":"w","function":{{"name":"wait","arguments":{args}}}}}"#);
     big.feed(sse(&["{\"tool_calls\":[", &call, "]}"].concat()).as_bytes());

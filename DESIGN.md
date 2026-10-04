@@ -273,13 +273,17 @@ one. Forked crates keep their Apache-2.0 license and note their origin.
   model, with no tools, condense the chat into a note of 600 bytes at most,
   which takes the memory's first place (the 3 latest tasks follow it) until
   the next folds it in; the pill and Stop meanwhile, and a failure leaves
-  the memory. Kept in `~/.assistant/chats`, a line format read
-  defensively, 256 KiB at most. A finger's tap leaves the keyboard down
+  the memory. A task is remembered as it is kept, each text 1,000 bytes
+  at most, so a chat's memory never outgrows a request. Kept in
+  `~/.assistant/chats`, a line format read defensively, 256 KiB at most
+  (one that does not read is set aside as `chats.bad`); the Assistant's
+  file tools never reach that folder. A finger's tap leaves the keyboard down
   until its field is tapped. A dot under the tile while the overlay shows
   (the accent's while it has the keys). While it works the overlay is a
   pill: one line of what it does, and Stop at its right edge however the
   line changes (its press reaches across the pill's height); the dot
-  beats, and each act flashes what it touched.
+  beats, and each act flashes what it touched. While a question waits it
+  is the card again, the question last, with Stop under it.
   Only Stop, or Escape while the overlay has the keys, stops it: the
   person's own presses, keys and wheel go where they go beside its acts
   (one on the bare desktop leaves the pill in view), and an act on a
@@ -364,7 +368,7 @@ one. Forked crates keep their Apache-2.0 license and note their origin.
   program came back), and the app's last fault in Studio's preview (kept
   under the app until another shows or the program changes), offer Send to
   compusophy by the status; an app in its own window offers none. The tap
-  is the consent (the Assistant presses it only after the person's yes, as
+  is the consent (the Assistant's press asks the person's yes itself, as
   in Feedback); each goes once (`Request::Feedback`, never the desktop's
   context): what was asked, how it ended (its code and problem, the make's
   own code for why it stopped, each request's kind, tokens, time and the
@@ -383,7 +387,8 @@ one. Forked crates keep their Apache-2.0 license and note their origin.
   color is one fill on the desktop and one ink of the render's 4,096 (with
   each shape, sprite square and text character), so a plain 64 x 64 board
   fits where a busy one faults (E0222). The AI reads where pixels are and
-  their size, never each square. A canvas's handler sees the tap's `x` and
+  their size, and while a canvas's come to 1,024 squares or fewer, each
+  square, a row a line, as a grid's. A canvas's handler sees the tap's `x` and
   `y`. Grids and canvases are boards: they take the room the window's
   other widgets leave, and with a handler they are pads. Studio's prompt
   asks that whatever is to be seen (a game, a board, drawing, animation, a
@@ -406,8 +411,9 @@ one. Forked crates keep their Apache-2.0 license and note their origin.
   CPU and can End it. The graphs move only when a sample comes, the seconds
   between at their average: at rest nothing draws. Its window alone may send
   `Request::Watch` and `Request::End` (it runs `bin/system.wasm` whatever
-  `/bin/activity` says; the Assistant presses in it only after the person's
-  yes, as in Feedback). On a phone it watches only while it has the focus.
+  `/bin/activity` says; the Assistant's presses and keys there ask the
+  person's yes themselves, as in Feedback). On a phone it watches only
+  while it has the focus.
   The desktop answers with `Event::Stats`
   (`uiwire::stat`): the kernel's table (deterministic) and the page's meters
   (frames by cause, its own time and memory, each worker's busy ms and memory
@@ -507,13 +513,20 @@ in its home; names in it, and roots per profile, wait for R2.
   done the way a person's pointer and keys go (uiwire `Act`, `Acted`). Some
   tools are its own, no act: it lists, reads and writes the person's files
   over its program's WASI filesystem, paths from the home (the `files`
-  crate: never /dev, a read clipped to 16 KB, failures E0925 to E0928), and
-  what no tool does it tells compusophy (`send_feedback`, an idea or a bug,
-  marked `Assistant:`, through the page's outbox as the Feedback app's
-  reports go). A call that sends a report or replaces what is kept
-  (feedback always; a write over a file or outside the home) shows the
-  person all that would go, the question under it, and runs only on their
-  yes to it: yes words alone, so an answer that asks for a change is none.
+  crate: never /dev nor its own `~/.assistant`, a read clipped to 16 KB,
+  failures E0925 to E0928), and what no tool does it tells compusophy
+  (`send_feedback`, an idea or a bug, marked `Assistant:`, through the
+  page's outbox as the Feedback app's reports go). A call that sends a report or replaces what is kept
+  (feedback always; a write over a file or outside the home), and an act
+  that sends off the device or ends a program (a press, typing or a key
+  into Feedback, a press of Studio's Send to compusophy, a press or key in
+  Activity), shows the person all that would go, the question under it
+  naming what it does, and runs only on their yes to it, that call alone:
+  yes words alone, never a question, so an answer that asks for a change
+  is none. A yes to `ask_user` lets nothing through, and the calls the
+  model made after the question wait until it has heard the answer. What
+  another app saves or a Terminal runs the model is told to ask about
+  first; no code holds it.
   So the loop of growth: the Assistant meets what it cannot do, says so,
   asks its creator for the tool, and the tool ships. Cloud AI is free for
   every visitor: `api/ai.mjs`, a thin same-origin function, forwards

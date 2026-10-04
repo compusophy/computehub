@@ -5,14 +5,15 @@
 
 use std::process::ExitCode;
 
-/// Where its chats are kept, under the person's home (`agent::compact`).
-const FILE: &str = "/.assistant/chats";
-
 fn main() -> ExitCode {
     let mut agent = assistant::agent::Agent::default();
-    let file = std::env::var("HOME").ok().map(|home| home + FILE);
-    if let Some(text) = file.as_ref().and_then(|f| std::fs::read(f).ok()) {
-        agent.load(&String::from_utf8_lossy(&text));
+    // Its chats, in its own folder of the person's home, which its file tools never reach
+    // (`agent::compact`); a file that does not read is set aside, never written over.
+    let file = std::env::var("HOME").ok().map(|home| [&home, files::OWN, "/chats"].concat());
+    if let Some((f, text)) = file.as_ref().and_then(|f| Some((f, std::fs::read(f).ok()?))) {
+        if !agent.load(&String::from_utf8_lossy(&text)) {
+            _ = std::fs::rename(f, [f, ".bad"].concat());
+        }
     }
     let mut keep = |text: &str| file.iter().for_each(|f| save(f, text));
     let served = uiwire::client::open()

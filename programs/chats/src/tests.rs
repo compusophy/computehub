@@ -170,6 +170,21 @@ fn chats_are_kept_and_read_back_defensively() {
         Chats::load(&Chats::default().encode(&big, &Memory::new()), (16, 4)).unwrap();
     assert_eq!((kept.len(), &kept[0].prompt[..], kept[0].lines.len()), (1, "p15", 16));
     assert_eq!(kept[0].lines[15].1.len(), LINE);
+    // A newest turn too big alone (its escapes) keeps its last lines that fit, and the older
+    // turns that fit after it stay.
+    let heavy = vec![(Style::Body, "a\n".repeat(150)); 16];
+    let two = [
+        Turn { prompt: "earlier".into(), lines: Vec::new() },
+        Turn { prompt: "latest".into(), lines: heavy },
+    ];
+    let (_, kept, _) =
+        Chats::load(&Chats::default().encode(&two, &Memory::new()), (16, 4)).unwrap();
+    assert_eq!((kept.len(), &kept[1].prompt[..], kept[1].lines.len()), (2, "latest", 13));
+    // Texts past their bounds (a file not of its making) come back clipped as it keeps them.
+    let long = format!("compusophy chats 1\nc {0}\nm {0}\t{0}\nt {0}\nl 0 {0}\n", "m".repeat(5000));
+    let (c, t, m) = Chats::load(&long, (2, 4)).unwrap();
+    let sizes = [c.list[0].name.len(), m[0].0.len(), m[0].1.len(), t[0].prompt.len()];
+    assert_eq!((sizes, t[0].lines[0].1.len()), ([NAME, TASK, TASK, LINE], LINE));
     // Escapes come back; an unknown line, a style or a memory line without its tab, turns past
     // the most (with their lines) and a ninth chat are skipped.
     let mut odd =
@@ -210,4 +225,11 @@ fn a_note_stays_first_until_the_next_and_a_task_like_it_is_none() {
     assert_eq!(m, (0..4).map(task).collect::<Vec<_>>());
     // Worth compacting past LEAN bytes, more than a note takes.
     assert!(!compactable(&m) && compactable(&vec![("a".into(), "x".repeat(LEAN))]));
+    // A task is remembered as the file keeps it, each text within TASK bytes, so the memory never
+    // outgrows a request: an ellipsis where cut.
+    remember(&mut m, &"p".repeat(16 << 10), "Ok.", 4);
+    let (prompt, answer) = &m[3];
+    assert!(
+        prompt.len() == TASK && prompt.ends_with("p\u{2026}") && answer == "Ok." && m.len() == 4
+    );
 }
