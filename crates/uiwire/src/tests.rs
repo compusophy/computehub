@@ -117,10 +117,28 @@ fn every_kind_round_trips_and_nothing_else_decodes() {
         Node::Choice { id: 20, on: true, text: "GLM 5.3\nbest answers".into() },
         Node::Switch { id: 30, on: false, label: "Living grain".into() },
         Node::Button { id: 31, variant: Variant::Link, label: "Send feedback".into() },
+        Node::Chart { id: 0, hue: 11, h: 72, values: vec![UNKNOWN, 0, 500, 1000] },
+        Node::Meter { id: 3, hue: 4, value: 1000 },
+        Node::Columns { id: 40, on: 2, labels: "Name\tCPU\tMemory".into() },
     ];
     own.iter().for_each(|n| strict(n, Node::encode, Node::decode));
     let pref = Request::Pref { key: "grain".into(), value: "off".into() };
     strict(&pref, Request::encode, Request::decode);
+    // Past a value's 1000, the canvas colors or a Chart's sizes, nothing decodes, nor checks.
+    let chart = |hue, h, values: Vec<u16>| Node::Chart { id: 0, hue, h, values };
+    let bad = [
+        chart(12, 72, vec![]),
+        chart(1, 15, vec![]),
+        chart(1, 481, vec![]),
+        chart(1, 72, vec![1001]),
+    ];
+    let long = chart(1, 72, vec![0; CHART_POINTS + 1]);
+    let meters =
+        [Node::Meter { id: 0, hue: 12, value: 0 }, Node::Meter { id: 0, hue: 1, value: 1001 }];
+    for n in bad.iter().chain([&long]).chain(&meters) {
+        let frame = Frame { nodes: vec![n.clone()], ..Frame::default() };
+        assert!(Node::decode(&n.encode()).is_none() && frame.encode_checked().is_none(), "{n:?}");
+    }
 }
 
 #[test]

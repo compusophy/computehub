@@ -54,7 +54,7 @@ pub const SYSTEM: [SystemApp; 7] = [
     ("files", "Files", icon(Glyph::Folder, 0x60a5fa), (640.0, 480.0), false),
     ("welcome", "Welcome", icon(Glyph::Mark, 0xf472b6), (520.0, 768.0), true),
     ("editor", "Editor", icon(Glyph::Editor, 0xfb923c), (640.0, 560.0), false),
-    ("activity", "Activity", icon(Glyph::Pulse, 0x22d3ee), (440.0, 640.0), true),
+    ("activity", "Activity", icon(Glyph::Pulse, 0x22d3ee), (760.0, 580.0), true),
     ("settings", "Settings", icon(Glyph::Cog, 0x94a3b8), (720.0, 520.0), true),
 ];
 /// The program the OS's own windows run, whatever /bin holds: Activity's, Settings'.

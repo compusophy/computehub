@@ -48,7 +48,7 @@ AI for all); later pooled compute across tabs and devices. Author handle: compus
 ## Map
 
 ```
-crates/      the OS (boot, kernel, worker); speaks to programs by WASI, uiwire
+crates/      the OS (boot, kernel, worker); talks WASI and uiwire
   wm/        floating window manager: stacking, snapping, focus; deterministic
   vfs/       in-memory filesystem, deterministic (/apps, /home, /tmp)
   font/      TrueType reader + glyph rasterizer (no font engine ships)
@@ -73,13 +73,14 @@ crates/      the OS (boot, kernel, worker); speaks to programs by WASI, uiwire
              jobs, file server (main), snap (/home), module
   wasi/      the kernel's worker half: WASI preview 1 Proc, fds, /dev
   cpu/       the program worker (cdylib; dist/cpu/): loader, WASI imports
-programs/    wasm32-wasip1 programs (dist/bin/), the app language they share
+programs/    wasm32-wasip1 programs (dist/bin/) and their app language
   fuel/ lang/                 forks of litelite (budgets, parse kit)
   applang-syntax/ applang/    tier 0 app language: front end, runtime
   studio/    make apps by describing them; runs `.app` files
   coder/     Studio's coding agent: write, test, fix by edits, keep the best
   assistant/ the Assistant: the overlay AI using the desktop
-  system/    About, Editor, Feedback, Files, Welcome, Activity, Settings
+  system/    About, Editor, Feedback, Files, Welcome, Settings
+  activity/  the resource monitor
   sh/        the shell: line editor, commands, jobs
   toolbox/   test programs, one binary
 assets/fonts/  the fonts (see Fonts below)

@@ -16,6 +16,7 @@ name = "system"
 path = "src/main.rs"
 
 [dependencies]
+compusophy-activity.workspace = true
 compusophy-icons.workspace = true
 compusophy-uiwire.workspace = true
 compusophy-vfs.workspace = true
