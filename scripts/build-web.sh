@@ -100,10 +100,11 @@ features=(
 # 1 KiB is the far end of rustc's 1 MiB stack, below every static. About
 # 1.5 KB gzipped on the os module.
 opts=(--low-memory-unused)
-# The pass pipelines tried: -Oz, and -Oz run twice (the second run finds
-# more). gzip -9 is chaotic at the margin (a few bytes of code can move the
-# os module's gzipped size by hundreds), so each is measured.
-pipelines=("-Oz" "-Oz -Oz")
+# The pass pipelines tried: -Oz, run up to three times (each run finds more),
+# and -Oz around flattening and re-relooping the control flow (about 0.4 KB
+# gzipped on the os module). gzip -9 is chaotic at the margin (a few bytes of
+# code can move the os module's gzipped size by hundreds), so each is measured.
+pipelines=("-Oz" "-Oz -Oz" "-Oz -Oz -Oz" "-Oz --flatten --rereloop -Oz")
 # Runs wasm-opt on the module $1 in place, if it is installed and helps:
 # of the input and each pipeline's output, keeps whichever gzips smallest.
 scratch="$target_dir/wasm-opt-scratch"

@@ -264,7 +264,10 @@ one. Forked crates keep their Apache-2.0 license and note their origin.
   it drags; lifted unmoved, its menu); the others slide aside and the
   order is kept (`dock`). Tiles shrink evenly to fit beside the Assistant
   (8 apps get 34 px on a 411 px phone; never off the screen). A click
-  opens, focuses or minimizes; windows minimize into their tile.
+  opens, focuses or minimizes; windows minimize into their tile. The
+  person's own apps (`~/apps/*.app`) also offer **Delete** in their menu,
+  asked again in place ("Delete for good"): their windows close, the dock
+  lets them go and the file goes, with /home as kept.
 - **Keys** (`mod` is Alt or Meta, without Ctrl):
 
   | keys | action |
