@@ -78,7 +78,7 @@ programs/    wasm32-wasip1 programs (dist/bin/) and their app language
   applang-syntax/ applang/    tier 0 app language: front end, runtime
   studio/    make apps by describing them; runs `.app` files
   coder/     Studio's coding agent: write, test, fix by edits, keep the best
-  assistant/ the Assistant: the overlay AI using the desktop
+  assistant/ the AI using the desktop; files/: its file tools
   system/    About, Editor, Feedback, Files, Welcome, Settings
   activity/  the resource monitor
   terminal/  the Terminal; vt/ term/: its parser, screen model

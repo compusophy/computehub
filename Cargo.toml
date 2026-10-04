@@ -30,6 +30,7 @@ members = [
     "programs/coder",
     "programs/studio",
     "programs/assistant",
+    "programs/files",
     "programs/system",
     "programs/activity",
     "programs/sh",
@@ -81,6 +82,7 @@ compusophy-applang = { path = "programs/applang", version = "0.1.0" }
 compusophy-coder = { path = "programs/coder", version = "0.1.0" }
 compusophy-studio = { path = "programs/studio", version = "0.1.0" }
 compusophy-assistant = { path = "programs/assistant", version = "0.1.0" }
+compusophy-files = { path = "programs/files", version = "0.1.0" }
 compusophy-system = { path = "programs/system", version = "0.1.0" }
 compusophy-activity = { path = "programs/activity", version = "0.1.0" }
 

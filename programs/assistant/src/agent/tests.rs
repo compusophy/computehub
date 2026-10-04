@@ -567,11 +567,12 @@ fn the_person_takes_over_answers_questions_and_feedback_waits_for_a_yes() {
     assert!(matches!(a.prepare(&t, &look), Ok((Act::Scroll { win: 1, id: 0, dy: 90 }, ..))));
     t.approved = true;
     assert!(matches!(a.prepare(&t, &typed), Ok((Act::Type { win: 1, .. }, ..))));
-    // A text past what one act types: its first part goes, and the model hears so.
+    // A text past what one act types: its first part goes, nothing added, and the model hears so.
     let long = format!(r#"{{"ref":"e2","text":"{}"}}"#, "x".repeat(MAX_TYPED + 1));
-    let long = a.prepare(&t, &Call { args: long, ..typed.clone() }).map(|p| p.2);
+    let long = a.prepare(&t, &Call { args: long, ..typed.clone() }).unwrap();
     let want = "typed into \u{201c}Your name\u{201d} (e2); only its first 4000 bytes";
-    assert_eq!(long.as_deref(), Ok(want));
+    let x4000 = "x".repeat(MAX_TYPED);
+    assert!(matches!(long.0, Act::Type { text, .. } if text == x4000) && long.2 == want);
     t.scene.wins[0].app = "feedback".into();
     // A scroll names its window: an element of another window is not one of its.
     t.scene.wins.push(page(2, false));
@@ -661,29 +662,6 @@ fn the_pill_keys_receipts_and_ai_errors() {
     assert_eq!([tokens(940), tokens(9400), tokens(12_345)], ["940", "9.4k", "12.3k"]);
 }
 
-/// The person's files in memory, shared with the test, as WASI gives them.
-impl Disk for Shared<Vfs> {
-    fn list(&mut self, path: &str) -> std::io::Result<Vec<vfs::Entry>> {
-        self.borrow().list(path).map_err(found)
-    }
-    fn read(&mut self, path: &str) -> std::io::Result<Vec<u8>> {
-        self.borrow().read(path).map(<[u8]>::to_vec).map_err(found)
-    }
-    fn write(&mut self, path: &str, data: &[u8]) -> std::io::Result<()> {
-        let mut fs = self.borrow_mut();
-        _ = fs.mkdir_all(path.rsplit_once('/').map_or("/", |d| d.0));
-        fs.write(path, data).map_err(found)
-    }
-}
-
-/// A VFS error as an I/O one, as far as the file tools read its kind (NotFound).
-fn found(e: vfs::VfsError) -> std::io::Error {
-    match e {
-        vfs::VfsError::NotFound => std::io::ErrorKind::NotFound.into(),
-        e => std::io::Error::other(e),
-    }
-}
-
 /// Serves `a` with no desktop: each look and act settles at once on an empty screen, and the
 /// model answers as `model` says. What else it asked, and the bodies the model was sent.
 fn alone(a: &mut Agent, model: &dyn Fn(&Json) -> String) -> (Vec<Request>, Vec<Json>) {
@@ -729,15 +707,15 @@ fn feedback_goes_to_compusophy_only_on_a_yes_to_it() {
         _ => reply("I can't reach the clipboard.", Some(("send_feedback", report))),
     };
     let sent = |r: &[Request]| r.iter().filter(|r| matches!(r, Request::Feedback { .. })).count();
-    // Asked first, the report shown as it would go; nothing sent.
+    // Asked first, the report shown as it would go, the question under it; nothing sent.
     let (left, _) = alone(&mut a, &model);
     let q = "Send this idea to compusophy, with what is open and recent events (never your files)?";
     let said = shown(&mut a);
-    assert!(sent(&left) == 0 && said.ends_with(&[q, "\n", text].concat()), "{said}");
+    assert!(sent(&left) == 0 && said.ends_with(&[text, "\n", q].concat()), "{said}");
     // Any answer but a yes: nothing goes, and the model hears so (here it asks again).
-    ask(&mut a, "no, not yet");
+    ask(&mut a, "please, leave my name out");
     let (left, bodies) = alone(&mut a, &model);
-    let not = "the user answered: no, not yet; so it was not done\n";
+    let not = "the user answered: please, leave my name out; so it was not done\n";
     assert!(sent(&left) == 0 && last(&bodies[0]).starts_with(not));
     // A yes to it: it goes as shown, with the desktop's context; the model hears what went.
     ask(&mut a, "Yes, send it");
@@ -757,64 +735,61 @@ fn feedback_goes_to_compusophy_only_on_a_yes_to_it() {
     assert!(
         matches!(&long, Some(Ran::Failed(e)) if e.starts_with("E0918: the report is 8011 bytes"))
     );
-    // A yes: its first word one, and no word a no.
-    assert!(["yes", "OK, go", "Sure!", "y", "please do"].into_iter().all(yes));
-    assert!(!["please don't", "no", "yes, but shorter", "not now", "what?"].into_iter().any(yes));
+    // A yes is yes words alone: one that asks for a change, or says no, is none.
+    let yeses = ["yes", "OK, go", "Sure!", "y", "please do", "sure, why not", "yes, no problem"];
+    assert!(yeses.into_iter().chain(["Sounds good", "send it", "yes\u{2014}do it"]).all(yes));
+    let nos = ["please don't", "no", "yes, but shorter", "not now", "what?", "ok hold on", ""];
+    let more = ["please make it shorter", "please, I can't share that", "yeah nah", "ok, later"];
+    assert!(!nos.into_iter().chain(more).chain(["yes, and one about the dock"]).any(yes));
 }
 
 #[test]
-fn file_tools_list_read_and_write_from_the_home_coded() {
-    let disk = Shared::new(RefCell::new(Vfs::new()));
-    let (mut own, at) = (disk.clone(), |p: &str| [Vfs::HOME, p].concat());
-    let d: &mut dyn Disk = &mut own;
-    // A new file in the home asks nothing; its folders are made; listed and read back.
-    assert_eq!(files::asks(d, "notes/a.txt", "hello"), Ok(None));
-    let wrote = files::write(d, "notes/a.txt", "hello");
-    assert_eq!(wrote.as_deref(), Ok("ok: wrote ~/notes/a.txt (5 bytes, new)"));
-    let listed = files::list(d, &at("/notes"));
-    assert_eq!(listed.as_deref(), Ok("ok: listed ~/notes (1 entry)\na.txt, 5 bytes"));
-    let read = files::read(d, "~/notes/a.txt");
-    assert_eq!(read.as_deref(), Ok("ok: read ~/notes/a.txt (5 bytes):\nhello"));
-    // A long file reaches the model clipped, saying so.
-    files::write(d, "long.txt", &"ab".repeat(10_000)).unwrap();
-    let read = files::read(d, "long.txt").unwrap();
-    let head = "ok: read ~/long.txt (20000 bytes; clipped to its first 16384):\nabab";
-    assert!(read.starts_with(head) && read.ends_with('\u{2026}') && read.len() < 16_500);
-    // Replacing a file, or writing outside the home, asks first.
-    let q = files::asks(d, "/tmp/x", "hi");
-    assert_eq!(q, Ok(Some("Write /tmp/x, outside your home, with these 2 bytes?".into())));
-    // Failures, coded: nothing there, a folder for a file and a file for a folder, not text,
-    // not a path.
-    d.write(&at("/raw"), &[0xff, 0]).unwrap();
-    let errs = [
-        files::read(d, "nope"),
-        files::read(d, "notes"),
-        files::list(d, "notes/a.txt"),
-        files::asks(d, "notes", "x").map(|_| String::new()),
-        files::read(d, "raw"),
-        files::read(d, "a\0b"),
-    ];
-    let codes = errs.map(|e| e.unwrap_err().get(..5).unwrap_or_default().to_string());
-    assert_eq!(codes, ["E0925", "E0926", "E0926", "E0926", "E0928", "E0918"]);
-    // Through the agent: a replace shows what it would write and waits for the yes to it.
+fn file_tools_ask_their_yes_fold_for_room_and_misses_go_on() {
+    let disk = files::Mem::default();
+    let file = |p: &str| disk.0.borrow().read(&[Vfs::HOME, p].concat()).map(<[u8]>::to_vec);
+    files::write(&mut disk.clone(), "notes/a.txt", "hello").unwrap();
+    // A replace shows the text whole, the question under it, and waits for the yes to it: a
+    // no leaves the file, a yes writes it.
     let mut a = Agent::new(Box::new(disk.clone()));
-    ask(&mut a, "say bye in notes/a.txt");
     let model = |b: &Json| match last(b) {
-        l if l.starts_with("ok: wrote") => reply("Done.", None),
+        l if l.starts_with("ok: wrote") || l.contains("not done") => reply("Done.", None),
         _ => reply("", Some(("write_file", r#"{"path":"notes/a.txt","text":"bye"}"#))),
     };
-    alone(&mut a, &model);
-    let said = shown(&mut a);
-    assert!(said.ends_with("Replace ~/notes/a.txt (5 bytes) with these 3 bytes?\nbye"), "{said}");
-    assert_eq!(disk.borrow().read(&at("/notes/a.txt")), Ok(&b"hello"[..]));
-    ask(&mut a, "yes");
-    let (_, bodies) = alone(&mut a, &model);
-    assert_eq!(disk.borrow().read(&at("/notes/a.txt")), Ok(&b"bye"[..]));
-    assert!(last(&bodies[0]).starts_with("ok: wrote ~/notes/a.txt (3 bytes; it held 5)\n"));
+    let q = "bye\nReplace ~/notes/a.txt (5 bytes) with these 3 bytes?";
+    for answer in ["no, keep it", "yes"] {
+        ask(&mut a, "say bye in notes/a.txt");
+        alone(&mut a, &model);
+        assert!(shown(&mut a).ends_with(q) && file("/notes/a.txt") == Ok(b"hello".to_vec()));
+        ask(&mut a, answer);
+        let (_, bodies) = alone(&mut a, &model);
+        let heard = "the user answered: no, keep it; so it was not done\n";
+        assert!(answer == "yes" || last(&bodies[0]).starts_with(heard));
+    }
+    assert_eq!(file("/notes/a.txt"), Ok(b"bye".to_vec()));
     assert!(shown(&mut a).contains("yes\nWrote ~/notes/a.txt (3 bytes; it held 5)\nDone."));
+    // Three misses in a row are news, not failures; six reads that would pass what the free AI
+    // takes keep the oldest to their first line; the task answers.
+    for i in 0..6 {
+        files::write(&mut disk.clone(), &format!("r{i}"), &"line\n".repeat(3000)).unwrap();
+    }
+    let read = |p: String| ("read_file", format!("{{\"path\":\"{p}\"}}"));
+    let model = |b: &Json| match messages(b).iter().filter(|m| m.0 == "tool").count() {
+        0 => many(&["a", "b", "c"].map(|p| read(p.into()))),
+        3 => many(&(0..6).map(|i| read(format!("r{i}"))).collect::<Vec<_>>()),
+        _ => reply("Read them.", None),
+    };
+    ask(&mut a, "read them all");
+    let (_, bodies) = alone(&mut a, &model);
+    let (m, body) = (messages(&bodies[2]), encode(&bodies[2]));
+    let folded =
+        m.iter().filter(|m| m.1.ends_with("(the rest left out for room: call it again to see it)"));
+    assert!(bodies.len() == 3 && folded.count() == 4 && body.len() <= MAX_BODY, "{}", body.len());
+    assert!(m[m.len() - 1].1.starts_with("ok: read ~/r5 (15000 bytes):\nline\nline\n"));
+    assert!(shown(&mut a).contains("Couldn't: E0925: nothing is at ~/c; list_files shows what is"));
+    assert!(shown(&mut a).contains("Read them."));
     // No files at all: E0927.
     let list =
-        Call { name: "list_files".into(), args: "{\"path\":\"~\"}".into(), ..Call::default() };
+        Call { name: "list_files".into(), args: r#"{"path":"~"}"#.into(), ..Call::default() };
     let none = Some(Ran::Failed("E0927: there are no files here".into()));
     assert_eq!(Agent::default().local(&list, false), none);
 }
@@ -832,9 +807,11 @@ fn a_cut_call_and_a_grid_clicked_whole_say_so() {
     big.feed(sse(&["{\"tool_calls\":[", &call, "]}"].concat()).as_bytes());
     [&mut c, &mut big].into_iter().for_each(Calls::end);
     assert!(c.calls[0].cut && big.calls[0].cut && big.calls[0].args.is_empty());
+    // A file's text is never written in parts: each would replace the one before.
     let why = Agent::default().local(&c.calls[0], true);
-    let cut = "E0918: the arguments of write_file were cut off (a reply holds 2,048 tokens";
-    assert!(matches!(&why, Some(Ran::Failed(w)) if w.starts_with(cut)), "{why:?}");
+    let cut = "E0918: the arguments of write_file were cut off (a reply holds 2048 tokens";
+    let whole = "write a shorter text: write_file replaces the whole file, no append";
+    assert!(matches!(&why, Some(Ran::Failed(w)) if w.starts_with(cut) && w.ends_with(whole)));
     // A grid clicked whole (or a square it lacks): how to click one.
     assert!(result(acted::MALFORMED, "", "e4").starts_with("E0918: e4 cannot take that: a grid's"));
     assert_eq!(result(acted::MALFORMED, "", "dusk"), "E0918: dusk cannot take that");

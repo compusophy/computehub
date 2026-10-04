@@ -6,24 +6,27 @@
 //!
 //! - **Folding.** Only the latest result carries a screen; older ones keep their result alone (a
 //!   file read keeps its text), and the task's first screen is left out once steps follow it, so
-//!   a step costs about the same however many came before. The last [`MEMORY`] tasks go along as
-//!   plain prompts and answers.
+//!   a step costs about the same however many came before. A request that would pass the free
+//!   AI's [`MAX_BODY`] has the oldest results that hold text (a read, a listing) keep their first
+//!   line, saying so, until it fits. The last [`MEMORY`] tasks go along as plain prompts and
+//!   answers.
 //! - **Recovery.** A failure goes back to the model as its coded result: an act's E0911 to E0918,
 //!   arguments that do not read (E0918, saying so when they were cut off), the files' E0925 to
-//!   E0928. Two in a row add a hint and bound its thinking (1,024 tokens); three in a row, or the
-//!   same call on the same screen three times (E0924), end the task, as do [`MAX_STEPS`] model
-//!   calls or [`MAX_ACTS`] acts, or a request past the free AI's [`MAX_MESSAGES`] or [`MAX_BODY`]
-//!   (E0921; the memory goes first), an AI error (E0901 to E0905, with Retry), Stop, and the
-//!   person taking over ([`Event::Halt`]).
+//!   E0928. Two in a row add a hint and bound its thinking (1,024 tokens); three in a row (a file
+//!   not there, or not what was named, is news and never counts), or the same call on the same
+//!   screen three times (E0924), end the task, as do [`MAX_STEPS`] model calls or [`MAX_ACTS`]
+//!   acts, or a request past the free AI's [`MAX_MESSAGES`] (the memory goes first) or, folded,
+//!   [`MAX_BODY`] (E0921), an AI error (E0901 to E0905, with Retry), Stop, and the person taking
+//!   over ([`Event::Halt`]).
 //! - **Guard.** Acts into Feedback (the one app that sends what it holds off the device), and
-//!   presses in Activity (which ends programs), wait for the person's yes through `ask_user`: an
-//!   answer whose first word is a yes and no word a no ("please don't" is none). A call that
-//!   sends a report or replaces what is kept asks for its own: `send_feedback` always,
-//!   `write_file` replacing a file or writing outside the home. The transcript shows what
-//!   would go (the report, or the file and the text), the call runs only on a yes to it, and any
-//!   other answer goes back to the model, nothing done.
+//!   presses in Activity (which ends programs), wait for the person's yes through `ask_user`. A
+//!   call that sends a report or replaces what is kept asks for its own: `send_feedback` always,
+//!   `write_file` replacing a file or writing outside the home. What would go shows whole (the
+//!   report, or the text), the question under it; the call runs only on a yes to it, and any
+//!   other answer goes back to the model, nothing done. A yes is yes words alone ("yes", "ok,
+//!   send it", "sure, why not"), so an answer that asks for a change, or says no, is none.
 //! - **Files.** `list_files`, `read_file` and `write_file` reach the program's own files, from
-//!   the home ([`crate::files`]); they are not acts, so the screen stays as it was.
+//!   the home (the [`files`] crate); they are not acts, so the screen stays as it was.
 //! - **Feedback.** What the person needs and no tool does, the model tells compusophy, who builds
 //!   the OS: `send_feedback`, an idea or a bug, goes out as [`Request::Feedback`] (marked
 //!   `Assistant:`, with the desktop's context) through the page's outbox, as the Feedback app's
@@ -40,9 +43,9 @@ use uiwire::{Act, Event, Frame, Node, Request, Style, Variant, WinOp, acted, mod
 
 use crate::ai::{DEFAULT_MODEL, MAX_BODY, clip, failure};
 use crate::calls::{Call, Calls};
-use crate::files::{self, Disk};
 use crate::json::{Json, quote};
 use crate::look::{Elem, Refs, render};
+use files::Disk;
 
 /// The most model calls and acts one task takes; the past tasks each request remembers.
 pub const MAX_STEPS: u32 = 20;
@@ -54,6 +57,8 @@ const MAX_PROMPT: usize = 16 << 10;
 const MAX_TYPED: usize = 4000;
 /// The most bytes of a report `send_feedback` sends, as the Feedback app sends.
 const MAX_FEEDBACK: usize = 8000;
+/// The most tokens a reply holds, its thinking too.
+const MAX_TOKENS: u32 = 2048;
 const MAX_TURNS: usize = 16;
 const SEND: u32 = 1;
 const STOP: u32 = 2;
@@ -84,7 +89,7 @@ shapes as rect x y w h color, circle x y r color, ring x y r width color, line x
 color, text \"value\" x y size color, sprite x y side; click a point of it by x and y.";
 
 /// The tools, in OpenAI's function calling form.
-pub const TOOLS: &str = r#"[{"type":"function","function":{"name":"open_app","description":"Open an app, or bring its window to the front. Names are listed under Apps.","parameters":{"type":"object","properties":{"name":{"type":"string"}},"required":["name"],"additionalProperties":false}}},{"type":"function","function":{"name":"click","description":"Press an element: a button, tab, switch, option, item, link or field; a square of a grid, by its cell; or a point of a canvas, by its x and y.","parameters":{"type":"object","properties":{"ref":{"type":"string","description":"An element ref from the latest screen, like e4."},"cell":{"type":"integer","minimum":0,"description":"For a grid: the square, counted from 0 along its rows."},"x":{"type":"integer","minimum":0,"description":"For a canvas: the point's x, in its units."},"y":{"type":"integer","minimum":0,"description":"For a canvas: the point's y, in its units."}},"required":["ref"],"additionalProperties":false}}},{"type":"function","function":{"name":"type_text","description":"Focus a field and type text into it. submit presses Enter after.","parameters":{"type":"object","properties":{"ref":{"type":"string"},"text":{"type":"string","maxLength":4000},"submit":{"type":"boolean"}},"required":["ref","text"],"additionalProperties":false}}},{"type":"function","function":{"name":"press_key","description":"Press a key in a window (default: the focused one): enter, escape, tab, backspace, delete, up, down, left, right, home, end, pageup, pagedown, f1-f12, a letter or digit; with modifiers like ctrl+s or shift+tab.","parameters":{"type":"object","properties":{"key":{"type":"string"},"window":{"type":"string","description":"A window like w2."}},"required":["key"],"additionalProperties":false}}},{"type":"function","function":{"name":"scroll","description":"Scroll a window's content, or the element under ref. Positive amount scrolls down, in pixels.","parameters":{"type":"object","properties":{"window":{"type":"string"},"ref":{"type":"string"},"amount":{"type":"integer","minimum":-3000,"maximum":3000}},"required":["window","amount"],"additionalProperties":false}}},{"type":"function","function":{"name":"window","description":"Focus, close, minimize, maximize or restore a window.","parameters":{"type":"object","properties":{"window":{"type":"string"},"action":{"type":"string","enum":["focus","close","minimize","maximize","restore"]}},"required":["window","action"],"additionalProperties":false}}},{"type":"function","function":{"name":"set_theme","description":"Switch the desktop's theme.","parameters":{"type":"object","properties":{"name":{"type":"string","enum":["Midnight","Dawn","Mono"]}},"required":["name"],"additionalProperties":false}}},{"type":"function","function":{"name":"wait","description":"Let time pass (a program finishing, output arriving), then see the screen.","parameters":{"type":"object","properties":{"ms":{"type":"integer","minimum":0,"maximum":5000}},"required":["ms"],"additionalProperties":false}}},{"type":"function","function":{"name":"ask_user","description":"Ask the user a question and stop until they answer. Required before an app deletes, overwrites or sends anything off the device.","parameters":{"type":"object","properties":{"question":{"type":"string"}},"required":["question"],"additionalProperties":false}}},{"type":"function","function":{"name":"list_files","description":"List a folder of the user's files: its folders (ending in /) and files with their sizes.","parameters":{"type":"object","properties":{"path":{"type":"string","description":"From the user's home: ~, ~/notes or notes/todo.txt."}},"required":["path"],"additionalProperties":false}}},{"type":"function","function":{"name":"read_file","description":"Read a text file of the user's: at most its first 16 KB.","parameters":{"type":"object","properties":{"path":{"type":"string","description":"From the user's home: ~, ~/notes or notes/todo.txt."}},"required":["path"],"additionalProperties":false}}},{"type":"function","function":{"name":"write_file","description":"Create a text file, or replace one, making the folders above it. Replacing a file, or writing outside ~, shows the user the text and asks their yes itself.","parameters":{"type":"object","properties":{"path":{"type":"string","description":"From the user's home: ~, ~/notes or notes/todo.txt."},"text":{"type":"string","maxLength":6000}},"required":["path","text"],"additionalProperties":false}}},{"type":"function","function":{"name":"send_feedback","description":"Send compusophy, who builds this OS, a report: an idea (a tool or ability you lacked) or a bug. It shows the user the report and sends it only on their yes, which it asks itself; what is open and recent events go with it, never files.","parameters":{"type":"object","properties":{"kind":{"type":"string","enum":["idea","bug"]},"text":{"type":"string","maxLength":6000,"description":"First line a short title; then what the user asked, what you tried, and the tool you lacked and how you would have used it."}},"required":["kind","text"],"additionalProperties":false}}}]"#;
+pub const TOOLS: &str = r#"[{"type":"function","function":{"name":"open_app","description":"Open an app, or bring its window to the front. Names are listed under Apps.","parameters":{"type":"object","properties":{"name":{"type":"string"}},"required":["name"],"additionalProperties":false}}},{"type":"function","function":{"name":"click","description":"Press an element: a button, tab, switch, option, item, link or field; a square of a grid, by its cell; or a point of a canvas, by its x and y.","parameters":{"type":"object","properties":{"ref":{"type":"string","description":"An element ref from the latest screen, like e4."},"cell":{"type":"integer","minimum":0,"description":"For a grid: the square, counted from 0 along its rows."},"x":{"type":"integer","minimum":0,"description":"For a canvas: the point's x, in its units."},"y":{"type":"integer","minimum":0,"description":"For a canvas: the point's y, in its units."}},"required":["ref"],"additionalProperties":false}}},{"type":"function","function":{"name":"type_text","description":"Focus a field and type text into it. submit presses Enter after.","parameters":{"type":"object","properties":{"ref":{"type":"string"},"text":{"type":"string","maxLength":4000},"submit":{"type":"boolean"}},"required":["ref","text"],"additionalProperties":false}}},{"type":"function","function":{"name":"press_key","description":"Press a key in a window (default: the focused one): enter, escape, tab, backspace, delete, up, down, left, right, home, end, pageup, pagedown, f1-f12, a letter or digit; with modifiers like ctrl+s or shift+tab.","parameters":{"type":"object","properties":{"key":{"type":"string"},"window":{"type":"string","description":"A window like w2."}},"required":["key"],"additionalProperties":false}}},{"type":"function","function":{"name":"scroll","description":"Scroll a window's content, or the element under ref. Positive amount scrolls down, in pixels.","parameters":{"type":"object","properties":{"window":{"type":"string"},"ref":{"type":"string"},"amount":{"type":"integer","minimum":-3000,"maximum":3000}},"required":["window","amount"],"additionalProperties":false}}},{"type":"function","function":{"name":"window","description":"Focus, close, minimize, maximize or restore a window.","parameters":{"type":"object","properties":{"window":{"type":"string"},"action":{"type":"string","enum":["focus","close","minimize","maximize","restore"]}},"required":["window","action"],"additionalProperties":false}}},{"type":"function","function":{"name":"set_theme","description":"Switch the desktop's theme.","parameters":{"type":"object","properties":{"name":{"type":"string","enum":["Midnight","Dawn","Mono"]}},"required":["name"],"additionalProperties":false}}},{"type":"function","function":{"name":"wait","description":"Let time pass (a program finishing, output arriving), then see the screen.","parameters":{"type":"object","properties":{"ms":{"type":"integer","minimum":0,"maximum":5000}},"required":["ms"],"additionalProperties":false}}},{"type":"function","function":{"name":"ask_user","description":"Ask the user a question and stop until they answer. Required before an app deletes, overwrites or sends anything off the device.","parameters":{"type":"object","properties":{"question":{"type":"string"}},"required":["question"],"additionalProperties":false}}},{"type":"function","function":{"name":"list_files","description":"List a folder of the user's files: its folders (ending in /) and files with their sizes.","parameters":{"type":"object","properties":{"path":{"type":"string","description":"From the user's home: ~, ~/notes or notes/todo.txt."}},"required":["path"],"additionalProperties":false}}},{"type":"function","function":{"name":"read_file","description":"Read a text file of the user's: at most its first 16 KB.","parameters":{"type":"object","properties":{"path":{"type":"string","description":"From the user's home: ~, ~/notes or notes/todo.txt."}},"required":["path"],"additionalProperties":false}}},{"type":"function","function":{"name":"write_file","description":"Create a text file, or replace one whole (there is no append), making the folders above it. Replacing a file, or writing outside ~, shows the user the text and asks their yes itself.","parameters":{"type":"object","properties":{"path":{"type":"string","description":"From the user's home: ~, ~/notes or notes/todo.txt."},"text":{"type":"string","maxLength":3000}},"required":["path","text"],"additionalProperties":false}}},{"type":"function","function":{"name":"send_feedback","description":"Send compusophy, who builds this OS, a report: an idea (a tool or ability you lacked) or a bug. It shows the user the report and sends it only on their yes, which it asks itself; what is open and recent events go with it, never files.","parameters":{"type":"object","properties":{"kind":{"type":"string","enum":["idea","bug"]},"text":{"type":"string","maxLength":3000,"description":"First line a short title; then what the user asked, what you tried, and the tool you lacked and how you would have used it."}},"required":["kind","text"],"additionalProperties":false}}}]"#;
 
 /// The window's verbs, as the `window` tool names them, doing and done.
 const VERBS: [(&str, WinOp, &str, &str); 5] = [
@@ -106,8 +111,7 @@ pub struct Agent {
     memory: Vec<(String, String)>,
     task: Option<Task>,
     refs: Refs,
-    /// What the file tools reach (none: they fail, E0927).
-    disk: Option<Box<dyn Disk>>,
+    disk: Files,
     /// Whether the last frame was the pill; the prompt to ask again after an AI error.
     pill: bool,
     retry: Option<String>,
@@ -170,10 +174,26 @@ enum Ran {
     Ask(String, String),
 }
 
+/// What the file tools reach: on WASI the program's own files ([`files::Fs`]); elsewhere none
+/// (they fail, E0927) but what [`Agent::new`] gives, so a test never reaches the host's.
+struct Files(Option<Box<dyn Disk>>);
+
+impl Default for Files {
+    fn default() -> Files {
+        Files(cfg!(target_os = "wasi").then(|| Box::new(files::Fs) as Box<dyn Disk>))
+    }
+}
+
+impl std::fmt::Debug for Files {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(if self.0.is_some() { "Files" } else { "no files" })
+    }
+}
+
 impl Agent {
-    /// An agent whose file tools reach `disk` (the program's, [`files::Fs`]).
+    /// An agent whose file tools reach `disk` (an [`Agent::default`]'s, on WASI, the program's).
     pub fn new(disk: Box<dyn Disk>) -> Agent {
-        Agent { disk: Some(disk), ..Agent::default() }
+        Agent { disk: Files(Some(disk)), ..Agent::default() }
     }
 
     /// Handles one event; whether the window changed.
@@ -344,6 +364,8 @@ impl Agent {
         }
         let first = if t.steps.is_empty() { t.screen.as_str() } else { "(screen omitted)" };
         m.push(msg("user", &[&t.prompt, "\n\n", first].concat()));
+        // Each older result that holds text (a read, a listing): where it is, and it folded.
+        let mut folds = Vec::new();
         for (i, s) in t.steps.iter().enumerate() {
             let content = if s.text.is_empty() { "null".into() } else { quote(&s.text) };
             let calls: Vec<String> = s.calls.iter().map(|c| {
@@ -357,6 +379,17 @@ impl Agent {
             ));
             for (k, (c, (line, screen))) in s.calls.iter().zip(&s.results).enumerate() {
                 let latest = i + 1 == t.steps.len() && k + 1 == s.results.len();
+                let tool = |text: &str| {
+                    let id = quote(&c.id);
+                    format!(
+                        "{{\"role\":\"tool\",\"tool_call_id\":{id},\"content\":{}}}",
+                        quote(text)
+                    )
+                };
+                if let (false, Some((head, _))) = (latest, line.split_once('\n')) {
+                    let rest = "\n(the rest left out for room: call it again to see it)";
+                    folds.push((m.len(), tool(&[head, rest].concat())));
+                }
                 let mut text = line.clone();
                 if latest && t.fails >= 2 {
                     text += "\nHint: two actions failed in a row. Read the screen again and try another way, or ask_user.";
@@ -364,21 +397,32 @@ impl Agent {
                 if latest && !screen.is_empty() {
                     text = [&text, "\n", screen].concat();
                 }
-                m.push(format!(
-                    "{{\"role\":\"tool\",\"tool_call_id\":{},\"content\":{}}}",
-                    quote(&c.id),
-                    quote(&text)
-                ));
+                m.push(tool(&text));
             }
         }
         let effort = if t.fails >= 2 { ",\"reasoning\":{\"max_tokens\":1024}" } else { "" };
-        format!(
-            "{{\"model\":{},\"stream\":true,\"stream_options\":{{\"include_usage\":true}},\
-             \"max_tokens\":2048,\"temperature\":0.2,\"tool_choice\":\"auto\",\"tools\":{TOOLS}{effort},\
-             \"messages\":[{}]}}",
-            quote(self.model()),
-            m.join(",")
-        )
+        let body = |m: &[String]| {
+            format!(
+                "{{\"model\":{},\"stream\":true,\"stream_options\":{{\"include_usage\":true}},\
+                 \"max_tokens\":{MAX_TOKENS},\"temperature\":0.2,\"tool_choice\":\"auto\",\"tools\":{TOOLS}{effort},\
+                 \"messages\":[{}]}}",
+                quote(self.model()),
+                m.join(",")
+            )
+        };
+        // Too long for the free AI: the oldest results that hold text keep their first line.
+        let mut out = body(&m);
+        let mut over = out.len().saturating_sub(MAX_BODY);
+        if over > 0 {
+            for (at, folded) in folds {
+                if let (true, Some(whole)) = (over > 0, m.get_mut(at)) {
+                    over = over.saturating_sub(whole.len().saturating_sub(folded.len()));
+                    *whole = folded;
+                }
+            }
+            out = body(&m);
+        }
+        out
     }
 
     /// The model's reply ended with HTTP `status` and the host's `error`: its calls run, or it
@@ -474,12 +518,13 @@ impl Agent {
         }
     }
 
-    /// Asks the person `q`, `what` would go shown under it: the task waits for their answer.
+    /// Asks the person `q` below what would go, `what`, so the question is last, where the view
+    /// stays however long that is: the task waits for their answer.
     fn ask(&mut self, q: String, what: String) {
-        self.note(Style::Body, q);
         if !what.is_empty() {
             self.note(Style::Dim, what);
         }
+        self.note(Style::Body, q);
         if let Some(t) = &mut self.task {
             t.wait = Wait::User;
         }
@@ -487,15 +532,21 @@ impl Agent {
     }
 
     /// A call settled with no act: `line` its result, with the screen as it is; a failure is
-    /// noted and counted, the third in a row ending the task. Whether the task goes on.
+    /// noted and counted, the third in a row ending the task, but a file not there (or not what
+    /// was named) is news, so trying likely names never ends it. Whether the task goes on.
     fn settled(&mut self, line: String, failed: bool) -> bool {
         let first = line.lines().next().unwrap_or_default().to_string();
+        let news = ["E0925", "E0926", "E0928"].iter().any(|c| line.starts_with(c));
         let Some(t) = &mut self.task else { return false };
         let screen = t.screen.clone();
         if let Some(s) = t.steps.last_mut() {
             s.results.push((line, screen));
         }
-        t.fails = if failed { t.fails + 1 } else { 0 };
+        t.fails = match (failed, news) {
+            (false, _) => 0,
+            (true, true) => t.fails,
+            (true, false) => t.fails + 1,
+        };
         let three = t.fails >= 3;
         if failed {
             self.note(Style::Small, ["Couldn't: ", &first].concat());
@@ -585,14 +636,14 @@ impl Agent {
             )));
         }
         let path = need("path")?;
-        let disk = self.disk.as_deref_mut().ok_or("E0927: there are no files here")?;
+        let disk = self.disk.0.as_deref_mut().ok_or("E0927: there are no files here")?;
         Ok(Ran::Ok(match c.name.as_str() {
             "list_files" => files::list(disk, &path)?,
             "read_file" => files::read(disk, &path)?,
             _ => {
                 let text = need("text")?;
                 match files::asks(disk, &path, &text)? {
-                    Some(q) if !yes => return Ok(Ran::Ask(q, clip(&text, 600))),
+                    Some(q) if !yes => return Ok(Ran::Ask(q, text)),
                     _ => files::write(disk, &path, &text)?,
                 }
             }
@@ -677,12 +728,13 @@ impl Agent {
                 guard(e.win, false)?;
                 let submit = Json::parse(&c.args).and_then(|v| v.get("submit").cloned())
                     == Some(Json::Bool(true));
-                let act = Act::Type { win: e.win, id: e.id, text: clip(&text, MAX_TYPED), submit };
-                // Told when only part of it went.
-                let part = match text.len() > MAX_TYPED {
-                    true => format!("; only its first {MAX_TYPED} bytes"),
+                // Its first part, if it is longer than one act types, and the model told so.
+                let typed = cut(&text, MAX_TYPED);
+                let part = match typed.len() < text.len() {
+                    true => format!("; only its first {} bytes", typed.len()),
                     false => String::new(),
                 };
+                let act = Act::Type { win: e.win, id: e.id, text: typed.into(), submit };
                 (
                     act,
                     format!("Typing into {}", label(e)),
@@ -890,10 +942,15 @@ fn result(code: u16, ok: &str, what: &str) -> String {
 /// Whether call `c`'s arguments read: whole, and a JSON object or none; else why not, coded.
 fn readable(c: &Call) -> Result<(), String> {
     if c.cut {
+        // A file's text in parts would replace each part with the next.
+        let less = match c.name.as_str() {
+            "write_file" => "write a shorter text: write_file replaces the whole file, no append",
+            _ => "send less at once",
+        };
+        let kb = crate::calls::MAX_ARGS >> 10;
         return Err(format!(
-            "E0918: the arguments of {} were cut off (a reply holds 2,048 tokens, a call's arguments {} KB): send less at once",
-            c.name,
-            crate::calls::MAX_ARGS >> 10
+            "E0918: the arguments of {} were cut off (a reply holds {MAX_TOKENS} tokens with its thinking, a call's arguments {kb} KB): {less}",
+            c.name
         ));
     }
     if !object(&c.args) && !c.args.trim().is_empty() {
@@ -902,17 +959,38 @@ fn readable(c: &Call) -> Result<(), String> {
     Ok(())
 }
 
-/// Whether `answer` is a yes: its first word one, and no word a no ("please don't" is none).
+/// Whether `answer` is a yes: yes words alone, a phrase like "no problem" or "why not" one of
+/// them, so an answer that asks for a change ("please make it shorter") or says no is none.
 fn yes(answer: &str) -> bool {
-    let words: Vec<String> = answer
-        .split_whitespace()
-        .map(|w| w.chars().filter(char::is_ascii_alphabetic).collect::<String>())
-        .map(|w| w.to_ascii_lowercase())
-        .collect();
-    let yes = ["yes", "y", "ok", "okay", "sure", "go", "yep", "yeah", "please"];
-    let no = ["no", "not", "dont", "wont", "never", "nope", "stop", "wait", "cancel", "but"];
-    words.first().is_some_and(|w| yes.contains(&w.as_str()))
-        && !words.iter().any(|w| no.contains(&w.as_str()))
+    // The yes words, and the words that may go with them.
+    const YES: &str = "yes y ya yeah yep yup ok okay k sure fine good great perfect alright right \
+                       absolutely definitely certainly course correct agreed confirm approve \
+                       approved lgtm go do send write save proceed please";
+    const ALSO: &str = "i im am it its that this them the ahead on for now of all thanks thank \
+                        you sounds looks";
+    let is = |list: &str, w: &str| list.split(' ').any(|v| v == w);
+    let answer = answer.to_ascii_lowercase().replace(['\'', '\u{2019}'], "");
+    let words: Vec<&str> =
+        answer.split(|c: char| !c.is_ascii_alphanumeric()).filter(|w| !w.is_empty()).collect();
+    let (mut said, mut i) = (false, 0);
+    while let Some(&w) = words.get(i) {
+        let phrase = (w, words.get(i + 1).copied().unwrap_or_default());
+        i += 1;
+        if let ("why", "not") | ("no", "problem" | "worries") = phrase {
+            (said, i) = (true, i + 1);
+        } else if is(YES, w) {
+            said = true;
+        } else if !is(ALSO, w) {
+            return false;
+        }
+    }
+    said
+}
+
+/// `s` cut to at most `max` bytes at a character's start, nothing added.
+fn cut(s: &str, max: usize) -> &str {
+    let end = (0..=max.min(s.len())).rev().find(|&i| s.is_char_boundary(i)).unwrap_or(0);
+    s.get(..end).unwrap_or_default()
 }
 
 /// The string or number `k` of the JSON object `args`.

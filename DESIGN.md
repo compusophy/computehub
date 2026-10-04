@@ -111,6 +111,7 @@ frame: os → shell::draw → gfx::DrawList → platform::Renderer: one draw cal
 | `activity` | Activity, the resource monitor: graphs of CPU, memory, frames and the AI over the last minute, storage, a table of what runs |
 | `studio` | the applang editor, and `AppHost`, which runs `.app` files |
 | `coder` | the coding agent Studio runs: write, check (compile, smoke on 3 seeds), fix by SEARCH/REPLACE edits, keep the best so far, stop by budget; sans-IO, replayable |
+| `assistant`, `files` | the Assistant, the overlay AI that uses the desktop: a wasip1 GUI program off the boot download; its file tools, the person's files by paths from the home, clipped and coded |
 | `uiwire`, `uiview` | the remote UI protocol GUI programs speak; the desktop's half, which draws their trees |
 | `host` | the wm plus one app per window, the home screen's apps, windows held by the pointer, the keyboard's squeeze; motion, frame geometry |
 | `home` | the top bar, the home grid in the person's order (icons carried, the selection box), the bottom row (the person's dock at the left, the Assistant at the right), menus, touch |
@@ -456,13 +457,16 @@ in its home; names in it, and roots per profile, wait for R2.
   text with refs (`assistant::look`) and calls tools, and each call is an act
   done the way a person's pointer and keys go (uiwire `Act`, `Acted`). Some
   tools are its own, no act: it lists, reads and writes the person's files
-  over its program's WASI filesystem, paths from the home (`assistant::files`,
-  failures E0925 to E0928), and what no tool does it tells compusophy
-  (`send_feedback`, an idea or a bug, marked `Assistant:`, through the page's
-  outbox as the Feedback app's reports go). A call that sends a report or
-  replaces what is kept (feedback always; a write over a file or outside the
-  home) shows the person what would go and runs only on their yes to it. So the loop of growth: the Assistant meets what it cannot do,
-  says so, asks its creator for the tool, and the tool ships. Cloud AI is free for
+  over its program's WASI filesystem, paths from the home (the `files`
+  crate: never /dev, a read clipped to 16 KB, failures E0925 to E0928), and
+  what no tool does it tells compusophy (`send_feedback`, an idea or a bug,
+  marked `Assistant:`, through the page's outbox as the Feedback app's
+  reports go). A call that sends a report or replaces what is kept
+  (feedback always; a write over a file or outside the home) shows the
+  person all that would go, the question under it, and runs only on their
+  yes to it: yes words alone, so an answer that asks for a change is none.
+  So the loop of growth: the Assistant meets what it cannot do, says so,
+  asks its creator for the tool, and the tool ships. Cloud AI is free for
   every visitor: `api/ai.mjs`, a thin same-origin function, forwards
   chat-completions to the Vercel AI Gateway (GLM 5.3) with the project's
   own OIDC identity, so no key ever reaches the browser; bring-your-own-key
