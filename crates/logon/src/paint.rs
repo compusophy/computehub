@@ -40,8 +40,6 @@ const CROSS: f64 = 55.0;
 const GRAIN_MS: f64 = 125.0;
 
 const NAME: &str = "compusophy";
-const LINE: &str = "a computer in your browser";
-const STAYS: &str = "Your files stay in this browser, on this device.";
 const CARD_TITLE: &str = "How this start went";
 const CARD_FOOT: &str = "Measured by this browser. Sizes are what crossed the network.";
 const ASK: &str = "A PIN keeps a casual tap out; it is not a lock. Your files are not encrypted, \
@@ -121,7 +119,6 @@ be undone.",
     pub(crate) fn block_h(&self, text: &mut TextSystem) -> f32 {
         let note = if self.note.is_some() { GAP + LINE_H } else { 0.0 };
         match self.state {
-            State::Hello => 17.0 + 21.0 + TOUCH + 21.0 + LINE_H,
             State::Pick => self.rows_h() + note,
             State::Name(_) => TOUCH + GAP + TOUCH + GAP + LINE_H,
             State::Confirm(id) => {
@@ -288,16 +285,8 @@ be undone.",
             centered(list, text, (w / 2.0, cap_baseline(text, y, NAME_H, 34.0)), NAME, style);
         }
         let (mut y, cx) = (lay.block, w / 2.0);
-        let dim = TextStyle::new(FontId::Sans, 14.0, t.text_dim);
         let small = TextStyle::new(FontId::Sans, 12.0, t.text_dim);
         match self.state {
-            State::Hello => {
-                centered(list, text, (cx, cap_baseline(text, y, 17.0, 14.0)), LINE, dim);
-                y += 17.0 + 21.0;
-                self.buttons(list, text, y, &[("Start", Look::Main, Target::Start)]);
-                y += TOUCH + 21.0;
-                centered(list, text, (cx, cap_baseline(text, y, LINE_H, 12.0)), STAYS, small);
-            }
             State::Pick => y = self.paint_circles(list, text, y),
             State::Name(id) => {
                 self.field(list, text, y);
@@ -457,8 +446,7 @@ be undone.",
     /// The keys' focus ring around `r` if `at` has it and the keys moved it there.
     fn focus_ring(&self, list: &mut DrawList, text: &TextSystem, r: RectF, at: Target) {
         let focused = match (self.state, at) {
-            (State::Hello, Target::Start) => self.focus == 0,
-            (State::Hello | State::Pick, Target::Record) => self.focus + 1 == self.stops(),
+            (State::Pick, Target::Record) => self.focus + 1 == self.stops(),
             _ => false,
         };
         if focused && self.keyed {
@@ -641,10 +629,9 @@ be undone.",
         self.buttons(list, text, r.y + r.h - 21.0 - TOUCH, &row);
     }
 
-    /// The keys' stops: Start or the circles, then the record.
+    /// The keys' stops: the circles, then the record.
     pub(crate) fn stops(&self) -> usize {
         match self.state {
-            State::Hello => 2,
             State::Pick => self.circles() + 1,
             _ => 0,
         }

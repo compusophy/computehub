@@ -170,8 +170,8 @@ one. Forked crates keep their Apache-2.0 license and note their origin.
   measured times, gaps kept, with a caption (`Loading fonts…`, then
   `Ready in 412 ms · 218 KB`); a tap opens a card of the stages, the
   start's own 100 ms budget among them. Nothing is simulated, and waiting
-  draws no frames. A first visit says hello and starts with Start. A
-  return shows the profiles as circles (people are round, apps rounded
+  draws no frames. Every visit, the first too (guest alone), shows the
+  profiles as circles (people are round, apps rounded
   squares: a sigil on its hue, from a random seed, so a rename keeps the
   face), the one that signed in last in focus, then Add; a tap, or the
   arrows and Enter, signs in. Holding a circle 500 ms (or a right-click)

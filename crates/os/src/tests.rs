@@ -175,7 +175,7 @@ fn the_welcome_then_the_desktop_start_at_the_first_usable_sizes() {
     }
     assert!(desk.missed_tick);
     assert_eq!(desk.paint(1.0, &Ctl::default()), ui::theme("").base);
-    // A new tab says hello at any size; Start (Enter) signs in: no Welcome window opens.
+    // A new tab's welcome shows at any size; Enter signs in to guest: no Welcome window opens.
     assert_eq!(send(&mut desk, resize(800.0, short)), ((true, false), vec![]));
     send(&mut desk, resize(1280.0, 800.0));
     let store = |k: &str, v: &str| Fx::Store { key: k.into(), value: v.into() };
