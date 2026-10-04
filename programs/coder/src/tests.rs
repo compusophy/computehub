@@ -671,12 +671,10 @@ fn every_end_shows_its_fault_or_a_code_of_the_makes_own() {
     for replies in ends {
         let (_, _, d) = run(task("x", ""), Knobs::default(), replies);
         let shown = fault(&d.draft, "", 3).and_then(|f| f.diag.code).filter(|_| d.mark.is_some());
-        let own = matches!(d.code, 0 | 901..=910 | 919);
-        assert!(own || shown == Some(d.code), "{replies:?}: {} {}", d.code, d.said());
+        let own = matches!(d.code, 0 | 901..=910 | 919) && d.ended == d.code;
+        let ended = matches!((d.outcome, d.ended), (Outcome::Stopped, 0) | (_, 906..=910 | 919));
+        assert!(own || shown == Some(d.code) && ended, "{replies:?}: {} {}", d.code, d.said());
     }
-    // Why the make itself ended stays when the program's problem shows instead.
-    let (_, _, d) = run(task("x", ""), Knobs::default(), ends[3]);
-    assert_eq!((d.code, d.ended), (302, 919));
 }
 
 #[test]

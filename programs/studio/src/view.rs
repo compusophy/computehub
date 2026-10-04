@@ -1,7 +1,7 @@
 //! Studio's frames: one column at every width. With nothing open, only the prompt, centered.
-//! Else what the program's first comment says, the app (or its code, or while it is made the
-//! program streaming in), a status with `</>` (and Send to compusophy after a make that failed,
-//! or by the app's fault), and the prompt with Make (Stop while making).
+//! Else what the program's first comment says, the app and its last fault (or its code, or while
+//! it is made the program streaming in), a status with `</>` (and Send to compusophy after a
+//! make that failed, or by the app's fault), and the prompt with Make (Stop while making).
 
 use crate::edit::{MAKE, SEND, STOP, TOGGLE, spans};
 use crate::make::now;
@@ -43,6 +43,7 @@ impl Studio {
             true => "Studio".into(),
             false => ["Studio \u{2014} ", file_name(&self.path)].concat(),
         };
+        self.saw();
         let blank = self.path.is_empty() && self.text.is_empty() && self.make.is_none();
         let nodes = match blank && self.status.1.is_empty() {
             // A little above the middle reads as centered.
@@ -117,7 +118,15 @@ impl Studio {
             }
             None if self.code => nodes.push(code(self.code_id(), true, &self.text, self.mark)),
             None => {
-                nodes.extend(self.live.as_ref().map(|live| live.nodes(1)).unwrap_or_default());
+                if let Some(live) = &self.live {
+                    nodes.extend(live.nodes(1));
+                    // The kept fault stays under the app after the app's next event takes it.
+                    let (fault, afresh) = live.fault();
+                    let kept = Some(self.fault.as_str()).filter(|f| !f.is_empty());
+                    if kept.is_some() && kept != fault && kept != afresh {
+                        nodes.push(text(Style::Error, &self.fault));
+                    }
+                }
                 // The app keeps its height; the rest goes to the bottom.
                 nodes.push(fill(Vec::new()));
             }

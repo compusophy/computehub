@@ -332,15 +332,17 @@ one. Forked crates keep their Apache-2.0 license and note their origin.
   writing 48 lines, fixing line 43, testing); `studio::AppHost` runs a `.app`
   in its own window. Its prompt asks every app for its icon line (one card,
   and one in each example), which a change keeps.
-  A make that ends without an app that runs clean (but for the AI failing,
-  or a stop with nothing wrong showing), and the app's fault while it shows
-  in Studio, offer Send to compusophy by the status. The tap is the
-  consent; it sends feedback once (`Request::Feedback`, never the
-  desktop's context): what was asked, how it ended (its code and problem,
-  the make's own code for why it stopped, each request's kind, tokens, time
-  and the problem it left) and the program, clipped to 8 KB, so compusophy
-  sees what applang or the coder lacked; when applang can make nothing
-  close, it is an idea, else a bug.
+  A make that ends without an app that runs clean (but for a stop with
+  nothing wrong showing, or the free AI busy or out of credit before any
+  program came back), and the app's last fault in Studio's preview (kept
+  under the app until another shows or the program changes), offer Send to
+  compusophy by the status; an app in its own window offers none. The tap
+  is the consent; each goes once (`Request::Feedback`, never the desktop's
+  context): what was asked, how it ended (its code and problem, the make's
+  own code for why it stopped, each request's kind, tokens, time and the
+  problem it left) and the program, clipped to 8 KB, so compusophy sees
+  what applang or the coder lacked; when applang can make nothing close,
+  it is an idea, else a bug.
   Made apps draw: `canvas W, H, scene();` is a picture
   of square units (y down, scaled to fit) that `scene` draws with rect,
   circle, ring, line, text and sprite in the theme's 12 colors, sent as

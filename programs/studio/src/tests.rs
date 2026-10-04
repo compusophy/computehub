@@ -342,7 +342,8 @@ fn a_change_edits_the_open_app_and_never_makes_it_worse() {
     // The AI failing, and Stop, leave the working program as it was.
     let id = ai(&w.last(&[change(input(&f).0, 1, "break it"), click(MAKE)])).0;
     let f = w.last(&[Event::AiEnd { id, status: 429, error: String::new() }]);
-    assert_eq!(status(&f), "AI busy \u{b7} try in a minute");
+    // Busy before anything came back: nothing to tell compusophy.
+    assert!(status(&f) == "AI busy \u{b7} try in a minute" && !has(&f, "Send to"));
     assert!(has(&f, "x2") && has(&f, "Make") && input(&f).1 == "break it");
     let id = ai(&w.last(&[click(MAKE)])).0;
     let f = w.last(&[content(id, b"```app\n"), click(STOP)]);
@@ -437,28 +438,65 @@ fn a_failed_make_offers_to_tell_compusophy_once() {
     let [("idea", text, false)] = told(&f)[..] else { panic!("{:?}", f.requests) };
     assert!(text.contains("\nEnded: can't make that\nProblem: applang has no network.\n"));
     assert!(text.ends_with("\n\nNo program came back."), "{text}");
+    // The AI failing once a program came back: what it left, and the program, go too.
+    let mut w = Win::new(&[], Mem::new());
+    let f = w.last(&[WIDE]);
+    let (_, id, _) = w.make(&f, "tic tac toe");
+    let fix = ai(w.answer(id, &app(BROKEN)).last().unwrap()).0;
+    let f = w.last(&[Event::AiEnd { id: fix, status: 429, error: String::new() }]);
+    assert!(status(&f) == "AI busy \u{b7} try in a minute" && has(&f, "Send to compusophy"));
+    let f = w.last(&[click(SEND)]);
+    let [("bug", text, false)] = told(&f)[..] else { panic!("{:?}", f.requests) };
+    assert!(text.contains("\nProblem: E0903 the free AI is busy") && text.contains("\n2. fix: "));
+    assert!(
+        text.contains(", left E0302\n") && text.ends_with("```app\nstate n = 0;\nlabel nope;\n```")
+    );
 }
 
 #[test]
 fn an_app_that_faults_in_studio_offers_its_fault_once() {
     let src = "state n = 0;\nlabel \"n = \" + n;\nbutton \"inc\" { n = n + 1; }\n\
-               button \"spin\" { repeat 1000000 { n = n + 1; } }\n";
+               button \"spin\" { repeat 1000000 { n = n + 1; } }\nbutton \"zero\" { n = n / 0; }\n\
+               every 100 { n = n + 0; }\n";
     let mut w = Win::new(&["edit", "/apps/spin.app"], with(&[("/apps/spin.app", src)]));
     assert!(!has(&w.last(&[WIDE]), "Send to compusophy"));
     let f = w.last(&[click(APP + 1)]);
     assert!(has(&f, "E0206 4:") && has(&f, "Send to compusophy") && told(&f).is_empty());
+    // The next tick takes it from the app, not from Studio: it stays, once, until it goes.
+    let f = w.last(&[Event::Tick { ms: 100 }]);
+    let shown = words(&f).iter().filter(|w| w.starts_with("E0206 4:")).count();
+    assert!(shown == 1 && has(&f, "Send to compusophy"));
     // Not with the code, where the app and its fault are not.
     assert!(!has(&w.last(&[click(TOGGLE)]), "Send to"));
     assert!(has(&w.last(&[click(TOGGLE)]), "Send to compusophy"));
     let f = w.last(&[click(SEND)]);
     let [("bug", text, false)] = told(&f)[..] else { panic!("{:?}", f.requests) };
     assert!(text.starts_with("Studio app faulted: spin.app\n\nFault: E0206 4:"), "{text}");
-    assert!(text.ends_with(&format!("\n\nThe program (4 lines):\n```app\n{src}```")));
+    assert!(text.ends_with(&format!("\n\nThe program (6 lines):\n```app\n{src}```")));
     assert!(has(&f, "Sent") && w.send(&[click(SEND)]).is_none());
-    // A clean event takes the fault away; the same fault again went already.
-    assert!(!has(&w.last(&[click(APP)]), "Sent"));
-    let f = w.last(&[click(APP + 1)]);
-    assert!(has(&f, "Sent") && !has(&f, "Send to"));
+    // Another fault is offered anew; one that went never goes again, whatever came between.
+    let f = w.last(&[click(APP + 2)]);
+    assert!(has(&f, "E0203 5:") && !has(&f, "E0206") && has(&f, "Send to compusophy"));
+    assert!(has(&w.last(&[click(APP + 1)]), "Sent"));
+    // A failed make's report comes first; once it went, the app's faults are offered again.
+    let (_, mut id, _) = w.make(&f, "break it");
+    for _ in 0..2 {
+        id = ai(w.answer(id, &app(BROKEN)).last().unwrap()).0;
+    }
+    let f = w.answer(id, &app(BROKEN)).pop().unwrap();
+    assert!(status(&f).starts_with("couldn't change it") && has(&f, "Send to compusophy"));
+    let f = w.last(&[click(SEND)]);
+    assert!(told(&f)[0].1.starts_with("Studio make failed: break it") && has(&f, "Sent"));
+    assert!(has(&w.last(&[click(APP + 2)]), "Send to compusophy"));
+    // A program of the person's own: its faults are its own, and its notes are not faults.
+    let id = code(&w.last(&[click(TOGGLE)])).0;
+    let f = w.last(&[change(id, 2, &src.replace("\"inc\"", "\"add\"")), click(TOGGLE)]);
+    assert!(status(&f).starts_with("saved") && !has(&f, "Send to") && !has(&f, "Sent"));
+    assert!(has(&w.last(&[click(APP + 1)]), "Send to compusophy"));
+    let (path, state) = ("/apps/kept.app", [HOME, "/.appdata/kept.state"].concat());
+    let disk = with(&[(path, "saved state n = 0;\nlabel n;\n"), (&state, "n = \"x\";\n")]);
+    let f = Win::new(&["edit", path], disk).last(&[WIDE]);
+    assert!(has(&f, "dropped the saved `n`") && !has(&f, "Send to"));
 }
 
 /// A program that compiles but faults as it first renders (E0203 at line 4).
@@ -632,10 +670,8 @@ fn studio_ids_stay_below_the_apps_and_the_overlay_finds_them() {
     unique.dedup();
     assert_eq!(unique.len(), ids.len(), "{ids:?}");
     assert!([MAKE, STOP, TOGGLE, SEND, PROMPT, CODE].iter().all(|id| *id < APP));
-    assert_eq!(
-        (STOP, PROMPT, CODE),
-        (coder::ids::STOP, coder::ids::PROMPT, coder::ids::PROMPT_END)
-    );
+    use coder::ids;
+    assert_eq!((STOP, SEND, PROMPT, CODE), (ids::STOP, ids::SEND, ids::PROMPT, ids::PROMPT_END));
     const { assert!(PROMPT + 0xFF_FFFF < CODE && CODE + 0xFF_FFFF < APP && APP < INPUT) };
     let f = w.last(&[click(TOGGLE)]);
     assert!((CODE..APP).contains(&code(&f).0));

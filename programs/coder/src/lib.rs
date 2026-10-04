@@ -213,9 +213,11 @@ impl Done {
 }
 
 /// The ids Studio's own widgets use, so that another program (the overlay) can find them: Stop,
-/// and the prompt Input, whose id is in `PROMPT..PROMPT_END`.
+/// Send to compusophy (which sends off the device), and the prompt Input, whose id is in
+/// `PROMPT..PROMPT_END`.
 pub mod ids {
     pub const STOP: u32 = 2;
+    pub const SEND: u32 = 4;
     pub const PROMPT: u32 = 1 << 24;
     pub const PROMPT_END: u32 = 2 << 24;
 }

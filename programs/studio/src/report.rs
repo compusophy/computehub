@@ -1,12 +1,12 @@
-//! Back to compusophy: a make that ends without an app that runs clean, or the app's fault
-//! while it shows, offers "Send to compusophy" by the status. The person's tap is the consent:
+//! Back to compusophy: a make that ends without an app that runs clean, or the app's last fault
+//! in the preview, offers "Send to compusophy" by the status. The person's tap is the consent:
 //! nothing goes without it, and nothing twice. It goes as [`Request::Feedback`] (the desktop's
 //! outbox, as the Feedback app's), never with the desktop's context: what was asked, how the
 //! make ended (its code and problem, why it stopped, each request's kind, tokens, time and the
 //! problem it left) and the program, clipped, so compusophy sees what applang or the coder
 //! lacked.
 
-use crate::{Live, Studio, file_name};
+use crate::{Studio, file_name};
 use coder::ai::{put_clip, put_code, put_num};
 use coder::receipt::usd;
 use coder::{Done, Outcome, Task, Turn};
@@ -19,21 +19,27 @@ const MAX_ASK: usize = 1000;
 const MAX_WHY: usize = 1024;
 
 /// A failed make's report: its kind (a "bug"; an "idea" when applang can make nothing close),
-/// its text, and whether it went.
+/// its text, the problem it names (the fault of the program it installed goes with it), and
+/// whether it went.
 #[derive(Debug)]
 pub(crate) struct Report {
     kind: &'static str,
     text: String,
+    why: String,
     sent: bool,
 }
 
 /// The report of the make of `task` that ended as `done` (its program still in it); none when
-/// it ran clean, the AI failed (the desktop reports that itself), or the person stopped it with
-/// no problem showing.
+/// it ran clean, the person stopped it with no problem showing, or the free AI was busy or out
+/// of credit before any program came back (nothing applang or the coder lacked; the desktop
+/// reports an AI that did not answer, or answered with a 5xx, itself, but nothing else).
 pub(crate) fn made(task: &Task, done: &Done) -> Option<Report> {
     let kind = match done.outcome {
-        Outcome::Ready | Outcome::Failed => return None,
+        Outcome::Ready => return None,
         Outcome::Stopped if done.code == 0 => return None,
+        Outcome::Failed if matches!(done.code, 902 | 903) && done.draft.trim().is_empty() => {
+            return None;
+        }
         Outcome::Cant => "idea",
         _ => "bug",
     };
@@ -87,7 +93,7 @@ pub(crate) fn made(task: &Task, done: &Done) -> Option<Report> {
     put_num(&mut t, r.ms / 1000);
     t = t + " s, $" + &usd(r.usd_micros) + if r.est { ", estimated" } else { "" };
     program(&mut t, "The program it ended with", &done.draft);
-    Some(Report { kind, text: t, sent: false })
+    Some(Report { kind, text: t, why: done.why.clone(), sent: false })
 }
 
 /// Appends `src`, after `what` and its lines, clipped to [`MAX_SRC`] bytes; or that there was
@@ -110,15 +116,29 @@ fn program(t: &mut String, what: &str, src: &str) {
 }
 
 impl Studio {
-    /// What the status offers: `Some(false)` is "Send to compusophy", `Some(true)` "Sent". A
-    /// failed make's report until the next make; else the app's fault while it shows (the app,
-    /// not its code), sent if that one went.
-    pub(crate) fn offer(&self) -> Option<bool> {
-        if let Some(r) = &self.report {
-            return Some(r.sent);
+    /// Keeps the fault the app shows in the preview (at first, why it started afresh) once a
+    /// frame shows the app: it stays, under the app, after the app's next event takes it away,
+    /// until another shows or the program changes.
+    pub(crate) fn saw(&mut self) {
+        let shows = !self.code && self.make.is_none();
+        let Some(live) = self.live.as_ref().filter(|_| shows) else { return };
+        let (fault, afresh) = live.fault();
+        let now = fault.or(afresh.filter(|_| self.fault.is_empty()));
+        if let Some(f) = now.filter(|f| *f != self.fault) {
+            self.fault = f.into();
         }
-        let fault = self.live.as_ref().and_then(Live::fault).filter(|_| !self.code)?;
-        Some(fault == self.told)
+    }
+
+    /// What the status offers: `Some(false)` is "Send to compusophy", `Some(true)` "Sent". A
+    /// failed make's report until it goes; then the app's kept fault (while the app shows, not
+    /// its code), sent if it went; then that the report went.
+    pub(crate) fn offer(&self) -> Option<bool> {
+        let fault = Some(&self.fault).filter(|f| !f.is_empty() && !self.code);
+        let fault = fault.map(|f| self.told.contains(f));
+        match self.report.as_ref().map(|r| r.sent) {
+            Some(false) => Some(false),
+            made => fault.or(made),
+        }
     }
 
     /// The tap on "Send to compusophy": what it offers goes, once; whether it did.
@@ -126,20 +146,20 @@ impl Studio {
         if self.offer() != Some(false) {
             return false;
         }
-        let (kind, text) = match (&mut self.report, &self.live) {
-            (Some(r), _) => {
+        let (kind, text) = match &mut self.report {
+            Some(r) if !r.sent => {
                 r.sent = true;
+                self.told.push(std::mem::take(&mut r.why));
                 (r.kind, std::mem::take(&mut r.text))
             }
-            (None, Some(live)) => {
-                let fault = live.fault().unwrap_or_default();
+            _ => {
+                let Some(live) = &self.live else { return false };
                 let mut t = ["Studio app faulted: ", file_name(&self.path), "\n\nFault: "].concat();
-                put_clip(&mut t, fault, MAX_WHY);
+                put_clip(&mut t, &self.fault, MAX_WHY);
                 program(&mut t, "The program", live.src());
-                self.told = fault.into();
+                self.told.push(self.fault.clone());
                 ("bug", t)
             }
-            (None, None) => return false,
         };
         self.requests.push(Request::Feedback { kind: kind.into(), text, context: false });
         true
