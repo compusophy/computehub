@@ -20,13 +20,14 @@ pub(crate) const TOO_BIG: &str =
     "renders more than 4,000 widgets or nests them deeper than 32; the rest is not shown";
 
 /// A program compiled and running with [`Limits::default`], or why it cannot run; a fault
-/// (a handler or render that failed), or what its saved states said as they came back, shows
-/// under it until the next event. Its `saved` states live in `~/.appdata/<name>.state` (its
-/// file's name: [`state_path`]), read when it starts and written when they change. Other runs
-/// of it (its windows, Studio's preview) share that file: what they wrote comes back before
-/// each event but a tick, and a write keeps their states it did not change. States it cannot
-/// start from (its first render faults with them) it starts without, keeping nothing, so the
-/// file waits for a program that runs from it; that shows under it while it runs.
+/// (a handler or render that failed), and a note (what its saved states said as they came back,
+/// or that they were not kept), show under it until the next event. Its `saved` states live in
+/// `~/.appdata/<name>.state` (its file's name: [`state_path`]), read when it starts and written
+/// when they change. Other runs of it (its windows, Studio's preview) share that file: what they
+/// wrote comes back before each event but a tick, and a write keeps their states it did not
+/// change. States it cannot start from (its first render faults with them) it starts without,
+/// keeping nothing, so the file waits for a program that runs from it; that shows under it while
+/// it runs.
 #[derive(Debug)]
 pub struct Live {
     src: String,
@@ -34,6 +35,7 @@ pub struct Live {
     app: Result<App, (String, String)>,
     nodes: Vec<A>,
     fault: Option<String>,
+    note: Option<String>,
     /// Whether its first render faulted, from its saved states or not; and why it started
     /// without them, if it did.
     failed: bool,
@@ -81,9 +83,9 @@ impl Live {
     /// `app` (compiled from `src`, or its problem) before it starts: no saved states, nothing
     /// shown.
     fn stopped(src: &str, app: Result<App, (String, String)>) -> Live {
-        let (nodes, fault, failed, afresh) = (Vec::new(), None, false, None);
+        let (nodes, fault, note, failed, afresh) = (Vec::new(), None, None, false, None);
         let (state, saved, kept) = (String::new(), String::new(), String::new());
-        Live { src: src.into(), app, nodes, fault, failed, afresh, state, saved, kept }
+        Live { src: src.into(), app, nodes, fault, note, failed, afresh, state, saved, kept }
     }
 
     /// The file at `path` running, or why it cannot be read.
@@ -105,6 +107,17 @@ impl Live {
         self.app.is_ok()
     }
 
+    /// The fault showing under the app (a handler's or render's; never a note), and why it
+    /// started afresh; none for a program that does not compile.
+    pub(crate) fn fault(&self) -> (Option<&str>, Option<&str>) {
+        (self.fault.as_deref(), self.afresh.as_deref())
+    }
+
+    /// The program it runs.
+    pub(crate) fn src(&self) -> &str {
+        &self.src
+    }
+
     /// What it wants of the window: a tick every so many ms (0: none), and plain keys.
     pub fn play(&mut self) -> (u32, bool) {
         self.app.as_mut().map_or((0, false), |app| (app.timer(), app.keys()))
@@ -124,7 +137,7 @@ impl Live {
 
     /// Takes back the saved states the file holds if another run wrote them since this one
     /// last read or wrote it (at the start, if any are kept); whether they came back. What they
-    /// said as they came back (a type that changed) is its fault now.
+    /// said as they came back (a type that changed) is its note now, and its fault is gone.
     fn sync(&mut self, disk: &mut dyn Disk) -> bool {
         let Ok(app) = &mut self.app else { return false };
         let text = (!self.state.is_empty()).then(|| disk.read(&self.state).ok()).flatten();
@@ -132,7 +145,8 @@ impl Live {
         // As kept, whatever shows: where they fault, `new` starts it afresh keeping nothing over
         // them (restore would start afresh too, but then keep over them).
         let notes = app.take_back(&text);
-        self.fault = (!notes.is_empty()).then(|| notes.join("; "));
+        self.fault = None;
+        self.note = (!notes.is_empty()).then(|| notes.join("; "));
         (self.saved, self.kept) = (app.saved(), text);
         true
     }
@@ -153,7 +167,7 @@ impl Live {
         }
         match disk.write(&self.state, &text) {
             Ok(()) => (self.saved, self.kept) = (app.saved(), text),
-            Err(e) => self.fault = Some(format!("its saved state was not kept: {e}")),
+            Err(e) => self.note = Some(format!("its saved state was not kept: {e}")),
         }
     }
 
@@ -204,17 +218,18 @@ impl Live {
             }
             return tick || synced;
         }
-        // What came back says so, unless the event faulted.
-        if !synced || ran.is_err() {
-            self.fault = ran.err().map(|d| problem(&d, &self.src));
+        // What came back says so, and the event's fault.
+        if !synced {
+            self.note = None;
         }
+        self.fault = ran.err().map(|d| problem(&d, &self.src));
         self.keep(disk);
         self.render();
         true
     }
 
     /// The app as wire nodes, the outermost at `depth`: its widgets while they fit in a frame,
-    /// then its fault and why it started afresh; or its problem and the problem's line.
+    /// then its fault, its note and why it started afresh; or its problem and the problem's line.
     pub fn nodes(&self, depth: usize) -> Vec<Node> {
         let mut out = Vec::new();
         match &self.app {
@@ -227,7 +242,7 @@ impl Live {
                 if !wire(&self.nodes, depth, &mut { MAX_WIDGETS }, &names, &mut out) {
                     out.push(text(Style::Error, TOO_BIG));
                 }
-                let notes = [&self.fault, &self.afresh].map(Option::as_deref);
+                let notes = [&self.fault, &self.note, &self.afresh].map(Option::as_deref);
                 out.extend(notes.into_iter().flatten().map(|f| text(Style::Error, f)));
             }
         }

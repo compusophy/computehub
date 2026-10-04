@@ -7,7 +7,8 @@
 //! [`serve`] runs a view until its window closes. Studio runs the coding agent ([`coder`]): it
 //! asks the AI (through the desktop, as the Assistant does) for a program, which the agent
 //! checks with [`applang`] and fixes with edits until it runs clean or its budget is spent; then
-//! Studio saves the best so far and runs it live in its window ([`Live`]). A view asks the
+//! Studio saves the best so far and runs it live in its window ([`Live`]). A make that fails, or
+//! the app's fault, it offers to send to compusophy, once, at the person's tap. A view asks the
 //! desktop to open `studio:<path>`. Files go through a [`Disk`]: [`Fs`] in the program, a map in
 //! tests.
 
@@ -15,6 +16,7 @@
 
 mod edit;
 mod make;
+mod report;
 mod run;
 mod view;
 
