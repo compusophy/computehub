@@ -952,3 +952,23 @@ fn pages_are_a_column_or_tabs_and_cards_ring_what_is_chosen() {
     let want = [(1, 2, 0), (2, 2, 1), (10, 4, 1), (11, 4, 0), (20, 4, 1), (30, 3, 0), (31, 9, 0)];
     assert!(want.iter().all(|m| marks.contains(m)), "{marks:?}");
 }
+
+#[test]
+fn charts_skip_what_they_do_not_know_meters_fill_and_columns_head_the_cells() {
+    let (t, unknown) = (&THEMES[0], uiwire::UNKNOWN);
+    let nodes = vec![
+        Node::Chart { id: 0, hue: 11, h: 64, values: vec![unknown, unknown, 0, 500, 1000] },
+        Node::Meter { id: 0, hue: 4, value: 250 },
+        Node::Columns { id: 20, on: 2, labels: "Name\tCPU\tMemory".into() },
+    ];
+    let d = draw(&nodes, &mut Texts::default(), &mut View::default(), None);
+    // Two segments: none to or from a moment unknown; the newest a dot in the accent.
+    assert_eq!(d.of(Kind::Line).len(), 2);
+    assert!(d.of(Kind::Fill).iter().any(|i| i.color == t.accent && i.rect[2] == 6.0));
+    let bar = d.of(Kind::Fill).into_iter().find(|i| i.color == t.ansi[4]).expect("the fill");
+    assert_eq!(bar.rect[2], 140.0, "a quarter of 560");
+    // Each label a click, the columns 80 px wide from the right, a chevron's room kept.
+    let (cpu, mem) = (d.hit(21).rect, d.hit(22).rect);
+    assert_eq!((cpu.w, mem.w, mem.x + mem.w, mem.x - cpu.x), (80.0, 80.0, 551.0, 80.0));
+    assert_eq!((d.hit(20).rect.x, d.hit(20).rect.x + d.hit(20).rect.w), (20.0, cpu.x));
+}

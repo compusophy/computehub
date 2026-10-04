@@ -11,7 +11,6 @@
 #![forbid(unsafe_code)]
 
 mod about;
-mod activity;
 mod editor;
 mod feedback;
 mod files;
@@ -50,6 +49,17 @@ pub trait View {
     /// The window is closing: the last moment to keep what it holds.
     fn close(&mut self, disk: &mut dyn Disk) {
         _ = disk;
+    }
+}
+
+/// Activity (its own crate) as the window of this program.
+impl View for Activity {
+    fn event(&mut self, ev: &Event, _: &mut dyn Disk) -> bool {
+        Activity::event(self, ev)
+    }
+
+    fn frame(&mut self) -> Frame {
+        Activity::frame(self)
     }
 }
 

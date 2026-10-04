@@ -17,6 +17,7 @@
 mod area;
 mod canvas;
 mod cards;
+mod meters;
 #[cfg(test)]
 mod tests;
 mod texts;
@@ -506,6 +507,9 @@ impl Lay<'_> {
             Node::Entry { .. } => (w, ENTRY_H),
             Node::Toggle { .. } => (w, TOGGLE_H),
             Node::Choice { .. } | Node::Switch { .. } => (w, f32::from(uiwire::CARD_H)),
+            Node::Chart { h, .. } => (w, f32::from(*h)),
+            Node::Meter { .. } => (w, meters::METER_H),
+            Node::Columns { .. } => (w, meters::HEAD_H),
             Node::Themes { .. } => (w, cards::themes_size(w).3),
             Node::Pages { .. } => (0.0, 0.0),
             // As tall as its rows, and what it takes of a Fill's room.
@@ -673,6 +677,9 @@ impl Lay<'_> {
             Node::Choice { id, on, text } => cards::choice(ui, WidgetId(*id), r, text, *on),
             Node::Switch { id, on, label } => cards::switch_card(ui, WidgetId(*id), r, label, *on),
             Node::Themes { id } => cards::themes(ui, *id, (x, y, w)),
+            Node::Chart { hue, values, .. } => meters::chart(ui, r, *hue, values),
+            Node::Meter { hue, value, .. } => meters::meter(ui, r, *hue, *value),
+            Node::Columns { id, on, labels } => meters::columns(ui, *id, r, *on, labels),
             Node::Separator => ui.fill(RectF { h: ui.px(1.0), ..r }, 0.0, t.border),
             Node::Spacer { .. } | Node::Pages { .. } => {}
             Node::Grid { id, cols, cells, texts } => {
@@ -929,7 +936,9 @@ fn entry(
         right = at.x - 8.0;
     }
     let (body, small) = (t.body(), t.small());
-    if !detail.is_empty() {
+    if detail.contains('\t') {
+        right = meters::cells(ui, r, detail);
+    } else if !detail.is_empty() {
         let base = cap_base(ui, r.y, r.h, small);
         let ts = ui.text_system();
         let dw = ts.measure(detail, small);

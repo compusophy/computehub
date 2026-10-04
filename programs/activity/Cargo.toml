@@ -1,0 +1,16 @@
+[package]
+name = "compusophy-activity"
+description = "compusophyOS Activity, the resource monitor: CPU, memory, frames and the AI over the last minute, your files against what the browser keeps, and a table of what runs, each program's page able to End it. A view the system program serves (bin/system.wasm), on the remote UI protocol."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[lib]
+name = "activity"
+
+[dependencies]
+compusophy-icons.workspace = true
+compusophy-uiwire.workspace = true

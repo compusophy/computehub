@@ -225,7 +225,8 @@ pub enum Node {
     /// A list row: `glyph` on an app tile of `hue` (0xRRGGBB; [`SIGIL`] for a `.app` file's),
     /// `text` (a second line, after a `\n`, small under the first), `detail` dim at the right
     /// and, when `more` (it leads somewhere, as a folder does), a chevron; a click sends
-    /// [`Event::Click`].
+    /// [`Event::Click`]. A `detail` of `\t`-separated parts is a table's cells, each right
+    /// aligned in a column [`COLUMN`] px wide, as [`Node::Columns`] heads them.
     Entry { id: u32, glyph: u8, hue: u32, text: String, detail: String, more: bool },
     /// A row saying `label`, with a switch at the right that is `on`; a click sends
     /// [`Event::Click`] (the program flips it).
@@ -271,7 +272,28 @@ pub enum Node {
     /// A raised card [`CARD_H`] tall across the width saying `label`, with a switch at its right
     /// that is `on`; a click sends [`Event::Click`] (the program flips it).
     Switch { id: u32, on: bool, label: String },
+    /// A graph of a meter's history `h` px tall across the width (16 to [`CHART_MAX_H`]):
+    /// `values` per mille of its height (each at most 1000, or [`UNKNOWN`]: nothing drawn
+    /// there; [`CHART_POINTS`] at most), the oldest at the left and the newest at the right
+    /// edge, spread evenly; an area under a line in the canvas color `hue` (as a [`Draw`]'s),
+    /// over rules at its quarters.
+    Chart { id: u32, hue: u8, h: u16, values: Vec<u16> },
+    /// A bar across the width, `value` per mille of it (at most 1000) filled in the canvas color
+    /// `hue`: how full something is.
+    Meter { id: u32, hue: u8, value: u16 },
+    /// A table's head over [`Node::Entry`] rows whose `detail` is cells: `labels` `\t`-separated,
+    /// the first over the rows' names and each other over its column; label `on - 1` lit (0:
+    /// none). With an id, a click on label `i` sends [`Event::Click`] with `id + i`.
+    Columns { id: u32, on: u8, labels: String },
 }
+
+/// The width of a table's column ([`Node::Columns`], an [`Node::Entry`]'s cells).
+pub const COLUMN: u16 = 80;
+/// A [`Node::Chart`]'s value for a moment it has no data for.
+pub const UNKNOWN: u16 = u16::MAX;
+/// The most points of a [`Node::Chart`], and its tallest.
+pub const CHART_POINTS: usize = 240;
+pub const CHART_MAX_H: u16 = 480;
 
 /// The narrowest window whose [`Node::Pages`] are a column.
 pub const WIDE: u16 = 520;
@@ -504,6 +526,8 @@ impl Node {
         let spans = match self {
             Self::Grid { cols, cells, texts, .. } => grid(*cols, cells, texts.len()),
             Self::Canvas { w, h, draws, .. } => canvas(*w, *h, draws),
+            Self::Chart { hue, h, values, .. } => chart(*hue, *h, values),
+            Self::Meter { hue, value, .. } => *hue <= CANVAS_COLOR && *value <= 1000,
             Self::Code { text, spans, .. } => {
                 let mut end = 0;
                 spans.iter().all(|s| {
@@ -568,6 +592,12 @@ impl Node {
             Self::Themes { id } => o.head(23, *id, n),
             Self::Choice { id, on, text } => o.head(24, *id, n).u8((*on).into()).str(text),
             Self::Switch { id, on, label } => o.head(25, *id, n).u8((*on).into()).str(label),
+            Self::Chart { id, hue, h, values } => {
+                let o = o.head(26, *id, n).u8(*hue).u16(*h).len(values.len());
+                values.iter().fold(o, |o, v| o.u16(*v))
+            }
+            Self::Meter { id, hue, value } => o.head(27, *id, n).u8(*hue).u16(*value),
+            Self::Columns { id, on, labels } => o.head(28, *id, n).u8(*on).str(labels),
         };
         self.children().iter().for_each(|child| child.put(o));
     }
@@ -618,6 +648,17 @@ impl Node {
             23 => Self::Themes { id },
             24 => Self::Choice { id, on: r.bool()?, text: r.str()? },
             25 => Self::Switch { id, on: r.bool()?, label: r.str()? },
+            26 => {
+                let (hue, h) = (r.u8()?, r.u16()?);
+                let n = r.count().filter(|n| *n <= CHART_POINTS && *n <= r.0.len() / 2)?;
+                let values = (0..n).map(|_| r.u16()).collect::<Option<Vec<_>>>()?;
+                chart(hue, h, &values).then_some(Self::Chart { id, hue, h, values })?
+            }
+            27 => {
+                let (hue, value) = (r.u8().filter(|c| *c <= CANVAS_COLOR)?, r.u16()?);
+                (value <= 1000).then_some(Self::Meter { id, hue, value })?
+            }
+            28 => Self::Columns { id, on: r.u8()?, labels: r.str()? },
             _ => return None,
         };
         match &mut node {
@@ -674,6 +715,13 @@ impl Node {
         }
         Some(Self::Code { id, version, line_numbers, text, spans })
     }
+}
+
+/// Whether a Chart of `hue`, `h` px and `values` decodes.
+fn chart(hue: u8, h: u16, values: &[u16]) -> bool {
+    let tall = (16..=CHART_MAX_H).contains(&h);
+    let known = |v: &u16| *v <= 1000 || *v == UNKNOWN;
+    hue <= CANVAS_COLOR && tall && values.len() <= CHART_POINTS && values.iter().all(known)
 }
 
 /// Whether a Grid of `cols`, `cells` and `texts` texts decodes.

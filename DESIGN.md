@@ -107,7 +107,8 @@ frame: os → shell::draw → gfx::DrawList → platform::Renderer: one draw cal
 | `vt`, `term` | VT/xterm escape parser; terminal screen model |
 | `sh` | the shell the Terminal runs: a wasip1 program on its console |
 | `apps` | the Terminal: a console and its screen |
-| `system` | About, Editor, Feedback, Files, Welcome, Activity and Settings: one wasip1 GUI program (`dist/bin/system.wasm`), off the boot download |
+| `system` | About, Editor, Feedback, Files, Welcome and Settings, and it serves Activity: one wasip1 GUI program (`dist/bin/system.wasm`), off the boot download |
+| `activity` | Activity, the resource monitor: graphs of CPU, memory, frames and the AI over the last minute, storage, a table of what runs |
 | `studio` | the applang editor, and `AppHost`, which runs `.app` files |
 | `coder` | the coding agent Studio runs: write, check (compile, smoke on 3 seeds), fix by SEARCH/REPLACE edits, keep the best so far, stop by budget; sans-IO, replayable |
 | `uiwire`, `uiview` | the remote UI protocol GUI programs speak; the desktop's half, which draws their trees |
@@ -323,13 +324,17 @@ one. Forked crates keep their Apache-2.0 license and note their origin.
   **Welcome** (a program, its mark revealed by the desktop's clock)
   is the first screen; **Settings** picks the theme and
   lists what compusophyOS is made of.
-- **Activity**, the resource monitor: one word for the whole machine (Busy,
-  Drawing and why, Resting while only the grain draws, Still), then what runs
-  (the desktop, each program by its command line, never a title it set) with
-  its share of a core and its memory, /home against the browser's ~5 MB, and
-  the AI since the tab opened (requests, failures, tokens and cost from the
-  receipt `api/ai.mjs` ends each stream with, `: receipt in= out= microusd=`;
-  an answer with none is counted, never guessed). Its window alone may send
+- **Activity**, the resource monitor. Performance: graphs of the last
+  minute, a point a second (uiwire's `Chart`), of CPU (the desktop's and the
+  programs' share of a core), memory, frames a second and the AI's tokens a
+  second (requests, failures, tokens and cost from the receipt `api/ai.mjs`
+  ends each stream with, `: receipt in= out= microusd=`; an answer with none
+  is counted, never guessed), and /home against the browser's ~5 MB (a
+  `Meter`). Processes: a table (`Columns` over Entries whose detail is
+  cells) of what runs, the desktop and each program by its command line,
+  never a title it set, sorted by the column picked; a row's page graphs its
+  CPU and can End it. The graphs move only when a sample comes, the seconds
+  between at their average: at rest nothing draws. Its window alone may send
   `Request::Watch` and `Request::End` (it runs `bin/system.wasm` whatever
   `/bin/activity` says; the Assistant presses in it only after the person's
   yes, as in Feedback). On a phone it watches only while it has the focus.
