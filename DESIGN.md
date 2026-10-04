@@ -113,6 +113,7 @@ frame: os → shell::draw → gfx::DrawList → platform::Renderer: one draw cal
 | `coder` | the coding agent Studio runs: write, check (compile, smoke on 3 seeds), fix by SEARCH/REPLACE edits, keep the best so far, stop by budget; sans-IO, replayable |
 | `assistant`, `chats`, `files` | the Assistant, the overlay AI that uses the desktop: a wasip1 GUI program off the boot download; its chats: each one's transcript and memory, their file, their row on its card; its file tools, the person's files by paths from the home, clipped and coded |
 | `uiwire`, `uiview` | the remote UI protocol GUI programs speak; the desktop's half, which draws their trees |
+| `canvas` | a program's `Canvas` as the desktop draws it (its shapes and pixels in the theme, on device pixels) and lists it for the AI |
 | `host` | the wm plus one app per window, the home screen's apps, windows held by the pointer, the keyboard's squeeze; motion, frame geometry |
 | `home` | the top bar, the home grid in the person's order (icons carried, the selection box), the bottom row (the person's dock at the left, the Assistant at the right), menus, touch |
 | `shell` | the desktop around `host`: chrome, keys, the overlay; wires the home screen to the pointer |
@@ -359,12 +360,23 @@ one. Forked crates keep their Apache-2.0 license and note their origin.
   and one in each example), which a change keeps.
   Made apps draw: `canvas W, H, scene();` is a picture
   of square units (y down, scaled to fit) that `scene` draws with rect,
-  circle, ring, line, text and sprite in the theme's 12 colors, sent as
-  uiwire's `Node::Canvas` (a display list, never pixels); only what a
-  canvas calls draws, and it changes nothing, so a render stays pure. A
-  canvas's handler sees the tap's `x` and `y`. Grids and canvases are
-  boards: they take the room the window's other widgets leave, and with a
-  handler they are pads. **Editor** writes plain text, a new note in `~/notes`;
+  circle, ring, line, text, sprite and pixels in the theme's 12 colors, sent
+  as uiwire's `Node::Canvas` (a display list, never a bitmap); only what a
+  canvas calls draws, and it changes nothing but its own lets, so a render
+  stays pure. `pixels(cells, x, y, w, side)` draws a list of ints as
+  squares `side` units wide, `w` a row, -1 none and 0 to 11 a color:
+  boards, paintings, life. Pixels are whole rows, 64 x 64 at most and
+  16,384 in a render, or a coded fault (E0224). Each row's run of one
+  color is one fill on the desktop and one ink of the render's 4,096 (with
+  each shape, sprite square and text character), so a plain 64 x 64 board
+  fits where a busy one faults (E0222). The AI reads where pixels are and
+  their size, never each square. A canvas's handler sees the tap's `x` and
+  `y`. Grids and canvases are boards: they take the room the window's
+  other widgets leave, and with a handler they are pads. Studio's prompt
+  asks that whatever is to be seen (a game, a board, drawing, animation, a
+  clock, a chart) be drawn on a canvas, never spelled out in labels and
+  buttons: its first example is snake on pixels.
+  **Editor** writes plain text, a new note in `~/notes`;
   Files and the Terminal's `edit` open files in it (a `.app` in Studio).
   **Welcome** (a program, its mark revealed by the desktop's clock)
   is the first screen; **Settings** picks the profile's face, the theme,
@@ -470,7 +482,7 @@ in its home; names in it, and roots per profile, wait for R2.
   joins processes to a Terminal, cooked or raw (`/dev/consctl`), and
   `/dev/job` starts programs joined by pipes. OPFS keeps the VFS and the
   desktop across reloads. The virtual
-  GPU is the draw protocol: processes send display lists, never pixels,
+  GPU is the draw protocol: processes send display lists, never a bitmap,
   and the one instanced renderer draws them, so a program can draw from
   another device just as well.
 - **R3, AI.** An agent whose tools are the OS's capabilities (open apps,

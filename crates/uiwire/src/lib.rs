@@ -1,5 +1,5 @@
 //! The remote UI protocol: a GUI program writes its window as a widget tree,
-//! never pixels (one [`Frame`] per `write()` to `/dev/draw`); the desktop draws
+//! never a bitmap (one [`Frame`] per `write()` to `/dev/draw`); the desktop draws
 //! it in its own toolkit and theme and answers with [`Event`]s (one per `read()`
 //! of `/dev/events`, over 64 KiB in 64 KiB parts). [`client`] wraps both.
 //!
@@ -96,7 +96,7 @@ codes! {
     /// What an [`Act::Window`] does to a window: the title bar's controls, and raising it.
     WinOp { Focus = 0, Close = 1, Minimize = 2, Maximize = 3, Restore = 4, }
     /// What a [`Draw`] of a [`Node::Canvas`] draws.
-    Shape { Rect = 0, Circle = 1, Ring = 2, Line = 3, Text = 4, Sprite = 5, }
+    Shape { Rect = 0, Circle = 1, Ring = 2, Line = 3, Text = 4, Sprite = 5, Pixels = 6, }
 }
 
 impl Default for Style {
@@ -256,9 +256,9 @@ pub enum Node {
     /// on a square, and the pointer dragged onto another while pressed, sends [`Event::Tap`].
     Grid { id: u32, cols: u16, cells: Vec<u8>, texts: Vec<String> },
     /// A picture `w` units wide and `h` tall (each 1 to [`MAX_SIDE`]), scaled to fit with square
-    /// units: its draws in order, each over those before, [`MAX_INK`] ink at most. With an id, a
-    /// press on it, and the pointer dragged onto another unit while pressed, sends
-    /// [`Event::Tap`] with `cell` the unit's `y * w + x`.
+    /// units: its draws in order, each over those before, [`MAX_INK`] ink and [`MAX_PIXELS`]
+    /// cells of Pixels at most. With an id, a press on it, and the pointer dragged onto another
+    /// unit while pressed, sends [`Event::Tap`] with `cell` the unit's `y * w + x`.
     Canvas { id: u32, w: u16, h: u16, draws: Vec<Draw> },
     /// A frame's first node only (elsewhere nothing): the window's pages, `labels` one a line,
     /// page `i` the button `id + i` and page `on` lit; a column at the window's left and a line
@@ -347,6 +347,12 @@ pub const CANVAS_COLOR: u8 = 11;
 pub const MAX_SIDE: u16 = 1024;
 /// The most ink a [`Node::Canvas`] holds ([`Draw::ink`]).
 pub const MAX_INK: usize = 4096;
+/// The most cells a Pixels has a row, and the most rows.
+pub const PIXELS_SIDE: usize = 64;
+/// The most cells a [`Node::Canvas`]'s Pixels hold in all.
+pub const MAX_PIXELS: usize = 16_384;
+/// A Pixels' cell of color `i` is the char `PAINT[i]`; `.` is none.
+pub const PAINT: &[u8; 12] = b"0123456789ab";
 
 /// One shape on a [`Node::Canvas`], in its units: x to the right and y down from its top-left
 /// unit, a point at its unit's middle. `at` holds, by shape (the slots after, 0; the sizes never
@@ -360,9 +366,13 @@ pub const MAX_INK: usize = 4096;
 /// | Line   | x1 y1 x2 y2 width | a segment with round ends                                     |
 /// | Text   | x y size          | `text`, one line, size units tall, centered on x, y           |
 /// | Sprite | x y side          | `text`'s lines down from x, y, a char a square side units wide |
+/// | Pixels | x y w side        | `text`'s cells from x, y, w a row, a cell a square side wide   |
 ///
-/// A Sprite's digit paints its square that color; any other char shows through.
-/// `color` is at most [`CANVAS_COLOR`] (0 for a Sprite); only a Text and a Sprite have a `text`.
+/// A Sprite's digit paints its square that color; any other char shows through. A Pixels'
+/// `text` is its cells row by row, a char each ([`PAINT`], or `.` showing through): 1 to
+/// [`PIXELS_SIDE`] a row (`w`), as many rows at most, and whole rows.
+/// `color` is at most [`CANVAS_COLOR`] (0 for a Sprite and Pixels); only a Text, a Sprite and
+/// Pixels have a `text`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Draw {
     pub shape: Shape,
@@ -374,14 +384,21 @@ pub struct Draw {
 impl Draw {
     /// The slots of `at` each shape uses, and those that are sizes, as bits from slot 0.
     #[rustfmt::skip]
-    const SLOTS: [(u8, u8); 6] = [(0b1111, 0b1100), (0b111, 0b100), (0b1111, 0b1100),
-        (0b11111, 0b10000), (0b111, 0b100), (0b111, 0b100)];
+    const SLOTS: [(u8, u8); 7] = [(0b1111, 0b1100), (0b111, 0b100), (0b1111, 0b1100),
+        (0b11111, 0b10000), (0b111, 0b100), (0b111, 0b100), (0b1111, 0b1100)];
 
-    /// Its ink: 1, and 1 more for each char of a Text and each painted square of a Sprite.
+    /// Its ink: 1, and 1 more for each char of a Text, each painted square of a Sprite and each
+    /// run of one color in a row of Pixels (each drawn as one fill).
     pub fn ink(&self) -> usize {
         1 + match self.shape {
             Shape::Text => self.text.chars().count(),
             Shape::Sprite => self.text.bytes().filter(u8::is_ascii_digit).count(),
+            // A painted cell (not `.`) that starts its row or follows another color.
+            Shape::Pixels => {
+                let (c, w) = (self.text.as_bytes(), usize::try_from(self.at[2]).unwrap_or(0));
+                let new = |i: usize| i % w.max(1) == 0 || c[i - 1] != c[i];
+                (0..c.len()).filter(|&i| c[i] != b'.' && new(i)).count()
+            }
             _ => 0,
         }
     }
@@ -398,6 +415,12 @@ impl Draw {
         let text = match self.shape {
             Shape::Text => !self.text.as_bytes().contains(&b'\n'),
             Shape::Sprite => self.color == 0,
+            Shape::Pixels => {
+                let (n, w) = (self.text.len(), usize::try_from(self.at[2]).unwrap_or(0));
+                let cells = self.text.bytes().all(|c| c == b'.' || PAINT.contains(&c));
+                let rows = (1..=PIXELS_SIDE).contains(&w) && n % w == 0 && n / w <= PIXELS_SIDE;
+                self.color == 0 && rows && cells
+            }
             _ => self.text.is_empty(),
         };
         self.color <= CANVAS_COLOR && slots && text
@@ -408,7 +431,9 @@ impl Draw {
 fn canvas(w: u16, h: u16, draws: &[Draw]) -> bool {
     let side = |s: u16| (1..=MAX_SIDE).contains(&s);
     let ink = draws.iter().map(Draw::ink).sum::<usize>();
-    side(w) && side(h) && ink <= MAX_INK && draws.iter().all(Draw::valid)
+    let pixels = draws.iter().filter(|d| d.shape == Shape::Pixels).map(|d| d.text.len());
+    let ok = side(w) && side(h) && ink <= MAX_INK && pixels.sum::<usize>() <= MAX_PIXELS;
+    ok && draws.iter().all(Draw::valid)
 }
 
 /// One complete picture of a window, program to host: the program's frame
@@ -642,7 +667,7 @@ impl Node {
                 draws.iter().fold(o, |o, d| {
                     let o = d.at.iter().fold(o.u8(d.shape as u8).u8(d.color), |o, v| o.i16(*v));
                     match d.shape {
-                        Shape::Text | Shape::Sprite => o.str(&d.text),
+                        Shape::Text | Shape::Sprite | Shape::Pixels => o.str(&d.text),
                         _ => o,
                     }
                 })
@@ -760,7 +785,7 @@ impl Node {
             let (shape, color) = (Shape::from_u8(r.u8()?)?, r.u8()?);
             let at = [r.i16()?, r.i16()?, r.i16()?, r.i16()?, r.i16()?];
             let text = match shape {
-                Shape::Text | Shape::Sprite => r.str()?,
+                Shape::Text | Shape::Sprite | Shape::Pixels => r.str()?,
                 _ => String::new(),
             };
             draws.push(Draw { shape, color, at, text });

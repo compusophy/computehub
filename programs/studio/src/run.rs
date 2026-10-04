@@ -4,7 +4,7 @@
 use crate::{Disk, View, file_name, text};
 use applang::{App, Limits, Node as A};
 use coder::ai::{clip, problem, shown, state_path};
-use uiwire::Shape::{Circle, Line, Rect, Ring, Sprite, Text};
+use uiwire::Shape::{Circle, Line, Pixels, Rect, Ring, Sprite, Text};
 use uiwire::{Event, Frame, Key, MAX_DEPTH, Node, Request, Style, Variant, mods};
 
 /// The app's buttons and grids are this plus applang's ids, its inputs [`INPUT`] plus their
@@ -313,10 +313,20 @@ fn wire(nodes: &[A], depth: usize, left: &mut usize, names: &[&str], out: &mut V
                 let (cells, texts) = (cells.clone(), texts.clone());
                 Node::Grid { id: id.map_or(0, app), cols: *cols, cells, texts }
             }
-            // The same shapes, in the same order and units: uiwire's Draw by its fields.
+            // The same shapes, in the same units: uiwire's Draw by its fields. Each by name, so a
+            // shape the language gains cannot go unsent.
             A::Canvas { id, w, h, draws } => {
+                use applang::Shape as S;
                 let draw = |d: &applang::Draw| uiwire::Draw {
-                    shape: [Rect, Circle, Ring, Line, Text, Sprite][d.shape as usize],
+                    shape: match d.shape {
+                        S::Rect => Rect,
+                        S::Circle => Circle,
+                        S::Ring => Ring,
+                        S::Line => Line,
+                        S::Text => Text,
+                        S::Sprite => Sprite,
+                        S::Pixels => Pixels,
+                    },
                     color: d.color,
                     at: d.at,
                     text: d.text.clone(),

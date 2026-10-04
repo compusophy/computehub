@@ -654,7 +654,7 @@ fn grid_texts_fit_their_squares_and_its_colors_read_apart() {
         (a.max(b) + 0.05) / (a.min(b) + 0.05)
     };
     for t in &THEMES {
-        let ((silver, on_silver), (gray, on_gray)) = (color(t, 7), color(t, 8));
+        let ((silver, on_silver), (gray, on_gray)) = (canvas::square(t, 7), canvas::square(t, 8));
         assert!(contrast(silver, gray) >= 2.0, "{} {}", t.name, contrast(silver, gray));
         assert!(contrast(on_silver, silver) >= 4.5 && contrast(on_gray, gray) >= 3.0, "{}", t.name);
     }
@@ -789,59 +789,6 @@ fn canvases_fit_a_phone_and_land_on_device_pixels() {
     let (d, view, _) = boards((600.0, 400.0), 1.0, t, &[tall]);
     assert!(view.grids.is_empty() && d.hits.is_empty(), "no id: nothing to tap");
     assert_eq!(d.of(Kind::Fill)[0].rect, [PAD + 190.0, PAD, 180.0, 360.0]);
-}
-
-#[test]
-fn canvas_colors_come_from_the_theme() {
-    for t in &THEMES {
-        let draws = (0..12).map(|c| shape(Shape::Rect, c, [c.into(), 0, 1, 1, 0], "")).collect();
-        let canvas = Node::Canvas { id: 0, w: 12, h: 1, draws };
-        let (d, ..) = boards((600.0, 400.0), 1.0, t, &[canvas]);
-        let silver = if t.dark { t.ansi[7] } else { t.text_faint };
-        let mut want = vec![t.surface_lo];
-        want.extend(t.ansi[1..7].iter().copied().chain([silver, t.ansi[8]]));
-        want.extend([t.text, t.text_dim, t.accent]);
-        let got: Vec<Rgba> = d.of(Kind::Fill).iter().skip(1).map(|f| f.color).collect();
-        assert_eq!(got, want, "{}", t.name);
-        assert!((0..12).all(|c| canvas::ink(t, c) == want[usize::from(c)]));
-    }
-}
-
-#[test]
-fn canvas_shapes_rings_texts_and_sprites_draw_scaled() {
-    let t = &THEMES[1];
-    let draws = vec![
-        shape(Shape::Ring, 4, [50, 25, 10, 2, 0], ""),
-        shape(Shape::Circle, 3, [50, 25, 4, 0, 0], ""),
-        shape(Shape::Text, 11, [50, 40, 3, 0, 0], "Score 7"),
-        shape(Shape::Sprite, 0, [0, 40, 2, 0, 0], "11.2\n.33"),
-        // Nothing of no size; a ring of no width.
-        shape(Shape::Rect, 5, [0, 0, 0, 5, 0], ""),
-        shape(Shape::Circle, 5, [1, 1, 0, 0, 0], ""),
-        shape(Shape::Ring, 5, [1, 1, 4, 0, 0], ""),
-        shape(Shape::Text, 5, [1, 1, 0, 0, 0], "x"),
-    ];
-    // 100 x 50 units in 560 x 360: 5.6 px a unit.
-    let canvas = Node::Canvas { id: 2, w: 100, h: 50, draws };
-    let (d, _, sem) = boards((600.0, 400.0), 1.0, t, &[canvas]);
-    let (cx, cy) = (PAD + 50.5 * 5.6, PAD + 25.5 * 5.6);
-    let ring = d.of(Kind::Border).into_iter().find(|b| b.color == t.ansi[4]).unwrap();
-    assert_eq!((ring.radius, ring.p0), (56.0, 11.2));
-    assert_eq!(ring.rect, [cx - 56.0, cy - 56.0, 112.0, 112.0]);
-    let disc = d.of(Kind::Fill).into_iter().find(|f| f.color == t.ansi[3]).unwrap();
-    assert_eq!((disc.radius, disc.rect[2]), (4.0 * 5.6, 8.0 * 5.6));
-    assert!(d.list.instances().iter().all(|i| i.color != t.ansi[5]));
-    // 3 units of 5.6 px is 16.8 px: set at 16, in the boot's font, read where it shows.
-    assert!(d.of(Kind::Glyph).iter().filter(|g| g.color == t.accent).count() >= 6);
-    let run = sem.runs.iter().find(|r| r.text == "Score 7").unwrap();
-    assert_eq!(run.rect.h, 1.25 * 16.0);
-    // A sprite's squares, two units a side: a run of one color a fill.
-    let low = |f: &&Instance| f.rect[1] >= PAD + 220.0;
-    let sprite: Vec<_> = d.of(Kind::Fill).into_iter().filter(low).collect();
-    let colors: Vec<Rgba> = sprite.iter().map(|f| f.color).collect();
-    assert_eq!(colors, [t.ansi[1], t.ansi[2], t.ansi[3]]);
-    assert_eq!(sprite[0].rect, [PAD, PAD + 224.0, 22.0, 11.0]);
-    assert_eq!((sprite[2].rect[0], sprite[2].rect[1]), (PAD + 11.0, PAD + 235.0));
 }
 
 #[test]
