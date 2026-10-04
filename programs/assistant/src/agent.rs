@@ -11,15 +11,20 @@
 //!   and bound its thinking (1,024 tokens); three in a row, or the same call on the same screen
 //!   three times (E0924), end the task, as do [`MAX_STEPS`] model calls or [`MAX_ACTS`] acts, or a
 //!   request past the free AI's [`MAX_MESSAGES`] or [`MAX_BODY`] (E0921; the memory goes first),
-//!   an AI error (E0901 to E0905, with Retry), Stop, and the person taking over ([`Event::Halt`]).
+//!   an AI error (E0901 to E0905, with Retry), and Stop: the pill's, or Escape ([`Event::Halt`]).
 //! - **Guard.** Acts into Feedback (the one app that sends what it holds off the device), and
 //!   presses in Activity (which ends programs), wait for the person's yes through `ask_user`.
 //! - **Shown.** While it works it says so ([`Request::Status`]): the desktop makes it a pill, and
 //!   it draws one, one line of what it does and Stop, whatever its size. Each task ends with its
 //!   receipt: steps and tokens.
+//! - **Chats.** Each conversation has its own transcript and memory (its last [`MEMORY`] tasks,
+//!   a compacted note first, one of them), so one task's context never weighs on another's: the
+//!   card switches between them, starts, deletes and compacts them ([`chats`], [`compact`]);
+//!   they are kept across reloads.
 
 use std::io::{self, ErrorKind, Read, Write};
 
+use chats::{Chats, Turn};
 use uiwire::client::Client;
 use uiwire::scene::Scene;
 use uiwire::{Act, Event, Frame, Node, Request, Style, Variant, WinOp, acted, mods};
@@ -28,6 +33,8 @@ use crate::ai::{DEFAULT_MODEL, MAX_BODY, clip, failure};
 use crate::calls::{Call, Calls};
 use crate::json::{Json, quote};
 use crate::look::{Elem, Refs, render};
+
+pub mod compact;
 
 /// The most model calls and acts one task takes; the past tasks each request remembers.
 pub const MAX_STEPS: u32 = 20;
@@ -79,9 +86,16 @@ pub struct Agent {
     model: String,
     input: String,
     sent: u32,
+    /// The current chat's transcript, and its last tasks as (prompt, answer).
     turns: Vec<Turn>,
-    /// The last tasks as (prompt, answer).
     memory: Vec<(String, String)>,
+    /// The chats, the others' transcripts and memory ([`chats`]); the card's width as last told
+    /// while it showed; a compaction asked for and its reply so far; whether the chats changed
+    /// since they were last kept.
+    chats: Chats,
+    width: u16,
+    compacting: Option<(u32, Calls)>,
+    unkept: bool,
     task: Option<Task>,
     refs: Refs,
     /// Whether the last frame was the pill; the prompt to ask again after an AI error.
@@ -90,13 +104,6 @@ pub struct Agent {
     last_id: u32,
     requests: Vec<Request>,
     framed: bool,
-}
-
-/// A task as shown: its prompt, then what it did, asked and answered.
-#[derive(Debug, Default)]
-struct Turn {
-    prompt: String,
-    lines: Vec<(Style, String)>,
 }
 
 /// The task in hand: its prompt, the window it was opened over, the steps, the latest screen
@@ -140,6 +147,10 @@ struct Step {
 impl Agent {
     /// Handles one event; whether the window changed.
     pub fn event(&mut self, ev: &Event) -> bool {
+        // The chats' events go first, and a compaction's.
+        if let Some(changed) = self.chats_event(ev) {
+            return changed;
+        }
         let input = self.input_id();
         let wait = self.task.as_mut().map(|t| &mut t.wait);
         match (ev, wait) {
@@ -160,7 +171,7 @@ impl Agent {
             (Event::Ask { text }, None) if !text.trim().is_empty() => {
                 self.start(clip(text.trim(), MAX_PROMPT));
             }
-            (Event::Halt, Some(_)) => self.stop("Stopped: you took over."),
+            (Event::Halt, Some(_)) => self.stop("Stopped."),
             (Event::AiData { id, data }, Some(Wait::Model(w, calls))) if id == w => {
                 calls.feed(data)
             }
@@ -302,6 +313,7 @@ impl Agent {
         // The memory, as much as the free AI's count of messages leaves room for.
         let keep = (MAX_MESSAGES.saturating_sub(own(t)) / 2).min(self.memory.len());
         for (prompt, answer) in &self.memory[self.memory.len() - keep..] {
+            let prompt = if prompt.is_empty() { compact::SUM } else { prompt };
             m.extend([msg("user", prompt), msg("assistant", answer)]);
         }
         let first = if t.steps.is_empty() { t.screen.as_str() } else { "(screen omitted)" };
@@ -617,7 +629,7 @@ impl Agent {
     fn done(&mut self, answer: String) {
         if let Some(t) = &self.task {
             self.memory.push((t.prompt.clone(), answer.clone()));
-            self.memory.drain(..self.memory.len().saturating_sub(MEMORY));
+            chats::forget(&mut self.memory, MEMORY);
         }
         self.end(Style::Body, answer);
     }
@@ -641,6 +653,7 @@ impl Agent {
             format!("{steps} steps, {} tokens in, {} out", tokens(t.usage.0), tokens(t.usage.1));
         self.note(Style::Small, receipt);
         self.requests.push(Request::Status { working: false });
+        self.changed();
     }
 
     /// What it is doing now, in a line.
@@ -655,17 +668,21 @@ impl Agent {
         }
     }
 
-    /// The window now, with the requests since the last frame: the pill while it works, else the
-    /// transcript, then the prompt with Send.
+    /// The window now, with the requests since the last frame: the pill while it works (or
+    /// compacts), else the transcript, then the chats' chips and the prompt with Send.
     pub fn frame(&mut self) -> Frame {
         let text = |style, text: &str| Node::Text { id: 0, style, text: text.into() };
         let button = |id, variant, label: &str| Node::Button { id, variant, label: label.into() };
-        let working = self.task.as_ref().is_some_and(|t| !matches!(t.wait, Wait::User));
+        let working = self.working();
         // Back from the pill, the prompt has the keys again.
         let back = std::mem::replace(&mut self.pill, working) && !working;
         let mut nodes = Vec::new();
         if working {
-            let line = text(Style::Body, &clip(&self.doing(), 64));
+            let doing = match self.compacting {
+                Some(_) => "Compacting the chat\u{2026}".into(),
+                None => self.doing(),
+            };
+            let line = text(Style::Body, &clip(&doing, 64));
             let stop = button(STOP, Variant::Normal, "Stop");
             nodes.push(Node::Row { id: 0, gap: 12, children: vec![line, stop] });
         } else {
@@ -683,6 +700,7 @@ impl Agent {
                 nodes.push(button(RETRY, Variant::Chip, "Retry"));
             }
             nodes.push(Node::Fill { id: 0, children: Vec::new() });
+            nodes.extend(self.chips());
             let placeholder = "Ask, or say what to do".into();
             let input = Node::Input { id: self.input_id(), value: self.input.clone(), placeholder };
             let send = button(SEND, Variant::Primary, "Send");
@@ -696,8 +714,13 @@ impl Agent {
 }
 
 /// Runs the agent on `ui`, a frame per event that changes it, until Close or the end of the
-/// events; an event that does not decode is skipped.
-pub fn serve<R: Read, W: Write>(ui: &mut Client<R, W>, agent: &mut Agent) -> io::Result<()> {
+/// events; an event that does not decode is skipped. The chats go to `keep` after each change
+/// ([`Agent::kept`]).
+pub fn serve<R: Read, W: Write>(
+    ui: &mut Client<R, W>,
+    agent: &mut Agent,
+    keep: &mut dyn FnMut(&str),
+) -> io::Result<()> {
     let mut seq = 0u32;
     loop {
         let ev = match ui.next_event() {
@@ -710,6 +733,9 @@ pub fn serve<R: Read, W: Write>(ui: &mut Client<R, W>, agent: &mut Agent) -> io:
         if agent.event(&ev) {
             ui.show(&Frame { seq, ..agent.frame() })?;
             seq = seq.wrapping_add(1);
+        }
+        if let Some(text) = agent.kept() {
+            keep(&text);
         }
     }
 }

@@ -16,6 +16,7 @@ name = "assistant"
 path = "src/main.rs"
 
 [dependencies]
+compusophy-chats.workspace = true
 compusophy-coder.workspace = true
 compusophy-uiwire.workspace = true
 

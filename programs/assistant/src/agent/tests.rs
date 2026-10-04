@@ -1,12 +1,14 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use chats::{CHAT, COMPACT, NEW};
 use host::{Effect, Host, OVERLAY, Registry, Response};
 use ui::{App, AppEvent, Cx, TextSystem, Ui};
 use uiwire::scene::{Hit, Mark, Run, Win};
 use vfs::Vfs;
 use wm::{Rect, Wm};
 
+use super::compact::{NOTE, SUM};
 use super::*;
 use crate::calls::encode;
 use crate::look::render;
@@ -529,7 +531,7 @@ fn the_person_takes_over_answers_questions_and_feedback_waits_for_a_yes() {
     let f = a.frame();
     let (cancel, idle) = (Request::AiCancel { id }, Request::Status { working: false });
     assert_eq!(f.requests, [Request::Focus { id: a.input_id() }, cancel, idle]);
-    assert!(shown(&mut a).contains("Stopped: you took over."));
+    assert!(shown(&mut a).ends_with("anything\nStopped.\n0 steps, 0 tokens in, 0 out"));
     // Typing into Feedback waits for the person's yes, asked; then it goes.
     let (mut d, mut a) = (desk(), Agent::default());
     d.host.open("terminal", None, &mut Response::default());
@@ -652,4 +654,134 @@ fn the_pill_keys_receipts_and_ai_errors() {
     assert_eq!([k("f5"), k("7"), k("pageup")].map(|k| k.unwrap().0), ["F5", "Digit7", "PageUp"]);
     assert_eq!([k("hyper+x"), k("f25"), k("ab")], [None, None, None]);
     assert_eq!([tokens(940), tokens(9400), tokens(12_345)], ["940", "9.4k", "12.3k"]);
+}
+
+/// The buttons of a frame's rows but Send: the chats', New chat and Compact, as (id, variant,
+/// label); and how many rows.
+fn chips(a: &mut Agent) -> (Vec<(u32, Variant, String)>, usize) {
+    let rows: Vec<Vec<Node>> = (a.frame().nodes.into_iter())
+        .filter_map(|n| match n {
+            Node::Row { children, .. } => Some(children),
+            _ => None,
+        })
+        .collect();
+    let n = rows.len();
+    let buttons = rows.into_iter().flatten().filter_map(|n| match n {
+        Node::Button { id, variant, label } if id != SEND => Some((id, variant, label)),
+        _ => None,
+    });
+    (buttons.collect(), n)
+}
+
+/// A task asked on desk `d`, the model answering `answer`.
+fn task(d: &mut Desk, a: &mut Agent, prompt: &str, answer: &str) {
+    ask(a, prompt);
+    d.run(a, &|_| reply(answer, None));
+}
+
+/// Chat `n`'s chip, the current one's lit; New chat or Compact.
+fn chip(n: u32, on: bool, label: &str) -> (u32, Variant, String) {
+    (CHAT + n, if on { Variant::On } else { Variant::Chip }, label.into())
+}
+
+fn quiet(id: u32, label: &str) -> (u32, Variant, String) {
+    (id, Variant::Quiet, label.into())
+}
+
+#[test]
+fn chats_keep_their_own_transcripts_and_memory_and_a_new_one_starts_empty() {
+    let (mut d, mut a) = (desk(), Agent::default());
+    a.event(&Event::Resize { w: 560, h: 480 });
+    // Nothing yet; a task done, its chat's chip lit, and New chat.
+    assert_eq!(chips(&mut a), (vec![], 1));
+    task(&mut d, &mut a, "turn on the grain", "The grain is on.");
+    let grain = |on| chip(0, on, "turn on the grai\u{2026}");
+    assert_eq!(chips(&mut a).0, [grain(true), quiet(NEW, "New chat")]);
+    // A new chat: empty, lit and first, and its requests carry nothing of the other.
+    a.event(&Event::Click { id: NEW });
+    assert_eq!(a.frame().requests, [Request::Focus { id: a.input_id() }]);
+    assert!(shown(&mut a).starts_with("Ask anything"));
+    assert_eq!(chips(&mut a).0, [chip(1, true, "New chat"), grain(false)]);
+    task(&mut d, &mut a, "open settings", "Settings is open.");
+    let m = messages(d.bodies.last().unwrap());
+    assert!(m.len() == 2 && m[1].1.starts_with("open settings\n\n"));
+    // Back to the first: its transcript, and its memory alone.
+    a.event(&Event::Click { id: CHAT });
+    let said = shown(&mut a);
+    assert!(said.contains("The grain is on.") && !said.contains("open settings"), "{said}");
+    assert_eq!(chips(&mut a).0[..2], [grain(true), chip(1, false, "open settings")]);
+    task(&mut d, &mut a, "and off again", "The grain is off.");
+    let m = messages(d.bodies.last().unwrap());
+    let pair = (m.len(), m[1].1.as_str(), m[2].1.as_str());
+    assert_eq!(pair, (4, "turn on the grain", "The grain is on."));
+    // Kept, then put back as they were.
+    let (kept, mut b) = (a.kept().expect("changed"), Agent::default());
+    b.load(&kept);
+    assert_eq!((a.kept(), shown(&mut b), chips(&mut b)), (None, shown(&mut a), chips(&mut a)));
+    // Nothing switches while a task is in hand.
+    ask(&mut a, "wait");
+    assert!(!a.event(&Event::Click { id: CHAT + 1 }) && !a.event(&Event::Click { id: NEW }));
+}
+
+#[test]
+fn compact_condenses_the_chat_into_a_note_and_a_failure_keeps_the_memory() {
+    let (mut d, mut a) = (desk(), Agent::default());
+    a.event(&Event::Resize { w: 400, h: 480 });
+    // Short tasks are no gain to condense; a long one is.
+    task(&mut d, &mut a, "turn on the grain", "The grain is on.");
+    assert_eq!(chips(&mut a).0[1..], [quiet(NEW, "New chat")]);
+    task(&mut d, &mut a, "switch to Dawn", &"Dawn it is. ".repeat(90));
+    let both = [quiet(NEW, "New chat"), quiet(COMPACT, "Compact")];
+    assert_eq!(chips(&mut a).0[1..], both);
+    // Compacting is the pill with Stop; Stop cancels it and the memory stays.
+    a.event(&Event::Click { id: COMPACT });
+    let f = a.frame();
+    let line = Node::Text { id: 0, style: Style::Body, text: "Compacting the chat\u{2026}".into() };
+    let stop = Node::Button { id: STOP, variant: Variant::Normal, label: "Stop".into() };
+    assert_eq!(f.nodes, [Node::Row { id: 0, gap: 12, children: vec![line, stop] }]);
+    let ai = |f: &Frame| {
+        f.requests.iter().find_map(|r| match r {
+            Request::Ai { id, .. } => Some(*id),
+            _ => None,
+        })
+    };
+    let id = ai(&f).unwrap();
+    assert!(!a.event(&Event::Ask { text: "meanwhile".into() }));
+    a.event(&Event::Click { id: STOP });
+    let idle = Request::Status { working: false };
+    let cancel = [Request::Focus { id: a.input_id() }, Request::AiCancel { id }, idle];
+    assert_eq!(a.frame().requests, cancel);
+    assert!(shown(&mut a).ends_with("Compact\nStopped.\n0 tokens in, 0 out"));
+    // An AI error, coded, and a reply with no note: the memory as it was, Compact still there.
+    a.event(&Event::Click { id: COMPACT });
+    let id = ai(&a.frame()).unwrap();
+    a.event(&Event::AiEnd { id, status: 429, error: "".into() });
+    assert!(shown(&mut a).contains("Compact\nE0903 the free AI is busy"));
+    a.event(&Event::Click { id: COMPACT });
+    d.run(&mut a, &|_| reply("", None));
+    let none = "E0929 the AI wrote no note; the memory is as it was\n1.2k tokens in, 30 out";
+    assert!(shown(&mut a).ends_with(none) && chips(&mut a).0[1..] == both);
+    // The note: asked with no tools, with room past the free AI's 1,024 tokens of thinking, the
+    // chat in it; clipped to its most, it stands for the memory.
+    a.event(&Event::Click { id: COMPACT });
+    let long = ["Grain on, theme Dawn. ", &"x".repeat(700)].concat();
+    d.run(&mut a, &|_| reply(&long, None));
+    let b = d.bodies.last().unwrap();
+    let m = messages(b);
+    assert!(b.get("tools").is_none() && m.len() == 2 && m[0].0 == "system");
+    assert_eq!(b.get("max_tokens").map(encode).as_deref(), Some("2048"));
+    for said in ["User: turn on the grain\nAssistant: The grain is on.", "User: switch to Dawn\n"] {
+        assert!(m[1].1.contains(said), "{}", m[1].1);
+    }
+    let note = clip(&long, NOTE - 3);
+    let said = [&note, "\nCompacted: 1.2k tokens in, 30 out"].concat();
+    assert!(note.len() == NOTE && shown(&mut a).ends_with(&said));
+    assert_eq!(chips(&mut a).0[1..], [quiet(NEW, "New chat")]);
+    // Later tasks carry it first, as the answer to SUM, and it stays first as they come and go.
+    for i in 0..5 {
+        task(&mut d, &mut a, &format!("step {i}"), "Ok.");
+    }
+    let m = messages(d.bodies.last().unwrap());
+    let kept = (m.len(), m[1].1.as_str(), m[2].1.as_str(), m[3].1.as_str());
+    assert_eq!(kept, (10, SUM, note.as_str(), "step 1"));
 }
