@@ -750,11 +750,16 @@ fn folders_hold_their_apps_show_as_one_icon_and_open_as_a_panel() {
     assert_eq!(folders::at((1280.0, 800.0), 5, p.x + 2.0, p.y + 2.0), Some(None));
     assert_eq!(folders::at((1280.0, 800.0), 5, 4.0, 4.0), None);
     assert!(folders::panel((375.0, 800.0), 9).w <= 375.0 - 32.0, "on a phone, inside the screen");
-    // Drawn: the folder's tile holds its apps' tiles; open, its name and its apps over the dim.
+    // Drawn: the folder's tile holds its apps' tiles; open, its name and its apps over the dim,
+    // and the top bar's mark (washed, hovered), which still answers.
     let (mut list, mut t) = (DrawList::new(), text());
     g.sync(0.0, true);
     g.draw(&mut list, &mut t, &THEMES[0], 0.0, None, None);
     g.open = Some(0);
-    g.draw_open(&mut list, &mut t, &THEMES[0], (1280.0, 800.0), Some((0, false)));
+    let hover = (Some((0, false)), Some((crate::bar::Button::Mark, true)));
+    g.draw_open(&mut list, &mut t, &THEMES[0], (1280.0, 800.0), hover);
     assert!(fills(&list, THEMES[0].base.with_alpha(153)) && NAMES[0] == "System");
+    let (f, l) = (Kind::Fill as u8 as f32, list.instances());
+    let fill = |c: Rgba| l.iter().position(|i| i.kind == f && i.color == c);
+    assert!(fill(THEMES[0].base.with_alpha(153)) < fill(THEMES[0].wash(true)));
 }

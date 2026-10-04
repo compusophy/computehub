@@ -150,7 +150,7 @@ impl Shell {
     /// on the home screen, focuses a window, grabs it (not on a narrow screen), toggles maximize
     /// on a double click, or presses into content (a finger's press waits to be a tap: a scroll
     /// is no press; but on a [`Sense::Pad`] it presses at once, and the finger drags it, never
-    /// scrolling). It never stops the Assistant's task.
+    /// scrolling). It never stops the Assistant's task, nor hides it while it works.
     pub(crate) fn press(&mut self, touch: bool, out: &mut Response) {
         let ((x, y), now) = (self.pointer.unwrap_or_default(), self.host.now_ms);
         let hit = self.hit(x, y);
@@ -159,12 +159,12 @@ impl Shell {
         if hit == Some(Target::Off) {
             // Outside a menu, or the open folder (with none), closes it.
             (self.menu, self.grid.open) = (None, self.grid.open.filter(|_| self.menu.is_some()));
-            out.redraw = true;
             return;
         }
         let overlay = matches!(hit, Some(Target::Body(OVERLAY)));
         match hit {
-            Some(Target::Desktop) => self.overlay = Default::default(),
+            // The bare desktop hides the overlay, but its working pill (and Stop) stays.
+            Some(Target::Desktop) if !self.host.agent.working => self.overlay = Default::default(),
             Some(Target::Assistant) => {}
             _ => self.overlay.focus = overlay,
         }

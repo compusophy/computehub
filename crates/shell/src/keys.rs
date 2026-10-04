@@ -45,7 +45,7 @@ impl Shell {
         }
         // Escape closes the open folder.
         if key == Key::Escape && self.grid.open.take().is_some() {
-            (out.consumed, out.redraw) = (true, true);
+            out.consumed = true;
             return;
         }
         // The overlay with the keys: Escape hides it, or stops its task (no other key does).

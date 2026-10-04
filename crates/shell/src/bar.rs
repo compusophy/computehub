@@ -31,12 +31,17 @@ impl Shell {
         self.bare = shown;
     }
 
-    /// The bar, its hovered button washed (more while pressed), its clock once it ticked.
-    pub(crate) fn draw_bar(&mut self, list: &mut DrawList, theme: &Theme) {
-        let hover = match self.hover {
+    /// The bar's button under the pointer, and whether it is pressed.
+    pub(crate) fn bar_hover(&self) -> home::bar::Hover {
+        match self.hover {
             Some(Target::Bar(b)) => Some((b, self.armed == self.hover)),
             _ => None,
-        };
+        }
+    }
+
+    /// The bar, its hovered button washed (more while pressed), its clock once it ticked.
+    pub(crate) fn draw_bar(&mut self, list: &mut DrawList, theme: &Theme) {
+        let hover = self.bar_hover();
         let (w, text) = (self.size.0, &mut self.host.text);
         home::bar::draw(list, text, theme, w, (hover, self.clock));
     }

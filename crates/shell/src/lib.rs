@@ -90,6 +90,8 @@ struct Visuals {
     wins: usize,
     zone: Option<host::frame::Zone>,
     menu: Option<(RectF, Option<usize>)>,
+    /// The open folder, however it opened or closed.
+    folder: Option<usize>,
     home: (usize, usize, usize),
     /// Carried icons (or a dock tile): lifted, their slot, the pointer; the selection box's far
     /// corner.
@@ -457,6 +459,7 @@ impl Shell {
             wins: self.host.wins.len(),
             zone: self.grab.and_then(|g| g.zone()),
             menu: self.menu.as_ref().map(|m| (m.0.rect, m.0.sel)),
+            folder: g.open,
             home: (self.tiles.len() + self.dock.favs.len(), g.icons.len(), g.selected.len()),
             carry,
             lasso,

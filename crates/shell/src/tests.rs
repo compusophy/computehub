@@ -509,13 +509,14 @@ fn the_assistant_opens_the_overlay_which_only_escape_or_its_stop_halts() {
     s.click(s.item("Ask the Assistant"));
     assert!(s.overlay.open && s.overlay.focus);
     // While it works: a pill over a line of buttons, the tile's dot beating. The person's own
-    // presses, keys and wheel stop nothing, in it or out of it (where the card was: the bug);
-    // Escape with its keys does, once.
+    // presses, keys and wheel stop nothing, in it or out of it (where the card was: the bug; on
+    // the bare desktop the pill stays, too); Escape with its keys does, once.
     s.host.agent.working = true;
     s.input(Input::PointerLeave);
     let (pill, halt) = (RectF::new(850.0, 686.0, 420.0, 52.0), E::Agent(ui::uiwire::Event::Halt));
     assert!(s.overlay_rects() == (pill, RectF { y: 676.0, h: 72.0, ..pill }) && s.animating());
-    for (x, y) in [(860.0, 700.0), (720.0, 264.0), (860.0, 700.0)] {
+    assert_eq!(s.hit(1100.0, 400.0), Some(Target::Desktop), "where the card was");
+    for (x, y) in [(860.0, 700.0), (720.0, 264.0), (1100.0, 400.0), (860.0, 700.0)] {
         let _ = (s.click((x, y)), s.k(Char('y'), ""), s.input(Input::Wheel { x, y, dy: 3.0 }));
     }
     let got = log.take();
@@ -739,17 +740,18 @@ fn the_mark_shows_the_desktop_and_again_brings_the_windows_back() {
     let all = s.wm().windows().iter().all(|w| w.1 == State::Minimized);
     assert!(s.menu.is_none() && s.wm().layout().is_empty() && all && s.animating());
     // Again, nothing shown since (mod+D too): back in their stacking order, the top focused.
-    s.rest(1000.0);
-    s.k(Char('d'), "a");
+    let _ = (s.rest(1000.0), s.k(Char('d'), "a"));
     assert_eq!(s.wm().layout(), before);
     // A window shown in between: the next press minimizes again, the one after brings it back.
     let _ = (s.k(Char('d'), "a"), s.k(Enter, "a"), s.k(Char('d'), "a"));
     assert!(s.wm().layout().is_empty() && s.k(Char('d'), "a").consumed);
     assert_eq!(s.wm().layout().iter().map(|p| p.win).collect::<Vec<_>>(), [WinId(4)]);
-    // None showing and none to bring back: it closes the open folder, nothing more.
-    let _ = (s.k(Down, "a"), s.k(Down, "a"), s.click(cell(7)));
-    assert_eq!((s.grid.open, s.click(mark).redraw), (Some(0), true));
-    assert!(s.grid.open.is_none() && s.wm().layout().is_empty());
+    // None showing and none to bring back: it closes the open folder (a new frame), nothing more;
+    // the mark, drawn above the folder's dim, answers there.
+    let _ = (s.k(Down, "a"), s.k(Down, "a"), s.click(cell(7)), s.input(Input::PointerLeave));
+    assert!(s.grid.open == Some(0) && (s.rest(1e3), s.k(Char('d'), "a")).1.redraw);
+    let t = (s.grid.open, s.click(cell(7)), s.grid.open, s.click(mark), s.grid.open);
+    assert!((t.0, t.2, t.4) == (None, Some(0), None) && s.wm().layout().is_empty());
 }
 
 /// The middle of the icon in cell `i` of a 1280 x 800 desktop.

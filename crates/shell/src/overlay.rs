@@ -1,13 +1,14 @@
 //! The overlay: the Assistant over the desktop (see `host::agent`), a layer above the windows,
 //! never one of them. A glass card above the Assistant's tile in the bottom-right corner (a
 //! sheet on a phone), a pill while it works; its content routes as a window's does. The tile
-//! opens and hides it, as does Alt+Space; a press on the bare desktop hides it, as does Escape
-//! while it has the keys and no task runs. Only the pill's Stop, or Escape while it has the keys,
-//! stops a task: the person's own presses, keys and wheel go where they go, the task running on
-//! (hidden, too). A press in it gives it the keys; one on a window takes them back, the overlay staying. Shown by
-//! a finger, it holds the keyboard back until its text field is tapped. A failed program starts
-//! again at the next summon (`Host::open_overlay`). What the agent touches flashes; while it
-//! works, the dot under the Assistant's tile beats (`Shell::draw_dock`).
+//! opens and hides it, as does Alt+Space; while no task runs, a press on the bare desktop hides
+//! it too, as does Escape while it has the keys. Only the pill's Stop, or Escape while it has the
+//! keys, stops a task: the person's own presses, keys and wheel go where they go, the task running
+//! on (hidden by the tile, too). A press in it gives it the keys; one on a window (or, while it
+//! works, on the bare desktop) takes them back, the overlay staying. Shown by a finger, it holds
+//! the keyboard back until its text field is tapped. A failed program starts again at the next
+//! summon (`Host::open_overlay`). What the agent touches flashes; while it works, the dot under
+//! the Assistant's tile beats (`Shell::draw_dock`).
 
 use gfx::{DrawList, RectF};
 use host::agent::FLASH_MS;

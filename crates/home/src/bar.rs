@@ -28,6 +28,9 @@ pub enum Button {
     Settings,
 }
 
+/// The button under the pointer, and whether it is held.
+pub type Hover = Option<(Button, bool)>;
+
 impl Button {
     /// The app it shows: Feedback or Settings; none for the mark, which shows the desktop.
     pub fn app(self) -> Option<&'static str> {
@@ -76,26 +79,38 @@ pub fn draw(
     text: &mut TextSystem,
     theme: &Theme,
     w: f32,
-    (hover, clock): (Option<(Button, bool)>, Option<LocalTime>),
+    (hover, clock): (Hover, Option<LocalTime>),
 ) {
     let line = px(text, 1.0);
     list.fill(RectF::new(0.0, 0.0, w, H), 0.0, theme.glass);
     list.fill(RectF::new(0.0, H - line, w, line), 0.0, theme.border);
-    let square = |r: RectF, side: f32| r.inset((r.w - side) / 2.0);
-    for (r, b) in buttons(w) {
-        if let Some((_, held)) = hover.filter(|h| h.0 == b) {
-            list.fill(square(r, WASH), WASH / 2.0, theme.wash(held));
-        }
-        let (side, glyph) = match b {
-            Button::Mark => (MARK, Glyph::Mark),
-            Button::Feedback => (GLYPH, Glyph::Bug),
-            Button::Settings => (GLYPH, Glyph::Cog),
-        };
-        ui::icon::draw(list, text, square(r, side), glyph, theme.text);
+    for b in buttons(w) {
+        button(list, text, theme, b, hover);
     }
     if let Some(time) = clock {
         draw_clock(list, text, theme, w, time);
     }
+}
+
+/// Button `b` at `r`, its glyph, washed while `hover` holds it. An open folder draws the mark so
+/// again above its dim, since it answers there.
+pub fn button(
+    list: &mut DrawList,
+    text: &mut TextSystem,
+    theme: &Theme,
+    (r, b): (RectF, Button),
+    hover: Hover,
+) {
+    let square = |side: f32| r.inset((r.w - side) / 2.0);
+    if let Some((_, held)) = hover.filter(|h| h.0 == b) {
+        list.fill(square(WASH), WASH / 2.0, theme.wash(held));
+    }
+    let (side, glyph) = match b {
+        Button::Mark => (MARK, Glyph::Mark),
+        Button::Feedback => (GLYPH, Glyph::Bug),
+        Button::Settings => (GLYPH, Glyph::Cog),
+    };
+    ui::icon::draw(list, text, square(side), glyph, theme.text);
 }
 
 /// The date (dim) and time centered in the bar of a screen `w` wide: the time alone on a phone,

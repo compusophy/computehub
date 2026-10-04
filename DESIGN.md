@@ -224,8 +224,9 @@ one. Forked crates keep their Apache-2.0 license and note their origin.
   Productivity (the Editor, Files) at first; an app's menu moves it (Move
   to: a folder, or the home screen; `home::folders`, kept as `folders`). A
   folder that holds any is an icon of its first four apps' tiles, and opens
-  as a panel over the dimmed screen, its apps four across: a click opens
-  one, and anywhere else (or Escape) closes it. Each icon sits in a cell of
+  as a panel over the dimmed screen (all but the top bar's mark, which
+  still answers), its apps four across: a click opens one, and anywhere
+  else (or Escape) closes it. Each icon sits in a cell of
   a grid: down the columns from the top
   left on a wide screen, in rows of four on a phone; there is no other
   list. A `.app` file's icon is the one its header draws (`// icon:` under
@@ -264,9 +265,10 @@ one. Forked crates keep their Apache-2.0 license and note their origin.
   pill, one line of what it does and Stop (whose press reaches across the
   pill's height), and the dot beats; each act flashes what it touched.
   Only Stop, or Escape while the overlay has the keys, stops it: the
-  person's own presses, keys and wheel go where they go beside its acts,
-  and an act on a window they closed fails as gone. A program that failed
-  starts again at the next summon. Later it listens.
+  person's own presses, keys and wheel go where they go beside its acts
+  (one on the bare desktop leaves the pill in view), and an act on a
+  window they closed fails as gone. A program that failed starts again at
+  the next summon. Later it listens.
 - **Dock**: the person's own, left-aligned from the bottom-left corner:
   nothing in it at first ("Add to dock" from any app's menu, or its icon
   dragged onto the row, which opens a gap under the pointer, the icon
