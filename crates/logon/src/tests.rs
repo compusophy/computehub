@@ -300,20 +300,20 @@ fn a_return_picks_a_profile_and_the_band_opens_the_card() {
 }
 
 #[test]
-fn a_first_visit_says_hello_and_starts_with_start() {
-    // Nothing kept: hello. A list, kept files or the device's mark mean a return.
+fn a_first_visit_shows_its_profile_and_add_as_a_return_does() {
+    // Nothing kept, a list or kept files: the circles, guest and Add, either way.
     let lists = [(LIST, TWO)];
-    for (kv, want) in [(&[][..], State::Hello), (&[("compusophy.home", "x")][..], State::Pick)] {
-        assert_eq!(welcome((411.0, 794.0), kv).state, want);
+    for kv in [&[][..], &[("compusophy.home", "x")][..], &lists[..]] {
+        assert_eq!(welcome((411.0, 794.0), kv).state, State::Pick);
     }
-    assert_eq!(welcome((411.0, 794.0), &lists).state, State::Pick);
     let (mut l, ..) = drawn((411.0, 794.0), 3.5, &[]);
-    let start = l.hits.iter().find(|h| h.1 == Target::Start).expect("Start").0;
-    assert!(start.h >= TOUCH && start.w >= TOUCH && start.y + start.h < 794.0 - TRACK);
-    // A tap elsewhere does nothing; Start (or Enter) marks the device seen and signs in.
+    let guest = l.hits.iter().find(|h| h.1 == Target::Circle(0)).expect("guest").0;
+    assert!(guest.h >= TOUCH && guest.w >= TOUCH && guest.y + guest.h < 794.0 - TRACK);
+    assert!(l.hits.iter().any(|h| h.1 == Target::Circle(1)), "Add");
+    // A tap elsewhere does nothing; guest (or Enter) marks the device seen and signs in.
     assert_eq!(feed(&mut l, &[], &tap(20.0, 300.0)), []);
     let seen = Out::Set(SEEN.into(), "1".into());
-    let tapped = feed(&mut l, &[], &tap(start.x + 2.0, start.y + 2.0));
+    let tapped = feed(&mut l, &[], &tap(guest.x + guest.w / 2.0, guest.y + guest.h / 2.0));
     assert_eq!(tapped, [&[seen.clone()][..], &signed_in("0")].concat());
     let (mut l, ..) = drawn((411.0, 794.0), 3.5, &[]);
     assert_eq!(feed(&mut l, &[], &[down(Key::Enter)]), [&[seen][..], &signed_in("0")].concat());

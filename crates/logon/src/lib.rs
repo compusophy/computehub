@@ -9,9 +9,9 @@
 //!   stage of the real start, at its measured times, gaps kept; its caption says
 //!   `Loading fonts…`, then `Ready in 412 ms · 218 KB`. A tap (or the keys' focus, then Enter)
 //!   opens a card of the stages. Nothing is simulated, and waiting draws no frames.
-//! - **Logon.** A first visit says hello and starts with **Start**. A return shows the
-//!   [`profiles`] as circles (people are round, apps rounded squares), the one that signed in
-//!   last in focus, and **Add**: a tap, or the arrows and Enter, signs in; holding a circle
+//! - **Logon.** Every visit, the first too, shows the [`profiles`] as circles (people are
+//!   round, apps rounded squares; a first visit's one, guest, made when it signs in), the one
+//!   that signed in last in focus, and **Add**: a tap, or the arrows and Enter, signs in; holding a circle
 //!   500 ms (or a right-click) opens its menu: Rename, Set a PIN (Change PIN, Remove PIN),
 //!   Remove (confirmed, with its files). Signing in flies the mark to the bar's (220 ms) as the
 //!   welcome fades off the desktop. A reload of a signed-in tab skips it ([`SESSION`]), never a
@@ -95,13 +95,12 @@ pub fn session(session: Option<&str>, get: &dyn Fn(&str) -> Option<String>) -> O
     list.get(id).filter(|p| p.pin.is_none()).map(|p| p.id)
 }
 
-/// What the welcome shows: a first visit's hello; the circles to pick from; a name being
+/// What the welcome shows: the circles to pick from; a name being
 /// given (a new profile, or profile `id` renamed); whether a new profile wants a PIN; a new PIN
 /// being chosen (for the new profile, or profile `id`); profile `id`'s PIN asked, then what it
 /// opens; a removal to confirm; the card over the desktop when its files could not be kept.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 enum State {
-    Hello,
     #[default]
     Pick,
     Name(Option<u32>),
@@ -132,7 +131,6 @@ enum Pending {
 /// What a press lands on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Target {
-    Start,
     Record,
     Card,
     Back,
@@ -208,8 +206,8 @@ pub struct Logon {
 }
 
 impl Logon {
-    /// The welcome for a screen `size`, reading `localStorage` through `get`: a first visit
-    /// (no list, no welcome said hello, no files kept) says hello; a return picks a profile.
+    /// The welcome for a screen `size`, reading `localStorage` through `get`: the profiles to
+    /// pick from (a first visit's, guest alone).
     /// PINs need a `secure` page (WebCrypto). What to ask of the page at once: a damaged list
     /// set aside and reported.
     pub fn new(
@@ -228,13 +226,12 @@ impl Logon {
         let focus = list.list.iter().position(|p| Some(p.id) == last).unwrap_or(0);
         let id = list.list[focus].id;
         let seen = get(SEEN).is_some();
-        let first = stored.is_none() && !seen && get(&key(0, "home")).is_none();
         let l = Logon {
             size,
             look: ui::theme(&get(&key(id, "theme")).unwrap_or_default()).name,
             grain: get(&key(id, "grain")).as_deref() != Some("off"),
             seen,
-            state: if first { State::Hello } else { State::Pick },
+            state: State::Pick,
             read_only: why == Some(profiles::NEWER),
             list,
             focus,
@@ -517,11 +514,10 @@ impl Logon {
                 self.focus = (self.focus + if back { stops - 1 } else { 1 }) % stops;
                 self.keyed = true;
             }
-            (Key::Enter | Key::Space, State::Hello | State::Pick) => {
-                let t = match (self.state, self.focus) {
-                    (_, f) if f + 1 == stops => Target::Record,
-                    (State::Hello, _) => Target::Start,
-                    (_, f) => Target::Circle(f),
+            (Key::Enter | Key::Space, State::Pick) => {
+                let t = match self.focus {
+                    f if f + 1 == stops => Target::Record,
+                    f => Target::Circle(f),
                 };
                 self.act(t, now, get, outs);
             }
@@ -556,7 +552,7 @@ impl Logon {
                 self.go(State::Pick)
             }
             State::Unkept => outs.push(Out::Close),
-            State::Hello | State::Pick => self.keyed = false,
+            State::Pick => self.keyed = false,
         }
     }
 
@@ -590,7 +586,6 @@ impl Logon {
         }
         match (t, self.state) {
             (Target::Record, _) => self.card = !self.card,
-            (Target::Start, _) => self.sign_in(0, now, outs),
             // A PIN asked: a tap off its dots goes back to the circles.
             (Target::Circle(_) | Target::Back, State::Pin(..)) => self.go(State::Pick),
             (Target::Circle(i), _) => {
