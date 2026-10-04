@@ -183,9 +183,8 @@ fn the_welcome_then_the_desktop_start_at_the_first_usable_sizes() {
     let fx = [store(logon::SEEN, "1"), store("compusophy.last", "0"), s, Fx::TextInput(false)];
     assert_eq!(send(&mut desk, key("Enter/Enter", true)), ((true, true), fx.to_vec()));
     assert!(desk.logon.as_ref().is_some_and(Logon::leaving));
-    let got = shell(&desk);
-    assert!(got.wm().layout().is_empty() && desk.parts.is_none() && desk.saved == "Mono");
-    assert_eq!(got.vfs().read(remote::STUDIO), Ok(&b"#!wasm bin/studio.wasm\n"[..]));
+    assert!(shell(&desk).wm().layout().is_empty() && desk.parts.is_none() && desk.saved == "Mono");
+    assert_eq!(shell(&desk).vfs().read(remote::STUDIO), Ok(&b"#!wasm bin/studio.wasm\n"[..]));
 }
 
 #[test]
@@ -378,18 +377,19 @@ fn programs_reach_the_kernel_and_its_effects_the_page() {
     desk.event(resize(1280.0, 800.0), &mut ctl);
     assert_eq!(desk.ai.status().model, ai::DEFAULT_MODEL);
     assert!(shell(&desk).wm().layout().is_empty());
-    // Preferences are kept as compusophy.<key> (the AI model through the AI hub); other keys
-    // are dropped, as are streams nobody asked for.
+    // Preferences are kept as compusophy.<key> (the AI model through the AI hub, the face in the
+    // list); other keys are dropped, as are streams nobody asked for.
     let pref = |key: &str, value: &str| Effect::Pref { key: key.into(), value: value.into() };
     let mut ctl = Ctl::default();
     #[rustfmt::skip]
     let asked = [("ai.model", "zai/glm-5.3-flash"), ("ai.nope", "x"), ("dock", "studio,files"),
-        ("seen", "1"), ("reports", "off"), ("theme", "x")];
+        ("seen", "1"), ("reports", "off"), ("theme", "x"), ("face", "3"), ("face", "10")];
     asked.into_iter().for_each(|(k, v)| effect(pref(k, v), &mut ctl, &desk.ai));
     let store = |k: &str, v: &str| Fx::Store { key: k.into(), value: v.into() };
     #[rustfmt::skip]
     let stored = [store(ai::MODEL, "zai/glm-5.3-flash"), store("compusophy.dock", "studio,files"),
-        store("compusophy.seen", "1"), store("compusophy.reports", "off")];
+        store("compusophy.seen", "1"), store("compusophy.reports", "off"),
+        store(LIST, "CSPR 1 1\n0 00000003 - guest")];
     assert_eq!((ctl.effects(), desk.ai.status().model.as_str()), (&stored[..], ai::MODELS[1]));
     let end = Event::StreamEnd { id: 1, status: 0, error: "".into() };
     for ev in [Event::Chunk { id: 1, data: vec![1] }, end] {

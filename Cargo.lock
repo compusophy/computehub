@@ -140,6 +140,7 @@ dependencies = [
  "compusophy-gfx",
  "compusophy-home",
  "compusophy-host",
+ "compusophy-profiles",
  "compusophy-ui",
 ]
 
@@ -168,6 +169,13 @@ dependencies = [
  "js-sys",
  "wasm-bindgen",
  "web-sys",
+]
+
+[[package]]
+name = "compusophy-profiles"
+version = "0.1.0"
+dependencies = [
+ "compusophy-ui",
 ]
 
 [[package]]

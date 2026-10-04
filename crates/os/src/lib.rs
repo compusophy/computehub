@@ -35,6 +35,7 @@ pub mod remote;
 pub mod report;
 
 use gfx::{DrawList, Rgba};
+use logon::profiles::{LIST, set_face};
 use logon::record::{self, Record};
 use logon::{Logon, Out};
 use platform::{App, Ctl, Event, Handled, Renderer};
@@ -166,7 +167,7 @@ impl Desktop {
         if self.signed.is_none() || w < 1.0 || h < shell::BAR_H + shell::DOCK_CLEAR + 1.0 {
             return None;
         }
-        logon::sign(self.signed?);
+        logon::sign(self.signed?, ctl.storage_get(LIST).as_deref());
         let ((text, mut vfs), t) = (self.parts.take()?, ctl.monotonic_ms());
         self.home.restore(&mut vfs, ctl, &mut self.report);
         report::note(&record::home_note(self.home.kept_len(), ctl.monotonic_ms() - t));
@@ -290,9 +291,7 @@ impl Desktop {
             self.typing = on;
             ctl.set_text_input(on);
         }
-        if let Some(c) = r.cursor {
-            ctl.set_cursor(CURSORS[c as usize]);
-        }
+        r.cursor.iter().for_each(|&c| ctl.set_cursor(CURSORS[c as usize]));
         // A tap on the focused window while typing asks for text input again,
         // inside its user activation: that brings back a dismissed keyboard. A
         // finger's scroll, wander or long press does not; a long press on
@@ -569,10 +568,14 @@ fn effect(fx: Effect, ctl: &mut Ctl, ai: &ai::Ai) {
 }
 
 /// Stores a preference of [`PREFS`] as `compusophy.<key>` (the AI model through the AI hub,
-/// which checks it); any other key is dropped.
+/// which checks it; the signed-in profile's face in the list); any other key is dropped.
 fn pref(key: &str, value: &str, ctl: &mut Ctl, ai: &ai::Ai) {
     match key {
         ui::AI_MODEL => ai.set_model(ctl, value),
+        "face" => {
+            let list = set_face(ctl.storage_get(LIST).as_deref(), value);
+            list.iter().for_each(|list| ctl.storage_set(LIST, list));
+        }
         key if PREFS.contains(&key) => ctl.storage_set(&logon::own(key), value),
         _ => {}
     }

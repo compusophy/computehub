@@ -731,27 +731,51 @@ fn settings_sets_themes_models_and_switches_and_hears_the_desktop() {
         })
     };
     let told = |reports, grain, kept| Event::Prefs { reports, grain, kept };
-    let f = w.last(&[resize(720), told(true, true, true)]);
-    assert!(matches!(f.nodes[0], Node::Pages { on: 0, .. }) && on(&f, LIVING));
+    let f = w.last(&[resize(720), told(true, true, true), Event::Click { id: NAV + 1 }]);
+    assert!(matches!(f.nodes[0], Node::Pages { on: 1, .. }) && on(&f, LIVING));
     assert_eq!(w.click(THEME + 1)[0].requests, pref("theme", "Dawn"));
     // Ours stands until the desktop's word changes: told again what it said, the grain stays off.
     let f = w.send(&[Event::Click { id: LIVING }, told(true, true, true)]);
     assert!(f.len() == 1 && f[0].requests == pref("grain", "off") && !on(&f[0], LIVING));
     assert!(on(&w.last(&[told(true, false, true), told(true, true, true)]), LIVING));
-    let f = w.last(&[Event::Click { id: NAV + 1 }, Event::Config { model: MODELS[1].1.into() }]);
+    let f = w.last(&[Event::Click { id: NAV + 2 }, Event::Config { model: MODELS[1].1.into() }]);
     assert_eq!([on(&f, MODEL), on(&f, MODEL + 1)], [false, true]);
     assert_eq!(w.click(MODEL)[0].requests, pref("ai.model", MODELS[0].1));
-    let f = w.last(&[Event::Click { id: NAV + 2 }, told(true, true, false)]);
+    let f = w.last(&[Event::Click { id: NAV + 3 }, told(true, true, false)]);
     assert!(texts(&f.nodes).contains(&UNKEPT) && on(&f, REPORTS));
     assert_eq!(w.click(REPORTS)[0].requests, pref("reports", "off"));
     assert_eq!(w.click(FEEDBACK)[0].requests, [Request::Open { name: "feedback".into() }]);
 }
 
 #[test]
+fn settings_opens_on_the_profile_whose_face_a_click_picks() {
+    use crate::settings::{FACE, NAV};
+    let mut w = Win::new("/bin/settings");
+    let faces = |f: &Frame| {
+        all(&f.nodes).into_iter().find_map(|n| match n {
+            Node::Faces { id: FACE, on } => Some(*on),
+            _ => None,
+        })
+    };
+    let told = |face| Event::Face { face };
+    let f = w.last(&[resize(720)]);
+    assert!(matches!(f.nodes[0], Node::Pages { on: 0, .. }) && faces(&f) == Some(0));
+    assert_eq!(faces(&w.last(&[told(2)])), Some(2));
+    // A click picks one, which the desktop keeps; ours stands until its word changes.
+    let pref = vec![Request::Pref { key: "face".into(), value: "5".into() }];
+    assert_eq!(w.click(FACE + 5)[0].requests, pref);
+    assert!(w.send(&[told(2)]).is_empty());
+    assert_eq!(faces(&w.last(&[told(7)])), Some(7));
+    // Past the last face, a click is no face's.
+    assert!(w.click(FACE + u32::from(icons::FACES)).iter().all(|f| f.requests.is_empty()));
+    assert_eq!(faces(&w.last(&[Event::Click { id: NAV + 1 }])), None);
+}
+
+#[test]
 fn settings_resets_only_once_the_word_is_typed() {
     use crate::settings::{ERASE, NAV, SAY, WORD};
     let mut w = Win::new("/bin/settings");
-    let f = w.last(&[resize(720), Event::Click { id: NAV + 3 }]);
+    let f = w.last(&[resize(720), Event::Click { id: NAV + 4 }]);
     let erase = |f: &Frame| {
         all(&f.nodes).into_iter().find_map(|n| match n {
             Node::Button { id: ERASE, variant, .. } => Some(*variant),

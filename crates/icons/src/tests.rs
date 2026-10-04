@@ -63,6 +63,39 @@ fn the_mark_is_rings_of_fibonacci_dots() {
     assert!(near(center(&o[2]), (634.87, 634.87)) && near(center(&o[364]), (478.97, 981.68)));
 }
 
+/// Face `n`'s dots.
+fn dots(n: u8) -> Vec<(f32, f32)> {
+    let mut out = Vec::new();
+    face(n, |x, y| out.push((x, y)));
+    out
+}
+
+#[test]
+fn a_face_holds_its_count_of_dots_upright_apart_and_inside_its_ring() {
+    for n in 0..FACES {
+        let dots = dots(n);
+        assert_eq!(dots.len(), usize::from(n));
+        // Mirrored left to right, and clear of the ring by more than they are of each other.
+        for &(x, y) in &dots {
+            assert!(dots.iter().any(|d| (d.0 + x).abs() < 1e-4 && (d.1 - y).abs() < 1e-4));
+            assert!((x * x + y * y).sqrt() + 2.5 * FACE_DOT < 1.0, "{n}: {x} {y}");
+        }
+        // No two touch: a dot's width between them at least.
+        for (i, a) in dots.iter().enumerate() {
+            for b in &dots[i + 1..] {
+                let apart = ((a.0 - b.0).powi(2) + (a.1 - b.1).powi(2)).sqrt();
+                assert!(apart >= 3.0 * FACE_DOT, "{n}: {a:?} {b:?}");
+            }
+        }
+    }
+    // One is the middle; two side by side; three an apex up; seven the middle in six.
+    assert_eq!(dots(1), [(0.0, 0.0)]);
+    let two = dots(2);
+    assert!(two.iter().all(|d| d.1.abs() < 1e-4) && (two[0].0 + two[1].0).abs() < 1e-4);
+    assert!(dots(3)[0].0.abs() < 1e-4 && dots(3)[0].1 < 0.0);
+    assert_eq!((dots(7)[0], dots(200).len()), ((0.0, 0.0), usize::from(FACES - 1)));
+}
+
 #[test]
 fn sigils_are_one_shape_per_name_and_differ_between_names() {
     let fnv = |s: &str| {

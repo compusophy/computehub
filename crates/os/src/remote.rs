@@ -6,7 +6,7 @@
 //! honored (Size in the first only; Focus when the frame holds that Input, Code or Area; Feedback
 //! goes to the page; Watch, End, Pref (`theme` a theme) and Reset from the OS's own windows alone,
 //! Activity's and Settings', which run its own `bin/system.wasm`, never what a `/bin` file names,
-//! and hear [`Event::Prefs`] after the first Resize, then with an event once they change); a
+//! and hear [`Event::Prefs`] and [`Event::Face`] after the first Resize, then once they change); a
 //! clean exit or a kill (137) closes the window, and closing it sends [`Event::Close`]. The
 //! window's focus goes to the program as [`Event::Focus`], and a prompt from the everything bar
 //! as [`Event::Ask`], held until it starts. Edited text is owned as uiwire says ([`Texts`]), one
@@ -124,7 +124,7 @@ pub struct Remote {
     ai: Ai,
     /// The OS's own window (Activity's, Settings'), and what Settings shows as it was last told.
     trusted: bool,
-    prefs: Option<[bool; 3]>,
+    prefs: Option<([bool; 3], u8)>,
     /// Why nothing runs (empty while it does), and its last output.
     note: String,
     log: String,
@@ -176,10 +176,11 @@ impl Remote {
         }
         let Some(pid) = self.pid else { return };
         cx.kernel.post_event(pid, &ev.encode());
-        let now = [!cx.ai.reports_off, cx.grain, !cx.ai.unkept];
+        let now = ([!cx.ai.reports_off, cx.grain, !cx.ai.unkept], logon::profiles::face());
         if self.trusted && self.prefs.replace(now) != Some(now) {
-            let [reports, grain, kept] = now;
-            cx.kernel.post_event(pid, &Event::Prefs { reports, grain, kept }.encode());
+            let ([reports, grain, kept], face) = now;
+            let told = [Event::Prefs { reports, grain, kept }, Event::Face { face }];
+            told.iter().for_each(|ev| cx.kernel.post_event(pid, &ev.encode()));
         }
     }
 
@@ -321,11 +322,7 @@ impl Remote {
                 Request::Feedback { kind, text, context } => cx.feedback(&kind, &text, context),
                 r @ (Request::Act { .. } | Request::Status { .. }) => cx.agent(r),
                 // The OS's own windows' alone (Watch and End go to the hub); others', dropped.
-                Request::Watch { .. }
-                | Request::End { .. }
-                | Request::Pref { .. }
-                | Request::Reset
-                    if !self.trusted => {}
+                r if !self.trusted && r.own() => {}
                 Request::Reset => cx.reset(),
                 Request::Pref { key, value } if key == "theme" => cx.set_theme(&value),
                 Request::Pref { key, value } => cx.pref(&key, &value),

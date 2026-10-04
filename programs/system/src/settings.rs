@@ -1,15 +1,18 @@
-//! Settings: the themes and the living grain, the AI model, what gets reported, and a reset.
+//! Settings: the profile's face, the themes and the living grain, the AI model, what gets
+//! reported, and a reset.
 
 use std::mem;
 
+use icons::FACES;
 use uiwire::{Event, Frame, Node, Request, Style, Variant};
 
 use crate::{Disk, View, space, text};
 
 /// The pages, one a line.
-const PAGES: &str = "Appearance\nAI\nPrivacy\nReset";
+const PAGES: &str = "Profile\nAppearance\nAI\nPrivacy\nReset";
 /// Widget ids: page `i` is `NAV + i`, theme `i` `THEME + i`, model `i` `MODEL + i`; the reports
-/// switch, the feedback link and the grain's switch; the reset's word and its button.
+/// switch, the feedback link and the grain's switch; the reset's word and its button; face `i`
+/// `FACE + i`.
 pub(crate) const NAV: u32 = 1;
 pub(crate) const THEME: u32 = 10;
 pub(crate) const MODEL: u32 = 20;
@@ -18,6 +21,9 @@ pub(crate) const FEEDBACK: u32 = 31;
 pub(crate) const LIVING: u32 = 32;
 pub(crate) const WORD: u32 = 40;
 pub(crate) const ERASE: u32 = 41;
+pub(crate) const FACE: u32 = 50;
+const FACE_NOTE: &str = "Your face is how the welcome shows you, above your name. Each \
+profile starts with the fewest dots no other has: guest none, the first one, the next two.";
 /// The desktop's themes in its own order, which its theme cards' ids follow.
 pub(crate) const THEMES: [&str; 3] = ["Midnight", "Dawn", "Mono"];
 /// The models on offer as (name, then what it is best at; the value stored), the first the
@@ -49,7 +55,7 @@ const TYPE: &str = "Type reset to confirm.";
 /// The widest row of cards.
 const ROW_MAX: u16 = 440;
 
-/// Settings: Appearance (the desktop's themes as cards, a click applying one; the living grain's
+/// Settings: Profile (the faces, a click picking one, which the desktop keeps), Appearance (the desktop's themes as cards, a click applying one; the living grain's
 /// switch), AI (a note on the free AI, the models as cards; a click picks one, which the desktop
 /// stores), Privacy (the automatic reports switch, what a report holds, where files stay or
 /// that they could not be kept, a link to Feedback) and Reset (what it erases; once `reset` is
@@ -64,6 +70,9 @@ pub struct Settings {
     model: String,
     pub(crate) on: [bool; 3],
     told: Option<[bool; 3]>,
+    /// The signed-in profile's face: as last picked here or told, and as told.
+    pub(crate) face: u8,
+    told_face: Option<u8>,
     /// What is typed to reset.
     pub(crate) word: String,
     /// The nodes last framed, the requests since, whether a frame went yet.
@@ -80,6 +89,8 @@ impl Default for Settings {
             model: String::new(),
             on: [true; 3],
             told: None,
+            face: 0,
+            told_face: None,
             word: String::new(),
             shown,
             requests,
@@ -99,6 +110,11 @@ impl View for Settings {
                     if was.is_none_or(|w| w[i] != on) {
                         self.on[i] = on;
                     }
+                }
+            }
+            Event::Face { face } => {
+                if self.told_face.replace(face) != Some(face) {
+                    self.face = face;
                 }
             }
             Event::Click { id } => self.click(id),
@@ -127,7 +143,8 @@ impl Settings {
         self.word.trim().eq_ignore_ascii_case(SAY)
     }
 
-    /// A click on widget `id`: a page, a theme, a model, a switch, the feedback link or Erase.
+    /// A click on widget `id`: a page, a face, a theme, a model, a switch, the feedback link or
+    /// Erase.
     fn click(&mut self, id: u32) {
         let pref = |key: &str, value: &str| Request::Pref { key: key.into(), value: value.into() };
         if let Some(name) = THEMES.get(id.wrapping_sub(THEME) as usize) {
@@ -143,7 +160,10 @@ impl Settings {
             self.requests.push(Request::Open { name: "feedback".into() });
         } else if id == ERASE && self.armed() {
             self.requests.push(Request::Reset);
-        } else if id.wrapping_sub(NAV) < 4 {
+        } else if id.wrapping_sub(FACE) < u32::from(FACES) {
+            self.face = (id - FACE) as u8;
+            self.requests.push(pref("face", &self.face.to_string()));
+        } else if id.wrapping_sub(NAV) < 5 {
             self.page = (id - NAV) as u8;
         }
     }
@@ -156,6 +176,13 @@ impl Settings {
         let mut nodes = vec![pages];
         match self.page {
             0 => nodes.extend([
+                text(Style::Heading, "Profile"),
+                text(Style::Small, FACE_NOTE),
+                space(0),
+                Node::Faces { id: FACE, on: self.face },
+                space(0),
+            ]),
+            1 => nodes.extend([
                 text(Style::Heading, "Appearance"),
                 text(Style::Small, "Pick a theme. The whole desktop follows at once."),
                 space(0),
@@ -166,7 +193,7 @@ impl Settings {
                 // The view ends a spacing below the note.
                 space(0),
             ]),
-            1 => {
+            2 => {
                 // A model not on offer (or none yet) is the default, as the desktop stores it.
                 let on = MODELS.iter().position(|m| m.1 == self.model).unwrap_or(0);
                 let models = MODELS
@@ -181,7 +208,7 @@ impl Settings {
                     Node::Pane { id: 0, w: ROW_MAX, children: models.collect() },
                 ]);
             }
-            3 => {
+            4 => {
                 let (value, placeholder) = (self.word.clone(), SAY.into());
                 let variant = if self.armed() { Variant::Danger } else { Variant::Normal };
                 nodes.extend([

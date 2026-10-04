@@ -11,7 +11,8 @@
 //! - Arcs are quadratic segments of at most π / 8, within 0.02% of round.
 //!
 //! A `.app` file draws its own icon if its header has one ([`made`]: a line of shapes Studio's AI
-//! writes for the app), else its [`sigil`], drawn from a hash of its name.
+//! writes for the app), else its [`sigil`], drawn from a hash of its name. A person's face is a
+//! ring holding dots ([`face`]): guest's none, the first profile's one, the next two.
 
 #![forbid(unsafe_code)]
 
@@ -228,6 +229,30 @@ pub fn rings() -> impl Iterator<Item = (usize, f32, f32)> {
         s = (n, prev + n, r + step, step / PHI, dot / PHI);
         (n, r + step, dot / PHI)
     })
+}
+
+/// The faces a profile can have: face `n` is a ring holding `n` dots.
+pub const FACES: u8 = 10;
+/// A face's dots' radius, in units of its ring's radius: 1/φ⁴, a dot 1/φ⁴ of the face across.
+pub const FACE_DOT: f32 = 1.0 / (PHI * PHI * PHI * PHI);
+
+/// Face `n`'s dots (`n` at most [`FACES`] - 1), each `dot`'s center in units of its ring's radius
+/// from its center, y down. One sits in the middle; two to six go round a ring 2/φ³ out,
+/// upright (an apex at the top when odd, a flat top when even); seven to nine, one in the
+/// middle and the rest round a ring their neighbors as far apart as six are.
+pub fn face(n: u8, mut dot: impl FnMut(f32, f32)) {
+    let n = u32::from(n.min(FACES - 1));
+    let m = if n == 1 || n >= 7 { n - 1 } else { n };
+    if m < n {
+        dot(0.0, 0.0);
+    }
+    let (k, near) = (m.max(1) as f32, 2.0 / (PHI * PHI * PHI));
+    let at = if m > 6 { near / (2.0 * sin(PI / k)) } else { near };
+    let turn = if m % 2 == 0 { FRAC_PI_2 + PI / k } else { FRAC_PI_2 };
+    for j in 0..m {
+        let a = turn - TAU * j as f32 / k;
+        dot(at * cos(a), -at * sin(a));
+    }
 }
 
 /// The center dot and every ring's dots, each ring's first dot at 12 o'clock and the rest

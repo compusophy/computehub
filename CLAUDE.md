@@ -51,7 +51,7 @@ AI for all); later pooled compute across tabs and devices. Author handle: compus
 crates/      the OS (boot, kernel, worker); talks WASI and uiwire
   wm/        floating window manager: stacking, snapping, focus; deterministic
   vfs/       in-memory filesystem, deterministic (/apps, /home, /tmp)
-  font/      TrueType reader + glyph rasterizer (no font engine ships)
+  font/      TrueType reader + glyph rasterizer
   gfx/       instanced-quad draw list, glyph atlas, the WebGL2 shaders
   text/      TextSystem: font slots, fallbacks, glyphs on the atlas
   icons/     the mark, glyphs and made icons as vector outlines (`ui::icon`)
@@ -60,15 +60,16 @@ crates/      the OS (boot, kernel, worker); talks WASI and uiwire
   vt/        VT/xterm escape parser        term/  terminal screen model
   apps/      Terminal (built in), a console
   uiwire/    remote UI protocol: GUI programs send widget trees, get events
-  uiview/    draws them with ui; holds edited text
+  uiview/    draws them with ui; edited text
   host/      wm + one app per window; agent; grabs, squeeze; motion, frames
-  home/      top bar, home grid (every app), dock + Assistant row, menus, touch
-  logon/     the welcome: mark, real boot record, profiles, PIN
+  home/      top bar, home grid, dock + Assistant row, menus, touch
+  logon/     the welcome: mark, real boot record, sign-in, PIN
+  profiles/  the list: each profile's keys, face, name, PIN
   shell/     the desktop: window chrome, keys, overlay; wires host + home
   platform/  the browser boundary: canvas, WebGL2, input, textarea, fetch,
              frames on demand, localStorage, workers, beacon
-  os/        wasm entry: fonts, VFS, registry, prefs, event glue, Remote (a
-             program's window), ai, report (telemetry), home (/home kept)
+  os/        wasm entry: fonts, VFS, registry, prefs, events, Remote (a
+             program's window), ai, report, home (/home kept)
   kernel/    deterministic: wire protocol, process table, consoles,
              jobs, file server (main), snap (/home), module
   wasi/      the kernel's worker half: WASI preview 1 Proc, fds, /dev

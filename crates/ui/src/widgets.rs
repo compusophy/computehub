@@ -430,6 +430,11 @@ impl<'a> Ui<'a> {
         crate::icon::draw(self.list, self.text, r, g, color);
     }
 
+    /// Face `n` ([`crate::icon::face`]) in the square centered in `r`: its ring, its dots.
+    pub fn face(&mut self, r: RectF, n: u8, colors: [Rgba; 2]) {
+        crate::icon::face(self.list, self.text, r, n, colors);
+    }
+
     /// `r` filled with its rounded corners in a vertical gradient.
     pub fn gradient(&mut self, r: RectF, radius: f32, top: Rgba, bottom: Rgba) {
         self.list.gradient(r, radius, top, bottom, 0.0);

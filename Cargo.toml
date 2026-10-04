@@ -7,6 +7,7 @@ members = [
     "crates/host",
     "crates/home",
     "crates/logon",
+    "crates/profiles",
     "crates/shell",
     "crates/platform",
     "crates/os",
@@ -56,6 +57,7 @@ compusophy-gfx = { path = "crates/gfx", version = "0.1.0" }
 compusophy-host = { path = "crates/host", version = "0.1.0" }
 compusophy-home = { path = "crates/home", version = "0.1.0" }
 compusophy-logon = { path = "crates/logon", version = "0.1.0" }
+compusophy-profiles = { path = "crates/profiles", version = "0.1.0" }
 compusophy-shell = { path = "crates/shell", version = "0.1.0" }
 compusophy-platform = { path = "crates/platform", version = "0.1.0" }
 compusophy-font = { path = "crates/font", version = "0.1.0" }

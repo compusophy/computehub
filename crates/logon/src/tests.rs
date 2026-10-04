@@ -1,7 +1,7 @@
 use super::*;
 use crate::paint::{BAND, FADE, FLIGHT, TOUCH, TRACK};
 use gfx::{DrawList, Kind};
-use profiles::{Pin, fnv};
+use profiles::Pin;
 use record::{Record, Timing};
 use ui::TextSystem;
 
@@ -145,7 +145,7 @@ fn signed_in(id: &str) -> Vec<Out> {
 }
 
 /// Two profiles: guest, and ana (id 2: a removed 1 is never reused).
-const TWO: &str = "CSPR 1 3\n0 be5cdbf3 - guest\n2 0c55aa31 - ana";
+const TWO: &str = "CSPR 1 3\n0 00000000 - guest\n2 00000001 - ana";
 
 #[test]
 fn the_hairline_keeps_gaps_and_lands_on_device_pixels() {
@@ -174,93 +174,14 @@ fn the_hairline_keeps_gaps_and_lands_on_device_pixels() {
 }
 
 #[test]
-fn profiles_keep_their_own_keys_and_the_first_keeps_todays() {
-    // Profile 0's keys are the ones from before profiles: nothing was moved.
-    let today = "compusophy.home compusophy.home.bad compusophy.home.mark compusophy.theme \
-        compusophy.dock compusophy.home.order compusophy.grain compusophy.ai.model \
-        compusophy.reports compusophy.outbox";
-    assert_eq!(PER_PROFILE.map(|k| key(0, k)).join(" "), today);
-    assert_eq!(
-        [key(7, "home"), key(1000, "theme")],
-        ["compusophy.7.home", "compusophy.1000.theme"]
-    );
-    // Every profile's keys (ids to 1,000) and the device's are apart.
-    let mut all: Vec<String> = (0..=1000).flat_map(|id| PER_PROFILE.map(|k| key(id, k))).collect();
-    all.extend([LIST, profiles::LIST_BAD, LAST, SEEN, SESSION].map(String::from));
-    let n = all.len();
-    all.sort();
-    all.dedup();
-    assert_eq!(all.len(), n);
-    // Before a sign-in, profile 0's; then the signed-in one's, by name or by a first key.
-    // A panic stays unreported if that one's reports are off (before: any listed one's).
-    let off = [(LIST, TWO), ("compusophy.2.reports", "off")];
-    assert_eq!(
-        (active(), own("compusophy.theme"), quiet(&store(&off))),
-        (None, key(0, "theme"), true)
-    );
-    sign(2);
-    assert_eq!((own("compusophy.outbox"), own("ai.model")), (key(2, "outbox"), key(2, "ai.model")));
-    assert!(quiet(&store(&off)) && !quiet(&store(&[])));
-    // Its files go unkept once another tab removed it; the first is listed with no list.
-    assert!(listed(Some(TWO)) && !listed(None) && !listed(Some("CSPR 1 3\n0 be5cdbf3 - guest")));
-    sign(0);
-    assert!(listed(None) && !quiet(&store(&off)));
+fn a_reload_goes_back_to_a_listed_profile_and_the_tabs_keys_are_the_devices() {
+    let keys = [LIST, profiles::LIST_BAD, LAST, SEEN, SESSION];
+    assert!(keys.iter().all(|k| k.starts_with("compusophy.") && profiles::key(0, "home") != *k));
     // A reload goes back to a listed profile's desktop, never another's.
     for (s, want) in [(Some("2"), Some(2)), (Some("1"), None), (Some("x"), None), (None, None)] {
         assert_eq!(session(s, &store(&[(LIST, TWO)])), want, "{s:?}");
     }
     assert_eq!(session(Some("0"), &store(&[])), Some(0));
-}
-
-#[test]
-fn the_list_reads_back_what_it_wrote_and_codes_what_it_cannot() {
-    let implied = Profiles::implied();
-    assert_eq!((implied.list[0].seed, implied.list[0].name.as_str()), (fnv("guest"), "guest"));
-    assert_eq!(Profiles::read(None), (implied.clone(), None));
-    assert_eq!(implied.format(), "CSPR 1 1\n0 be5cdbf3 - guest");
-    // Up to eight, names with spaces or past ASCII, each reads back; ids are never reused.
-    let mut p = implied;
-    let names = ["kai", "Ana María", "\u{674e}", "x y z", "a-b", "Zo\u{eb}", "seven"];
-    for (i, name) in names.into_iter().enumerate() {
-        let seed = i as u32 * 0x1234_5679;
-        let id = p.apply(Op::Add { name: name.into(), seed, pin: None }, &|_| false);
-        assert_eq!(id, Ok(i as u32 + 1));
-        assert_eq!(Profiles::read(Some(&p.format())), (p.clone(), None));
-    }
-    let add = |name: &str| Op::Add { name: name.into(), seed: 1, pin: None };
-    assert_eq!(p.apply(add("nine"), &|_| false), Err(profiles::FULL));
-    assert_eq!(p.apply(Op::Remove(3), &|_| false), Ok(3));
-    assert_eq!(p.apply(add("KAI"), &|_| false), Err(profiles::TAKEN));
-    // A new one skips ids whose keys are still there: it inherits no one's files.
-    assert_eq!(p.apply(add("eight"), &|id| id == 8), Ok(9));
-    assert_eq!(p.apply(Op::Rename(9, "Kai".into()), &|_| false), Err(profiles::TAKEN));
-    assert_eq!(p.apply(Op::Rename(9, "EIGHT".into()), &|_| false), Ok(9));
-    assert_eq!(p.apply(Op::Remove(3), &|_| false), Err(profiles::GONE));
-    let mut one = Profiles::implied();
-    assert_eq!(one.apply(Op::Remove(0), &|_| false), Err(profiles::LAST_ONE));
-    // Damaged lists offer profile 0 alone; a newer one reads as far as it can, read-only.
-    let guest = "0 be5cdbf3 - guest";
-    #[rustfmt::skip]
-    let bad = ["", "CSPR", "CSPX 1 1\n0 be5cdbf3 - guest", "CSPR 1 1\n0 5be1c0dz - guest",
-        "CSPR 1 1\n1 be5cdbf3 - guest", "CSPR 1 2\n0 be5cdbf3 - guest\n1 be5cdbf3 - GUEST",
-        "CSPR 1 1\n0 be5cdbf3 - ", "CSPR 1 1\n0 be5cdbf3 -  guest", "CSPR 1 1", "CSPR 0 1\n0",
-        "CSPR 1 1\n0 be5cdbf3\t- guest"];
-    for s in bad {
-        assert_eq!(
-            Profiles::read(Some(s)),
-            (Profiles::implied(), Some(profiles::DAMAGED)),
-            "{s:?}"
-        );
-    }
-    let nine: String = (0..9).map(|i| format!("\n{i} 0000000{i} - p{i}")).collect();
-    assert_eq!(Profiles::read(Some(&format!("CSPR 1 9{nine}"))).1, Some(profiles::DAMAGED));
-    let newer = Profiles::read(Some(&format!("CSPR 2 5\n{guest}\n4 00000001 - kai")));
-    assert_eq!((newer.0.list.len(), newer.1), (2, Some(profiles::NEWER)));
-    // Names: control chars go, the ends are trimmed, 24 chars at most, never none.
-    let long = "abcdefghijklmnopqrstuvwxyz";
-    assert_eq!(profiles::clean("  k\u{7}ai \n"), Ok("kai".into()));
-    assert_eq!(profiles::clean(long), Ok(long[..24].into()));
-    assert_eq!(profiles::clean(" \t "), Err(profiles::NO_NAME));
 }
 
 #[test]
@@ -343,11 +264,10 @@ fn add_names_a_new_profile_and_signs_in_to_it() {
         l.typed.clear();
     }
     // Typed, a char taken back: the new profile is stored, on the list as it is now (another
-    // tab's profile kept), its face from fresh bytes, and signed in to.
+    // tab's profile kept), its face the fewest dots no other has, and signed in to.
     let other = [(SEEN, "1"), (LIST, TWO)];
-    l.fresh[..4].copy_from_slice(&[1, 2, 3, 4]);
     let ins = [Input::Text(" Kai\u{7}x".into()), down(Key::Backspace), down(Key::Enter)];
-    let list = "CSPR 1 4\n0 be5cdbf3 - guest\n2 0c55aa31 - ana\n3 04030201 - Kai";
+    let list = "CSPR 1 4\n0 00000000 - guest\n2 00000001 - ana\n3 00000002 - Kai";
     let want = [&[Out::Set(LIST.into(), list.into())][..], &signed_in("3")].concat();
     assert_eq!(feed(&mut l, &other, &ins), want);
     // (the keyboard went with the name: nothing more to say).
@@ -392,7 +312,7 @@ fn a_held_circle_opens_its_menu_to_rename_or_remove_it() {
     feed(&mut l, &kv, &tap(x, y));
     assert_eq!((l.state, l.typed.as_str()), (State::Name(Some(2)), "ana"));
     let ins = [down(Key::Backspace), Input::Text("A B".into()), down(Key::Enter)];
-    let renamed = "CSPR 1 3\n0 be5cdbf3 - guest\n2 0c55aa31 - anA B";
+    let renamed = "CSPR 1 3\n0 00000000 - guest\n2 00000001 - anA B";
     assert_eq!(feed(&mut l, &kv, &ins), [Out::Set(LIST.into(), renamed.into())]);
     assert_eq!((l.state, l.leaving()), (State::Pick, false));
     // Remove (of the list as stored: here, still ana's name): a right-click opens the menu; a
@@ -411,10 +331,10 @@ fn a_held_circle_opens_its_menu_to_rename_or_remove_it() {
     feed(&mut l, &kv, &[Input::PointerDown { x: 1.0, y: 1.0, button: 2, touch: false }]);
     l.state = State::Confirm(2);
     let gone = PER_PROFILE.map(|k| Out::Remove(key(2, k)));
-    let list = Out::Set(LIST.into(), "CSPR 1 3\n0 be5cdbf3 - guest".into());
+    let list = Out::Set(LIST.into(), "CSPR 1 3\n0 00000000 - guest".into());
     assert_eq!(feed(&mut l, &kv, &[down(Key::Enter)]), [&gone[..], &[list]].concat());
     // The last one cannot go (the list as stored now holds guest alone).
-    let kv = [(SEEN, "1"), (LIST, "CSPR 1 3\n0 be5cdbf3 - guest")];
+    let kv = [(SEEN, "1"), (LIST, "CSPR 1 3\n0 00000000 - guest")];
     draw(&mut l, 3000.0);
     let (x, y) = spot(&l, Target::Circle(0));
     feed(&mut l, &kv, &[Input::PointerDown { x, y, button: 2, touch: false }]);
@@ -583,27 +503,7 @@ fn hash_of(digits: &str) -> Vec<u8> {
 fn pinned() -> String {
     let hash = hash_of("2468").try_into().expect("32 bytes");
     let pin = Pin { len: 4, iterations: 9, salt: [7; 16], hash }.format();
-    format!("CSPR 1 2\n0 be5cdbf3 - guest\n1 0c55aa31 {pin} kai")
-}
-
-#[test]
-fn a_pins_record_reads_back_and_only_a_well_formed_one() {
-    let pin = Pin { len: 4, iterations: 100_000, salt: [7; 16], hash: [0xab; 32] };
-    let rec = pin.format();
-    assert_eq!((&rec[..18], Pin::read(&rec)), ("p1:4:100000:070707", Some(pin)));
-    let hex = |n: usize| "ab".repeat(n);
-    let (salt, hash) = (hex(16), hex(32));
-    #[rustfmt::skip]
-    let bad = [format!("p1:3:9:{salt}:{hash}"), format!("p1:9:9:{salt}:{hash}"),
-        format!("p2:4:9:{salt}:{hash}"), format!("p1:4:0:{salt}:{hash}"),
-        format!("p1:4:9:{}:{hash}", hex(15)), format!("p1:4:9:{salt}:{}", hash.to_uppercase()),
-        format!("p1:4:9:{salt}:{hash}:"), String::from("-x")];
-    assert!(bad.iter().all(|b| Pin::read(b).is_none()));
-    // A list keeps a PIN's record and reads it back; a bad one damages it.
-    let list = pinned();
-    assert_eq!(Profiles::read(Some(&list)).0.format(), list);
-    let broken = list.replace("p1:4:9", "p1:4:x");
-    assert_eq!(Profiles::read(Some(&broken)).1, Some(profiles::DAMAGED));
+    format!("CSPR 1 2\n0 00000000 - guest\n1 00000001 {pin} kai")
 }
 
 #[test]
@@ -651,7 +551,7 @@ fn a_pin_is_checked_by_the_browser_asked_at_every_load_and_never_kept() {
     // profile it removed is gone.
     let (mut l, ..) = drawn((411.0, 794.0), 3.5, &[(SEEN, "1"), (LIST, TWO)]);
     let rec = list.split(' ').find(|t| t.starts_with("p1:")).expect("a record");
-    let now = TWO.replace("2 0c55aa31 -", &format!("2 0c55aa31 {rec}"));
+    let now = TWO.replace("2 00000001 -", &format!("2 00000001 {rec}"));
     let stored = [(SEEN, "1"), (LIST, &now[..])];
     let (x, y) = spot(&l, Target::Circle(1));
     assert_eq!(
@@ -671,7 +571,7 @@ fn a_pin_is_checked_by_the_browser_asked_at_every_load_and_never_kept() {
 fn a_new_profile_may_take_a_pin_chosen_twice() {
     let kv = [(SEEN, "1")];
     let (mut l, _, mut t) = drawn((411.0, 794.0), 3.5, &kv);
-    l.fresh = [1, 2, 3, 4, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9];
+    l.fresh = [9; 16];
     let (x, y) = spot(&l, Target::Circle(1));
     feed(&mut l, &kv, &tap(x, y));
     assert_eq!(feed(&mut l, &kv, &[Input::Text("kai".into()), down(Key::Enter)]), []);
@@ -700,7 +600,7 @@ fn a_new_profile_may_take_a_pin_chosen_twice() {
     // Its record is kept on the list (never the digits), and the new profile signed in to.
     let (_, outs) = l.derived(1, Ok(vec![5; 32]), 100.0, &store(&kv));
     let pin = Pin { len: 4, iterations, salt: [9; 16], hash: [5; 32] }.format();
-    let list = format!("CSPR 1 2\n0 be5cdbf3 - guest\n1 04030201 {pin} kai");
+    let list = format!("CSPR 1 2\n0 00000000 - guest\n1 00000001 {pin} kai");
     let set = Out::Set(LIST.into(), list.clone());
     let (last, pad) = (Out::Set(LAST.into(), "1".into()), Out::Numeric(false));
     let want = vec![set, last, pad, Out::SignIn(1)];
@@ -736,7 +636,7 @@ fn a_pin_guards_its_profiles_menu_but_never_removal() {
     assert_eq!(l.state, State::Pin(1, Then::Unpin));
     feed(&mut l, &kv, &[Input::Text("2468".into())]);
     let (_, outs) = l.derived(2, Ok(hash_of("2468")), 100.0, &store(&kv));
-    let bare = "CSPR 1 2\n0 be5cdbf3 - guest\n1 0c55aa31 - kai";
+    let bare = "CSPR 1 2\n0 00000000 - guest\n1 00000001 - kai";
     assert_eq!((outs, l.state), (vec![Out::Set(LIST.into(), bare.into())], State::Pick));
     // Removing it never asks the PIN: a forgotten one means just that.
     let (mut l, ..) = drawn((1280.0, 800.0), 1.0, &kv);

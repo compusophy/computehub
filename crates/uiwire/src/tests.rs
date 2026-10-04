@@ -87,6 +87,7 @@ fn events() -> Vec<Event> {
         Event::Focus { on: true },
         Event::Focus { on: false },
         Event::Prefs { reports: true, grain: false, kept: true },
+        Event::Face { face: 3 },
     ]
 }
 
@@ -114,6 +115,7 @@ fn every_kind_round_trips_and_nothing_else_decodes() {
     let own = [
         Node::Pages { id: 1, on: 2, labels: "Appearance\nAI\nPrivacy".into() },
         Node::Themes { id: 10 },
+        Node::Faces { id: 50, on: 4 },
         Node::Choice { id: 20, on: true, text: "GLM 5.3\nbest answers".into() },
         Node::Switch { id: 30, on: false, label: "Living grain".into() },
         Node::Button { id: 31, variant: Variant::Link, label: "Send feedback".into() },
