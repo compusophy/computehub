@@ -1,6 +1,5 @@
-// Snake: the arrows or the buttons steer; eat the food; the walls and your tail end it.
+// Snake: the arrows, or a tap toward a square, steer; eat the food; walls and your tail end it.
 // icon: line 4 20 4 13 11 13 11 20 19 20 19 9 dot 19 6 3 dot 7 5 2
-state cells = [0; 300];   // what the grid shows, 20 x 15: drawn anew from the states below
 state xs = [0; 0];        // the body, head last
 state ys = [0; 0];
 state dx = 1;             // the way it moves
@@ -14,7 +13,7 @@ saved state best = 0;
 
 fn at(x: int, y: int) -> int { return y * 20 + x; }
 
-// Whether the body is on (x, y): the game asks its states, never the grid.
+// Whether the body is on (x, y): the game asks its states, never what it drew.
 fn body(x: int, y: int) -> bool {
   for i in 0..len(xs) {
     if xs[i] == x && ys[i] == y { return true; }
@@ -22,11 +21,13 @@ fn body(x: int, y: int) -> bool {
   return false;
 }
 
-// The squares from what the game remembers: the body and the food.
-fn paint() {
-  for i in 0..len(cells) { cells[i] = 0; }
+// The board, 20 x 15 squares of 8 units, made anew from what the game remembers.
+fn scene() {
+  let cells = [-1; 300];
   for i in 0..len(xs) { cells[at(xs[i], ys[i])] = 2; }
-  cells[at(fx, fy)] = 1;
+  if len(xs) > 0 { cells[at(fx, fy)] = 1; }
+  pixels(cells, 0, 0, 20, 8);
+  if speed == 0 { text("Snake", 80, 60, 16, 11); }
 }
 
 // Food on a free square: the first one from a random place on.
@@ -52,7 +53,6 @@ fn start() {
   ny = 0;
   food();
   speed = 150;
-  paint();
 }
 
 // A turn, taken at the next step; never straight back.
@@ -60,6 +60,20 @@ fn turn(x: int, y: int) {
   if x != -dx || y != -dy {
     nx = x;
     ny = y;
+  }
+}
+
+// A tap at square (x, y) turns toward it, across or down, whichever is farther.
+fn toward(x: int, y: int) {
+  if len(xs) == 0 { return; }
+  let ax = x - xs[len(xs) - 1];
+  let ay = y - ys[len(ys) - 1];
+  if abs(ax) > abs(ay) {
+    if ax > 0 { turn(1, 0); } else { turn(-1, 0); }
+  } else if ay > 0 {
+    turn(0, 1);
+  } else if ay < 0 {
+    turn(0, -1);
   }
 }
 
@@ -80,7 +94,6 @@ every speed {
       remove(xs, 0);
       remove(ys, 0);
     }
-    paint();
   }
 }
 
@@ -91,13 +104,7 @@ on key "down" { turn(0, 1); }
 
 label "Snake";
 label "Length " + len(xs) + "   Best " + best;
-grid 20, cells;
-row {
-  button "Left" { turn(-1, 0); }
-  button "Up" { turn(0, -1); }
-  button "Down" { turn(0, 1); }
-  button "Right" { turn(1, 0); }
-}
+canvas 160, 120, scene() { toward(x / 8, y / 8); }
 if speed == 0 {
   if len(xs) > 0 { label "Game over"; }
   button "Start" { start(); }

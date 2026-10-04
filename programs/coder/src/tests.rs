@@ -340,6 +340,8 @@ fn the_system_prompt_is_stable_and_whole() {
     }
     assert!(s.contains("<<<<<<< SEARCH\nlines copied exactly") && !s.contains(DEFAULT_MODEL));
     assert!(!s.contains(HOME) && s.starts_with("You write apps for Studio"));
+    // What is seen is drawn on a canvas; the first example draws its board as pixels.
+    assert!(s.contains("chart) is drawn on a canvas, never") && shots[0].contains("pixels(cells"));
     // FNV-1a 64: a change to the prompt is a decision (and an eval), never a drift.
     let fnv = s
         .bytes()
@@ -354,7 +356,7 @@ fn the_system_prompt_is_stable_and_whole() {
 }
 
 /// The system prompt's hash (see the test above).
-const FNV: u64 = 0x8b2d_8925_97c7_62ad;
+const FNV: u64 = 0x1845_071d_0aa7_189e;
 
 #[test]
 fn a_clean_write_is_one_request() {

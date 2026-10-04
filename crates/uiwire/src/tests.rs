@@ -431,6 +431,7 @@ fn canvases() -> [Node; 2] {
         draw(Shape::Line, 10, [100, 8, -100, 291, 3], ""),
         draw(Shape::Text, 11, [80, 4, 6, 0, 0], "Score 7 \u{e9}"),
         draw(Shape::Sprite, 0, [8, 12, 2, 0, 0], "..5..\n.555."),
+        draw(Shape::Pixels, 0, [-4, 20, 3, 10, 0], "112.b."),
     ];
     let tap = Node::Canvas { id: 1 << 30, w: 300, h: 300, draws };
     [tap, Node::Canvas { id: 0, w: 1, h: MAX_SIDE, draws: Vec::new() }]
@@ -443,7 +444,7 @@ fn canvases_round_trip_every_shape_and_decode_strictly() {
     let frame = Frame { nodes: vec![col(canvases.to_vec())], ..Frame::default() };
     assert_eq!(frame.encode_checked(), Some(frame.encode()));
     let Node::Canvas { draws, .. } = &canvases[0] else { unreachable!() };
-    assert_eq!(draws.iter().map(Draw::ink).collect::<Vec<_>>(), [1, 1, 1, 1, 10, 5]);
+    assert_eq!(draws.iter().map(Draw::ink).collect::<Vec<_>>(), [1, 1, 1, 1, 10, 5, 4]);
     // Its code after the last; its size, its draws' count, and each draw's shape, color and
     // slots, then a string for a Text or a Sprite only.
     let line = draw(Shape::Line, 9, [1, -2, 3, 4, 5], "");
@@ -453,8 +454,8 @@ fn canvases_round_trip_every_shape_and_decode_strictly() {
     let head = [21, 2, 0, 0, 0, 0, 0, 3, 0, 4, 0, 2, 0, 0, 0];
     let want = [&head[..], &[3, 9], &at([1, -2, 3, 4, 5]), &[4, 0], &at([0; 5]), &[0; 4]].concat();
     assert_eq!(one.encode(), want);
-    // No shape 6, a count past what the bytes hold, nor a child.
-    assert!(Node::decode(&set(one.encode(), 15, 6)).is_none());
+    // No shape 7, a count past what the bytes hold, nor a child.
+    assert!(Node::decode(&set(one.encode(), 15, 7)).is_none());
     assert!(Node::decode(&set(one.encode(), 14, 1)).is_none());
     assert!(Node::decode(&set(one.encode(), 5, 1)).is_none());
     // As many ink as a canvas holds, and one more.
@@ -480,6 +481,49 @@ fn canvases_round_trip_every_shape_and_decode_strictly() {
         canvas(9, 9, sprite(MAX_INK)),
     ];
     for c in bad {
+        let frame = Frame { nodes: vec![c.clone()], ..Frame::default() };
+        let back = Node::decode(&c.encode());
+        assert!(back != Some(c.clone()) && frame.encode_checked().is_none(), "{c:?}");
+    }
+}
+
+#[test]
+fn pixels_are_whole_rows_of_paint_and_count_their_runs() {
+    let px = |at: [i16; 5], cells: &str| draw(Shape::Pixels, 0, at, cells);
+    let canvas = |draws| Node::Canvas { id: 0, w: 64, h: 64, draws };
+    // Its code after Sprite's, its cells a string as a Sprite's rows are.
+    let at = [1, 0, 2, 0, 2, 0, 3, 0, 0, 0];
+    let want = [&[21, 0, 0, 0, 0, 0, 0, 64, 0, 64, 0, 1, 0, 0, 0, 6, 0][..], &at, &[2, 0, 0, 0]];
+    assert_eq!(
+        canvas(vec![px([1, 2, 2, 3, 0], "0b")]).encode(),
+        [&want.concat()[..], b"0b"].concat()
+    );
+    // A run of one color is one ink, however long; none shows through and costs nothing.
+    let (full, side) = (|c: &str| c.repeat(PIXELS_SIDE * PIXELS_SIDE), PIXELS_SIDE as i16);
+    assert_eq!(px([0, 0, side, 1, 0], &full("a")).ink(), 1 + PIXELS_SIDE);
+    assert_eq!(px([0, 0, 2, 1, 0], "1..1").ink(), 3);
+    assert_eq!(px([0, 0, 4, 1, 0], "....").ink(), 1);
+    // Four full boards a canvas holds, and an empty one; a cell more is too many.
+    let board = px([0, 0, side, 1, 0], &full("."));
+    let four = canvas(vec![board; MAX_PIXELS / (PIXELS_SIDE * PIXELS_SIDE)]);
+    strict(&four, Node::encode, Node::decode);
+    strict(&canvas(vec![px([0, 0, 1, 0, 0], "")]), Node::encode, Node::decode);
+    let Node::Canvas { mut draws, .. } = four else { unreachable!() };
+    draws.push(px([0, 0, 1, 1, 0], "1"));
+    // A color, no or too many cells a row, rows not whole or too many, a char not paint, a slot
+    // past those it uses, a negative side, too many cells in all: neither checked nor decoded.
+    let bad = [
+        draw(Shape::Pixels, 1, [0, 0, 1, 1, 0], "1"),
+        px([0, 0, 0, 1, 0], ""),
+        px([0, 0, side + 1, 1, 0], &".".repeat(PIXELS_SIDE + 1)),
+        px([0, 0, 2, 1, 0], "123"),
+        px([0, 0, 1, 1, 0], &".".repeat(PIXELS_SIDE + 1)),
+        px([0, 0, 1, 1, 0], "c"),
+        px([0, 0, 2, 1, 0], "1\n"),
+        px([0, 0, 1, 1, 1], "1"),
+        px([0, 0, 1, -1, 0], "1"),
+    ];
+    for c in bad.map(|d| canvas(vec![d])).into_iter().chain([canvas(draws)]) {
         let frame = Frame { nodes: vec![c.clone()], ..Frame::default() };
         let back = Node::decode(&c.encode());
         assert!(back != Some(c.clone()) && frame.encode_checked().is_none(), "{c:?}");

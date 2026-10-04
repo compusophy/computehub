@@ -387,25 +387,35 @@ fn the_snake_shot_steers_by_its_states_and_rests_when_still() {
     // No timer runs before Start; up then left within one step turns up, never back.
     let mut a = snake(1);
     assert_eq!(a.timer(), 0);
-    assert_eq!(click(&mut a, 4), None);
+    assert_eq!(click(&mut a, 1), None);
     assert_eq!(a.timer(), 150);
     for e in [key("up"), key("left"), tick.clone()] {
         assert_eq!(ev(&mut a, e), None);
     }
-    assert_eq!((at(&a, 1), at(&a, 2), at(&a, 9)), (vec![4, 5, 5], vec![7, 7, 6], vec![150]));
+    assert_eq!((at(&a, 0), at(&a, 1), at(&a, 8)), (vec![4, 5, 5], vec![7, 7, 6], vec![150]));
+    // Its board is pixels, 20 x 15 squares of 8 units: the body green, the food red.
+    let Node::Canvas { draws, .. } = &a.render().unwrap()[2] else { panic!("the canvas") };
+    let count = |c| draws[0].text.chars().filter(|&ch| ch == c).count();
+    assert_eq!(
+        (draws[0].shape, draws[0].at, count('2'), count('1')),
+        (Shape::Pixels, [0, 0, 20, 8, 0], 3, 1)
+    );
+    // A tap left of the head, at square (0, 6), turns it left.
+    assert_eq!(ev(&mut a, Event::Tap { id: 0, cell: (6 * 8 + 3) * 160 + 3 }), None);
+    assert_eq!((at(&a, 4), at(&a, 5)), (vec![-1], vec![0]));
     // Food never starts on the body (seeds 132, 246 and 495 once put it there).
     for seed in 1..600 {
         let mut a = snake(seed);
-        click(&mut a, 4);
-        let (fx, fy) = (at(&a, 7)[0], at(&a, 8)[0]);
+        click(&mut a, 1);
+        let (fx, fy) = (at(&a, 6)[0], at(&a, 7)[0]);
         assert!(fy != 7 || !(3..6).contains(&fx), "seed {seed}");
     }
     // The head runs into its body even where the food is drawn over it, and the timer stops.
-    a.state.vals[1] = ints(&[6, 5, 5, 4, 4]);
-    a.state.vals[2] = ints(&[6, 6, 7, 7, 6]);
-    a.state.vals[3..9].clone_from_slice(&[1, 0, 1, 0, 5, 6].map(Value::Int));
+    a.state.vals[0] = ints(&[6, 5, 5, 4, 4]);
+    a.state.vals[1] = ints(&[6, 6, 7, 7, 6]);
+    a.state.vals[2..8].clone_from_slice(&[1, 0, 1, 0, 5, 6].map(Value::Int));
     assert_eq!(ev(&mut a, tick), None);
-    assert_eq!((at(&a, 9), a.timer()), (vec![0], 0));
+    assert_eq!((at(&a, 8), a.timer()), (vec![0], 0));
 }
 
 #[test]
@@ -435,6 +445,8 @@ fn every_card_example_compiles_and_smokes_clean() {
         "canvas 160, 120, scene() {",
         "fn scene() { rect(0, 0, 160, 8, 4); circle(bx, by, 3, 3); text(score, 80, 4, 6, 9); }",
         "sprite([\"..3..\", \".333.\", \"33333\"], ",
+        "pixels(board, x, y, 10, side);",
+        "let b = [-1; 200]; b[at(x, y)] = 2;",
         "sin(d)  cos(d)",
     ];
     let src = r#"
@@ -446,8 +458,10 @@ fn every_card_example_compiles_and_smokes_clean() {
         fn reset() { score = 0; }
         fn mark(on: bool) -> string { if on { return "x"; } return ""; }
         fn scene() { rect(0, 0, 160, 8, 4); circle(bx, by, 3, 3); text(score, 80, 4, 6, 9); }
+        fn squares(x: int, y: int, side: int) { let b = [-1; 200]; b[at(x, y)] = 2;
+          pixels(b, x, y, 10, side); pixels(board, x, y, 10, side); }
         fn more() { ring(80, 60, 20, 2, 11); line(0, 119, 159, 0, 1, 10);
-          sprite(["..3..", ".333.", "33333"], 70, 90, 2); scene(); }
+          sprite(["..3..", ".333.", "33333"], 70, 90, 2); scene(); squares(0, 10, 4); }
         every 500 { n += 1; board[random(200)] = random(9); }
         every speed { score += 1; if len(todos) < 9 { push(todos, "t" + score); } }
         on key "left" { reset(); let i = 1; xs = [0; 2]; xs[i] = at(1, 2); push(xs, 1);
@@ -524,7 +538,7 @@ fn each_code_has_a_rule_and_the_card_says_what_models_got_wrong() {
     );
     #[rustfmt::skip]
     let all = [1, 2, 3, 4, 5, 101, 102, 203, 204, 205, 206, 211, 212, 214, 215, 216, 217, 218, 219,
-        220, 221, 222, 223, 301, 302, 303, 304, 305, 306, 307, 308, 309];
+        220, 221, 222, 223, 224, 301, 302, 303, 304, 305, 306, 307, 308, 309];
     for code in all {
         assert!(rule(code).ends_with('.'), "{code}");
     }
@@ -543,6 +557,7 @@ fn canvases_draw_their_shapes_in_order_and_taps_say_where() {
          fn scene() {
            rect(0, 0, 40, 2, 1); ring(20, 10, 6, 2, 4); line(0, 19, 39, 0, 1, 9);
            text(42, 20, 10, 4, 11); text(\"hi\", 1, 1, 2, 10); sprite([\"1.2\", \".3\"], 30, 15, 1);
+           pixels([1, 1, -1, 11, 0, 9], 2, 3, 3, 2);
            for i in 0..n { dot(i); }
          }
          label \"x\";
@@ -556,17 +571,18 @@ fn canvases_draw_their_shapes_in_order_and_taps_say_where() {
         draw(Shape::Text, 11, [20, 10, 4, 0, 0], "42"),
         draw(Shape::Text, 10, [1, 1, 2, 0, 0], "hi"),
         draw(Shape::Sprite, 0, [30, 15, 1, 0, 0], "1.2\n.3"),
+        draw(Shape::Pixels, 0, [2, 3, 3, 2, 0], "11.b09"),
     ];
     let canvas = |id, w, draws| Node::Canvas { id, w, h: if w == 40 { 20 } else { 1 }, draws };
     assert_eq!(nodes[1..], [canvas(Some(0), 40, draws.clone()), canvas(None, 6, draws.clone())]);
-    assert_eq!(draws.iter().map(Draw::ink).collect::<Vec<_>>(), [1, 1, 1, 3, 3, 4]);
+    assert_eq!(draws.iter().map(Draw::ink).collect::<Vec<_>>(), [1, 1, 1, 3, 3, 4, 5]);
     // A tap is the unit y * w + x: its handler sees x and y.
     assert_eq!(ev(&mut a, Event::Tap { id: 0, cell: 3 * 40 + 7 }), None);
     assert_eq!(ev(&mut a, Event::Tap { id: 0, cell: 799 }), None);
     assert_eq!(vals(&a)[0], ints(&[7, 3, 39, 19]));
     let Node::Canvas { draws, .. } = &a.render().unwrap()[1] else { panic!() };
     assert_eq!(
-        draws[6..],
+        draws[7..],
         [draw(Shape::Circle, 3, [0, 5, 2, 0, 0], ""), draw(Shape::Circle, 3, [10, 5, 2, 0, 0], "")]
     );
     // A unit past it, a click on it and a tap on what has no handler are bad events.
@@ -607,11 +623,26 @@ fn shapes_past_a_canvas_fault_coded_and_sines_are_whole() {
         // 4,097 ink: a sprite of 4,096 squares, and itself.
         ("sprite([\"1\"; 4096], 0, 0, 1);", "4096 ink"),
         ("for i in 0..2049 { text(\"a\", i, 0, 1, 1); }", "4096 ink"),
+        ("pixels([1], 0, 0, 1, -1);", "side is -1"),
+        // 4,097 ink: 4,096 runs of one square, and itself.
+        ("let b = [0; 4096]; for i in 0..2048 { b[i * 2] = 1; } pixels(b, 0, 0, 64, 1);",
+         "4096 ink"),
     ];
-    for (body, said) in cases {
+    let pixels = [
+        ("pixels([1, 2], 0, 0, 0, 1);", "1 to 64 cells a row, not 0"),
+        ("pixels([0; 65], 0, 0, 65, 1);", "not 65"),
+        ("pixels([1, 2, 3], 0, 0, 2, 1);", "no whole rows of 2: 1 left over"),
+        ("pixels([0; 65], 0, 0, 1, 1);", "are 65 rows"),
+        ("pixels([0, 12], 0, 0, 2, 1);", "cell 1 is 12"),
+        ("pixels([-2], 0, 0, 1, 1);", "cell 0 is -2"),
+        // 16,385 cells: four whole boards, and one more.
+        ("for i in 0..4 { pixels([-1; 4096], 0, 0, 64, 1); } pixels([1], 0, 0, 1, 1);", "16384"),
+    ];
+    let bad = cases.iter().map(|c| (c, codes::BAD_DRAW));
+    for ((body, said), code) in bad.chain(pixels.iter().map(|c| (c, codes::BAD_PIXELS))) {
         let mut a = App::new(compile(&scene(body)).unwrap(), Limits::default(), 1);
         let e = a.render().unwrap_err();
-        assert_eq!(e.code, Some(codes::BAD_DRAW), "{body}");
+        assert_eq!(e.code, Some(code), "{body}");
         assert!(e.message.contains(said) && e.span.is_some(), "{body}: {}", e.message);
     }
     for (w, h) in [(0, 9), (9, 1025), (-1, 1)] {
@@ -620,8 +651,9 @@ fn shapes_past_a_canvas_fault_coded_and_sines_are_whole() {
         assert_eq!(a.render().unwrap_err().code, Some(codes::BAD_DRAW), "{w} x {h}");
     }
     // As much ink as a render holds draws, and 0 sizes draw (nothing): never clamped, never
-    // dropped.
+    // dropped. So do as many cells of pixels, and none.
     app(&scene("sprite([\"1\"; 4094], 0, 0, 1); rect(0, 0, 0, 0, 0);"));
+    app(&scene("for i in 0..4 { pixels([-1; 4096], 0, 0, 64, 0); } pixels([0; 0], 0, 0, 3, 1);"));
     // A thousand times the sine and cosine of a degree, any int a degree.
     let degs = "label sin(0) + \" \" + sin(30) + \" \" + sin(90) + \" \" + sin(210) + \" \" + sin(-90) + \
                 \" \" + cos(0) + \" \" + cos(180) + \" \" + cos(450) + \" \" + sin(9223372036854775807);";
@@ -644,10 +676,13 @@ fn the_smoke_test_taps_canvases_and_finds_a_picture_drawn_off_them() {
                label \"tap\"; canvas 50, 50, s() { if len(xs) < 99 { push(xs, x); } }";
     let report = smoke(compile(src).unwrap(), 2);
     assert!(report.fault.is_none(), "{report:?}");
-    // Tic-tac-toe and breakout on a canvas play clean, from three seeds.
+    // Tic-tac-toe, breakout, paint, tetris and snake on a canvas play clean, from three seeds.
     for (name, src) in [
         ("tictactoe", include_str!("../tests/tictactoe.app")),
         ("breakout", include_str!("../tests/breakout.app")),
+        ("paint", include_str!("../tests/paint.app")),
+        ("blocks", include_str!("../tests/blocks.app")),
+        ("snake", SHOTS[0].1),
     ] {
         for seed in 1..=3 {
             let report =
@@ -668,4 +703,65 @@ fn the_smoke_test_taps_canvases_and_finds_a_picture_drawn_off_them() {
     assert_eq!(ev(&mut t, Event::Tap { id: 0, cell: 150 * 300 + 150 }), None);
     assert_eq!(marks(&mut t), before + 2);
     assert_eq!(vals(&t)[0], ints(&[0, 0, 0, 0, 1, 0, 0, 0, 0]));
+}
+
+/// `nodes`' canvases as uiwire carries them (Studio sends them so): each decodes as it is, with
+/// the ink the runtime counted. How many there are.
+fn wired(nodes: &[Node]) -> usize {
+    use uiwire::Shape as S;
+    let shapes = [S::Rect, S::Circle, S::Ring, S::Line, S::Text, S::Sprite, S::Pixels];
+    let each = |n: &Node| match n {
+        Node::Canvas { w, h, draws, .. } => {
+            let wire = |d: &Draw| {
+                let text = d.text.clone();
+                uiwire::Draw { shape: shapes[d.shape as usize], color: d.color, at: d.at, text }
+            };
+            let wires: Vec<_> = draws.iter().map(wire).collect();
+            assert!(draws.iter().zip(&wires).all(|(d, w)| d.ink() == w.ink()), "{draws:?}");
+            let c = uiwire::Node::Canvas { id: 1, w: *w, h: *h, draws: wires };
+            assert_eq!(uiwire::Node::decode(&c.encode()).as_ref(), Some(&c));
+            1
+        }
+        Node::Row { children } | Node::Col { children } => wired(children),
+        _ => 0,
+    };
+    nodes.iter().map(each).sum()
+}
+
+#[test]
+fn paint_blocks_and_snake_play_on_pixels_that_cross_the_wire() {
+    // Paint: a tap paints its square in the pen's color; one under the picture picks the pen.
+    let mut p = app(include_str!("../tests/paint.app"));
+    let tap = |w: u32, x: u32, y: u32| Event::Tap { id: 0, cell: y * w + x };
+    for e in [tap(160, 12, 7), tap(160, 2 + 4 * 13 + 5, 170), tap(160, 159, 159)] {
+        assert_eq!(ev(&mut p, e), None);
+    }
+    let Value::List(art) = &vals(&p)[0] else { panic!("the art") };
+    let blank = Value::Int(-1);
+    let painted: Vec<_> = art.iter().enumerate().filter(|(_, v)| **v != blank).collect();
+    assert_eq!(painted, [(34, &Value::Int(1)), (1023, &Value::Int(4))]);
+    assert_eq!(wired(&p.render().unwrap()), 1);
+    assert_eq!(click(&mut p, 2), None);
+    assert_eq!(vals(&p)[0], ints(&[-1; 1024]), "Clear");
+    // Blocks: an I lying at the top over a bottom row full but for its four squares; a tap at
+    // the bottom drops it, and the row clears.
+    let mut b = app(include_str!("../tests/blocks.app"));
+    assert_eq!(click(&mut b, 1), None);
+    let mut cells = vec![-1; 190];
+    cells.extend([1, 1, 1, -1, -1, -1, -1, 1, 1, 1]);
+    b.state.vals[0] = ints(&cells);
+    b.state.vals[1..5].clone_from_slice(&[0, 0, 3, 0].map(Value::Int));
+    assert_eq!(ev(&mut b, tap(80, 40, 150)), None);
+    assert_eq!((&vals(&b)[0], &vals(&b)[5]), (&ints(&[-1; 200]), &Value::Int(10)));
+    // A tap at its left moves the next piece left; a tick lets it fall a row.
+    assert_eq!(ev(&mut b, tap(80, 5, 50)), None);
+    assert_eq!(ev(&mut b, Event::Tick { ms: 400 }), None);
+    assert_eq!(vals(&b)[3..5], [Value::Int(2), Value::Int(1)]);
+    // Snake too, as it moves.
+    let mut s = app(SHOTS[0].1);
+    assert_eq!(click(&mut s, 1), None);
+    for _ in 0..20 {
+        assert_eq!(ev(&mut s, Event::Tick { ms: 150 }), None);
+        assert_eq!((wired(&s.render().unwrap()), wired(&b.render().unwrap())), (1, 1));
+    }
 }

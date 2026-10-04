@@ -1,6 +1,6 @@
 [package]
-name = "compusophy-uiview"
-description = "The desktop's half of the remote UI protocol: lays out a GUI program's widget tree and draws it with the compusophyOS toolkit in the frame's theme, keeping the text the user edits."
+name = "compusophy-canvas"
+description = "A uiwire Canvas as the compusophyOS desktop draws it: its shapes and pixels in the frame's theme, scaled to fit on device pixels, and the listing the AI reads."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -9,10 +9,9 @@ authors.workspace = true
 repository.workspace = true
 
 [lib]
-name = "uiview"
+name = "canvas"
 
 [dependencies]
-compusophy-canvas.workspace = true
 compusophy-gfx.workspace = true
 compusophy-ui.workspace = true
 compusophy-uiwire.workspace = true

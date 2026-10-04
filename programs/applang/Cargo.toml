@@ -18,3 +18,4 @@ compusophy-fuel.workspace = true
 
 [dev-dependencies]
 compusophy-icons.workspace = true
+compusophy-uiwire.workspace = true

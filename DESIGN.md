@@ -111,7 +111,7 @@ frame: os → shell::draw → gfx::DrawList → platform::Renderer: one draw cal
 | `activity` | Activity, the resource monitor: graphs of CPU, memory, frames and the AI over the last minute, storage, a table of what runs |
 | `studio` | the applang editor, and `AppHost`, which runs `.app` files |
 | `coder` | the coding agent Studio runs: write, check (compile, smoke on 3 seeds), fix by SEARCH/REPLACE edits, keep the best so far, stop by budget; sans-IO, replayable |
-| `uiwire`, `uiview` | the remote UI protocol GUI programs speak; the desktop's half, which draws their trees |
+| `uiwire`, `uiview`, `canvas` | the remote UI protocol GUI programs speak; the desktop's half, which draws their trees; a `Canvas` as the desktop draws one (its shapes and pixels in the theme, on device pixels) and lists it for the AI |
 | `host` | the wm plus one app per window, the home screen's apps, windows held by the pointer, the keyboard's squeeze; motion, frame geometry |
 | `home` | the top bar, the home grid in the person's order (icons carried, the selection box), the bottom row (the person's dock at the left, the Assistant at the right), menus, touch |
 | `shell` | the desktop around `host`: chrome, keys, the overlay; wires the home screen to the pointer |
@@ -331,15 +331,24 @@ one. Forked crates keep their Apache-2.0 license and note their origin.
   AI, checks each reply and fixes it by edits, showing what moves (thinking,
   writing 48 lines, fixing line 43, testing); `studio::AppHost` runs a `.app`
   in its own window. Its prompt asks every app for its icon line (one card,
-  and one in each example), which a change keeps.
+  and one in each example), which a change keeps, and asks that whatever is
+  to be seen (a game, a board, drawing, animation, a clock, a chart) be
+  drawn on a canvas, never spelled out in labels and buttons: its first
+  example is snake on pixels.
   Made apps draw: `canvas W, H, scene();` is a picture
   of square units (y down, scaled to fit) that `scene` draws with rect,
-  circle, ring, line, text and sprite in the theme's 12 colors, sent as
-  uiwire's `Node::Canvas` (a display list, never pixels); only what a
-  canvas calls draws, and it changes nothing, so a render stays pure. A
-  canvas's handler sees the tap's `x` and `y`. Grids and canvases are
-  boards: they take the room the window's other widgets leave, and with a
-  handler they are pads. **Editor** writes plain text, a new note in `~/notes`;
+  circle, ring, line, text, sprite and pixels in the theme's 12 colors, sent
+  as uiwire's `Node::Canvas` (a display list, never a bitmap); only what a
+  canvas calls draws, and it changes nothing but its own lets, so a render
+  stays pure. `pixels(cells, x, y, w, side)` draws a list of ints as
+  squares `side` units wide, `w` a row, -1 none and 0 to 11 a color:
+  boards, paintings, life. Pixels are whole rows, 64 x 64 at most and
+  16,384 in a render, or a coded fault (E0224); the desktop fills each
+  row's run of one color once, and the AI reads where they are and their
+  size, never each square. A canvas's handler sees the tap's `x` and `y`.
+  Grids and canvases are boards: they take the room the window's other
+  widgets leave, and with a handler they are pads.
+  **Editor** writes plain text, a new note in `~/notes`;
   Files and the Terminal's `edit` open files in it (a `.app` in Studio).
   **Welcome** (a program, its mark revealed by the desktop's clock)
   is the first screen; **Settings** picks the profile's face, the theme,

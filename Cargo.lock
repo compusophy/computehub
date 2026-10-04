@@ -30,6 +30,7 @@ dependencies = [
  "compusophy-fuel",
  "compusophy-icons",
  "compusophy-lang",
+ "compusophy-uiwire",
 ]
 
 [[package]]
@@ -60,6 +61,15 @@ dependencies = [
  "compusophy-uiwire",
  "compusophy-vfs",
  "compusophy-wm",
+]
+
+[[package]]
+name = "compusophy-canvas"
+version = "0.1.0"
+dependencies = [
+ "compusophy-gfx",
+ "compusophy-ui",
+ "compusophy-uiwire",
 ]
 
 [[package]]
@@ -263,6 +273,7 @@ dependencies = [
 name = "compusophy-uiview"
 version = "0.1.0"
 dependencies = [
+ "compusophy-canvas",
  "compusophy-gfx",
  "compusophy-ui",
  "compusophy-uiwire",

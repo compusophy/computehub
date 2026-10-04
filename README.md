@@ -20,7 +20,8 @@ install, and no server runs your apps: the tab is the machine.
 - **Terminal.** A program drawing an xterm screen of `/bin/sh`: Unix-like commands, pipes (`a | b`), redirects
   (`<`, `>`, `>>`), history.
 - **Studio.** Make an app by describing it. A coding agent writes it in applang, a small
-  language made for this, then tests and fixes it.
+  language made for this, then tests and fixes it. Games, boards, drawings, clocks and charts
+  draw on a canvas: shapes, and pixels for boards of squares.
 - **Assistant.** An AI that uses the desktop as you do: it reads the screen, then clicks, types
   and opens apps.
 - **Activity.** The resource monitor: CPU, memory, frames and AI use over the last minute, and

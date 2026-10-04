@@ -8,15 +8,14 @@
 //! know is empty space; a revealed mark comes in ring by ring by the window's own clock (the page
 //! clock at its first draw), frames asked for only meanwhile ([`View::animating`]). In a window
 //! narrower than [`NARROW`] (a phone's) chips and quiet buttons are touch targets, [`TOUCH`] tall.
-//! Grids and Canvases are boards: they take the room the other widgets leave ([`SQUARE`]), and
-//! with an id they are pads ([`Sense::Pad`]) a press or a drag taps ([`Play::tap`]). A frame
-//! whose first node is its Pages lays the rest out beside or under them; one whose only node is
-//! a Screen is a terminal's, edge to edge ([`ui::screen`]).
+//! Grids and Canvases (which [`canvas`] draws) are boards: they take the room the other widgets
+//! leave ([`SQUARE`]), and with an id they are pads ([`Sense::Pad`]) a press or a drag taps
+//! ([`Play::tap`]). A frame whose first node is its Pages lays the rest out beside or under
+//! them; one whose only node is a Screen is a terminal's, edge to edge ([`ui::screen`]).
 
 #![forbid(unsafe_code)]
 
 mod area;
-mod canvas;
 mod cards;
 mod meters;
 #[cfg(test)]
@@ -705,18 +704,20 @@ impl Lay<'_> {
                 self.grids.extend((id != 0).then_some(Board { id, nth, rect, cols, n, fine }));
             }
             Node::Canvas { id, w: cw, h: ch, draws } => {
-                let b = canvas::draw(ui, RectF::new(x, y, w, h), *id, (*cw, *ch), draws);
-                self.grids.extend((*id != 0).then_some(Board { nth: self.nth - 1, ..b }));
+                let rect = canvas::draw(ui, RectF::new(x, y, w, h), *id, (*cw, *ch), draws);
+                let (id, nth, n) = (*id, self.nth - 1, u32::from(*cw) * u32::from(*ch));
+                let fine = true;
+                self.grids.extend((id != 0).then_some(Board { id, nth, rect, cols: *cw, n, fine }));
             }
         }
     }
 }
 
-/// A Grid's squares centered across `r` in their colors ([`color`]), a text in each that has one
-/// and room (made to fit); the empty ones outlined, as text fields are, and the whole where no
-/// gap parts them, so a board shows on any surface. With an id, a pad hit over the squares (a
-/// finger plays it at once) and, for the AI, a mark of its size, a row of colors a line, then
-/// each text by its square.
+/// A Grid's squares centered across `r` in their colors ([`canvas::square`]), a text in each
+/// that has one and room (made to fit); the empty ones outlined, as text fields are, and the
+/// whole where no gap parts them, so a board shows on any surface. With an id, a pad hit over
+/// the squares (a finger plays it at once) and, for the AI, a mark of its size, a row of colors
+/// a line, then each text by its square.
 /// Where the squares are.
 fn grid(
     ui: &mut Ui<'_>,
@@ -734,7 +735,7 @@ fn grid(
     for (i, &c) in cells.iter().enumerate() {
         let (cx, cy) = (x + (i % n) as f32 * side, r.y + (i / n) as f32 * side);
         let square = RectF::new(cx, cy, side - gap, side - gap);
-        let (fill, ink) = color(t, c);
+        let (fill, ink) = canvas::square(t, c);
         ui.fill(square, round, fill);
         if c == 0 && gap > 0.0 {
             ui.border(square, round, edge, t.border);
@@ -772,17 +773,6 @@ fn grid(
         }
     }
     at
-}
-
-/// The fill of a Grid's square of color `c` in theme `t`, and the ink of its text: 0 the
-/// sunken well, 1 to 8 the palette (ANSI 1 to 8); but 7, silver, is the faint ink on a light
-/// theme, whose ANSI white is dark and next to 8, gray.
-fn color(t: &Theme, c: u8) -> (Rgba, Rgba) {
-    match c {
-        0 => (t.surface_lo, t.text),
-        7 if !t.dark => (t.text_faint, t.text),
-        c => (t.ansi[usize::from(c.min(8))], t.base),
-    }
 }
 
 /// `text` centered in the square `r` in `style`, smaller where that is too wide (2 px spare
