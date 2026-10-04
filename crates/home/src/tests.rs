@@ -270,13 +270,15 @@ fn menus_open_on_screen_and_follow_the_keys() {
 #[test]
 fn the_bar_holds_the_mark_feedback_settings_and_the_clock() {
     use super::bar::{self, Button};
-    // The mark at the left, Feedback and Settings at the right, each 44 px; each shows its app.
+    // The mark at the left, Feedback and Settings at the right, each 44 px; each shows its app
+    // but the mark, Show desktop, as their tooltips say.
     let at = |w, x| bar::at(w, x, 22.0);
     let wide = [at(1280.0, 27.0), at(1280.0, 1209.0), at(1280.0, 1253.0), at(1280.0, 640.0)];
     let (m, f, s) = (Some(Button::Mark), Some(Button::Feedback), Some(Button::Settings));
     assert_eq!((wide, at(390.0, 368.0), bar::at(390.0, 368.0, 50.0)), ([m, f, s, None], s, None));
-    let apps = [Button::Mark, Button::Feedback, Button::Settings].map(Button::app);
-    assert_eq!(apps, ["welcome", "feedback", "settings"]);
+    let all = [Button::Mark, Button::Feedback, Button::Settings];
+    assert_eq!(all.map(Button::app), [None, Some("feedback"), Some("settings")]);
+    assert_eq!(all.map(Button::label), ["Show desktop", "Send feedback", "Settings"]);
     // Drawn: the hovered button washed; the date beside the time where it fits, the time alone
     // on a phone.
     let (mut text, t) = (text(), &THEMES[0]);

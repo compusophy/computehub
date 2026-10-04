@@ -56,17 +56,20 @@ impl Target {
 }
 
 impl Shell {
-    /// What is under `(x, y)`: a menu (which hides the rest), the open folder (likewise), the
-    /// top bar, the bottom row's tiles, the windows top to bottom, then the home screen.
+    /// What is under `(x, y)`: a menu (which hides the rest but the mark, Show desktop), the
+    /// open folder (likewise), the top bar, the bottom row's tiles, the windows top to bottom,
+    /// then the home screen.
     pub(crate) fn hit(&self, x: f32, y: f32) -> Option<Target> {
+        let off = match self.bar_hit(x, y) {
+            mark @ Target::Bar(home::bar::Button::Mark) => mark,
+            _ => Target::Off,
+        };
         if let Some((m, ..)) = &self.menu {
-            return Some(
-                m.at(x, y).map_or(Target::Off, |i| i.map_or(Target::MenuPanel, Target::Menu)),
-            );
+            return Some(m.at(x, y).map_or(off, |i| i.map_or(Target::MenuPanel, Target::Menu)));
         }
         if let Some(k) = self.grid.open {
             let at = home::folders::at(self.size, self.grid.inside[k].len(), x, y);
-            return Some(at.map_or(Target::Off, |i| i.map_or(Target::Folder, Target::Inside)));
+            return Some(at.map_or(off, |i| i.map_or(Target::Folder, Target::Inside)));
         }
         if (0.0..BAR_H).contains(&y) {
             return Some(self.bar_hit(x, y));
@@ -110,9 +113,13 @@ impl Shell {
         }
     }
 
-    /// The topmost hit of `win`'s last frame at `(x, y)`, inside its content.
+    /// The topmost hit of `win`'s last frame at `(x, y)`, inside its content; in the working
+    /// overlay's pill, on its middle line, so its one line of buttons (Stop) answers across the
+    /// pill's whole height, a fingertip's.
     pub(crate) fn widget_at(&self, win: WinId, x: f32, y: f32) -> Option<ui::Hit> {
         let inside = content_rect(rectf(self.placement(win)?.rect)).contains(x, y);
+        let pill = (win == OVERLAY && self.host.agent.working).then(|| self.overlay_rects().0);
+        let y = pill.map_or(y, |r| r.y + r.h / 2.0);
         ui::hit_test(&self.host.win(win).filter(|_| inside)?.hits, x, y)
     }
 
@@ -138,11 +145,12 @@ impl Shell {
         }
     }
 
-    /// Button 0 down (a finger's if `touch`): closes a menu pressed outside (and does nothing
-    /// else), arms a button, follows a finger, presses on the home screen, focuses a window,
-    /// grabs it (not on a narrow screen), toggles maximize on a double click, or presses into
-    /// content (a finger's press waits to be a tap: a scroll is no press; but on a
-    /// [`Sense::Pad`] it presses at once, and the finger drags it, never scrolling).
+    /// Button 0 down (a finger's if `touch`): outside a menu (or the open folder), but for on
+    /// the mark, closes it and does nothing else; else arms a button, follows a finger, presses
+    /// on the home screen, focuses a window, grabs it (not on a narrow screen), toggles maximize
+    /// on a double click, or presses into content (a finger's press waits to be a tap: a scroll
+    /// is no press; but on a [`Sense::Pad`] it presses at once, and the finger drags it, never
+    /// scrolling). It never stops the Assistant's task.
     pub(crate) fn press(&mut self, touch: bool, out: &mut Response) {
         let ((x, y), now) = (self.pointer.unwrap_or_default(), self.host.now_ms);
         let hit = self.hit(x, y);
@@ -155,7 +163,6 @@ impl Shell {
             return;
         }
         let overlay = matches!(hit, Some(Target::Body(OVERLAY)));
-        self.takeover(!overlay && hit != Some(Target::Assistant), out);
         match hit {
             Some(Target::Desktop) => self.overlay = Default::default(),
             Some(Target::Assistant) => {}
@@ -280,7 +287,10 @@ impl Shell {
     fn activate(&mut self, target: Target, out: &mut Response) {
         let name = |s: &Shell, i: usize| s.tiles.get(i).map_or(String::new(), |d| d.0.clone());
         match target {
-            Target::Bar(b) => self.host.show(b.app(), out),
+            Target::Bar(b) => match b.app() {
+                Some(app) => self.host.show(app, out),
+                None => self.show_desktop(),
+            },
             Target::Dock(i) => self.host.toggle(&name(self, i), out),
             Target::Assistant => self.toggle_overlay(false),
             Target::Ctl(w, i) => {
@@ -302,9 +312,7 @@ impl Shell {
 
     /// The wheel goes to the app under it.
     pub(crate) fn wheel(&mut self, x: f32, y: f32, dy: f32, out: &mut Response) {
-        let hit = self.hit(x, y);
-        self.takeover(hit != Some(Target::Body(OVERLAY)), out);
-        let Some(Target::Body(win)) = hit else { return };
+        let Some(Target::Body(win)) = self.hit(x, y) else { return };
         let scroll = Scroll::Win(win, (x, y));
         out.consumed |= dy.is_finite() && self.scroll(scroll, dy, out);
     }

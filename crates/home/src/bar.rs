@@ -1,6 +1,7 @@
-//! The top bar: compusophy's mark at the left (Welcome), the date and time in the middle (the
-//! time alone on a phone, or where the date does not fit), Feedback (a bug) and Settings at the
-//! right.
+//! The top bar: compusophy's mark at the left (Show desktop: every window minimized, and back
+//! again; Welcome is in the System folder), the date and time in the middle (the time alone on a
+//! phone, or where the date does not fit), Feedback (a bug) and Settings at the right; a tooltip
+//! names each button.
 
 use gfx::{DrawList, RectF};
 use host::LocalTime;
@@ -19,7 +20,7 @@ const GLYPH: f32 = 20.0;
 const WASH: f32 = 34.0;
 const CLOCK_SIZE: f32 = 13.0;
 
-/// The bar's buttons: the mark, Feedback and Settings.
+/// The bar's buttons: the mark (Show desktop), Feedback and Settings.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Button {
     Mark,
@@ -28,12 +29,21 @@ pub enum Button {
 }
 
 impl Button {
-    /// The app it shows: Welcome, Feedback or Settings.
-    pub fn app(self) -> &'static str {
+    /// The app it shows: Feedback or Settings; none for the mark, which shows the desktop.
+    pub fn app(self) -> Option<&'static str> {
         match self {
-            Button::Mark => "welcome",
-            Button::Feedback => "feedback",
-            Button::Settings => "settings",
+            Button::Mark => None,
+            Button::Feedback => Some("feedback"),
+            Button::Settings => Some("settings"),
+        }
+    }
+
+    /// What its tooltip calls it.
+    pub fn label(self) -> &'static str {
+        match self {
+            Button::Mark => "Show desktop",
+            Button::Feedback => "Send feedback",
+            Button::Settings => "Settings",
         }
     }
 }

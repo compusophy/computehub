@@ -148,6 +148,8 @@ pub struct Shell {
     /// A layer drawn, then replayed scaled and faded.
     scratch: DrawList,
     overlay: overlay::Overlay,
+    /// The windows Show desktop minimized, bottom to top; forgotten once any window shows.
+    bare: Vec<WinId>,
 }
 
 impl Shell {
@@ -163,7 +165,7 @@ impl Shell {
             ime: None, focus: None, cursor: Cursor::Default, clock: None, dock, tiles: Vec::new(),
             marks: Vec::new(), grid, reduced: false, menu: None, touch: None, fling: None,
             finger: false, motion: Default::default(), instant: false, startup: !prefs.seen,
-            scratch: DrawList::new(), overlay: Default::default() };
+            scratch: DrawList::new(), overlay: Default::default(), bare: Vec::new() };
         shell.place();
         shell.host.grain = !prefs.grain_off;
         shell.host.kernel.set_isolated(prefs.isolated);
@@ -411,7 +413,8 @@ impl Shell {
     }
 
     /// Brings the apps up to date with the wm, then the shell with the apps and the files. An app
-    /// that takes the focus ends the home screen's selection: Enter and Escape are then its own.
+    /// that takes the focus ends the home screen's selection: Enter and Escape are then its own; a
+    /// window that shows, what Show desktop would bring back.
     fn settle(&mut self, out: &mut Response) {
         self.host.settle(out);
         self.tiles = self.host.dock_apps(&self.dock.favs);
@@ -427,6 +430,9 @@ impl Shell {
         }
         self.marks = self.tiles.iter().map(|d| self.host.mark(&d.0)).collect();
         self.place_overlay(out);
+        if self.host.wm().focused().is_some() {
+            self.bare.clear();
+        }
         let focus = self.key_target();
         if mem::replace(&mut self.focus, focus) != focus && focus.is_some() {
             self.grid.selected.clear();

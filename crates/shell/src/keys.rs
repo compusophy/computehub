@@ -48,7 +48,7 @@ impl Shell {
             (out.consumed, out.redraw) = (true, true);
             return;
         }
-        // The overlay with the keys: Escape hides it, or stops its task.
+        // The overlay with the keys: Escape hides it, or stops its task (no other key does).
         let overlay = self.key_target() == Some(host::OVERLAY);
         if overlay && key == Key::Escape {
             match self.host.agent.working {
@@ -58,7 +58,6 @@ impl Shell {
             out.consumed = true;
             return;
         }
-        self.takeover(!overlay, out);
         if !overlay && self.home_key(key, m, out) || chord && self.binding(key, m.shift, out) {
             out.consumed = true;
             return;
@@ -84,6 +83,10 @@ impl Shell {
             }
             (Key::Enter, false) => {
                 self.host.open("terminal", None, out);
+                None
+            }
+            (Key::Char('d'), false) => {
+                self.show_desktop();
                 None
             }
             (Key::Char('q'), false) => focused.map(Cmd::Close),

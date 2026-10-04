@@ -21,12 +21,13 @@ const PREVIEW_MS: f32 = 160.0;
 const OPEN_SCALE: f32 = 0.96;
 
 /// The tweens of every window (closing and minimized too), each dock tile's lift (0 to 1) and
-/// place (by app name) and the Assistant's lift, and the snap preview.
+/// place (by app name), the Assistant's lift and the top bar's tooltip, and the snap preview.
 #[derive(Default)]
 pub(crate) struct Motion {
     pub wins: Vec<(WinId, Tween<Vis>)>,
     pub tiles: Vec<(String, Tween<f32>, Tween<f32>)>,
     pub ai: Tween<f32>,
+    pub bar: Tween<f32>,
     pub preview: Tween<Vis>,
 }
 
@@ -82,8 +83,9 @@ impl Shell {
         self.grid.sync(now, self.instant);
     }
 
-    /// Each dock tile's lift, and the Assistant's, heads up while hovered, else down; each tile
-    /// slides to its place (a new one shows there; on a new screen size, all at once).
+    /// Each dock tile's lift, the Assistant's and the top bar's tooltip head up while hovered,
+    /// else down; each tile slides to its place (a new one shows there; on a new screen size, all
+    /// at once).
     fn sync_tiles(&mut self, now: f64) {
         let hovered = match self.hover {
             Some(Target::Dock(i)) => self.tiles.get(i).map(|d| d.0.as_str()),
@@ -103,6 +105,8 @@ impl Shell {
         }
         let ai = f32::from(u8::from(self.hover == Some(Target::Assistant)));
         self.motion.ai.to(ai, now, LIFT_MS);
+        let bar = f32::from(u8::from(matches!(self.hover, Some(Target::Bar(_)))));
+        self.motion.bar.to(bar, now, LIFT_MS);
     }
 
     fn sync_preview(&mut self, now: f64) {
@@ -130,6 +134,7 @@ impl Shell {
         }
         self.grid.arm(now);
         m.ai.arm(now);
+        m.bar.arm(now);
         m.preview.arm(now);
         self.host.theme.arm(now);
     }
@@ -149,6 +154,7 @@ impl Shell {
             || m.tiles.iter().any(|t| t.1.is_running(now) || t.2.is_running(now))
             || self.grid.moving(now)
             || m.ai.is_running(now)
+            || m.bar.is_running(now)
             || m.preview.is_running(now)
             || self.host.theme.is_running(now)
             || self.touch.is_some_and(|t| !t.0.done)

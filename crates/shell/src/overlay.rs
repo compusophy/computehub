@@ -1,9 +1,10 @@
 //! The overlay: the Assistant over the desktop (see `host::agent`), a layer above the windows,
 //! never one of them. A glass card above the Assistant's tile in the bottom-right corner (a
 //! sheet on a phone), a pill while it works; its content routes as a window's does. The tile
-//! opens and hides it, as does Alt+Space; Escape (or a press on the bare desktop) hides it, or
-//! while it works stops the task, as the person's own press, key or wheel outside it does. A
-//! press in it gives it the keys; one on a window takes them back, the overlay staying. Shown by
+//! opens and hides it, as does Alt+Space; a press on the bare desktop hides it, as does Escape
+//! while it has the keys and no task runs. Only the pill's Stop, or Escape while it has the keys,
+//! stops a task: the person's own presses, keys and wheel go where they go, the task running on
+//! (hidden, too). A press in it gives it the keys; one on a window takes them back, the overlay staying. Shown by
 //! a finger, it holds the keyboard back until its text field is tapped. A failed program starts
 //! again at the next summon (`Host::open_overlay`). What the agent touches flashes; while it
 //! works, the dot under the Assistant's tile beats (`Shell::draw_dock`).
@@ -87,13 +88,6 @@ impl Shell {
         let layout = self.overlay.open.then(|| self.overlay_rects().1);
         self.host.agent.screen = self.size;
         self.host.place_overlay(layout, out);
-    }
-
-    /// The person's own press, key or wheel `outside` the overlay stops its task.
-    pub(crate) fn takeover(&mut self, outside: bool, out: &mut Response) {
-        if outside && self.host.agent.working {
-            self.host.halt(out);
-        }
     }
 
     /// The card or pill and its content.

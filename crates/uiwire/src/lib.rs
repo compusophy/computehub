@@ -18,8 +18,8 @@
 //!
 //! The overlay (the Assistant over the desktop) may also act as a person would: [`Request::Act`]
 //! is answered by one [`Event::Acted`] once the screen settles, carrying the [`scene`] as it is
-//! then; [`Event::Halt`] says the person took over. A request carries its [`Act`] as the act's
-//! own bytes, so only the overlay links the act's encoder and only the desktop its decoder.
+//! then; [`Event::Halt`] says the person stopped its task. A request carries its [`Act`] as the
+//! act's own bytes, so only the overlay links the act's encoder and only the desktop its decoder.
 //!
 //! The OS's own windows alone (Activity's and Settings', which run its `system` program) may
 //! watch the desktop's meters ([`Request::Watch`], answered by [`Event::Stats`] in the [`stat`]
@@ -503,7 +503,8 @@ pub enum Event {
     /// Act `id` settled with `code` ([`acted`]) and the host's `note`; `scene` is the screen
     /// now ([`scene::Scene`] bytes).
     Acted { id: u32, code: u16, note: String, scene: Vec<u8> },
-    /// The person took over (a press, key or wheel outside the overlay): stop acting.
+    /// The person stopped the task (Escape while the overlay has the keys; nothing else they do
+    /// stops it): stop acting.
     Halt,
     /// `ms` passed since the last tick ([`Request::Timer`]).
     Tick { ms: u32 },
