@@ -317,7 +317,8 @@ fn agent() -> (Vec<Request>, Vec<Event>) {
     let ask = |(id, act): (u32, Act)| Request::Act { id, act: act.encode() };
     let mut requests: Vec<_> = (1..).zip(acts).map(ask).collect();
     requests.extend([Request::Status { working: true }, Request::Status { working: false }]);
-    requests.push(Request::Yield { win: 2 });
+    requests
+        .extend([Request::Yield { win: 2, hide: true }, Request::Yield { win: 3, hide: false }]);
     let scene = scene().encode();
     let acted = Event::Acted { id: 9, code: acted::OFF_SCREEN, note: "e9".into(), scene };
     (requests, vec![acted, Event::Halt])
@@ -350,9 +351,11 @@ fn acts_and_scenes_round_trip_strictly() {
     assert_eq!(scroll.encode(), [5, 1, 0, 0, 0, 0, 0, 0, 0, 254, 255]);
     // A request whose bytes are no act never decodes.
     assert!(Request::decode(&[8, 1, 0, 0, 0, 1, 0, 0, 0, 9]).is_none());
-    let (status, aside) = (Request::Status { working: true }, Request::Yield { win: 2 });
+    let (status, aside) =
+        (Request::Status { working: true }, Request::Yield { win: 2, hide: true });
     let codes = [status.encode(), aside.encode(), Event::Halt.encode()];
-    assert_eq!(codes, [&[9, 1][..], &[18, 2, 0, 0, 0], &[13]]);
+    assert_eq!(codes, [&[9, 1][..], &[18, 2, 0, 0, 0, 1], &[13]]);
+    assert!(Request::decode(&[18, 2, 0, 0, 0, 2]).is_none());
     // The overlay's alone: its acts, its status, stepping aside.
     let others = [Request::Close, Request::Reset, Request::Keys { on: true }];
     assert!([click.clone(), status, aside].iter().all(Request::overlay));

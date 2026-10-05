@@ -1,4 +1,4 @@
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use chats::{CHAT, COMPACT, NEW};
@@ -125,7 +125,7 @@ fn desk() -> Desk {
 
 impl Desk {
     /// Serves `agent` until it asks nothing more: the model answers each request as `model`
-    /// says, in 7-byte chunks; acts and status go to the host as the overlay's.
+    /// says, in 7-byte chunks; acts, status and steps aside go to the host as the overlay's.
     fn run(&mut self, agent: &mut Agent, model: &dyn Fn(&Json) -> String) {
         for _ in 0..300 {
             let mut events = Vec::new();
@@ -137,13 +137,10 @@ impl Desk {
                         self.bodies.push(body);
                         let data =
                             sse.as_bytes().chunks(7).map(|c| Event::AiData { id, data: c.into() });
-                        events.extend(data.chain([Event::AiEnd {
-                            id,
-                            status: 200,
-                            error: "".into(),
-                        }]));
+                        let end = Event::AiEnd { id, status: 200, error: "".into() };
+                        events.extend(data.chain([end]));
                     }
-                    r @ (Request::Act { .. } | Request::Status { .. }) => {
+                    r if r.overlay() => {
                         self.out.borrow_mut().push(r);
                         self.host.now_ms += 100.0;
                         let (mut out, now) = (Response::default(), self.host.now_ms);
@@ -241,10 +238,8 @@ fn reports_off(body: &Json) -> String {
         return click(first(l));
     }
     if let Some(w) = line("(settings)").map(first) {
-        return reply(
-            "",
-            Some(("window", &format!("{{\"window\":\"{w}\",\"action\":\"close\"}}"))),
-        );
+        let close = format!("{{\"window\":\"{w}\",\"action\":\"close\"}}");
+        return reply("", Some(("window", &close)));
     }
     reply("Error reports are off.", None)
 }
@@ -281,7 +276,7 @@ fn on(a: &mut Agent, scene: Scene) -> Task {
     let (screen, shown) = render(&scene, &mut a.refs, scene.focus);
     Task { prompt: String::new(), over: scene.focus, steps: Vec::new(), screen, scene, shown,
         wait: Wait::User, calls: 0, acts: 0, fails: 0, repeat: (0, 0), approved: false,
-        usage: (0, 0), into: 0 }
+        usage: (0, 0), into: (0, false) }
 }
 
 #[test]
@@ -335,10 +330,8 @@ fn tool_calls_are_collected_however_they_are_split() {
     c.end();
     let args = r#"{"ref":"e4"}"#.into();
     let call = Call { id: "call_click".into(), name: "click".into(), args, cut: false };
-    assert_eq!(
-        (c.text.as_str(), &c.calls[..], c.finish.as_str()),
-        ("Sure.", &[call][..], "tool_calls")
-    );
+    let got = (c.text.as_str(), &c.calls[..], c.finish.as_str());
+    assert_eq!(got, ("Sure.", &[call][..], "tool_calls"));
     assert_eq!(c.usage, Some((1200, 30)));
     // Two calls whole in one chunk, by index (one with its arguments an object); one with no
     // index joins a new one by its id; an error body is read at the end.
@@ -452,12 +445,11 @@ fn failures_go_back_coded_and_three_end_the_task() {
     // Unknown tools and keys, malformed arguments, an unknown app (the desktop says so): coded.
     let (mut d, mut a) = (desk(), Agent::default());
     ask(&mut a, "do odd things");
-    let n = Rc::new(RefCell::new(0));
+    let n = Cell::new(0);
     let odd =
         [("fly", "{}"), ("press_key", r#"{"key":"hyper+x"}"#), ("open_app", r#"{"name":"nope"}"#)];
     d.run(&mut a, &|_| {
-        *n.borrow_mut() += 1;
-        let k = *n.borrow() - 1;
+        let k = n.replace(n.get() + 1);
         odd.get(k).map_or_else(|| reply("Gave up.", None), |c| reply("", Some(*c)))
     });
     let tools: Vec<String> =
@@ -475,10 +467,9 @@ fn failures_go_back_coded_and_three_end_the_task() {
     // reply here calls 7 tools, 3 of them acts, and no two failures follow each other.
     let (mut d, mut a) = (desk(), Agent::default());
     ask(&mut a, "dither");
-    let n = Rc::new(RefCell::new(0));
+    let n = Cell::new(0);
     d.run(&mut a, &|_| {
-        *n.borrow_mut() += 1;
-        let k = *n.borrow();
+        let k = n.replace(n.get() + 1) + 1;
         let bad = ("click", r#"{"ref":"e999"}"#.to_string());
         let wait = |j: u32| ("wait", format!("{{\"ms\":{}}}", k * 10 + j));
         many(&[bad.clone(), wait(1), bad.clone(), wait(2), bad.clone(), wait(3), bad])
@@ -518,7 +509,7 @@ fn halt_stops_answers_questions_and_what_sends_or_ends_waits_for_a_yes() {
     let model = |b: &Json| match last(b) {
         l if l.starts_with("not run") => many(&[send()]),
         l if l.starts_with("the user answered: no") => many(&[send(), send()]),
-        _ => many(&[("ask_user", r#"{"question":"Shall I look closer?"}"#.into()), send()]),
+        _ => many(&[("ask_user", r#"{"question":"Shall I look **closer**?"}"#.into()), send()]),
     };
     let clicks = |r: &[Request]| -> Vec<Act> {
         let act = |r: &Request| match r {
@@ -636,14 +627,9 @@ fn the_pill_keys_receipts_and_ai_errors() {
         let (mut list, mut hits) = (gfx::DrawList::new(), Vec::new());
         let (r, theme, state) =
             (gfx::RectF::new(0.0, 0.0, 420.0, 72.0), &ui::THEMES[0], ui::UiState::default());
-        let (mut texts, mut view, nodes) =
-            (uiview::Texts::default(), uiview::View::default(), [pill(doing)]);
-        uiview::draw(
-            &mut Ui::new(&mut list, &mut ts, r, &mut hits, state, theme),
-            &nodes,
-            &mut texts,
-            &mut view,
-        );
+        let (mut texts, mut view) = (uiview::Texts::default(), uiview::View::default());
+        let mut draw = |ui: &mut Ui<'_>| uiview::draw(ui, &[pill(doing)], &mut texts, &mut view);
+        draw(&mut Ui::new(&mut list, &mut ts, r, &mut hits, state, theme));
         let r = hits.iter().find(|h| h.id == ui::WidgetId(STOP)).unwrap().rect;
         (r.x + r.w, r.y)
     };
@@ -960,30 +946,54 @@ fn a_cut_call_and_a_grid_clicked_whole_say_so() {
 }
 
 #[test]
-fn a_task_done_in_a_window_to_use_steps_aside_for_it_in_plain_words() {
-    // One call on a screen of one window of `app`, its e1 of `role`, then `answer`: whether the
-    // overlay stepped aside, and for which window; what the card says.
-    let run = |app: &str, role: u8, call: (&str, &str), answer: &str| {
+fn a_task_steps_aside_for_the_window_it_leaves_the_person_in_in_plain_words() {
+    // `prompt`, one call on a screen of one window of `app` (its e1 of `role`), then `answer`:
+    // its requests to the model and steps aside (`w2`; `w2!` hiding), in order; what it says.
+    let run = |prompt: &str, (app, role): (&str, u8), call: (&str, &str), answer: &str| {
         let mut w = Win { app: app.into(), ..page(2, true) };
         w.marks[0].role = role;
         let (scene, mut a) =
             (Scene { focus: 2, wins: vec![w], ..Scene::default() }, Agent::default());
-        ask(&mut a, "go");
+        ask(&mut a, prompt);
         let model = |b: &Json| match messages(b).iter().any(|m| m.0 == "tool") {
             true => reply(answer, None),
             false => reply("", Some(call)),
         };
-        let win = |r: &Request| if let Request::Yield { win } = r { Some(*win) } else { None };
-        (alone(&mut a, &scene, &model).0.iter().find_map(win), shown(&mut a))
+        let tag = |r: &Request| match r {
+            Request::Yield { win, hide } => format!("w{win}{} ", ["", "!"][usize::from(*hide)]),
+            Request::Ai { .. } => "ai ".into(),
+            _ => String::new(),
+        };
+        (alone(&mut a, &scene, &model).0.iter().map(tag).collect::<String>(), shown(&mut a))
     };
-    // A board pressed (a game's Start), or a window opened: it steps aside for that window, the
-    // answer in plain words, the receipt counting 1 step.
+    // A board played (a game's Start): its window takes the keys at once; answered (in plain
+    // words, the receipt counting 1 step), the overlay hides, past a courtesy question too.
     let (click, open) = (("click", r#"{"ref":"e1"}"#), ("open_app", r#"{"name":"files"}"#));
-    let (win, said) = run("snake", CANVAS, click, "It runs: steer with `the arrows`, **go**.");
-    let end = "It runs: steer with the arrows, go.\n1 step, 2.4k tokens in, 60 out";
-    assert!(win == Some(2) && said.ends_with(end), "{said}");
-    assert_eq!(run("files", 2, open, "Files is open.").0, Some(2));
-    // A setting changed, an answer that asks, a press in a window it did not open: never.
-    let not = [run("settings", 3, click, "On."), run("snake", GRID, click, "Which level?")];
-    assert!(not.iter().chain([&run("files", 2, click, "Done.")]).all(|r| r.0.is_none()));
+    let (asked, said) = run("go", ("snake", CANVAS), click, "Started: steer `the arrows`, **go**.");
+    let end = "Started: steer the arrows, go.\n1 step, 2.4k tokens in, 60 out";
+    assert!(asked == "ai w2 ai w2! " && said.ends_with(end), "{asked} {said}");
+    assert_eq!(run("go", ("snake", GRID), click, "Started. Faster?").0, asked);
+    // A window opened: it hides, but not for an answer asked for, nor one that asks; nor after a
+    // press in a window it did not open.
+    let files = ("files", 2);
+    assert_eq!(run("open files", files, open, "Files is open.").0, "ai ai w2! ");
+    let not = [run("what's in files", files, open, "Notes."), run("go", files, click, "Ok.")];
+    assert!(not.iter().chain([&run("go", files, open, "Which?")]).all(|r| r.0 == "ai ai "));
+    // In Settings a tab's press keeps where it leaves the person, any other act ends it; a window
+    // come up new with the keys (a press opened it) is where it leaves them.
+    let settings = Scene { focus: 2, wins: vec![page(2, true)], ..Scene::default() };
+    let click = |id| Act::Click { win: 2, id };
+    assert_eq!(into(&settings, &settings, (2, false), &click(1)), (2, false));
+    assert_eq!(into(&settings, &settings, (2, false), &click(30)), (0, false));
+    assert_eq!(into(&Scene::default(), &settings, (0, false), &click(30)), (2, false));
+    // A failure last keeps the card, however the model words it.
+    let mut t = Task { into: (2, false), ..on(&mut Agent::default(), settings) };
+    let (done, failed) = (aside(&t, "Done."), ("E0912: e9 is not on screen".into(), String::new()));
+    t.steps.push(Step { text: String::new(), calls: Vec::new(), results: vec![failed] });
+    assert_eq!((done, aside(&t, "I couldn't press it.")), (Some(2), None));
+    // Sent, a step aside goes first, alone in its frame: a desktop older than it drops that alone.
+    let yields = Request::Yield { win: 2, hide: true };
+    let mut a = Agent { requests: vec![Request::Reset, yields.clone()], ..Agent::default() };
+    let f: Vec<Vec<Request>> = a.frames().into_iter().map(|f| f.requests).collect();
+    assert!(f.len() == 2 && f[0] == [yields] && f[1].ends_with(&[Request::Reset]));
 }

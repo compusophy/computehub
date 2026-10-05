@@ -70,8 +70,8 @@ impl Shell {
 
     /// The row: the dock's tiles (lifted while hovered, sliding to their places, none where one
     /// carried lands) over a dot under each running app, the hairline between the groups; the
-    /// Assistant's tile, over a dot while the overlay shows or an answer it stepped aside from
-    /// waits (the accent's then, and while it has the keys or works, beating then).
+    /// Assistant's tile, over a dot while the overlay shows or an answer waits unread (the
+    /// accent's then, and while it has the keys or works, beating then).
     pub(crate) fn draw_dock(&mut self, list: &mut DrawList, theme: &Theme) {
         let (now, carried) = (self.host.now_ms, self.dock.carried(self.pointer).map(|c| c.0));
         let mut looks = Vec::new();

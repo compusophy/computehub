@@ -61,7 +61,11 @@ impl App for Probe {
                 ("theme", name) => cx.set_theme(name),
                 ("open", name) => cx.open(name),
                 ("grain", value) => cx.pref("grain", value),
-                ("yield", w) => cx.agent(ui::uiwire::Request::Yield { win: w.parse().unwrap() }),
+                // Stepping aside, hiding (its task done) or not.
+                ("yield" | "lend", w) => {
+                    let (win, hide) = (w.parse().unwrap(), cmd.starts_with('y'));
+                    cx.agent(ui::uiwire::Request::Yield { win, hide })
+                }
                 _ => {}
             }
         }
@@ -521,11 +525,17 @@ fn the_assistant_opens_the_overlay_which_only_escape_or_its_stop_halts() {
     assert!(s.at(now + 599.0) && !s.at(now + 600.0));
     s.click((200.0, 640.0));
     assert!(!s.overlay.open && !s.at(now + 2000.0));
-    // A task done in a window the person uses next steps aside for it: hidden, that window with
-    // the keys, the tile's dot the accent's until it shows again (a press elsewhere keeps it).
-    let _ = (s.click(AI), s.say(0, "yield 1"), s.click((200.0, 640.0)));
+    // It steps aside for a window the person uses next: while it works, that window has the
+    // keys, the pill staying; its task done, it hides, the tile's dot the accent's until it
+    // shows again (a press on the bare desktop keeps it), as after a task that ends hidden.
+    let _ = (s.click(AI), s.host.agent.working = true, s.say(0, "lend 1"), s.to(AI));
+    assert!(s.overlay.open && s.key_target() == Some(WinId(1)));
+    let _ = (s.say(0, "yield 1"), s.host.agent.working = false, s.to(AI));
     assert!(!s.overlay.open && s.overlay.unread && s.key_target() == Some(WinId(1)));
-    assert!((s.click(AI), s.overlay.open && !s.overlay.unread && !s.host.agent.touch).1);
+    s.click((200.0, 640.0));
+    assert!(s.overlay.unread && (s.click(AI), s.overlay.open && !s.overlay.unread).1);
+    let _ = (s.click(AI), s.host.agent.ended = true, s.to((200.0, 640.0)));
+    assert!(s.overlay.unread && !s.host.agent.touch);
     // The work area keeps its place as the dock fills.
     let area = s.wm().area();
     let _ = (s.k(Enter, "a"), s.right(s.tile_at(1)), s.click(s.item("Add to dock")));
@@ -643,8 +653,7 @@ fn fingers_scroll_what_they_hold_and_fling_it_on() {
     assert!(log.take().is_empty() && !s.up(at).gesture);
     assert!(matches!(log.take()[..], [(_, E::PointerDown { .. }), (_, E::Click(W(1)))]));
     // Past 8 px the finger presses nothing, and the content follows it.
-    s.set_now(1000.0);
-    s.push(at, 0, true);
+    let _ = (s.set_now(1000.0), s.push(at, 0, true));
     for (t, dy) in [(1010.0, 5.0), (1020.0, 10.0), (1036.0, 26.0)] {
         s.set_now(t);
         s.to((at.0, at.1 - dy));
@@ -664,16 +673,12 @@ fn fingers_scroll_what_they_hold_and_fling_it_on() {
     assert!(steps.len() > 60 && slowing && (sum - 251.0).abs() < 4.0, "{sum}");
     assert!(!s.at(t + 100.0));
     // A press stops a fling; a mouse dragged over content never scrolls it.
-    s.push(at, 0, true);
-    s.set_now(t + 200.0);
-    s.to((at.0, at.1 - 100.0));
-    s.set_now(t + 210.0);
-    s.to((at.0, at.1 - 120.0));
+    let _ = (s.push(at, 0, true), s.set_now(t + 200.0), s.to((at.0, at.1 - 100.0)));
+    let _ = (s.set_now(t + 210.0), s.to((at.0, at.1 - 120.0)));
     assert!(s.up((at.0, at.1 - 120.0)).animating);
     s.down(at);
     assert!(!s.at(t + 300.0));
-    s.to((at.0, at.1 - 100.0));
-    s.up((at.0, at.1 - 100.0));
+    let _ = (s.to((at.0, at.1 - 100.0)), s.up((at.0, at.1 - 100.0)));
     assert_eq!(wheels(&log), [20.0]);
 }
 
@@ -763,8 +768,7 @@ fn icons_move_and_open_by_the_pointer_and_the_keys() {
     // bare) and drops it there, its own left empty, every cell kept, nothing opened; the pointer
     // leaving or Escape puts it back.
     let (mut s, log) = desk();
-    s.to(cell(0));
-    s.down(cell(0));
+    let _ = (s.to(cell(0)), s.down(cell(0)));
     let (r, c3) = (s.to(cell(3)), cell(3));
     assert!(r.cursor == Some(Cursor::Grabbing) && s.hit(c3.0, c3.1) == Some(Target::Desktop));
     let kept = "@2,studio:0.3:,assistant:0.1:,terminal:0.2:,files:0.4:,settings:0.5:,feedback:1.0:";
@@ -888,8 +892,7 @@ fn the_focused_app_gets_keys_text_and_the_pointer() {
     let down = E::PointerDown { x: 10.0, y: 10.0, id: Some(W(1)) };
     assert_eq!(log.take(), [("welcome", down), ("welcome", E::Click(W(1)))]);
     // A release elsewhere is no click; the wheel goes to the window under it.
-    s.down((c.x + 10.0, c.y + 10.0));
-    s.up((c.x + 100.0, c.y + 10.0));
+    let _ = (s.down((c.x + 10.0, c.y + 10.0)), s.up((c.x + 100.0, c.y + 10.0)));
     assert!(s.input(Input::Wheel { x: c.x + 5.0, y: c.y + 5.0, dy: 3.0 }).consumed);
     assert_eq!(log.take().len(), 2);
     // A mouse held down on content and moved: the app hears where to (a grid draws by it).

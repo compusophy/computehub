@@ -9,9 +9,11 @@
 //! window (or, while it works, on the bare desktop) takes them back, the overlay staying. Shown
 //! by a finger, it holds the keyboard back until its text field is tapped. A failed program
 //! starts again at the next summon (`Host::open_overlay`). What the agent touches flashes; while
-//! it works, the dot under the Assistant's tile beats (`Shell::draw_dock`). A task done in a
-//! window the person uses next steps aside for it (`Request::Yield`): the overlay hides, that
-//! window has the keys, and the tile's dot, the accent's, says an answer waits until it shows.
+//! it works, the dot under the Assistant's tile beats (`Shell::draw_dock`). It steps aside for a
+//! window the person uses next (`Request::Yield`): that window has the keys (a game the task
+//! started is played as it starts, the pill staying); the task done, the overlay hides, and the
+//! tile's dot, the accent's, says an answer waits until it shows, as it does for a task that
+//! ended while the overlay hid.
 
 use gfx::{DrawList, RectF};
 use host::agent::FLASH_MS;
@@ -24,7 +26,7 @@ use crate::{BAR_H, Response, Shell};
 
 /// Whether the overlay shows, whether it has the keys, whether it holds the keyboard back
 /// (shown by a finger, until its text field is tapped), and whether an answer waits unseen (it
-/// stepped aside).
+/// stepped aside, or its task ended while it hid).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Overlay {
     pub open: bool,
@@ -82,13 +84,18 @@ impl Shell {
         }
     }
 
-    /// Brings the overlay up to date: one that stepped aside hides, its answer unread; one asked
-    /// for opens; its app gone, it goes; the host knows where it shows, the screen, whether the
-    /// last press was a finger's, and the home screen's apps.
+    /// Brings the overlay up to date: one that stepped aside gives the keys away, and, its task
+    /// done, hides, its answer unread (as is one that ended while it hid); one asked for opens;
+    /// its app gone, it goes; the host knows where it shows, the screen, whether the last press
+    /// was a finger's, and the home screen's apps.
     pub(crate) fn place_overlay(&mut self, out: &mut Response) {
-        if std::mem::take(&mut self.host.agent.yielded) {
-            self.overlay = Overlay { unread: true, ..Overlay::default() };
+        let ended = std::mem::take(&mut self.host.agent.ended) && !self.overlay.open;
+        match self.host.agent.aside.take() {
+            Some(true) => self.overlay = Overlay { unread: true, ..Overlay::default() },
+            Some(false) => self.overlay.focus = false,
+            None => {}
         }
+        self.overlay.unread |= ended;
         if std::mem::take(&mut self.host.agent.summon) {
             self.show_overlay(self.finger);
         }

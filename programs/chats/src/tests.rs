@@ -351,3 +351,12 @@ fn answers_show_in_plain_words() {
     assert_eq!(plain(said), "Saved to ~/.ai/notes.txt: 3 lines, 2 * 3 = 6, a_b.");
     assert_eq!(plain("Done."), "Done.");
 }
+
+#[test]
+fn a_prompt_asks_to_be_told_or_to_have_it_done() {
+    // A lookup's answer is the news; a task's, what was done.
+    let told = ["how much memory is in use", "Open Activity and tell me what's big", "Is it on"];
+    let done = ["open my snake game and press Start", "Open Files", "turn reports off", ""];
+    assert!(told.iter().chain(&["open files?", "\u{bf}Hora"]).all(|p| asks(p)));
+    assert!(!done.iter().any(|p| asks(p)));
+}

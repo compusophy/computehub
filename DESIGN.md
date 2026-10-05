@@ -287,20 +287,29 @@ one. Forked crates keep their Apache-2.0 license and note their origin.
   pill: one line of what it does, and Stop at its right edge however the
   line changes (its press reaches across the pill's height); the dot
   beats, and each act flashes what it touched. While a question waits it
-  is the card again, the question last, with Stop under it. A task
-  answered in a window the person uses next (one it opened or raised, or
-  one holding a canvas or grid it pressed or typed into: a game it
-  started) steps aside for it (uiwire `Yield`): the overlay hides and
-  that window, raised, takes the keys, so the game is seen and played,
-  never lost behind the card (a phone's sheet covers everything); the
-  answer waits in the chat, the tile's dot the accent's until the overlay
-  shows again. A question, a failure, Stop, or a task that changed a
-  setting (a theme, a press in Settings) keeps the card: its answer is
-  the news. Answers show as plain text (a model's backticks and bold
-  taken out), each receipt counting its steps ("1 step"); the model is
-  told to claim only what the latest screen shows, and its screen header
-  says a touch screen (the person's last press a finger's), so its hints
-  name taps, never keys.
+  is the card again, the question last, with Stop under it. A task steps
+  aside for the window the person uses next (uiwire `Yield`, sent alone
+  in a frame, so a desktop older than it drops that alone). Once it
+  presses, types or keys into a canvas or grid (a game's Start), that
+  window takes the keys at once, the pill staying with Stop, so the game
+  is played as it starts, not lost behind the overlay. Answered in such a
+  window, or in one it opened or raised (or that came up new with the
+  keys after its act), still focused and shown, the overlay hides, that
+  window with the keys (raised only while the overlay showed: never taken
+  from what the person moved on to); the answer waits in the chat, the
+  tile's dot the accent's until the overlay shows again, as after any
+  task that ended while it hid. The card stays for a question, a failure
+  (the last result one, an AI error, Stop), a task that changed a setting
+  (a theme; in Settings any act but a tab's press), and, in a window only
+  opened or raised, an answer the person asked for (`chats::asks`: a
+  question mark or a question's word) or one that asks: there the answer
+  is the news. Answers and questions show as plain text (a model's
+  backticks and bold taken out), each receipt counting its steps ("1
+  step"); the model is told its last reply asks nothing (ask_user does)
+  and claims only what the latest screen shows (a game it started runs
+  on: it says it started it), and its screen header says a touch screen
+  (the person's last press a finger's), so its hints name taps, never
+  keys.
   Only Stop, or Escape while the overlay has the keys (which, at a question
   or before the pill shows, hides the card too), stops it: the
   person's own presses, keys and wheel go where they go beside its acts

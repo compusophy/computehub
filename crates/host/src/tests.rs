@@ -771,14 +771,23 @@ fn the_overlay_acts_as_a_person_and_hears_once_the_screen_settles() {
 
 #[test]
 fn the_overlay_steps_aside_for_a_window_still_open() {
-    // Its task done in welcome, minimized meanwhile: welcome comes up focused, and the shell
-    // is told to hide the overlay. Another window may not ask it, nor may it for a window gone.
+    // Shown, it raises welcome (minimized meanwhile), the shell told whether it hides. Another
+    // window may not ask it, nor may it for a window gone. Hidden, it raises none (the person
+    // moved on); a task that ends then is the shell's to mark unread.
     let (mut h, _, _) = host();
     let _ = (h.open_overlay(), h.apply(Cmd::Minimize(WinId(1))));
-    let _ = (h.ask(2, vec![Ask::Yield { win: 1 }]), h.ask(0, vec![Ask::Yield { win: 9 }]));
-    assert!(!h.agent.yielded && h.focused_app() == Some(WinId(2)));
-    h.ask(0, vec![Ask::Yield { win: 1 }]);
-    assert!(h.agent.yielded && h.focused_app() == Some(WinId(1)) && h.rect_of(1).is_some());
+    let yields = |win, hide| vec![Ask::Yield { win, hide }];
+    h.agent.shown = Some(RectF::default());
+    let _ = (h.ask(2, yields(1, true)), h.ask(0, yields(9, true)));
+    assert!(h.agent.aside.is_none() && h.focused_app() == Some(WinId(2)));
+    h.ask(0, yields(1, false));
+    assert!(h.agent.aside == Some(false) && h.focused_app() == Some(WinId(1)));
+    (h.agent.shown, h.agent.aside) = (None, None);
+    let _ = (h.apply(Cmd::Focus(WinId(2))), h.ask(0, yields(1, true)));
+    assert!(h.agent.aside == Some(true) && h.focused_app() == Some(WinId(2)));
+    let working = |on| Ask::Status { working: on };
+    h.ask(0, vec![working(false)]);
+    assert!(!h.agent.ended && (h.ask(0, vec![working(true), working(false)]), h.agent.ended).1);
 }
 
 #[test]
