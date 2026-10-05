@@ -311,6 +311,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "compusophy-teach"
+version = "0.1.0"
+dependencies = [
+ "compusophy-applang",
+ "compusophy-coder",
+]
+
+[[package]]
 name = "compusophy-term"
 version = "0.1.0"
 dependencies = [
