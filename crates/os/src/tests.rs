@@ -199,7 +199,8 @@ fn the_welcome_then_the_desktop_start_at_the_first_usable_sizes() {
     let fx = [store(logon::SEEN, "1"), store("compusophy.last", "0"), s, Fx::TextInput(false)];
     assert_eq!(send(&mut desk, key("Enter/Enter", true)), ((true, true), fx.to_vec()));
     assert!(desk.logon.as_ref().is_some_and(Logon::leaving));
-    assert!(shell(&desk).wm().layout().is_empty() && desk.parts.is_none() && desk.saved == "Mono");
+    assert!(shell(&desk).wm().layout().is_empty() && desk.parts.is_none());
+    assert_eq!(desk.saved, "Mono Dark");
     assert_eq!(shell(&desk).vfs().read(remote::STUDIO), Ok(&b"#!wasm bin/studio.wasm\n"[..]));
 }
 
@@ -216,13 +217,14 @@ fn the_theme_comes_from_storage_and_goes_back_when_it_changes() {
     // other write is the first visit's mark).
     let (mut desk, writes) = stored("dawn");
     assert_eq!((shell(&desk).theme_name(), writes), ("Dawn", 2));
-    assert_eq!(shell(&stored("Solarized").0).theme_name(), "Mono");
+    let old = ["Solarized", "Mono"].map(|n| shell(&stored(n).0).theme_name());
+    assert_eq!(old, ["Mono Dark"; 2], "Mono: Mono Dark before Mono Light");
     // A new theme (Settings sets it) is stored once, after the event that set it.
-    let store = Fx::Store { key: THEME_KEY.into(), value: "Mono".into() };
-    assert!(desk.shell.as_mut().expect("created").set_theme("mono"));
+    let store = Fx::Store { key: THEME_KEY.into(), value: "Mono Light".into() };
+    assert!(desk.shell.as_mut().expect("created").set_theme("mono light"));
     let fx = send(&mut desk, Event::PointerMove { x: 9.0, y: 300.0 }).1;
     let stores = fx.iter().filter(|f| **f == store).count();
-    assert_eq!((shell(&desk).theme_name(), stores), ("Mono", 1));
+    assert_eq!((shell(&desk).theme_name(), stores), ("Mono Light", 1));
     for fx in [frame(&mut desk), send(&mut desk, Event::PointerMove { x: 9.0, y: 200.0 }).1] {
         assert!(fx.iter().all(|f| !matches!(f, Fx::Store { .. })), "{fx:?}");
     }

@@ -181,7 +181,7 @@ one. Forked crates keep their Apache-2.0 license and note their origin.
   profiles as circles (people are round, apps rounded squares): each
   face a ring a pixel wide holding dots, guest's none, and each profile
   added the fewest no other has (one, then two...), set in Settings →
-  Profile among ten; the ring in the accent on the one in focus (the one
+  Appearance among ten; the ring in the accent on the one in focus (the one
   that signed in last), then Add, a ring around a plus; a tap, or the
   arrows and Enter, signs in. Holding a circle 500 ms (or a right-click)
   opens its menu: Rename, Set a PIN (or Change PIN, Remove PIN), Remove
@@ -352,12 +352,18 @@ one. Forked crates keep their Apache-2.0 license and note their origin.
   (180 ms), themes crossfade (200 ms). Drags and resizes follow the pointer
   exactly.
 - **Themes**: Midnight (near-black `#07080C` with violet, cyan and magenta
-  light), Dawn (warm paper with peach, lilac and sky light) and Mono
+  light), Dawn (warm paper with peach, lilac and sky light), Mono Dark
   (black, white and grays, no light; the default, which a first visit and
-  an unknown name get). A theme is plain data: backdrop,
-  surfaces, glass, text ramp, one accent and the terminal's 16 colors;
-  nothing draws from a color constant. The choice is kept in
-  `localStorage` under `compusophy.theme`.
+  an unknown name get, as does Mono, its name before Mono Light) and Mono
+  Light (its opposite: white windows over a pale gray, black ink and
+  grays, a black accent, no light; a soft shadow and a white top edge as
+  on Dawn). Settings shows them in a row, the default first and the rest
+  after it, around (Mono Light, Midnight, Dawn), the current one ringed
+  in the accent (and checked where every name has room for the check);
+  narrower, two across, the dark ones over each other. A theme is plain
+  data: backdrop, surfaces, glass, text ramp, one accent and the
+  terminal's 16 colors; nothing draws from a color constant. The choice
+  is kept in `localStorage` under `compusophy.theme`.
 
 ### Apps
 
@@ -482,8 +488,11 @@ one. Forked crates keep their Apache-2.0 license and note their origin.
   **Editor** writes plain text, a new note in `~/notes`;
   Files and the Terminal's `edit` open files in it (a `.app` in Studio).
   **Welcome** (a program, its mark revealed by the desktop's clock)
-  is the first screen; **Settings** picks the profile's face, the theme,
-  the AI model and what is reported, and resets the device.
+  is the first screen; **Settings** opens on Appearance (the theme, the
+  grain, then the profile's face in a row of ten, each named by its dots
+  for whoever reads the screen: `no dots`, `1 dot`...), then picks the AI
+  model and what is reported, and resets the device. Renaming a profile
+  is the welcome's (its menu) and signing out the desktop's menu's.
 - **Activity**, the resource monitor. Performance: graphs of the last
   minute, a point a second (uiwire's `Chart`), of CPU (the desktop's and the
   programs' share of a core), memory, frames a second and the AI's tokens a

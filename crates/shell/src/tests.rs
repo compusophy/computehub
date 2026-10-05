@@ -223,7 +223,7 @@ fn welcome_opens_on_a_first_visit_once_there_is_a_work_area() {
     }
     // Once seen, the desktop starts empty.
     let (mut s, _) = desk_with(1280.0, 800.0, Prefs { seen: true, ..Prefs::default() });
-    assert!(s.names().is_empty() && s.take_effects().is_empty() && s.theme_name() == "Mono");
+    assert!(s.names().is_empty() && s.take_effects().is_empty() && s.theme_name() == "Mono Dark");
 }
 
 #[test]
@@ -909,17 +909,17 @@ fn the_focused_app_gets_keys_text_and_the_pointer() {
 #[test]
 fn themes_crossfade_and_the_clock_ticks() {
     let (mut s, _) = desk();
-    for name in ["Dawn", "Mono", "Midnight"] {
+    for name in ["Dawn", "Mono Light", "Mono Dark", "Midnight"] {
         assert!(s.set_theme(name));
         assert_eq!((s.theme_name(), s.clear_color()), (name, ui::theme(name).base));
         assert!(s.animating());
         s.rest(1000.0);
         assert!(!s.animating());
     }
-    s.say(1, "theme MONO;theme nope");
+    s.say(1, "theme MONO LIGHT;theme nope");
     assert!(s.input(Input::PointerLeave).redraw);
-    assert_eq!((s.theme_name(), desk_of(800.0, 600.0).0.theme_name()), ("Mono", "Midnight"));
-    assert!(!s.set_theme("mono") && !s.set_theme("nope"));
+    assert_eq!((s.theme_name(), desk_of(800.0, 600.0).0.theme_name()), ("Mono Light", "Midnight"));
+    assert!(!s.set_theme("mono light") && !s.set_theme("mono") && !s.set_theme("nope"));
     s.rest(1000.0);
     let time = LocalTime { year: 2026, month: 10, day: 1, weekday: 3, hour: 9, minute: 5 };
     assert!(s.input(Input::Tick { time }).redraw && !s.input(Input::Tick { time }).redraw);

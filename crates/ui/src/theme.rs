@@ -143,8 +143,8 @@ const DAWN: Theme = Theme {
 
 /// Ultra minimal: black, white and grays, no light.
 #[rustfmt::skip]
-const MONO: Theme = Theme {
-    name: "Mono", dark: true, base: Rgba::hex(0x000000), grain: 5,
+const MONO_DARK: Theme = Theme {
+    name: "Mono Dark", dark: true, base: Rgba::hex(0x000000), grain: 5,
     glows: [UNUSED; 4],
     surface: rgba(0x0a0a0a, 248), surface_hi: Rgba::hex(0x161616), surface_lo: Rgba::hex(0x050505),
     glass: rgba(0x0a0a0a, 210), border: rgba(0xffffff, 26), highlight: rgba(0xffffff, 10),
@@ -159,12 +159,34 @@ const MONO: Theme = Theme {
     icon: IconStyle { ground: Rgba::hex(0x161616), tile: [100, 100], ink: 100, shadow: 0 },
 };
 
-/// The built-in themes: Midnight, Dawn and Mono (the default).
-pub static THEMES: [Theme; 3] = [MIDNIGHT, DAWN, MONO];
+/// Mono Dark's opposite: white and near-white, black and grays, no light. As on Dawn,
+/// windows are white over a pale base, cast a soft shadow and wear a white top edge.
+#[rustfmt::skip]
+const MONO_LIGHT: Theme = Theme {
+    name: "Mono Light", dark: false, base: Rgba::hex(0xf2f2f2), grain: 5,
+    glows: [UNUSED; 4],
+    surface: rgba(0xffffff, 248), surface_hi: Rgba::hex(0xf0f0f0), surface_lo: Rgba::hex(0xe6e6e6),
+    glass: rgba(0xffffff, 200), border: rgba(0x000000, 26), highlight: rgba(0xffffff, 150),
+    text: Rgba::hex(0x111111), text_dim: Rgba::hex(0x666666), text_faint: Rgba::hex(0x9e9e9e),
+    accent: Rgba::hex(0x000000), accent_text: Rgba::hex(0xffffff), danger: Rgba::hex(0xd32f2f),
+    shadow: rgba(0x000000, 60), selection: rgba(0x000000, 50),
+    // Muted inks that read on white; white and bright white are grays, as on Dawn. Bright black
+    // (a canvas's gray) sits between the text and its dim, apart from both and from silver.
+    ansi: ansi([
+        0x1f1f1f, 0xb3393b, 0x2c7047, 0x7d5c0f, 0x2f5d9e, 0x7c429e, 0x1d6d74, 0x6b6b6b, //
+        0x4d4d4d, 0x9c2c2f, 0x235e3b, 0x654a0b, 0x264e8a, 0x67348a, 0x165a61, 0x707070,
+    ]),
+    // Monochrome: flat white tiles, every glyph in text, no shadow.
+    icon: IconStyle { ground: Rgba::hex(0xffffff), tile: [100, 100], ink: 100, shadow: 0 },
+};
 
-/// The theme named `name`, ignoring ASCII case; else the default, Mono.
+/// The built-in themes: Midnight, Dawn, Mono Dark (the default) and Mono Light.
+pub static THEMES: [Theme; 4] = [MIDNIGHT, DAWN, MONO_DARK, MONO_LIGHT];
+
+/// The theme named `name`, ignoring ASCII case; else the default, Mono Dark (which a name kept
+/// before it was renamed, Mono, thus still means).
 pub fn theme(name: &str) -> &'static Theme {
-    let all: &'static [Theme; 3] = &THEMES;
+    let all: &'static [Theme; 4] = &THEMES;
     all.iter().find(|t| t.name.eq_ignore_ascii_case(name)).unwrap_or(&all[2])
 }
 

@@ -87,10 +87,11 @@ fn the_terminal_shows_its_programs_answers_their_queries_and_does_their_asks() {
     // A query's answer goes back to the console.
     t.event(&Event::Output { data: b"\x1b[6n".to_vec() });
     assert_eq!(typed(&mut t), b"\x1b[2;2R");
-    // Asks: an app opens, a known theme applies.
-    let asks = b"\x1b]1729;open;editor:/tmp/a\x07\x1b]1729;theme;Dawn\x07\x1b]1729;theme;Sepia\x07";
-    t.event(&Event::Output { data: asks.to_vec() });
-    let theme = Request::Pref { key: "theme".into(), value: "Dawn".into() };
+    // Asks: an app opens, a known theme applies (Mono, Mono Dark's old name, is none).
+    let ask = |verb: &str, arg: &str| ["\x1b]1729;", verb, ";", arg, "\x07"].concat();
+    let asks = [ask("open", "editor:/tmp/a"), ask("theme", "Mono Light"), ask("theme", "Mono")];
+    t.event(&Event::Output { data: asks.concat().into_bytes() });
+    let theme = Request::Pref { key: "theme".into(), value: "Mono Light".into() };
     assert_eq!(t.frame().requests, [Request::Open { name: "editor:/tmp/a".into() }, theme]);
     // The wheel scrolls back by whole rows; a key snaps back.
     (0..40)

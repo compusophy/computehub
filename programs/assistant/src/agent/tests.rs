@@ -96,7 +96,7 @@ impl App for Own {
     }
 }
 
-/// A 1440 x 900 desktop in Mono with Settings and a terminal to open, its overlay running; what
+/// A 1440 x 900 Mono Dark desktop with Settings and a terminal to open, its overlay running; what
 /// the model was asked, what the desktop did, and each act's flash.
 struct Desk {
     host: Host,
@@ -116,7 +116,7 @@ fn desk() -> Desk {
         _ => None,
     });
     let (wm, text) = (Wm::new(Rect::new(0, 44, 1440, 771)), TextSystem::new(SANS.to_vec()));
-    let mut host = Host::new(wm, text.unwrap(), Vfs::new(), registry, "Mono");
+    let mut host = Host::new(wm, text.unwrap(), Vfs::new(), registry, "Mono Dark");
     host.agent.screen = (1440.0, 900.0);
     host.agent.apps = ["settings", "terminal"].map(String::from).into();
     assert!(host.open_overlay());
@@ -304,13 +304,13 @@ fn a_scripted_model_turns_error_reports_off_on_a_real_desktop() {
     assert_eq!(get("tools"), TOOLS);
     let m = messages(b);
     assert_eq!((m.len(), m[0].0.as_str(), &*m[0].1), (2, "system", SYSTEM));
-    assert!(m[1].1.starts_with("turn off error reports\n\nScreen 1440x900, theme Mono."));
+    assert!(m[1].1.starts_with("turn off error reports\n\nScreen 1440x900, theme Mono Dark."));
     assert!(m[1].1.contains("\nApps: settings, terminal\n"));
     // Folded: the first screen left out, older results their first line, the latest the screen.
     let m = messages(&d.bodies[3]);
     assert_eq!(m[1].1, "turn off error reports\n\n(screen omitted)");
     let tools: Vec<&str> = m.iter().filter(|m| m.0 == "tool").map(|m| m.1.as_str()).collect();
-    assert_eq!(tools[..2], ["ok: opened settings", "ok: clicked \u{201c}Privacy\u{201d} (e4)"]);
+    assert_eq!(tools[..2], ["ok: opened settings", "ok: clicked \u{201c}Privacy\u{201d} (e3)"]);
     let flip = "ok: clicked \u{201c}Send error reports automatically\u{201d} (e";
     assert!(tools[2].starts_with(flip));
     assert!(tools[2].contains("switch \"Send error reports automatically\" off"));
@@ -373,10 +373,10 @@ fn the_screen_reads_as_text_whose_refs_last_the_session() {
     let min =
         Win { id: 4, app: "terminal".into(), title: "Terminal".into(), state: 2, ..Win::default() };
     let (wins, apps) = (vec![page(2, true), page(3, false), min], vec!["settings".into()]);
-    let scene = Scene { w: 1440, h: 900, touch: false, theme: "Mono".into(), focus: 2, apps, wins };
+    let scene = Scene { w: 1440, h: 900, touch: false, theme: "Dawn".into(), focus: 2, apps, wins };
     let mut refs = Refs::default();
     let (text, elems) = render(&scene, &mut refs, 2);
-    let want = "Screen 1440x900, theme Mono, focused w2. You were opened over w2.\nApps: settings\n\
+    let want = "Screen 1440x900, theme Dawn, focused w2. You were opened over w2.\nApps: settings\n\
         w2 \"Settings\" (settings) 400x300 at 100,50, focused\n  \"Privacy\"\n  e1 tab \"Privacy\" selected\n  \
         e2 textbox placeholder \"Your name\" focused\n  e3 switch \"Send reports\" on\n  \"Reports go to compusophy.\"\n\
         w3 \"Other\" (settings) 400x300 at 100,50\n  e4 tab \"Privacy\" selected\n  e5 textbox placeholder \"Your name\" focused\n  \

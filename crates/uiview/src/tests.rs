@@ -267,12 +267,8 @@ fn areas_edit_wrap_grow_and_keep_the_caret_in_view() {
     assert!(c[1] > 0.0 && c[1] + c[3] < 400.0, "in view: {c:?}");
     // Not focused (or no such area in the text): the frame's value, no caret.
     texts.focus = 0;
-    let d = draw(
-        &[area("seen"), Node::Area { id: 0, value: "plain".into(), placeholder: "".into() }],
-        &mut texts,
-        &mut view,
-        None,
-    );
+    let plain = Node::Area { id: 0, value: "plain".into(), placeholder: "".into() };
+    let d = draw(&[area("seen"), plain], &mut texts, &mut view, None);
     assert!(caret(&d).is_none() && d.hits.len() == 1);
     // In a Fill (Editor's text): down to the bottom at least; with more rows, as tall as they.
     let page = |texts: &mut Texts| {
@@ -927,50 +923,59 @@ fn pages_are_a_column_or_tabs_and_cards_ring_what_is_chosen() {
         Node::Choice { id: 20, on: true, text: "GLM 5.3\nbest answers".into() },
         Node::Switch { id: 30, on: false, label: "Living grain".into() },
         Node::Button { id: 31, variant: Variant::Link, label: "Send feedback".into() },
+        Node::Faces { id: 50, on: 3 },
     ];
     let (mut texts, mut view) = (Texts::default(), View::default());
-    // Wide, a column with the rest right of it; narrow, tabs side by side with the rest under.
-    let d = draw_at(720.0, &nodes, &mut texts, &mut view, None);
+    // Wide, a column with the rest right of it (at Settings' 720 px, even 30 px less, the themes
+    // in one row and the faces in one); narrow, tabs side by side with the rest under.
+    let [d, less] = [720.0, 690.0].map(|w| draw_at(w, &nodes, &mut texts, &mut view, None));
     let (a, b) = (d.hit(1).rect, d.hit(2).rect);
     assert!(a.x == b.x && b.y > a.y && d.hit(10).rect.x > a.x + a.w, "{a:?} {b:?}");
+    let row = |d: &Drawn| [10, 13, 50, 59].map(|id| d.hit(id).rect.y);
+    assert!([row(&d), row(&less)].iter().all(|[a, b, c, e]| a == b && c == e));
     // The current theme (the first card's, Midnight's) and the chosen model wear the accent's
     // ring 3 px out; the switch and the link fill the width.
-    let ring = |d: &Drawn| -> Vec<[f32; 4]> {
-        let ring = |b: &&&Instance| b.color == t.accent && b.p0 == 2.0;
-        d.of(Kind::Border).iter().filter(ring).map(|b| b.rect).collect()
-    };
+    let ring = |b: &&&Instance| b.color == t.accent && b.p0 == 2.0;
+    let rings: Vec<_> = d.of(Kind::Border).iter().filter(ring).map(|b| b.rect).collect();
     let out = |r: RectF| [r.x - 3.0, r.y - 3.0, r.w + 6.0, r.h + 6.0];
-    assert_eq!(ring(&d), [out(d.hit(10).rect), out(d.hit(20).rect)]);
+    assert_eq!(rings, [out(d.hit(10).rect), out(d.hit(20).rect)]);
     assert!([30, 31].iter().all(|&id| d.hit(id).rect.w == d.hit(20).rect.w));
+    // The card's check where every name has room for it, apart (not at 720 px), else its ring.
+    let checks = |d: Drawn| d.of(Kind::Glyph).iter().filter(|g| g.color == t.accent).count();
+    let [n, w] = [720.0, 1000.0].map(|w| draw_at(w, &nodes[..2], &mut texts, &mut view, None));
+    assert_eq!([checks(n), checks(w)], [0, 1]);
     // Narrow, each tab its label's width and an even share of the rest, edge to edge.
     let d = draw_at(360.0, &nodes, &mut texts, &mut view, None);
     let (a, b, c) = (d.hit(1).rect, d.hit(2).rect, d.hit(3).rect);
     assert!(a.y == c.y && a.w > c.w && c.w > b.w && d.hit(10).rect.y > a.y + a.h, "{a:?} {c:?}");
     assert!((a.x + a.w - b.x).abs() < 0.5 && (b.x + b.w - c.x).abs() < 0.5);
-    // Three themes across, then fewer as the window narrows.
-    let mut rows = |w| {
-        let d = draw_at(w, &nodes[1..2], &mut texts, &mut view, None);
-        let mut ys: Vec<u32> = (10..13).map(|id| d.hit(id).rect.y as u32).collect();
-        (ys.sort(), ys.dedup(), ys.len()).2
-    };
-    assert_eq!([rows(600.0), rows(400.0), rows(200.0)], [1, 2, 3]);
+    // Four themes across, else two (the default first, the dark ones over each other), else one.
+    let cols = [700.0, 400.0, 200.0].map(|w| cards::themes_size(w - 2.0 * PAD).0);
+    let d = draw_at(400.0, &nodes[1..2], &mut texts, &mut view, None);
+    let [mid, dawn, dark, light] = [10, 11, 12, 13].map(|id| d.hit(id).rect);
+    assert!(cols == [4, 2, 1] && (dark.y, dawn.y) == (light.y, mid.y) && mid.y > dark.y);
+    assert!((mid.x, dawn.x) == (dark.x, light.x) && light.x > dark.x);
     // As the AI reads them: the page's tab selected, the theme and model chosen, the switch off,
     // a link (what lies below the window unmarked: without the themes, all of it shows).
     let marks = |nodes: &[Node]| sem(nodes, t).marks.into_iter().map(|m| (m.id, m.role, m.flags));
     let marks: Vec<_> = marks(&nodes).chain(marks(&[&nodes[..1], &nodes[2..]].concat())).collect();
     let want = [(1, 2, 0), (2, 2, 1), (10, 4, 1), (11, 4, 0), (20, 4, 1), (30, 3, 0), (31, 9, 0)];
     assert!(want.iter().all(|m| marks.contains(m)), "{marks:?}");
-    // The faces, in even rows (two of five at 560 px), each 55 px; the one on ringed in the
-    // accent and chosen.
-    let faces = [Node::Faces { id: 50, on: 3 }];
-    let d = draw(&faces, &mut texts, &mut view, None);
-    let (first, sixth) = (d.hit(50).rect, d.hit(55).rect);
-    assert!(first.w == 55.0 && sixth.x == first.x && sixth.y == first.y + 55.0 + 13.0);
-    let on = d.hit(53).rect;
-    let lit = |b: &&&Instance| b.color == t.accent && b.rect == [on.x, on.y, on.w, on.h];
+    // The faces in a row at 560 px (each a target 47 px across on whole pixels, its face 34
+    // inside), in even rows narrower (two of five at 400); the one on ringed in the accent.
+    let [d, n] = [600.0, 400.0].map(|w| draw_at(w, &nodes[5..], &mut texts, &mut view, None));
+    let [p, q, a, b] = [d.hit(50), d.hit(59), n.hit(50), n.hit(55)].map(|h| h.rect);
+    assert_eq!([p.w, q.x - p.x, q.y - p.y, b.x - a.x, b.y - a.y], [47.0, 423.0, 0.0, 0.0, 47.0]);
+    let h = d.hit(53).rect;
+    let lit = |b: &&&Instance| b.color == t.accent && b.rect == [h.x + 6.0, h.y + 6.0, 34.0, 34.0];
     assert_eq!(d.of(Kind::Border).iter().filter(lit).count(), 1);
-    let marks: Vec<_> = sem(&faces, t).marks.into_iter().map(|m| (m.id, m.flags)).collect();
-    assert!(marks.len() == 10 && marks.contains(&(53, 1)) && marks.contains(&(50, 0)));
+    // Each named by its dots: its mark's value, and its text, a run alone in its target.
+    let (s, names) = (sem(&nodes[5..], t), (0..10).map(cards::dots).collect::<Vec<_>>());
+    assert!(names[..3] == ["no dots", "1 dot", "2 dots"] && s.marks[3].flags == 1);
+    let (values, runs) = (s.marks.iter().map(|m| &m.value), s.runs.iter().map(|r| &r.text));
+    assert!(values.eq(&names) && runs.eq(&names));
+    let holds = |h: RectF, r: RectF| h.contains(r.x + r.w / 2.0, r.y + r.h / 2.0);
+    assert!(s.runs.iter().zip(50..).all(|(r, id)| holds(d.hit(id).rect, r.rect)));
 }
 
 #[test]

@@ -21,7 +21,7 @@ use vfs::Vfs;
 pub const APPS: [&str; 10] = ["studio", "assistant", "terminal", "files", "editor",
     "activity", "settings", "feedback", "about", "welcome"];
 /// The desktop's themes, in its order.
-const THEMES: [&str; 3] = ["Midnight", "Dawn", "Mono"];
+const THEMES: [&str; 4] = ["Midnight", "Dawn", "Mono Dark", "Mono Light"];
 const GREETING: &str = "\x1b[1mcompusophyOS terminal\x1b[m \u{2014} type 'help'.\n";
 const KEYS: &str = "Up and Down recall history, Ctrl+C cancels the line, Ctrl+L clears the \
 screen, Ctrl+D on an empty line closes the terminal. Quotes group words: \"a b\" or 'a b'; ~ \
@@ -134,7 +134,7 @@ const COMMANDS: [(&str, &str, usize, usize, &str, &str, Cmd); 20] = [
             io.line(&[&n, h], "  ");
         }
     }),
-    ("theme", "", 0, 1, "theme [name]", "list the themes, or switch to one", theme),
+    ("theme", "", 0, 2, "theme [name]", "list the themes, or switch to one", theme),
     ("clear", "", 0, ANY, "clear", "clear the screen",
         |_, _, _, io, _| io.out("\x1b[3J\x1b[H\x1b[2J")),
     ("whoami", "", 0, ANY, "whoami", "print your user name", |_, _, _, io, _| io.out("guest\n")),
@@ -1000,14 +1000,16 @@ fn open(s: &mut Shell, args: &[&str], _: u32, io: &mut Io<'_>, sys: &mut dyn Sys
     }
 }
 
-/// `theme`: lists the themes; `theme <name>` switches to one (any case).
+/// `theme`: lists the themes; `theme <name>` switches to one (any case, its words quoted or
+/// not: `theme mono light`).
 fn theme(_: &mut Shell, args: &[&str], _: u32, io: &mut Io<'_>, _: &mut dyn Sys) {
-    let Some(&want) = args.first() else {
+    if args.is_empty() {
         return THEMES.iter().for_each(|t| io.line(&[t], ""));
-    };
-    match THEMES.iter().find(|t| t.eq_ignore_ascii_case(want)) {
+    }
+    let want = args.join(" ");
+    match THEMES.iter().find(|t| t.eq_ignore_ascii_case(&want)) {
         Some(t) => io.ask("theme", t),
-        None => io.err(&["theme: ", want, ": no such theme (see 'theme')"]),
+        None => io.err(&["theme: ", &want, ": no such theme (see 'theme')"]),
     }
 }
 

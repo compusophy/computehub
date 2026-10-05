@@ -63,13 +63,13 @@ pub const GRAIN_MS: f64 = 125.0;
 
 type Widget = (WinId, WidgetId);
 
-/// What the page keeps for the shell between visits: the theme's name (else the default, Mono),
-/// the dock's favorites, where the home screen's icons sit and which folder holds which apps, as
-/// stored (the `dock`, `home.order` and `folders` preferences; `None` for none, the first
-/// folders for `folders`), whether Welcome was shown on a first visit (the
-/// `seen` preference) and whether the grain is still (the `grain` preference `"off"`); and
-/// whether the page is cross-origin isolated, which programs need: the kernel knows before
-/// Welcome, a program, opens.
+/// What the page keeps for the shell between visits: the theme's name (else the default, Mono
+/// Dark), the dock's favorites, where the home screen's icons sit and which folder holds which
+/// apps, as stored (the `dock`, `home.order` and `folders` preferences; `None` for none, the
+/// first folders for `folders`), whether Welcome was shown on a first visit (the `seen`
+/// preference) and whether the grain is still (the `grain` preference `"off"`); and whether the
+/// page is cross-origin isolated, which programs need: the kernel knows before Welcome, a
+/// program, opens.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Prefs {
     pub theme: String,

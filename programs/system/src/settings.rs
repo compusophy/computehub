@@ -1,4 +1,4 @@
-//! Settings: the profile's face, the themes and the living grain, the AI model, what gets
+//! Settings: the themes, the living grain and the profile's face, the AI model, what gets
 //! reported, and a reset.
 
 use std::mem;
@@ -8,8 +8,8 @@ use uiwire::{Event, Frame, Node, Request, Style, Variant};
 
 use crate::{Disk, View, space, text};
 
-/// The pages, one a line.
-const PAGES: &str = "Profile\nAppearance\nAI\nPrivacy\nReset";
+/// The pages, one a line: Settings opens on the first.
+const PAGES: &str = "Appearance\nAI\nPrivacy\nReset";
 /// Widget ids: page `i` is `NAV + i`, theme `i` `THEME + i`, model `i` `MODEL + i`; the reports
 /// switch, the feedback link and the grain's switch; the reset's word and its button; face `i`
 /// `FACE + i`.
@@ -22,10 +22,9 @@ pub(crate) const LIVING: u32 = 32;
 pub(crate) const WORD: u32 = 40;
 pub(crate) const ERASE: u32 = 41;
 pub(crate) const FACE: u32 = 50;
-const FACE_NOTE: &str = "Your face is how the welcome shows you, above your name. Each \
-profile starts with the fewest dots no other has: guest none, the first one, the next two.";
+const FACE_NOTE: &str = "How the welcome shows you, above your name.";
 /// The desktop's themes in its own order, which its theme cards' ids follow.
-pub(crate) const THEMES: [&str; 3] = ["Midnight", "Dawn", "Mono"];
+pub(crate) const THEMES: [&str; 4] = ["Midnight", "Dawn", "Mono Dark", "Mono Light"];
 /// The models on offer as (name, then what it is best at; the value stored), the first the
 /// default.
 pub(crate) const MODELS: [(&str, &str); 2] =
@@ -55,12 +54,13 @@ const TYPE: &str = "Type reset to confirm.";
 /// The widest row of cards.
 const ROW_MAX: u16 = 440;
 
-/// Settings: Profile (the faces, a click picking one, which the desktop keeps), Appearance (the desktop's themes as cards, a click applying one; the living grain's
-/// switch), AI (a note on the free AI, the models as cards; a click picks one, which the desktop
-/// stores), Privacy (the automatic reports switch, what a report holds, where files stay or
-/// that they could not be kept, a link to Feedback) and Reset (what it erases; once `reset` is
-/// typed, Erase or Enter asks the desktop to, [`Request::Reset`]), as the desktop's pages
-/// ([`Node::Pages`]).
+/// Settings: Appearance (the desktop's themes as cards, a click applying one; the living grain's
+/// switch; then the faces, a click picking one, which the desktop keeps), AI (a note on the free
+/// AI, the models as cards; a click picks one, which the desktop stores), Privacy (the automatic
+/// reports switch, what a report holds, where files stay or that they could not be kept, a link
+/// to Feedback) and Reset (what it erases; once `reset` is typed, Erase or Enter asks the
+/// desktop to, [`Request::Reset`]), as the desktop's pages ([`Node::Pages`]). A profile's name
+/// is the welcome's to change, and signing out the desktop's menu's.
 #[derive(Debug)]
 pub struct Settings {
     /// The page shown, the model the desktop answers with, and whether reports go, the grain
@@ -163,7 +163,7 @@ impl Settings {
         } else if id.wrapping_sub(FACE) < u32::from(FACES) {
             self.face = (id - FACE) as u8;
             self.requests.push(pref("face", &self.face.to_string()));
-        } else if id.wrapping_sub(NAV) < 5 {
+        } else if id.wrapping_sub(NAV) < 4 {
             self.page = (id - NAV) as u8;
         }
     }
@@ -176,13 +176,6 @@ impl Settings {
         let mut nodes = vec![pages];
         match self.page {
             0 => nodes.extend([
-                text(Style::Heading, "Profile"),
-                text(Style::Small, FACE_NOTE),
-                space(0),
-                Node::Faces { id: FACE, on: self.face },
-                space(0),
-            ]),
-            1 => nodes.extend([
                 text(Style::Heading, "Appearance"),
                 text(Style::Small, "Pick a theme. The whole desktop follows at once."),
                 space(0),
@@ -190,10 +183,14 @@ impl Settings {
                 space(0),
                 switch(LIVING, self.on[1], GRAIN),
                 text(Style::Small, GRAIN_NOTE),
-                // The view ends a spacing below the note.
+                space(0),
+                text(Style::Subheading, "Your face"),
+                text(Style::Small, FACE_NOTE),
+                Node::Faces { id: FACE, on: self.face },
+                // The view ends a spacing below the faces.
                 space(0),
             ]),
-            2 => {
+            1 => {
                 // A model not on offer (or none yet) is the default, as the desktop stores it.
                 let on = MODELS.iter().position(|m| m.1 == self.model).unwrap_or(0);
                 let models = MODELS
@@ -208,7 +205,7 @@ impl Settings {
                     Node::Pane { id: 0, w: ROW_MAX, children: models.collect() },
                 ]);
             }
-            4 => {
+            3 => {
                 let (value, placeholder) = (self.word.clone(), SAY.into());
                 let variant = if self.armed() { Variant::Danger } else { Variant::Normal };
                 nodes.extend([
