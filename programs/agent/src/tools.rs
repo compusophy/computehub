@@ -29,9 +29,13 @@ const SHOWN: usize = 8;
 /// The commands that only read: one of them alone runs without asking ([`reads`]).
 pub const READS: [&str; 10] =
     ["ls", "cat", "pwd", "cd", "echo", "apps", "history", "whoami", "uname", "help"];
-/// What a line may run that removes, moves or overwrites, or could unseen (a script, another
-/// agent, which may be told `-y`): such a line asks each time ([`risky`]).
-pub const RISKS: [&str; 4] = ["rm", "mv", "sh", "agent"];
+/// The shell's other commands that remove, move and overwrite nothing (but by a `>`): with
+/// [`READS`], what the person's always to commands covers of its own ([`risky`]).
+pub const MAKES: [&str; 8] = ["mkdir", "touch", "open", "run", "edit", "theme", "clear", "exit"];
+/// The programs always covers: /bin's applets that only read files and write their output, run
+/// by their name alone from /bin, which only the desktop writes. Any other program (by a path,
+/// from elsewhere, `sh`, another `agent`; a `#!wasm` marker may name any) asks each time.
+pub const APPLETS: [&str; 3] = ["wc", "rev", "hello"];
 
 /// Runs call `c`: its result for the model, and whether it failed (an `Error:` result).
 pub fn run(a: &mut Agent, c: &Call, w: &mut impl World) -> (String, bool) {
@@ -406,17 +410,22 @@ pub fn reads(line: &str) -> bool {
     matches!(sh::commands(line).as_deref(), Some([c]) if alone(c)) && !line.contains("/dev")
 }
 
-/// Whether `line` may remove, move or overwrite: a `>` that does not append, or a program of
-/// [`RISKS`] (by its name, wherever it is), or one named by a pattern, which could be any.
-pub fn risky(line: &str) -> bool {
-    let named = |w: &String| {
-        let name = w.rsplit('/').next().unwrap_or_default();
-        RISKS.contains(&name.strip_suffix(".wasm").unwrap_or(name)) || w.contains(['*', '?'])
+/// Whether `line`, as the shell reads it, may remove, move or overwrite, or run what could
+/// unseen: a `>` that does not append, or a stage that runs anything but one of the shell's
+/// own commands of [`READS`] and [`MAKES`] or an applet of [`APPLETS`] that `sys` has in /bin
+/// (so `rm`, `mv`, `/bin/sh/`, `./x`, a pattern, which could be any). Such a line asks each time.
+pub fn risky(line: &str, sys: &mut dyn sh::Sys) -> bool {
+    // A command's name is one only as a command's first word; elsewhere the shell refuses it.
+    let mut kept = |w: &String| {
+        READS.contains(&w.as_str())
+            || MAKES.contains(&w.as_str())
+            || APPLETS.contains(&w.as_str()) && sys.kind(&["/bin/", w].concat()) == Some(false)
     };
-    let risk = |(stages, out): &sh::Command| {
-        out.as_ref().is_some_and(|o| !o.1) || stages.iter().filter_map(|s| s.first()).any(named)
+    let mut risk = |(stages, out): &sh::Command| {
+        out.as_ref().is_some_and(|o| !o.1)
+            || !stages.iter().filter_map(|s| s.first()).all(&mut kept)
     };
-    sh::commands(line).unwrap_or_default().iter().any(risk)
+    sh::commands(line).unwrap_or_default().iter().any(&mut risk)
 }
 
 fn shell(a: &mut Agent, v: &Json, w: &mut impl World) -> Result<String, String> {
@@ -425,7 +434,7 @@ fn shell(a: &mut Agent, v: &Json, w: &mut impl World) -> Result<String, String> 
     if line.chars().any(|c| c.is_control() && c != '\t') {
         return Err("one command line at a time, with no control characters".into());
     }
-    let (reads, kind) = (reads(&line), if risky(&line) { RISK } else { RUN });
+    let (reads, kind) = (reads(&line), if risky(&line, w) { RISK } else { RUN });
     if !reads && !a.allowed(kind, &["run ", &line].concat(), w) {
         how(w, "declined");
         return declined(&["run ", &line].concat());

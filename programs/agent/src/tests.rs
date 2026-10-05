@@ -149,6 +149,15 @@ fn result(a: &Agent, n: usize) -> &str {
     tools.nth(n).expect("that many tool results")
 }
 
+/// Installs /bin's applets and programs in `w`, as the desktop does: each a `#!wasm` marker.
+fn applets(w: &mut Fake) {
+    w.fs.mkdir_all("/bin").unwrap();
+    for (name, wasm) in [("wc", "toolbox"), ("rev", "toolbox"), ("sh", "sh"), ("agent", "agent")] {
+        w.fs.write(&["/bin/", name].concat(), ["#!wasm bin/", wasm, ".wasm\n"].concat().as_bytes())
+            .unwrap();
+    }
+}
+
 fn file(w: &Fake, path: &str) -> String {
     String::from_utf8_lossy(w.fs.read(&path.replace('~', Vfs::HOME)).unwrap()).into_owned()
 }
@@ -224,12 +233,12 @@ fn the_shell_tool_is_the_os_shell_its_directory_stays_and_its_asks_reach_the_des
             ("shell", r#"{"command":"open studio"}"#),
         ]),
         calls(&[
-            ("shell", r#"{"command":"hi there > out.txt"}"#),
-            ("shell", r#"{"command":"hi | hi"}"#),
+            ("shell", r#"{"command":"rev there > out.txt"}"#),
+            ("shell", r#"{"command":"rev | wc"}"#),
         ]),
         says("ok"),
     ]);
-    w.fs.mkdir_all("/bin").and(w.fs.write("/bin/hi", b"#!wasm bin/toolbox.wasm\n")).unwrap();
+    applets(&mut w);
     w.answers = vec![Answer::Yes, Answer::Yes, Answer::Yes];
     let mut a = Agent::new(Vfs::HOME, &mut w);
     assert!(a.task("look around", &mut w));
@@ -239,7 +248,7 @@ fn the_shell_tool_is_the_os_shell_its_directory_stays_and_its_asks_reach_the_des
     assert_eq!(result(&a, 2), "[asked the desktop: open;studio]\n");
     assert!(w.shown.contains("\x1b]1729;open;studio\x07"), "the Terminal sees the ask");
     // cd and ls only read; open, and programs, ask first.
-    assert_eq!(w.asked, ["run open studio", "run hi there > out.txt (each time)", "run hi | hi"]);
+    assert_eq!(w.asked, ["run open studio", "run rev there > out.txt (each time)", "run rev | wc"]);
     // A program's output is caught, unless it goes to a file already.
     assert_eq!((result(&a, 3), result(&a, 4)), ("(no output)", "hi\n"));
     let stdout = |j: &[u8]| capture(j, "/x").is_some();
@@ -530,32 +539,48 @@ fn tokens_read_short() {
 
 #[test]
 fn only_a_lone_read_runs_unasked_and_what_may_destroy_asks_each_time() {
+    let mut w = fake(&[]);
+    applets(&mut w);
+    let mut risky = |line: &str| tools::risky(line, &mut w);
     for line in ["ls -a ~/apps", "cat \"a;b\" notes/*.txt", "cd ..", "echo hi"] {
-        assert!(tools::reads(line) && !tools::risky(line), "{line}");
+        assert!(tools::reads(line) && !risky(line), "{line}");
     }
     // Joined, piped, redirected, a device or no read at all: asked.
     let asked = ["cat a; rm -r ~", "ls && mv a b", "echo rm | sh", "echo x > f", "cat /dev/tty"];
     for line in asked.iter().chain(&["open studio", "hi < f", "cat 'a"]) {
         assert!(!tools::reads(line), "{line}");
     }
-    // As the shell reads it: quotes, escapes and paths hide no rm, and a pattern could be any.
-    let risky = ["ls; \\r\"m\" x", "/bin/sh -c x", "a || mv a b", "echo x > f", "r? -r ~"];
-    assert!(risky.iter().chain(&asked[..4]).all(|l| tools::risky(l)));
-    assert!(
-        !["echo x >> f", "open studio", "hi | hi", "mkdir -p a"].iter().any(|l| tools::risky(l))
-    );
+    // As the shell reads it: quotes, escapes and paths hide no rm, and a pattern could be any;
+    // a program is judged by what runs, so sh or agent by any path or alias (a `#!wasm` marker
+    // elsewhere), and an applet not in /bin (it would be found in ~/.local/bin), ask each time.
+    let risks = ["ls; \\r\"m\" x", "/bin/sh -c x", "a || mv a b", "echo x > f", "r? -r ~"];
+    let paths = ["/bin/sh/ -c 'rm -r ~'", "/bin/sh/. -c x", "/bin/agent/. -y x", "./x -c x"];
+    let others = ["helper -y wipe", "hello", "/bin/wc a", "cat a | sh", "ls | w?"];
+    for line in risks.iter().chain(&asked[..4]).chain(&paths).chain(&others) {
+        assert!(risky(line), "{line}");
+    }
+    for line in ["echo x >> f", "open studio", "rev | wc", "mkdir -p a", "cat a | wc -l", "touch b"]
+    {
+        assert!(!risky(line), "{line}");
+    }
     // Always covers commands, but never one that may destroy; -y covers all.
+    let rm = |line: &str| ["{\"command\":", &quote(line), "}"].concat();
     let mut w = fake(&[
         calls(&[("shell", r#"{"command":"mkdir a"}"#), ("shell", r#"{"command":"mkdir b"}"#)]),
         calls(&[("shell", r#"{"command":"rm -r a"}"#), ("shell", r#"{"command":"rm -r b"}"#)]),
+        calls(&[("shell", &rm("/bin/sh/ -c 'rm -r b'")), ("shell", &rm("./x -c 'rm -r b'"))]),
         says("ok"),
     ]);
+    applets(&mut w);
+    w.fs.write("/tmp/x", b"#!wasm bin/sh.wasm\n").unwrap();
     w.answers = vec![Answer::Always, Answer::Always, Answer::No];
     let mut a = Agent::new("/tmp", &mut w);
     a.learn = false;
     assert!(a.task("tidy", &mut w));
-    assert_eq!(w.asked, ["run mkdir a", "run rm -r a (each time)", "run rm -r b (each time)"]);
-    assert!(!w.fs.exists("/tmp/a") && w.fs.exists("/tmp/b"));
+    let each = ["run /bin/sh/ -c 'rm -r b' (each time)", "run ./x -c 'rm -r b' (each time)"];
+    let first = ["run mkdir a", "run rm -r a (each time)", "run rm -r b (each time)"];
+    assert_eq!(w.asked, [&first[..], &each].concat());
+    assert!(!w.fs.exists("/tmp/a") && w.fs.exists("/tmp/b") && w.jobs.is_empty());
     assert!(result(&a, 3).starts_with("The user declined: run rm -r b."));
 }
 

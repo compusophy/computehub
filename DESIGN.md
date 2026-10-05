@@ -414,10 +414,12 @@ one. Forked crates keep their Apache-2.0 license and note their origin.
   reads it (`sh::commands`) as one reading command alone (`ls`, `cat`,
   `cd`, ...: nothing joined by `;`, `&&`, `||` or `|`, no `>`, no /dev);
   one that may remove, move or overwrite (`rm`, `mv`, a `>` that does not
-  append, a script by `sh`, another `agent`, a program named by a pattern)
-  asks each time, always or not. No file tool, nor its shell, reads or
-  writes a device (but /dev/null). The reply streams in as it comes, and
-  each tool shows a line of what it does and one of how it went; what the
+  append), or runs a program but /bin's `wc`, `rev` and `hello` by name
+  (judged by what runs: `sh` or `agent` by any path or `#!wasm` alias, a
+  program named by a pattern), asks each time, always or not. No file
+  tool, nor its shell, reads or writes a device (but /dev/null). The reply
+  streams in as it comes, and each tool shows a line of what it does and
+  one of how it went; what the
   model wrote shows with its controls in caret notation (`^[`), so none of
   it styles the screen or asks the desktop (`OSC 1729`), and the shell's
   asks reach the Terminal only from a line the person let run. It reaches
