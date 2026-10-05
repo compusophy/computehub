@@ -312,10 +312,13 @@ one. Forked crates keep their Apache-2.0 license and note their origin.
   is the news. Answers and questions show as plain text (a model's
   backticks and bold taken out), each receipt counting its steps ("1
   step"); the model is told its last reply asks nothing (ask_user does)
-  and claims only what the latest screen shows (a game it started runs
-  on: it says it started it), and its screen header says a touch screen
-  (the person's last press a finger's), so its hints name taps, never
-  keys.
+  and claims only what the latest screen shows (after a press into a board
+  or a game, only what it did, never its live state, a length or a score,
+  which moves on before the person reads it), and its screen header says
+  a touch screen (the person's last press a finger's), so its hints name
+  taps, never keys. It opens an app by the name the home screen shows, in
+  any case, with or without `.app` (`host::Host::named`: a made app in
+  `~/apps` too, where `snake` was once no app, E0914).
   Only Stop, or Escape while the overlay has the keys (which, at a question
   or before the pill shows, hides the card too), stops it: the
   person's own presses, keys and wheel go where they go beside its acts
@@ -364,8 +367,9 @@ one. Forked crates keep their Apache-2.0 license and note their origin.
   grays, a black accent, no light; a soft shadow and a white top edge as
   on Dawn). Settings shows them in a row, the default first and the rest
   after it, around (Mono Light, Midnight, Dawn), the current one ringed
-  in the accent (and checked where every name has room for the check);
-  narrower, two across, the dark ones over each other. A theme is plain
+  in the accent and checked at any width (a check on a disc of the accent
+  in its miniature's top right corner, clear of its name); narrower, two
+  across, the dark ones over each other. A theme is plain
   data: backdrop, surfaces, glass, text ramp, one accent and the
   terminal's 16 colors; nothing draws from a color constant. The choice
   is kept in `localStorage` under `compusophy.theme`.
@@ -546,13 +550,19 @@ one. Forked crates keep their Apache-2.0 license and note their origin.
   the window's size or its boards changed (`uiview::View::around`), the
   room left above drawn above it, so a board keeps its size and place as a
   button or label comes and goes, after each first shows; with a handler
-  they are pads. Studio's prompt asks that whatever is to be seen (a game,
-  a board, drawing, animation, a clock, a chart) be drawn on a canvas,
-  never spelled out in labels and buttons (its first example is snake on
-  pixels); that a game show the same widgets before it as after (Start,
-  hidden while it plays) and say Game over on the canvas; and that a paint
-  app show the color it paints and its squares' edges faintly (gray) under
-  the paint.
+  they are pads. A grid's squares are a target before the boards share
+  the room (`uiview::TAP`, 24 px, or 44 in a narrow window, as its width
+  and its row hold them; the grids within the room, two thirds of it
+  beside a canvas), so a palette of 7 beside a swatch is no row of 8 px
+  squares; the canvases share what is left. Studio's prompt asks that
+  whatever is to be seen (a game, a board, drawing, animation, a clock, a
+  chart) be drawn on a canvas, never spelled out in labels and buttons
+  (its first example is snake on pixels); that a game show the same
+  widgets before it as after (Start, hidden while it plays) and say Game
+  over on the canvas; that a paint app show the color it paints and its
+  squares' edges faintly (gray) under the paint; and that a grid's
+  handler read its `cell` as the square's index, never its color (a
+  palette reads its list: `color = pal[cell]`).
   **Editor** writes plain text, a new note in `~/notes`;
   Files and the Terminal's `edit` open files in it (a `.app` in Studio).
   **Welcome** (a program, its mark revealed by the desktop's clock)

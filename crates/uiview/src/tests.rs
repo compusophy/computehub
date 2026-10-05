@@ -137,13 +137,8 @@ fn glyphs_entries_toggles_and_chips_draw_in_the_theme() {
     let (on, off) = (d.hit(7).rect, d.hit(8).rect);
     assert!(on.h == TOGGLE_H && off.y == on.y + on.h + SPACING);
     let track = |r: RectF, c| {
-        d.of(Kind::Fill).iter().any(|i| {
-            i.rect[2] == 34.0
-                && i.rect[3] == 21.0
-                && i.rect[1] > r.y
-                && i.rect[1] < r.y + r.h
-                && i.color == c
-        })
+        let at = |i: &&&Instance| i.rect[2..] == [34.0, 21.0] && i.color == c;
+        d.of(Kind::Fill).iter().filter(at).any(|i| i.rect[1] > r.y && i.rect[1] < r.y + r.h)
     };
     assert!(track(on, t.accent) && track(off, t.surface_lo) && !track(on, t.surface_lo));
 }
@@ -179,15 +174,10 @@ fn panes_take_their_width_chips_are_small_and_fills_match_a_taller_sibling() {
 
 #[test]
 fn centers_put_each_child_and_each_line_in_the_middle() {
-    let nodes = vec![Node::Center {
-        id: 0,
-        gap: 5,
-        children: vec![
-            Node::Glyph { glyph: Glyph::Mark as u8, size: 89 },
-            text(Style::Title, "compusophy"),
-            Node::Button { id: 4, variant: Variant::Normal, label: "Go".into() },
-        ],
-    }];
+    let go = Node::Button { id: 4, variant: Variant::Normal, label: "Go".into() };
+    let mark = Node::Glyph { glyph: Glyph::Mark as u8, size: 89 };
+    let children = vec![mark, text(Style::Title, "compusophy"), go];
+    let nodes = vec![Node::Center { id: 0, gap: 5, children }];
     let d = draw(&nodes, &mut Texts::default(), &mut View::default(), None);
     let mid = |x: f32, w: f32| (x + w / 2.0 - 300.0).abs() <= 1.0;
     let mark = d.of(Kind::Glyph).into_iter().find(|g| g.rect[2] > 80.0).expect("the mark").rect;
@@ -211,13 +201,9 @@ fn areas_edit_wrap_grow_and_keep_the_caret_in_view() {
     assert!(a.insert("c\u{7}\nd") && (a.text.as_str(), a.at, a.version) == ("abc\nd", 5, 1));
     assert!(!a.insert("\u{7}") && a.version == 1);
     // Moves change no text; edits do, a version each.
-    for (key, at, changed) in [
-        (Key::Home, 4, false),
-        (Key::Left, 3, false),
-        (Key::Backspace, 2, true),
-        (Key::Delete, 2, true),
-        (Key::End, 3, false),
-    ] {
+    let keys = [Key::Home, Key::Left, Key::Backspace, Key::Delete, Key::End];
+    let changes = [false, false, true, true, false];
+    for ((key, at), changed) in keys.into_iter().zip([4, 3, 2, 2, 3]).zip(changes) {
         assert_eq!((a.key(key), a.at), (Some(changed), at), "{key:?}");
     }
     assert_eq!((a.text.as_str(), a.version), ("abd", 3));
@@ -294,13 +280,8 @@ fn areas_edit_wrap_grow_and_keep_the_caret_in_view() {
 fn a_press_on_a_control_keeps_the_keyboard_and_a_waiting_edit_keeps_its_text() {
     // Typing in an Area, a chip or a switch pressed: the keyboard stays, so what is typed next
     // lands; an Input takes it; empty space takes it away.
-    let area = Area::new("");
-    let mut t = Texts {
-        areas: vec![(9, area)],
-        inputs: vec![(5, "".into(), 0)],
-        focus: 0,
-        ..Texts::default()
-    };
+    let (areas, inputs) = (vec![(9, Area::new(""))], vec![(5, "".into(), 0)]);
+    let mut t = Texts { areas, inputs, ..Texts::default() };
     assert!(t.press(9, 0.0, 0.0) && t.focus == 9);
     assert!(t.press(2, 0.0, 0.0) && t.focus == 9, "a chip keeps it");
     assert!(t.press(5, 0.0, 0.0) && t.focus == 5);
@@ -383,9 +364,8 @@ fn scrolls_keep_the_bar_above_them_still_and_start_at_the_top_when_new() {
     // The wheel over the list scrolls it; the bar stays, the thumb goes down.
     let (x, y) = (s.rect.x + 10.0, s.rect.y + 10.0);
     assert!(wheel(&mut texts, &mut view, x, y, 1e9));
-    assert!(
-        !wheel(&mut texts, &mut view, x, y, 5.0) && !wheel(&mut texts, &mut view, x, y, f32::NAN)
-    );
+    assert!(!wheel(&mut texts, &mut view, x, y, 5.0));
+    assert!(!wheel(&mut texts, &mut view, x, y, f32::NAN));
     let d = draw(&nodes(7, 200), &mut texts, &mut view, None);
     let s = view.scrolls[0];
     assert!(s.y == s.content - s.rect.h && d.hit(1).rect == bar);
@@ -436,15 +416,8 @@ fn strips_stay_on_one_line_and_slide_left_to_keep_their_end_in_view() {
     let mut crumbs: Vec<Node> = (0..8).map(|i| quiet(10 + i, "a-long-folder")).collect();
     crumbs.push(text(Style::Body, "the-last-folder-of-all"));
     let strut = Node::Pane { id: 0, w: 0, children: vec![Node::Spacer { px: 44 }] };
-    let bar = vec![Node::Row {
-        id: 0,
-        gap: 0,
-        children: vec![
-            quiet(1, "\u{2191}"),
-            Node::Strip { id: 0, gap: 0, children: crumbs },
-            strut,
-        ],
-    }];
+    let strip = Node::Strip { id: 0, gap: 0, children: crumbs };
+    let bar = vec![Node::Row { id: 0, gap: 0, children: vec![quiet(1, "\u{2191}"), strip, strut] }];
     let (mut texts, mut view) = (Texts::default(), View::default());
     let d = draw_at(360.0, &bar, &mut texts, &mut view, None);
     // Up keeps its place; the first crumbs slid out of view (no hits), the rest on Up's line.
@@ -836,6 +809,19 @@ fn a_board_keeps_its_size_and_place_as_widgets_come_and_go() {
     assert_eq!(rect(&ready[..2], 640.0), back);
     // The score above it gone as it plays: the board stays put, the room above it empty.
     assert_eq!(rect(&ready[1..], 640.0), back);
+    // A paint app: its painting over its swatch beside its palette of 7. The palette's squares
+    // are a mouse's target (a finger's on a phone), in its row and in the room; the canvases
+    // share what is left, all of it in view (a tall grid alone still shrinks to fit: above).
+    let canvas = |id, side| Node::Canvas { id, w: side, h: side, draws: Vec::new() };
+    let pal = Node::Grid { id: 3, cols: 7, cells: vec![1, 2, 3, 4, 5, 6, 0], texts: Vec::new() };
+    let row = Node::Row { id: 0, gap: 8, children: vec![canvas(2, 1), pal] };
+    let paint = [text(Style::Body, "Paint"), canvas(1, 32), row];
+    for (size, tap) in [((800.0, 450.0), TAP), ((409.0, 552.0), TOUCH)] {
+        let (_, view, _) = boards(size, 1.0, &THEMES[0], &paint);
+        let [art, swatch, pal] = [0, 1, 2].map(|i| view.grids[i].rect);
+        assert!(pal.w == 7.0 * tap && pal.h == tap && swatch.h > tap && art.h > swatch.h);
+        assert!(view.heights.0 <= size.1, "{view:?}");
+    }
 }
 
 #[test]
@@ -940,10 +926,17 @@ fn pages_are_a_column_or_tabs_and_cards_ring_what_is_chosen() {
     let out = |r: RectF| [r.x - 3.0, r.y - 3.0, r.w + 6.0, r.h + 6.0];
     assert_eq!(rings, [out(d.hit(10).rect), out(d.hit(20).rect)]);
     assert!([30, 31].iter().all(|&id| d.hit(id).rect.w == d.hit(20).rect.w));
-    // The card's check where every name has room for it, apart (not at 720 px), else its ring.
-    let checks = |d: Drawn| d.of(Kind::Glyph).iter().filter(|g| g.color == t.accent).count();
-    let [n, w] = [720.0, 1000.0].map(|w| draw_at(w, &nodes[..2], &mut texts, &mut view, None));
-    assert_eq!([checks(n), checks(w)], [0, 1]);
+    // At any width (720 px too) the current card's check is on a disc of the accent 20 px across,
+    // in its miniature's top right corner (12 px in from the card's), clear of its name.
+    for w in [720.0, 1000.0] {
+        let d = draw_at(w, &nodes[..2], &mut texts, &mut view, None);
+        let disc = |f: &&&Instance| f.color == t.accent && f.rect[2..] == [20.0; 2];
+        let [x, y, ..] = d.of(Kind::Fill).iter().find(disc).expect("a disc").rect;
+        let mid = |g: &[f32; 4], k: usize| (g[k] + g[k + 2] / 2.0 - [x, y][k] - 10.0).abs() < 3.0;
+        let on = |g: &&&Instance| g.color == t.accent_text && mid(&g.rect, 0) && mid(&g.rect, 1);
+        let (c, n) = (d.hit(10).rect, d.of(Kind::Glyph).iter().filter(on).count());
+        assert_eq!(([c.x + c.w - x, y - c.y], n), ([32.0, 12.0], 1));
+    }
     // Narrow, each tab its label's width and an even share of the rest, edge to edge.
     let d = draw_at(360.0, &nodes, &mut texts, &mut view, None);
     let (a, b, c) = (d.hit(1).rect, d.hit(2).rect, d.hit(3).rect);

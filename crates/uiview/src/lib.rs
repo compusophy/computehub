@@ -9,7 +9,8 @@
 //! clock at its first draw), frames asked for only meanwhile ([`View::animating`]). In a window
 //! narrower than [`NARROW`] (a phone's) chips and quiet buttons are touch targets, [`TOUCH`] tall.
 //! Grids and Canvases (which [`canvas`] draws) are boards: they take the room the other widgets
-//! leave ([`SQUARE`]), the most those took above the first and around them since the window or
+//! leave ([`SQUARE`]; a Grid's squares a target first, [`TAP`] px or narrow [`TOUCH`], as its
+//! width holds them), the most those took above the first and around them since the window or
 //! its boards changed (so a board keeps its size and place as a button comes and goes:
 //! [`View::around`]), and with an id they are pads ([`Sense::Pad`]) a press or a drag taps
 //! ([`Play::tap`]). A frame whose first node is its Pages lays the rest out beside or under
@@ -279,20 +280,23 @@ impl Play {
     }
 }
 
-/// The largest square of a Grid, in logical px: a finger's target several times over.
+/// The largest square of a Grid, in logical px: a finger's target several times over; the
+/// least it takes before the boards share their room, a mouse's target ([`TOUCH`] narrow).
 pub const SQUARE: f32 = 96.0;
+pub const TAP: f32 = 24.0;
 /// On a fine board (a Canvas), the logical px a drag moves between the units it taps, about,
 /// and the most it taps for one sample of the pointer (farther than 256 px, they spread out).
 pub const FINE: f32 = 4.0;
 pub const FINE_TAPS: u32 = 64;
 
 /// A grid's square for `cols` across `w`: whole device px, as wide as `w` holds up to [`SQUARE`]
-/// (a device px at least), times `fit` (the share of their room the boards get), 6 px at least.
-fn side(ts: &TextSystem, (w, cols): (f32, u16), fit: f32) -> f32 {
+/// (a device px at least), times `fit` (the share of their room the boards get), `least` px and
+/// 6 px at least (as `w` holds them).
+fn side(ts: &TextSystem, (w, cols): (f32, u16), (fit, least): (f32, f32)) -> f32 {
     let d = ts.dpr();
     // Not `clamp`: its panic message would link float formatting into the boot.
     let most = (w / f32::from(cols) * d).floor().min((SQUARE * d).floor()).max(1.0);
-    (most * fit).floor().max((6.0 * d).ceil()).min(most) / d
+    (most * fit).max(least * d).floor().max((6.0 * d).ceil()).min(most) / d
 }
 
 /// Whether `n` is a board (a Grid or a Canvas) or holds one.
@@ -363,8 +367,8 @@ pub fn draw(ui: &mut Ui<'_>, nodes: &[Node], texts: &mut Texts, view: &mut View)
     #[rustfmt::skip]
     let mut lay = Lay { t, texts, sizes: Vec::new(), extents: Vec::new(), extra: 0.0, fills: 0,
         slack: Vec::new(), again: false, i: 0, e: 0, y: 0.0, touch, right: r.x + r.w, old,
-        scrolls: Vec::new(), now, reveal: view.reveal, grids: Vec::new(), fit: 0.0,
-        room: (0.0, 0.0), top: None, shift: 0.0, nth: 0 };
+        scrolls: Vec::new(), now, reveal: view.reveal, grids: Vec::new(), fit: (0.0, 0.0, 0.0),
+        squares: Vec::new(), room: [0.0; 3], top: None, shift: 0.0, nth: 0 };
     let ts = ui.text_system();
     let mut h = lay.stack(ts, nodes, w, SPACING, None);
     // Again with the boards (measured at their least: Grids of 6 px squares) sharing what the
@@ -372,14 +376,23 @@ pub fn draw(ui: &mut Ui<'_>, nodes: &[Node], texts: &mut Texts, view: &mut View)
     // full width: a game takes the room its labels and buttons leave, the most they took (above
     // the first board, and the rest) since the window or its boards changed, so a board keeps
     // its size and place as a button or label comes and goes, the room it left kept above.
-    let ((least, most), above) = (lay.room, lay.top.unwrap_or(0.0));
+    let ([least, most, canvases], above) = (lay.room, lay.top.unwrap_or(0.0));
     if view.around.0 != [w, inner, most] {
         view.around = ([w, inner, most], [0.0; 2]);
     }
     let a = &mut view.around.1;
     *a = [a[0].max(above), a[1].max(h - least - above)];
     if most > 0.0 {
-        lay.fit = ((inner - a[0] - a[1]).max(inner / 3.0) / most).min(1.0);
+        let room = (inner - a[0] - a[1]).max(inner / 3.0);
+        let fit = (room / most).min(1.0);
+        // Each Grid's squares a target first (as its width holds them; the Grids' within the
+        // room, beside a Canvas two thirds of it) or their share if more, then the Canvases share
+        // what is left.
+        let grids = |g| lay.squares.iter().map(|&(n, wc)| n * side(ts, wc, g)).sum::<f32>();
+        let (tap, part) = (if touch { TOUCH } else { TAP }, if canvases > 0.0 { 1.5 } else { 1.0 });
+        let tap = tap * (room / part / grids((0.0, tap))).min(1.0);
+        let left = (room - grids((fit, tap))) / canvases;
+        lay.fit = (left.min(fit).max(0.0), fit, tap);
         (lay.fills, lay.shift) = (0, a[0] - above);
         lay.slack.clear();
         h = lay.restack(ts, nodes, w) + lay.shift;
@@ -431,9 +444,10 @@ fn style_of(style: Style, t: &Theme) -> TextStyle {
 /// whether this is the second pass, the next size and extent to draw, the top of the node being
 /// measured in the content, whether chips and quiet buttons are touch targets, the window's
 /// right edge, the Scrolls as last drawn and as drawn now, the page clock, when the reveal
-/// began, the boards drawn, the share of its largest size each board takes (0: its least), the
-/// boards' heights as measured and at their largest, the first board's top as first measured,
-/// the room kept above it (drawn before what holds it), and the boards drawn or passed.
+/// began, the boards drawn, the share of its largest size each Canvas and Grid takes (0: its
+/// least) and a Grid's least square, each Grid's rows and width and columns, the boards'
+/// heights as measured and at their largest (and the Canvases'), the first board's top as first
+/// measured, the room kept above it (drawn before what holds it), and the boards drawn or passed.
 struct Lay<'t> {
     t: &'t Theme,
     texts: &'t mut Texts,
@@ -453,8 +467,9 @@ struct Lay<'t> {
     now: f64,
     reveal: Option<f64>,
     grids: Vec<Board>,
-    fit: f32,
-    room: (f32, f32),
+    fit: (f32, f32, f32),
+    squares: Vec<(f32, (f32, u16))>,
+    room: [f32; 3],
     top: Option<f32>,
     shift: f32,
     nth: u32,
@@ -490,10 +505,11 @@ impl Lay<'_> {
         self.extra + self.slack[self.fills - 1]
     }
 
-    /// A board (a Grid or a Canvas) `w` wide, `h` tall as measured and `most` at its largest:
-    /// its size, its room (and the first one's top) noted.
-    fn board(&mut self, w: f32, h: f32, most: f32) -> (f32, f32) {
-        (self.room, self.top) = ((self.room.0 + h, self.room.1 + most), self.top.or(Some(self.y)));
+    /// A board (a Grid or a Canvas) `w` wide, `h` tall as measured and `most` at its largest
+    /// (a Canvas's `canvas`): its size, its room (and the first one's top) noted.
+    fn board(&mut self, w: f32, h: f32, most: f32, canvas: f32) -> (f32, f32) {
+        let [a, b, c] = self.room;
+        (self.room, self.top) = ([a + h, b + most, c + canvas], self.top.or(Some(self.y)));
         (w, h)
     }
 
@@ -545,15 +561,26 @@ impl Lay<'_> {
                 let mut room = (w - own.iter().flatten().sum::<f32>() - gaps).max(0.0);
                 let mut flex = own.iter().filter(|o| o.is_none()).count();
                 let share = if strip { f32::MAX } else { room / flex.max(1) as f32 };
+                let tap = if self.touch { TOUCH } else { TAP };
                 for (c, o) in children.iter().zip(&mut own) {
-                    if let Node::Text { style, text, .. } = c {
-                        let style = style_of(*style, t);
-                        let lines = ts.wrap(text, style, f32::MAX);
-                        let one = lines.iter().map(|l| ts.measure(l, style)).fold(0.0, f32::max);
-                        // A pixel more: snapping must not wrap it.
-                        let one = (one.ceil() + 1.0).min(share);
-                        (*o, room, flex) = (Some(one), (room - one).max(0.0), flex - 1);
-                    }
+                    let one = match c {
+                        Node::Text { style, text, .. } => {
+                            let style = style_of(*style, t);
+                            let lines = ts.wrap(text, style, f32::MAX);
+                            let one =
+                                lines.iter().map(|l| ts.measure(l, style)).fold(0.0, f32::max);
+                            // A pixel more: snapping must not wrap it.
+                            (one.ceil() + 1.0).min(share)
+                        }
+                        // A Grid's squares a target, where the Row holds them.
+                        Node::Grid { cols, .. }
+                            if (share..room).contains(&(f32::from(*cols) * tap)) =>
+                        {
+                            f32::from(*cols) * tap
+                        }
+                        _ => continue,
+                    };
+                    (*o, room, flex) = (Some(one), (room - one).max(0.0), flex - 1);
                 }
                 let share = room / flex.max(1) as f32;
                 let mut fills = Vec::new();
@@ -616,13 +643,14 @@ impl Lay<'_> {
             // Its units square, as wide as it can be, as all of it fits.
             Node::Canvas { w: cw, h: ch, .. } => {
                 let most = w / f32::from((*cw).max(1)) * f32::from(*ch);
-                self.board(w, most * self.fit, most)
+                self.board(w, most * self.fit.0, most, most)
             }
             Node::Grid { cols, cells, .. } => {
-                let (rows, cols) =
-                    (cells.len().div_ceil(usize::from(*cols).max(1)), (*cols).max(1));
-                let rows = rows as f32;
-                self.board(w, rows * side(ts, (w, cols), self.fit), rows * side(ts, (w, cols), 1.0))
+                let wc = (w, (*cols).max(1));
+                let rows = cells.len().div_ceil(usize::from(wc.1)) as f32;
+                self.squares.push((rows, wc));
+                let (fit, most) = ((self.fit.1, self.fit.2), rows * side(ts, wc, (1.0, 0.0)));
+                self.board(w, rows * side(ts, wc, fit), most, 0.0)
             }
         };
         self.sizes[at] = size;

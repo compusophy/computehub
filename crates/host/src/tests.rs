@@ -725,9 +725,11 @@ fn the_overlay_acts_as_a_person_and_hears_once_the_screen_settles() {
     // Nor may what runs in it ask the AI (`apps::asks`): its app hears it is driven.
     let pref = |v: &str| vec![Effect::Pref { key: "driven".into(), value: v.into() }];
     assert_eq!([1, 2].map(|n| h.say(n, "driven").effects), [pref("yes"), pref("no")]);
-    // A window verb is its title bar control's; opening is the home screen's tile.
+    // A window verb is its title bar control's; opening is the home screen's tile, by the name
+    // it shows in any case.
     h.acts(2, Act::Window { win: 2, op: WinOp::Close });
-    h.acts(3, Act::Open { name: "sized".into() });
+    h.agent.apps = vec!["sized".into()];
+    h.acts(3, Act::Open { name: "Sized".into() });
     assert_eq!(
         h.names()[1..],
         [(2, "terminal", true), (0, "assistant", true), (3, "sized", false)]
@@ -771,6 +773,24 @@ fn the_overlay_acts_as_a_person_and_hears_once_the_screen_settles() {
     h.ask(1, vec![Ask::Act { id: 5, act: Act::Window { win: 1, op: WinOp::Close }.encode() }]);
     let no = Event::Acted { id: 5, code: acted::REFUSED, note: "".into(), scene: vec![] };
     assert!(log.borrow()[n..].contains(&(1, E::Agent(no))) && h.live(WinId(1)));
+}
+
+#[test]
+fn the_ai_opens_an_app_by_the_name_the_home_screen_shows() {
+    // The home screen's apps: the person's made app by its label, in any case, with or without
+    // .app ("snake" was no app: E0914), and another in another case; a path, or a name the
+    // registry knows, as it is; else the name as given, for the registry to know or not.
+    let (mut h, _, _) = host();
+    let snake = [Vfs::HOME, "/apps/snake.app"].concat();
+    h.agent.apps = vec!["files".into(), snake.clone()];
+    for name in ["snake", "Snake", "SNAKE.APP", "snake.app", &snake] {
+        assert_eq!(h.named(name), snake, "{name}");
+    }
+    let same = ["files", "/apps/counter.app", "nope", "clock.app", "snake.ap"];
+    assert_eq!(
+        (same.map(|n| h.named(n)), h.named("Files")),
+        (same.map(String::from), "files".into())
+    );
 }
 
 #[test]

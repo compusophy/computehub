@@ -217,7 +217,9 @@ Studio's knobs, the harness at `81d703122e0435d3`. GLM 5.3 ran two trials (the s
 commit, the coder the same), Flash one: 124 requests and $0.74 in all. The runs were graded again
 from their transcripts after the checkers' fixes, so every record carries the hashes above; and
 again, every grade the same, when the hash moved from `81ab7e04340b535a` as the harness's build
-script came to forbid unsafe code.
+script came to forbid unsafe code. The prompt has since moved to `09141db7e75a4b45` (a grid's cell
+is the square's index, never its color, shown by a palette), so no request replays as recorded:
+these runs are stale (kept as they were, never graded again) until live runs at it replace them.
 
 | run | model | commit | pass | rate (95% CI) | tiny / small / medium / hard | tokens/pass | $/pass | s/make | errors | other model |
 |---|---|---|---|---|---|---|---|---|---|---|

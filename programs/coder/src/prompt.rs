@@ -21,7 +21,9 @@ const RULES: &str = "\n\nWhat is to be seen (a game, a board, drawing, animation
                      before a game as after it (Start, hidden while it plays) and say Game over \
                      on the canvas. A paint app paints where a tap or drag goes, shows the color \
                      it paints (a swatch) and its squares' edges faintly under the paint (lines \
-                     a unit wide in gray, 8). Saved states come back as they \
+                     a unit wide in gray, 8). A grid's cell is the index of the square tapped, \
+                     never what it holds: a palette reads its list, state pal = [1, 2, 3, 0]; \
+                     grid 4, pal { color = pal[cell]; }. Saved states come back as they \
                      were kept, also after a change: a saved list keeps its old length (one a \
                      change adds starts as declared), so check a list's length before indexing \
                      it. Write small functions instead of repeating code; keep programs under \

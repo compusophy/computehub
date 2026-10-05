@@ -660,6 +660,21 @@ impl Host {
         out
     }
 
+    /// The app the AI's `name` opens: itself where the registry knows it (but a bare `.app`
+    /// file's name), else the one of the home screen's apps ([`agent::Agent::apps`], the
+    /// person's own in `~/apps` too) it shows by that name, in any case, with or without `.app`;
+    /// else `name`.
+    pub fn named(&mut self, name: &str) -> String {
+        if (name.contains('/') || !name.ends_with(".app")) && self.icon(name).is_some() {
+            return name.to_string();
+        }
+        let cut = name.len().saturating_sub(4);
+        let stem = name.get(cut..).filter(|e| e.eq_ignore_ascii_case(".app")).and(name.get(..cut));
+        let want = app_label(stem.unwrap_or(name));
+        let shown = self.agent.apps.iter().find(|n| app_label(n).eq_ignore_ascii_case(&want));
+        shown.map_or_else(|| name.to_string(), String::clone)
+    }
+
     /// What a `.app` file's tile shows: the icon its header draws ([`ui::icon::made`]), else its
     /// name's sigil; none for another app.
     pub fn mark(&self, name: &str) -> Option<Mark> {

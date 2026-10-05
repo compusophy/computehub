@@ -223,6 +223,7 @@ impl Host {
             Act::Wait { .. } => {}
             Act::Open { name } if name == ASSISTANT => return acted::REFUSED,
             Act::Open { name } => {
+                let name = self.named(&name);
                 if self.icon(&name).is_none() {
                     return acted::UNKNOWN_APP;
                 }
