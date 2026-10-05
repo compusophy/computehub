@@ -551,12 +551,33 @@ fn at(d: &Drawn, kind: Kind, r: RectF, color: Rgba) -> usize {
 
 /// What a recording draw of `nodes` at 600 x 400 in theme `t` notes.
 fn sem(nodes: &[Node], t: &Theme) -> gfx::Sem {
+    sem_in(nodes, t, &mut Texts::default())
+}
+
+/// [`sem`], the text fields' text in `texts`.
+fn sem_in(nodes: &[Node], t: &Theme, texts: &mut Texts) -> gfx::Sem {
     let mut ts = TextSystem::new(SANS.to_vec()).unwrap();
     let (mut list, mut hits) = (DrawList::recording(), Vec::new());
     let r = RectF::new(0.0, 0.0, 600.0, 400.0);
     let ui = Ui::new(&mut list, &mut ts, r, &mut hits, UiState::default(), t);
-    super::draw(&mut { ui }, nodes, &mut Texts::default(), &mut View::default());
+    super::draw(&mut { ui }, nodes, texts, &mut View::default());
     list.take_sem().unwrap()
+}
+
+#[test]
+fn a_toggle_reads_as_a_switch_and_an_area_as_the_text_it_holds() {
+    let nodes = [
+        Node::Toggle { id: 3, on: true, label: "Include what is open".into() },
+        Node::Area { id: 7, value: "the dock is small".into(), placeholder: "What?".into() },
+    ];
+    let mut texts = Texts::default();
+    texts.adopt(&nodes, &[]);
+    let marks = sem_in(&nodes, &THEMES[0], &mut texts).marks;
+    let marks: Vec<_> = marks.into_iter().map(|m| (m.id, m.role, m.flags, m.value)).collect();
+    let (switch, area) = ((3, ui::sem::SWITCH), (7, ui::sem::TEXTBOX));
+    let want =
+        [(switch.0, switch.1, ui::sem::CHECKED, ""), (area.0, area.1, 0, "the dock is small")];
+    assert_eq!(marks, want.map(|m| (m.0, m.1, m.2, m.3.to_string())));
 }
 
 #[test]

@@ -61,7 +61,8 @@ pub struct Studio {
     model: String,
     pub(crate) make: Option<Making>,
     pub(crate) last_id: u32,
-    /// What the line under the app says, and how; what the program's first comment says.
+    /// What the line under the app says, and how; the caption over it: the make's plan, else the
+    /// program's leading comments ([`coder::ai::about`]).
     pub(crate) status: (Style, String),
     pub(crate) caption: String,
     /// The make's status as the last frame showed it (it moves with each line the draft gains).

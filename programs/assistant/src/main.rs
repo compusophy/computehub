@@ -3,17 +3,39 @@
 
 #![forbid(unsafe_code)]
 
+use std::io::ErrorKind;
 use std::process::ExitCode;
+
+/// What the card says when the kept chats are not there.
+const SET_ASIDE: &str =
+    "Your chats could not be read: they are set aside as ~/.assistant/chats.bad";
+const UNREAD: &str = "Your chats could not be read; they are left as they are, and this session's \
+                      are not kept";
+const NEWER: &str = "Your chats were kept by a newer compusophyOS: reload the page to see them; \
+                     this session's are not kept";
 
 fn main() -> ExitCode {
     let mut agent = assistant::agent::Agent::default();
     // Its chats, in its own folder of the person's home, which its file tools never reach
-    // (`agent::compact`); a file that does not read is set aside, never written over.
-    let file = std::env::var("HOME").ok().map(|home| [&home, files::OWN, "/chats"].concat());
-    if let Some((f, text)) = file.as_ref().and_then(|f| Some((f, std::fs::read(f).ok()?))) {
-        if !agent.load(&String::from_utf8_lossy(&text)) {
-            _ = std::fs::rename(f, [f, ".bad"].concat());
-        }
+    // (`agent::compact`). A file a newer OS kept stays as it is; one that does not read is set
+    // aside, never written over; and one that cannot be read or set aside stays, nothing kept
+    // over it. The card says which.
+    let mut file = std::env::var("HOME").ok().map(|home| [&home, files::OWN, "/chats"].concat());
+    let told = match file.as_deref().map(std::fs::read) {
+        Some(Ok(text)) => match String::from_utf8_lossy(&text) {
+            text if agent.load(&text) => None,
+            text if chats::newer(&text) => Some(NEWER),
+            _ => match file.as_deref().map(|f| std::fs::rename(f, [f, ".bad"].concat())) {
+                Some(Ok(())) => Some(SET_ASIDE),
+                _ => Some(UNREAD),
+            },
+        },
+        Some(Err(e)) if e.kind() != ErrorKind::NotFound => Some(UNREAD),
+        _ => None,
+    };
+    if let Some(line) = told {
+        agent.tell(line);
+        file = file.filter(|_| line == SET_ASIDE);
     }
     let mut keep = |text: &str| file.iter().for_each(|f| save(f, text));
     let served = uiwire::client::open()

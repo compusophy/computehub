@@ -12,8 +12,9 @@
 //!   device pixel at least.
 //! - A Text is set in the boot's Inter on a ladder of sizes ([`LADDER`]), so a size that moves
 //!   frame by frame never fills the glyph atlas.
-//! - The mark lists Pixels by their place and size, and while a canvas's come to [`SQUARES`] or
-//!   fewer, their squares too, a row a line, as a Grid's.
+//! - The mark lists Pixels by their place and size, and each board's squares too, a row a line,
+//!   as a Grid's, while the squares listed stay within [`SQUARES`] in all: a board past what is
+//!   left is its place and size alone, and a smaller one after it still lists its squares.
 
 #![forbid(unsafe_code)]
 
@@ -171,8 +172,8 @@ pub fn draw(ui: &mut Ui<'_>, r: RectF, id: u32, units: (u16, u16), draws: &[Draw
 
 /// A canvas as the AI reads it: "W x H units", then a line a draw (its shape's name, then its
 /// text in quotes, its slots, its color; Pixels as "pixels X Y, W x H squares of S units", then
-/// its rows, a char a square as they came, while [`SQUARES`] in all are not passed), [`LISTED`]
-/// at most and then how many more.
+/// its rows, a char a square as they came, if they fit in what is left of [`SQUARES`] in all),
+/// [`LISTED`] at most and then how many more.
 fn said((w, h): (u16, u16), draws: &[Draw]) -> String {
     let (mut v, mut room) = (String::new(), SQUARES);
     let num = |v: &mut String, n: i32| {

@@ -276,15 +276,18 @@ one. Forked crates keep their Apache-2.0 license and note their origin.
   the memory. A task is remembered as it is kept, each text 1,000 bytes
   at most, so a chat's memory never outgrows a request. Kept in
   `~/.assistant/chats`, a line format read defensively, 256 KiB at most
-  (one that does not read is set aside as `chats.bad`); the Assistant's
-  file tools never reach that folder. A finger's tap leaves the keyboard down
+  (one that does not read is set aside as `chats.bad`, one a newer OS kept
+  is left as it is, and one that cannot be read or set aside is never
+  written over; the card says which); the Assistant's file tools never
+  reach that folder. A finger's tap leaves the keyboard down
   until its field is tapped. A dot under the tile while the overlay shows
   (the accent's while it has the keys). While it works the overlay is a
   pill: one line of what it does, and Stop at its right edge however the
   line changes (its press reaches across the pill's height); the dot
   beats, and each act flashes what it touched. While a question waits it
   is the card again, the question last, with Stop under it.
-  Only Stop, or Escape while the overlay has the keys, stops it: the
+  Only Stop, or Escape while the overlay has the keys (which, at a question
+  or before the pill shows, hides the card too), stops it: the
   person's own presses, keys and wheel go where they go beside its acts
   (one on the bare desktop leaves the pill in view), and an act on a
   window they closed fails as gone. A program that failed starts again at
@@ -387,8 +390,9 @@ one. Forked crates keep their Apache-2.0 license and note their origin.
   color is one fill on the desktop and one ink of the render's 4,096 (with
   each shape, sprite square and text character), so a plain 64 x 64 board
   fits where a busy one faults (E0222). The AI reads where pixels are and
-  their size, and while a canvas's come to 1,024 squares or fewer, each
-  square, a row a line, as a grid's. A canvas's handler sees the tap's `x` and
+  their size, and each board's squares, a row a line, as a grid's, while
+  those listed stay within 1,024 in all (a board past what is left is its
+  place and size alone). A canvas's handler sees the tap's `x` and
   `y`. Grids and canvases are boards: they take the room the window's
   other widgets leave, and with a handler they are pads. Studio's prompt
   asks that whatever is to be seen (a game, a board, drawing, animation, a
@@ -514,19 +518,23 @@ in its home; names in it, and roots per profile, wait for R2.
   tools are its own, no act: it lists, reads and writes the person's files
   over its program's WASI filesystem, paths from the home (the `files`
   crate: never /dev nor its own `~/.assistant`, a read clipped to 16 KB,
-  failures E0925 to E0928), and what no tool does it tells compusophy
-  (`send_feedback`, an idea or a bug, marked `Assistant:`, through the
-  page's outbox as the Feedback app's reports go). A call that sends a report or replaces what is kept
+  failures E0925 to E0928; the refusal is the file tools', and Files,
+  Editor or a Terminal open to the person reach that folder as any other),
+  and what no tool does it tells compusophy (`send_feedback`, an idea or a
+  bug, marked `Assistant:`, through the page's outbox as the Feedback
+  app's reports go). A call that sends a report or replaces what is kept
   (feedback always; a write over a file or outside the home), and an act
-  that sends off the device or ends a program (a press, typing or a key
-  into Feedback, a press of Studio's Send to compusophy, a press or key in
-  Activity), shows the person all that would go, the question under it
-  naming what it does, and runs only on their yes to it, that call alone:
-  yes words alone, never a question, so an answer that asks for a change
-  is none. A yes to `ask_user` lets nothing through, and the calls the
-  model made after the question wait until it has heard the answer. What
-  another app saves or a Terminal runs the model is told to ask about
-  first; no code holds it.
+  that sends off the device or ends a program (a press of Feedback's Send
+  or Ctrl+Enter there, of Studio's Send to compusophy, of Activity's End),
+  shows the person what would go (Feedback's report as its field holds
+  it, and whether what is open goes too), the question under it naming
+  what it does, and runs only on their yes to it, that call alone: yes
+  words alone (`chats::yes`), never a question nor "I'm good", so an
+  answer that asks for a change is none. Typing, a kind chosen or the
+  other presses of those apps send nothing, and ask nothing. A yes to
+  `ask_user` lets nothing through, and the calls the model made after the
+  question wait until it has heard the answer. What another app saves or
+  a Terminal runs the model is told to ask about first; no code holds it.
   So the loop of growth: the Assistant meets what it cannot do, says so,
   asks its creator for the tool, and the tool ships. Cloud AI is free for
   every visitor: `api/ai.mjs`, a thin same-origin function, forwards

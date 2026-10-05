@@ -3,8 +3,9 @@
 //! every program sees), through the [`Disk`] the system program's Files and Editor reach ([`Fs`]
 //! in a program, [`Mem`] in tests). A path goes from the home ([`Vfs::HOME`]; `~` names it, `/…`
 //! the root), never into /dev (the program's devices, where a read may wait forever) nor the
-//! Assistant's own folder ([`OWN`]: its chats, every conversation's, which a listing leaves out),
-//! and a result names one in the home by `~`. A listing and a read reach the model clipped to
+//! Assistant's own folder ([`OWN`]: its chats, every conversation's, which a listing leaves out;
+//! the refusal is these tools' alone, and Files, Editor or a Terminal reach it as any other), and
+//! a result names one in the home by `~`. A listing and a read reach the model clipped to
 //! [`MAX_READ`] bytes, saying so; only text is read. Failures are coded in the Assistant's series:
 //! E0918 a path that is none, E0925 nothing there, E0926 a folder where a file was named or a
 //! file where a folder was, E0927 what the filesystem refused, E0928 a file that is not text.

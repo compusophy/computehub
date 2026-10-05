@@ -106,13 +106,12 @@ impl Host {
         }
     }
 
-    /// The person stopped the task (Escape while the overlay has the keys): a working overlay
-    /// hears [`Event::Halt`], its act settling dropped.
+    /// The person stopped the task (Escape while the overlay has the keys): the overlay hears
+    /// [`Event::Halt`], whether it works or waits (on their answer, or before it says it works;
+    /// with no task it does nothing), and the act settling is dropped.
     pub fn halt(&mut self, out: &mut Response) {
-        if mem::take(&mut self.agent.working) {
-            self.agent.pending = None;
-            self.deliver(OVERLAY, AppEvent::Agent(Event::Halt), out);
-        }
+        (self.agent.working, self.agent.pending) = (false, None);
+        self.deliver(OVERLAY, AppEvent::Agent(Event::Halt), out);
     }
 
     /// The overlay's program ended: it goes, and so does what it asked.

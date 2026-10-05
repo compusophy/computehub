@@ -49,13 +49,17 @@ fn the_tools_list_read_and_write_from_the_home_coded() {
     // not a path, the program's devices (a read there may never end), the Assistant's own chats
     // (every conversation's; a listing of the home leaves them out).
     d.write(&at("/raw"), &[0xff, 0]).unwrap();
-    d.write(
-        &at("/.assistant/chats"),
-        b"compusophy chats 1
-",
-    )
-    .unwrap();
+    d.write(&at("/.assistant/chats"), b"compusophy chats 1\n").unwrap();
     assert!(!list(d, "~").unwrap().contains(".assistant") && list(d, "~").unwrap().contains("raw"));
+    // Its folder however it is named; a name only like it is the person's.
+    let own = ["~/.assistant", "~/.assistant/", &at("//.assistant"), "~/./.assistant/x"];
+    for own in own {
+        let why = resolve(own).unwrap_err();
+        assert!(why.ends_with("is the Assistant's own chats, none of the user's files"), "{own}");
+    }
+    for theirs in ["~/.assistant2", "~/.assistant.bad", "~/.Assistant/chats", "/home/.assistant"] {
+        assert!(resolve(theirs).is_ok(), "{theirs}");
+    }
     let errs = [
         read(d, "nope"),
         read(d, "notes"),

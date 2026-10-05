@@ -821,11 +821,12 @@ fn acts_wait_for_busy_windows_and_their_time() {
     let last = heard(&log, me).pop().unwrap();
     assert_eq!((last.0, last.1, last.2.wins.len()), (6, acted::OK, 2));
     h.acts(7, Act::Wait { ms: 3000 });
-    // The person stops it: a working overlay hears it once; its program's end ends it all.
+    // The person stops it: the overlay hears it each time, working or not (a task waiting on
+    // the person, or not yet said to work, stops too); its program's end ends it all.
     h.halt(&mut Response::default());
     h.halt(&mut Response::default());
     let halts = log.borrow().iter().filter(|e| e.1 == E::Agent(Event::Halt)).count();
-    assert_eq!((halts, h.agent.working), (1, false));
+    assert_eq!((halts, h.agent.working), (2, false));
     h.acts(8, Act::Wait { ms: 0 });
     assert_eq!(codes(&log).last(), Some(&(8, acted::OK)));
     // The person closing the busy window an act waits on wedges nothing: the act settles once

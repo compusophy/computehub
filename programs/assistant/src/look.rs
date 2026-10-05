@@ -21,6 +21,9 @@ const ROLES: [&str; 12] = [
 /// A canvas's role (`ui::sem::CANVAS`): its value is its size in units, then its shapes, a line
 /// each (pixels as `pixels X Y, W x H squares of S units`, then on a small board its rows).
 pub const CANVAS: u8 = 11;
+/// A switch's role and its flag while on; a text field's role, its value what it holds.
+pub const SWITCH: (u8, u8) = (3, 2);
+pub const TEXTBOX: u8 = 5;
 /// The most refs a session keeps; past it they start over.
 const MAX_REFS: usize = 4096;
 

@@ -169,7 +169,12 @@ fn chats_are_kept_and_read_back_defensively() {
     let (_, kept, _) =
         Chats::load(&Chats::default().encode(&big, &Memory::new()), (16, 4)).unwrap();
     assert_eq!((kept.len(), &kept[0].prompt[..], kept[0].lines.len()), (1, "p15", 16));
-    assert_eq!(kept[0].lines[15].1.len(), LINE);
+    assert!(kept[0].lines[15].1.len() == LINE && kept[0].lines[15].1.ends_with("y\u{2026}"));
+    // A long prompt comes back cut where it says so.
+    let long = [Turn { prompt: "p".repeat(1241), lines: Vec::new() }];
+    let (_, kept, _) =
+        Chats::load(&Chats::default().encode(&long, &Memory::new()), (16, 4)).unwrap();
+    assert!(kept[0].prompt.len() == LINE && kept[0].prompt.ends_with("p\u{2026}"));
     // A newest turn too big alone (its escapes) keeps its last lines that fit, and the older
     // turns that fit after it stay.
     let heavy = vec![(Style::Body, "a\n".repeat(150)); 16];
@@ -199,11 +204,14 @@ fn chats_are_kept_and_read_back_defensively() {
     let n: String = (0..7).map(|i| format!("c n{i}\nt one\nt two\nl 0 kept\n")).collect();
     let want = ["compusophy chats 1\nc a\\\\b\\nc\nm p\\tq\tok\nt x\nl 4 yes\n", &n].concat();
     assert_eq!(c.encode(&t, &m), want);
-    // Not the file, no chat in it, or past its most bytes: nothing.
+    // Not the file, no chat in it, or past its most bytes: nothing. A newer one's is newer, not
+    // damaged.
     let long = ["compusophy chats 1\nc a\n", &" ".repeat(MAX_FILE)].concat();
     for text in ["compusophy chats 2\nc lost\n", "compusophy chats 1\n", long.as_str()] {
         assert!(Chats::load(text, (2, 4)).is_none());
+        assert_eq!(newer(text), text.starts_with("compusophy chats 2"));
     }
+    assert!(!newer("compusophy chats x\n") && !newer("a chat 9") && !newer(""));
     assert_eq!(Chats::default().encode(&[], &Memory::new()), "compusophy chats 1\nc \n");
 }
 
@@ -232,4 +240,106 @@ fn a_note_stays_first_until_the_next_and_a_task_like_it_is_none() {
     assert!(
         prompt.len() == TASK && prompt.ends_with("p\u{2026}") && answer == "Ok." && m.len() == 4
     );
+}
+
+#[test]
+fn a_yes_is_yes_words_alone_never_a_question_nor_a_no_thanks() {
+    let yeses = [
+        "yes",
+        "yes please",
+        "ok",
+        "OK, go",
+        "Sure!",
+        "sure",
+        "go ahead",
+        "do it",
+        "yep",
+        "y",
+        "yeah",
+        "please do",
+        "sure, why not",
+        "yes, no problem",
+        "Sounds good",
+        "send it",
+        "yes\u{2014}do it",
+        "that's fine",
+        "that\u{2019}s ok",
+        "yes, that's right",
+        "continue",
+        "yes, continue",
+        "just do it",
+        "go ahead and send it",
+        "yes that is fine",
+        "let's do it",
+        "yea",
+        "kk",
+        "cool",
+        "sure thing",
+        "confirmed",
+        "submit",
+        "you can",
+        "that works",
+        "works for me",
+        "\u{1f44d}",
+        "\u{1f44d}\u{1f3fd}",
+        "yes, type it",
+        "yes, click it",
+        "yes, press it",
+        "yes, end it",
+        "of course",
+        "fine",
+        "Good.",
+        "all right",
+        "ok thanks",
+        "perfect, thanks",
+        "yes I am sure",
+        "it's fine",
+        "looks good",
+    ];
+    for y in yeses {
+        assert!(yes(y), "{y}");
+    }
+    // A no, a change asked for, a question; and how the person is, a no thanks.
+    let nos = [
+        "please don't",
+        "no",
+        "yes, but shorter",
+        "not now",
+        "what?",
+        "sure?",
+        "send it?",
+        "",
+        "please make it shorter",
+        "please, I can't share that",
+        "yeah nah",
+        "ok, later",
+        "end it",
+        "yes, and one about the dock",
+        "ok hold on",
+        "no thanks",
+        "thanks",
+        "you can't",
+        "wait",
+        "thanks, I'm good",
+        "I'm good, thanks",
+        "I'm good",
+        "I'm fine",
+        "I'm ok",
+        "I am good",
+        "good thanks",
+        "fine, thank you",
+        "all good",
+        "I'm all right",
+        "I'm alright",
+        "\u{1f44e}",
+        "nah I'm good",
+        "ok, I'm good",
+        "I'm all set",
+        "send it to me",
+        "let's not",
+        "stop",
+    ];
+    for n in nos {
+        assert!(!yes(n), "{n}");
+    }
 }

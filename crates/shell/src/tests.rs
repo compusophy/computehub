@@ -498,14 +498,15 @@ fn the_assistant_opens_the_overlay_which_only_escape_or_its_stop_halts() {
     let got: Vec<E> = log.take().into_iter().filter(|e| e.0 == "assistant").map(|e| e.1).collect();
     assert_eq!(got, [sized(560.0, 480.0), key, E::Text("hi".into()), down, E::Click(W(1))]);
     assert_eq!(s.names(), ["welcome"]);
-    // A press on a window takes the keys back, the overlay staying; the tile hides it and
-    // shows it again; Escape hides it; its menu (or Alt+Space) asks the Assistant.
+    // A press on a window takes the keys back, the overlay staying; the tile hides it and shows
+    // it again; Escape hides it (halting a task that waits); its menu (or Alt+Space) asks it.
     s.click((320.0, 300.0));
     assert!(s.overlay.open && s.key_target() == Some(WinId(1)));
     s.click(AI);
     assert!(!s.overlay.open && s.hit(720.0, 264.0) == Some(Target::Body(WinId(1))));
-    let _ = (s.click(AI), s.k(Escape, ""), s.right(AI));
-    assert!(!s.overlay.open && s.labels() == ["Ask the Assistant"]);
+    let _ = (s.click(AI), log.take(), s.k(Escape, ""), s.right(AI));
+    let halted = log.take().iter().any(|e| e.1 == E::Agent(ui::uiwire::Event::Halt));
+    assert!(!s.overlay.open && s.labels() == ["Ask the Assistant"] && halted);
     s.click(s.item("Ask the Assistant"));
     assert!(s.overlay.open && s.overlay.focus);
     // While it works: a pill over a line of buttons, the tile's dot beating. The person's own

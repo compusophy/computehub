@@ -53,6 +53,7 @@ dependencies = [
 name = "compusophy-assistant"
 version = "0.1.0"
 dependencies = [
+ "compusophy-activity",
  "compusophy-chats",
  "compusophy-coder",
  "compusophy-files",

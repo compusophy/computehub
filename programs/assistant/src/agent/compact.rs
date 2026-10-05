@@ -4,9 +4,10 @@
 //! most. The note then stands for the memory as its one task with no prompt (asked as [`SUM`]),
 //! first while later tasks come and go, until the next Compact folds it in. A failure (E0901 to
 //! E0905, E0907 for a reply out of room, a note cut short too, or E0929 for no note) leaves the
-//! memory as it was, and Compact there to ask again. Compacting shows as a task does, the pill with Stop. The chats stay as they are while
-//! a task is in hand; they are kept after each change ([`Agent::kept`]) and read at the start
-//! ([`Agent::load`]).
+//! memory as it was, and Compact there to ask again. Compacting shows as a task does, the pill
+//! with Stop. The chats stay as they are while a task is in hand; they are kept after each
+//! change ([`Agent::kept`]) and read at the start ([`Agent::load`]); when they do not load, the
+//! card says why ([`Agent::tell`]).
 
 use chats::{COMPACT, Chats, Clicked, compactable};
 use uiwire::{Event, Node, Request, Style};

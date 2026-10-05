@@ -968,7 +968,7 @@ fn entry(
 
 /// A Toggle in `r`: `label` (cut to fit) and a switch 34 x 21 at the right, its track the accent
 /// and its knob right when `on`, else sunken with its knob left; washed under the pointer; a
-/// click hit.
+/// click hit, marked a switch.
 fn toggle(ui: &mut Ui<'_>, id: WidgetId, r: RectF, label: &str, on: bool) {
     let (t, s) = (ui.theme(), ui.state());
     if s.hover == Some(id) {
@@ -980,4 +980,5 @@ fn toggle(ui: &mut Ui<'_>, id: WidgetId, r: RectF, label: &str, on: bool) {
     let base = cap_base(ui, r.y, r.h, body);
     ui.text(r.x + 8.0, base, &shown, body);
     ui.hit(id, r, Sense::Click);
+    ui.mark(id, ui::sem::SWITCH, if on { ui::sem::CHECKED } else { 0 }, "");
 }

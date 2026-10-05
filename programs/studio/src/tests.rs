@@ -377,11 +377,13 @@ fn a_new_app_that_never_compiles_leaves_its_draft_marked() {
     let mut w = Win::new(&[], Mem::new());
     let f = w.last(&[WIDE]);
     let (_, mut id, _) = w.make(&f, "count");
+    let broken = ["// Count up.\n", BROKEN].concat();
     for _ in 0..2 {
-        id = ai(w.answer(id, &app(BROKEN)).last().unwrap()).0;
+        id = ai(w.answer(id, &app(&broken)).last().unwrap()).0;
     }
-    let f = w.answer(id, &app(BROKEN)).pop().unwrap();
-    assert_eq!((status(&f), f.title.as_str()), ("couldn't \u{b7} E0302 line 2", "Studio"));
+    let f = w.answer(id, &app(&broken)).pop().unwrap();
+    assert_eq!((status(&f), f.title.as_str()), ("couldn't \u{b7} E0302 line 3", "Studio"));
+    assert!(has(&f, "Count up."), "the make's plan over it");
     assert!(
         !w.disk.keys().any(|p| p.ends_with(".app"))
             && w.disk[MAKES].contains("\"outcome\":\"broken\"")
@@ -389,11 +391,12 @@ fn a_new_app_that_never_compiles_leaves_its_draft_marked() {
     // `</>` shows it, its problem marked; fixed there, `</>` saves and runs it under its name.
     let f = w.last(&[click(TOGGLE)]);
     let (cid, _, src, spans) = code(&f);
-    assert!(src == BROKEN && classes(src, spans).contains(&("nope", Class::Error)));
+    assert!(src == broken && classes(src, spans).contains(&("nope", Class::Error)));
     // What its first comment says shows over it, the make's plan gone.
     let tally = "// Tally: one number.\nstate n = 0;\nlabel \"Tally\";\nlabel n;\n";
     let f = w.last(&[change(cid, 2, tally), click(TOGGLE)]);
     assert!(status(&f).starts_with("saved ~/apps/tally.app") && has(&f, "Tally: one number."));
+    assert!(!has(&f, "Count up."));
 }
 
 #[test]
@@ -578,7 +581,12 @@ fn narrow_windows_show_the_make_with_the_keyboard_away() {
 #[test]
 fn code_edits_check_save_and_mark_problems() {
     let mut w = Win::new(&["edit", "/apps/x.app"], with(&[("/apps/x.app", COUNTER)]));
-    w.send(&[WIDE]);
+    // An opened file's leading comment is its caption; a file with none has none.
+    let (first, style) = (|f: Frame| f.nodes.into_iter().next(), uiwire::Style::Small);
+    let text = "A counter: two buttons change one number.".into();
+    assert_eq!(first(w.last(&[WIDE])), Some(Node::Text { id: 0, style, text }));
+    let mut g = Win::new(&["edit", "/apps/g.app"], with(&[("/apps/g.app", GREETER)]));
+    assert!(!matches!(first(g.last(&[WIDE])), Some(Node::Text { style: s, .. }) if s == style));
     let f = w.last(&[click(TOGGLE)]);
     let (id, version, text, spans) = code(&f);
     assert_eq!((id, version, text), (CODE + 1, 1, COUNTER));

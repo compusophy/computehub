@@ -48,13 +48,15 @@ impl Shell {
             out.consumed = true;
             return;
         }
-        // The overlay with the keys: Escape hides it, or stops its task (no other key does).
+        // The overlay with the keys: Escape stops its task (no other key does), and while none
+        // works it hides too; the task stops then as well, one waiting on the person's answer,
+        // or one asked an instant ago that has not said it works yet.
         let overlay = self.key_target() == Some(host::OVERLAY);
         if overlay && key == Key::Escape {
-            match self.host.agent.working {
-                true => self.host.halt(out),
-                false => self.overlay = Default::default(),
+            if !self.host.agent.working {
+                self.overlay = Default::default();
             }
+            self.host.halt(out);
             out.consumed = true;
             return;
         }

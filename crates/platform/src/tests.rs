@@ -1,5 +1,5 @@
 use super::ctl::is_relative_url;
-use super::io::{http_error, inserts_text};
+use super::io::{http_error, inserted};
 use super::proc::{RING_AT, RING_BYTES, meters, ring_spans};
 use super::render::{ATTRIBS, MIN_CAPACITY, backing_size, band_bytes, clear_rgb, grow_capacity};
 use super::*;
@@ -194,14 +194,28 @@ fn fetch_takes_only_same_origin_relative_urls() {
 
 #[test]
 fn text_comes_from_inserts_but_not_compositions() {
-    for t in "insertText insertFromPaste insertLineBreak insertReplacementText".split(' ') {
-        assert!(inserts_text(t), "{t}");
+    let sink = || "pasted".to_string();
+    for t in "insertText insertFromPaste insertReplacementText".split(' ') {
+        assert_eq!(
+            (inserted(t, Some("a".into()), sink), inserted(t, None, sink)),
+            ("a".into(), "pasted".into()),
+            "{t}"
+        );
     }
+    // Text of many lines typed in at once comes as an event a line, each break one with no
+    // data: "Q" (the sink holding "Q\nW", emptied then), a break, "W"; or, starting with a
+    // break, the break (the sink holding "\nQ\nW"), "Q", a break, "W". Each break is one.
+    for t in ["insertText", "insertLineBreak", "insertParagraph"] {
+        let breaks = ["", "\n", "\r\n", "\nQ\nW"].map(|held| inserted(t, None, || held.into()));
+        assert_eq!(breaks, ["\n"; 4], "{t}");
+        assert_eq!(inserted(t, Some("\nQ".into()), sink), "\nQ", "{t}");
+    }
+    assert_eq!(inserted("insertFromPaste", None, || "\nQ\nW".into()), "\nQ\nW");
     // The last is "".
     let not = "insertCompositionText insertFromComposition deleteCompositionText \
         deleteContentBackward historyUndo ";
     for t in not.split(' ') {
-        assert!(!inserts_text(t), "{t}");
+        assert_eq!(inserted(t, Some("a".into()), sink), "", "{t}");
     }
 }
 

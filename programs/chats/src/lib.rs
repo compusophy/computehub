@@ -18,10 +18,13 @@
 //!   ("Delete for good").
 //! - **Kept.** [`Chats::encode`] and [`Chats::load`]: `compusophy chats 1`, then per chat, the
 //!   current one first, `c <name>`, `m <prompt>\t<answer>` per remembered task, `t <prompt>` per
-//!   turn and `l <style> <text>` per line of it; each text clipped, and `\`, newline, tab and CR
-//!   escaped as `\\`, `\n`, `\t`, `\r`; a chat's newest turns within 6 KiB (the newest one
-//!   always, with its last lines that fit). Read defensively: each text clipped as it was kept, a
-//!   line unknown or past a bound skipped, and a file past [`MAX_FILE`] bytes not read.
+//!   turn and `l <style> <text>` per line of it; each text clipped (an ellipsis where cut), and
+//!   `\`, newline, tab and CR escaped as `\\`, `\n`, `\t`, `\r`; a chat's newest turns within
+//!   6 KiB (the newest one always, with its last lines that fit). Read defensively: each text
+//!   clipped as it was kept, a line unknown or past a bound skipped, and a file past
+//!   [`MAX_FILE`] bytes not read.
+//! - **Answers.** Whether the person's answer to a question that waits on their yes is one
+//!   ([`yes`]): yes words alone, never a question, never "I'm good".
 
 #![forbid(unsafe_code)]
 
@@ -262,12 +265,12 @@ impl Chats {
             let (mut kept, mut size) = (Vec::new(), 0);
             for t in turns.iter().rev() {
                 let mut s = String::from("t ");
-                esc(&mut s, clip(&t.prompt, LINE));
+                esc(&mut s, &fit(&t.prompt, LINE));
                 s.push('\n');
                 let (mut last, mut n) = (Vec::new(), s.len());
                 for (style, line) in t.lines.iter().rev().take(LINES) {
                     let mut l = ["l ", &(*style as u8).to_string(), " "].concat();
-                    esc(&mut l, clip(line, LINE));
+                    esc(&mut l, &fit(line, LINE));
                     l.push('\n');
                     n += l.len();
                     if n > TURNS_KEPT {
@@ -339,15 +342,65 @@ impl Chats {
     }
 }
 
+/// Whether `text` is chats a newer Assistant kept, its head's version past this one's (1): not
+/// damaged, but not for this one to read or write over.
+pub fn newer(text: &str) -> bool {
+    let version = text.lines().next().and_then(|head| head.strip_prefix("compusophy chats "));
+    version.and_then(|v| v.parse::<u32>().ok()).is_some_and(|v| v > 1)
+}
+
 /// Remembers a task, `prompt` answered `answer`, each clipped to 1,000 bytes as the file keeps
 /// them (an ellipsis, within them, where cut); the memory is then its last `n` tasks ([`forget`]).
 pub fn remember(memory: &mut Memory, prompt: &str, answer: &str, n: usize) {
-    let cut = |s: &str| match s.len() > TASK {
-        true => [clip(s, TASK - '\u{2026}'.len_utf8()), "\u{2026}"].concat(),
-        false => s.to_string(),
-    };
-    memory.push((cut(prompt), cut(answer)));
+    memory.push((fit(prompt, TASK), fit(answer, TASK)));
     forget(memory, n);
+}
+
+/// Whether `answer`, to a question that waits on the person's yes, is one: yes words alone ("yes",
+/// "ok, send it", "sure, why not", "that's fine", a thumbs up), never a question ("sure?"), and
+/// never how the person is ("I'm good", "fine, thanks": a no thanks). So an answer that asks for
+/// a change, or says no, is none.
+pub fn yes(answer: &str) -> bool {
+    if answer.contains(['?', '\u{ff1f}']) {
+        return false;
+    }
+    // The yes words; "good" and "fine" alone, or saying how a thing is ("sounds good", "it's
+    // fine"); the words that may go with them; and how the person may say they are.
+    const YES: &str = "yes y ya yea yeah yep yup aye ok okay k kk sure alright right great cool \
+                       perfect absolutely definitely certainly course correct agreed confirm \
+                       confirmed approve approved lgtm go do send write save replace type click \
+                       press tap submit proceed continue please works";
+    const HOW: &str = "good fine";
+    const IS: &str = "sounds looks seems thats its is";
+    const ALSO: &str = "i im am it its thats that this them the is ahead on for now of all and \
+                        just lets thing thanks thank you me can end sounds looks seems";
+    const STATE: &str = "good fine ok okay alright right";
+    let is = |list: &str, w: &str| list.split(' ').any(|v| v == w);
+    let answer = answer.to_ascii_lowercase().replace(['\'', '\u{2019}'], "");
+    // A thumbs up, an OK hand, a check mark.
+    let answer = answer.replace(['\u{1f44d}', '\u{1f44c}', '\u{2705}', '\u{2714}'], " ok ");
+    let words: Vec<&str> =
+        answer.split(|c: char| !c.is_ascii_alphanumeric()).filter(|w| !w.is_empty()).collect();
+    let at = |k: usize| words.get(k).copied().unwrap_or_default();
+    let (mut said, mut i) = (false, 0);
+    while i < words.len() {
+        let (w, next) = (at(i), at(i + 1));
+        let (back, back2) = (i.checked_sub(1).map_or("", at), i.checked_sub(2).map_or("", at));
+        // "I'm good", "I am fine", "I'm all right": how the person is.
+        let me = |x: &str| is("i im am", x);
+        if is(STATE, w) && (me(back) || back == "all" && me(back2)) {
+            return false;
+        }
+        i += 1;
+        if let ("why", "not") | ("no", "problem" | "worries") | ("you", "can") = (w, next) {
+            (said, i) = (true, i + 1);
+        } else if is(YES, w) || is(HOW, w) && (words.len() == 1 || is(IS, back)) {
+            said = true;
+        } else if !is(ALSO, w) && !is(HOW, w) {
+            return false;
+        }
+    }
+    said
 }
 
 /// Keeps `memory` to its last `n` tasks, a note (the one with no prompt) first while it is there,
@@ -386,6 +439,14 @@ fn short(s: &str, n: usize) -> String {
     match s.char_indices().nth(n) {
         Some((at, _)) => [s.get(..at).unwrap_or(s).trim_end(), "\u{2026}"].concat(),
         None => s.to_string(),
+    }
+}
+
+/// `s` within `max` bytes as the file keeps it: whole if it fits, else cut with an ellipsis.
+fn fit(s: &str, max: usize) -> String {
+    match s.len() > max {
+        true => [clip(s, max - '\u{2026}'.len_utf8()), "\u{2026}"].concat(),
+        false => s.to_string(),
     }
 }
 
