@@ -1,22 +1,27 @@
 //! `teach`, the teacher's commands (`cargo run -p compusophy-teach -- <command> --flag value`):
 //!
 //! ```text
-//! teach tasks  --tier T --families a,b --per 3 --card CARD --out tasks.jsonl --ledger L
-//!              [--batch] [--budget USD]
-//! teach solve  --suite S --held H --k 4 --rounds 3 --out solutions.jsonl --ledger L
-//!              [--batch] [--budget USD]
-//! teach export --solutions S --held H --out sft.jsonl
-//! teach ask    --url URL --model M --suite S --split held|train|all [--held H]
-//!              --out answers.jsonl [--gap MS]
-//! teach cost   --ledger L
+//! teach tasks   --tier T --families a,b --per 3 --out evals/suites/iq.jsonl --ledger L
+//!               [--card CARD] [--batch] [--budget USD]
+//! teach solve   --suite S [--held H] --k 4 --rounds 3 --out solutions.jsonl --ledger L
+//!               [--batch] [--budget USD]
+//! teach export  --solutions S (--held H | --suite S) --out sft.jsonl
+//! teach ask     --url URL --model M --suite S --split held|train|all [--held H]
+//!               --out answers.jsonl [--gap MS]
+//! teach prompts --suite S --split held|train|all [--held H] --out prompts.jsonl
+//! teach cost    --ledger L
 //! ```
 //!
 //! `tasks` and `solve` also take `--model` (claude-opus-5-5), `--effort` (high), `--max-tokens`
 //! (64000 for tasks, 32000 for solve) and `--day` (today, UTC). They append to `--out`; refused
 //! tasks go to `<out>.refused.jsonl`, and a batch's id waits in `<out>.batch` while it runs.
-//! `export` and `ask` write `--out` afresh. `--card` is the checker language's card (until iq
-//! lands, a file). `--held` lists the held-out families, one a line. The API key is
-//! `ANTHROPIC_API_KEY`, read from the environment only and never printed.
+//! Tasks are verified by [`iq::verify`] and written as `iq` writes them, so `--out` may be the
+//! suite itself. `export`, `ask` and `prompts` write `--out` afresh. `--card` is the checker
+//! language's card (default [`iq::CARD`]). `--held` lists the held-out families, one a line;
+//! without it they are the suite's families [`iq::held`] holds out. `prompts` writes, a line a
+//! task, the messages `ask` would send and the room and temperature it asks at, for a local
+//! model to answer in batches. The API key is `ANTHROPIC_API_KEY`, read from the environment
+//! only and never printed.
 
 #![forbid(unsafe_code)]
 
@@ -24,7 +29,7 @@ use std::collections::BTreeMap;
 
 use teach::cost::{self, Ledger};
 use teach::run::{self, Run};
-use teach::seam::{self, Smoke, Task};
+use teach::seam::{self, Iq, Judge, Task};
 use teach::wire::{Anthropic, OpenAi};
 use teach::{Fail, TEACHER, append, codes, read};
 
@@ -70,12 +75,13 @@ fn go(args: &[String]) -> Result<(), Fail> {
         Some("solve") => solve(&o),
         Some("export") => export(&o),
         Some("ask") => ask(&o),
+        Some("prompts") => prompts(&o),
         Some("cost") => {
             print!("{}", cost::summary(&read(o.need("--ledger")?)?));
             Ok(())
         }
         _ => Err(usage(
-            "usage: teach tasks | solve | export | ask | cost (see programs/teach/src/main.rs)",
+            "usage: teach tasks | solve | export | ask | prompts | cost (programs/teach/src/main.rs)",
         )),
     }
 }
@@ -126,8 +132,26 @@ fn suite(path: &str) -> Result<Vec<Task>, Fail> {
     lines.map(task).collect()
 }
 
+/// The held-out families: `--held`'s list, else those of `--suite`'s families [`iq::held`] holds.
 fn held(o: &Opts) -> Result<Vec<String>, Fail> {
-    Ok(seam::held(&read(o.need("--held")?)?))
+    if let Some(h) = o.get("--held") {
+        return Ok(seam::held(&read(h)?));
+    }
+    let tasks = suite(o.get("--suite").ok_or_else(|| usage("--held or --suite is needed"))?)?;
+    let mut held: Vec<String> =
+        tasks.into_iter().map(|t| t.family).filter(|f| iq::held(f)).collect();
+    held.sort();
+    held.dedup();
+    Ok(held)
+}
+
+/// The judge of the suite at `path`, which grades by its tasks' checks (none read: it only
+/// verifies new tasks).
+fn judge(path: Option<&str>) -> Result<Iq, Fail> {
+    let Some(path) = path else { return Ok(Iq { tasks: Vec::new() }) };
+    let tasks = iq::read_suite(&read(path)?)
+        .map_err(|r| Fail::new(codes::INPUT, format!("{path}: E{:04} {}", r.code, r.message)))?;
+    Ok(Iq { tasks })
 }
 
 /// A run of `cmd` as the flags say, `room` tokens a request unless `--max-tokens` says.
@@ -136,6 +160,7 @@ fn teach_run<'a>(
     cmd: &str,
     room: u32,
     teacher: &'a mut Anthropic,
+    judge: &'a dyn Judge,
 ) -> Result<Run<'a>, Fail> {
     let day = o.get("--day").map_or_else(teach::today, String::from);
     let cap = match o.get("--budget") {
@@ -157,7 +182,7 @@ fn teach_run<'a>(
     }
     Ok(Run {
         teacher,
-        judge: &Smoke,
+        judge,
         ledger,
         batch: o.get("--batch").is_some(),
         effort: effort.into(),
@@ -168,7 +193,10 @@ fn teach_run<'a>(
 
 fn tasks(o: &Opts) -> Result<(), Fail> {
     let out = o.need("--out")?;
-    let card = read(o.need("--card")?)?;
+    let card = match o.get("--card") {
+        Some(path) => read(path)?,
+        None => iq::CARD.to_string(),
+    };
     let tier: u8 = o.num("--tier", 0)?;
     if !(1..=6).contains(&tier) {
         return Err(usage("--tier: 1 to 6"));
@@ -188,9 +216,12 @@ fn tasks(o: &Opts) -> Result<(), Fail> {
         .collect();
     let mut teacher =
         Anthropic::new(o.get("--model").unwrap_or(TEACHER), &[out, ".batch"].concat())?;
-    let mut run = teach_run(o, "tasks", 64_000, &mut teacher)?;
+    let judge = judge(None)?;
+    let mut run = teach_run(o, "tasks", 64_000, &mut teacher, &judge)?;
     let w = run.tasks(&card, tier, &families, o.num("--per", 3)?, &taken);
-    append(out, &w.kept.concat())?;
+    // Each kept line as iq writes it, so the suite reads back byte for byte.
+    let canon = |l: &String| iq::read_task(l).map(|t| iq::write_task(&t)).unwrap_or(l.clone());
+    append(out, &w.kept.iter().map(canon).collect::<String>())?;
     let mut refused = String::new();
     for (why, line) in &w.refused {
         eprintln!("  refused: {why}");
@@ -218,7 +249,8 @@ fn solve(o: &Opts) -> Result<(), Fail> {
     let (k, rounds) = (o.num("--k", 4)?, o.num("--rounds", 3)?);
     let mut teacher =
         Anthropic::new(o.get("--model").unwrap_or(TEACHER), &[out, ".batch"].concat())?;
-    let mut run = teach_run(o, "solve", 32_000, &mut teacher)?;
+    let judge = judge(Some(o.need("--suite")?))?;
+    let mut run = teach_run(o, "solve", 32_000, &mut teacher, &judge)?;
     let passes = run.solve(&tasks, &held, k, rounds, &mut |lines| append(out, lines))?;
     eprintln!("{passes} attempts passed; ${} spent", cost::usd(run.ledger.spent));
     Ok(())
@@ -248,5 +280,18 @@ fn ask(o: &Opts) -> Result<(), Fail> {
     let mut chat = OpenAi { url: o.need("--url")?.into(), gap: o.num("--gap", 0)?, sent: false };
     let out = o.need("--out")?;
     let text = run::answers(&mut chat, o.need("--model")?, &tasks, split, &held);
+    std::fs::write(out, text).map_err(|e| Fail::new(codes::FILE, format!("{out}: {e}")))
+}
+
+fn prompts(o: &Opts) -> Result<(), Fail> {
+    let split = o.need("--split")?;
+    let held = match split {
+        "held" | "train" => held(o)?,
+        "all" => Vec::new(),
+        _ => return Err(usage("--split: held, train or all")),
+    };
+    let (tasks, out) = (suite(o.need("--suite")?)?, o.need("--out")?);
+    let text = run::prompts(&tasks, split, &held);
+    eprintln!("{} prompts", text.lines().count());
     std::fs::write(out, text).map_err(|e| Fail::new(codes::FILE, format!("{out}: {e}")))
 }

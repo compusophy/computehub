@@ -58,7 +58,7 @@ def parse_args():
     h.add_argument("--weight-decay", type=float, default=0.0)
     h.add_argument("--batch", type=int, default=4, help="sequences per micro-batch")
     h.add_argument("--accum", type=int, default=4, help="micro-batches per optimizer step")
-    h.add_argument("--max-len", type=int, default=4096, help="tokens; longer records are dropped, counted")
+    h.add_argument("--max-len", type=int, default=12288, help="tokens; longer records are dropped, counted")
     h.add_argument("--val-frac", type=float, default=0.05, help="fraction of tasks kept out for eval loss")
     h.add_argument("--val-max", type=int, default=64, help="at most this many eval records")
     h.add_argument("--save-every", type=int, default=50, help="checkpoint (and eval) every N steps")

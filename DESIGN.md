@@ -704,7 +704,42 @@ moves a grade is graded again offline and shows in the records. `tools/eval` is 
 as wide as the tasks warrant (trials of one task are not independent), their difference with
 Newcombe's, cost per pass and the tasks that flipped.
 
+### The applang model
+
+The spine since 2026-10-05: our own model, fine-tuned on applang, its app-making intelligence
+measured and climbing night after night. "Harnesses melt; verifiers compound" (metabolite): the
+verifier is what compounds, and applang's is the fastest one compusophy has built, a grade in
+milliseconds against a minute of `cargo test` in tempo-x402, so it can be the reward of
+reinforcement learning, not only a filter.
+
+- **`iq`, Suite 2**: tiered tasks (1 a counter to 6 an ambitious game) whose checks are data, a
+  small language over the makes probe (`iq::CARD`). `grade` is compile, smoke, check on seeds
+  1 to 3. `verify` keeps a task only when its reference passes, a null app fails, and its check
+  kills most of the reference's mutants (a survivor counts only when a fixed exploration tells
+  it apart). Families are held out by hash (`iq::held`), never trained on.
+- **`teach`**: Claude Opus 5.5 as the teacher, over the Messages and Batches APIs (curl; the key
+  on curl's stdin only). It writes tasks (verified by `iq` before they join the suite) and
+  solves them in the bytes Studio sends (`coder::prompt`), so what it teaches is what the model
+  will be asked. Every example carries its teacher, prompt hash and verifier hash; a ledger
+  prices every call and a budget stops a run.
+- **`train/`** (Python, a build-time tool): fine-tunes a Qwen coder on the RTX 3090 at night,
+  from the base model every round, on the exact messages (the model's own chat template, loss
+  on the reply only), with a manifest per run and checkpoints that survive a freeze;
+  `generate.py` answers `teach prompts` in batches for `iq score`. The fixes over tempo-x402's
+  attempt (3 to 33 of 201 Rust problems): a held-out set, train prompt = inference prompt,
+  recorded provenance, resumable runs.
+- First number (2026-10-05): the untuned Qwen2.5-Coder-0.5B passes 1 of 16 samples on the 8
+  seed tasks.
+
 ## What is next
+
+- **The applang model, nightly.** Opus writes the suite up to a few hundred tasks across the
+  tiers; baselines for today's GLM, Opus and the untuned Qwens; Opus's verified solutions train
+  the Qwens (0.5B full, 3B LoRA), scored on the held-out families; then RL with `iq::grade` as
+  the reward. A model ships only when it beats the last on held-out tasks; served first by
+  `/api/ai`, then in the tab (WebGPU), then split across tabs. applang grows with it (real
+  graphics, records, smooth motion), each change re-verifying the corpus and retraining; made
+  apps that people keep join the data through a store.
 
 - **R2, the kernel: a virtual computer in the tab.** wasm processes are the
   virtual CPU: each a module with fuel, memory limits and a capability

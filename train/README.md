@@ -73,7 +73,7 @@ One JSON object a line, as `teach export` writes them:
 - `kind`, `by`: counted in the manifest (kinds, teachers, days), not trained on.
 
 A record that breaks the schema stops the run, naming its file and line. Exact duplicates are
-dropped and counted. A record over `--max-len` tokens (4096) is dropped and counted, never cut.
+dropped and counted. A record over `--max-len` tokens (12288: Studio's system prompt alone is about 4,000) is dropped and counted, never cut.
 
 **Training prompt = inference prompt.** Each record is rendered by the base model's own chat
 template (`apply_chat_template`): the prompt is every message but the last plus the generation

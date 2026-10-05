@@ -456,3 +456,24 @@ pub fn answers(
     }
     out
 }
+
+/// What [`answers`] would send for each of `tasks` in `split`, a line a task, for a model
+/// answered elsewhere in batches (`train/generate.py`): `{"task","family","max_tokens",
+/// "temperature","messages":[system, user]}`, the room and temperature Studio asks at.
+pub fn prompts(tasks: &[Task], split: &str, held: &[String]) -> String {
+    let (system, mut out) = (prompts::solver(), String::new());
+    for t in tasks.iter().filter(|t| in_split(split, t, held)) {
+        out += "{\"task\":";
+        put(&mut out, &t.id);
+        out += ",\"family\":";
+        put(&mut out, &t.family);
+        out += &format!(",\"max_tokens\":{}", coder::Knobs::default().write_tokens);
+        out += WRITE_OPTIONS;
+        out += ",\"messages\":[{\"role\":\"system\",\"content\":";
+        put(&mut out, &system);
+        out += "},{\"role\":\"user\",\"content\":";
+        put(&mut out, &prompts::solve(&t.ask));
+        out += "}]}\n";
+    }
+    out
+}

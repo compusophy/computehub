@@ -8,7 +8,7 @@ use coder::json::{Json, quote};
 use crate::claude::{self, Msg, Replies, Req, Teacher, Usage};
 use crate::cost::{self, Ledger};
 use crate::run::{self, Run};
-use crate::seam::{By, Judge, Smoke, Task};
+use crate::seam::{By, Iq, Judge, Smoke, Task};
 use crate::wire::{self, Chat};
 use crate::{Fail, codes, day, fnv, hex16, prompts};
 
@@ -671,4 +671,33 @@ fn days_and_codes_read_as_they_should() {
     assert_eq!(day(951_868_800), "2000-03-01");
     assert_eq!(Fail::new(codes::BUDGET, "spent").to_string(), "E0987 spent");
     assert_eq!(hex16(fnv(b"")), "cbf29ce484222325");
+}
+
+#[test]
+fn the_iq_judge_grades_by_the_suites_checks() {
+    let suite = include_str!("../../../evals/suites/iq.jsonl");
+    let judge = Iq { tasks: iq::read_suite(suite).unwrap() };
+    assert_eq!(judge.id(), iq::verifier_hash());
+    let line = suite.lines().next().unwrap();
+    let t = iq::read_task(line).unwrap();
+    assert!(judge.verify_task(line).is_ok(), "{:?}", judge.verify_task(line));
+    let good = judge.grade(&t.id, &t.ask, &t.reference);
+    assert!(good.pass && good.stage == "ok", "{good:?}");
+    let bad = judge.grade(&t.id, &t.ask, "label \"hi\";");
+    assert!(!bad.pass && bad.stage == "check", "{bad:?}");
+    assert_eq!(judge.grade("no-such-task", "", &t.reference).stage, "harness");
+}
+
+#[test]
+fn prompts_carry_the_bytes_studio_sends() {
+    let tasks: Vec<Task> =
+        include_str!("../../../evals/suites/iq.jsonl").lines().filter_map(Task::parse).collect();
+    let text = run::prompts(&tasks, "all", &[]);
+    assert_eq!(text.lines().count(), tasks.len());
+    let first = Json::parse(text.lines().next().unwrap()).unwrap();
+    let msg = |i: usize| first.get("messages").and_then(|m| m.at(i)).and_then(|m| m.get("content"));
+    assert_eq!(msg(0).and_then(Json::text), Some(coder::prompt::system().as_str()));
+    let user = coder::prompt::write(&tasks[0].ask);
+    assert_eq!(msg(1).and_then(Json::text), Some(user.as_str()));
+    assert!(text.lines().next().unwrap().contains(",\"max_tokens\":6144,\"temperature\":0.3,"));
 }
