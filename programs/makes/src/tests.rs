@@ -22,7 +22,8 @@ fn every_reference_passes_its_checker() {
 
 /// Other designs the descriptions allow pass too (`refs/alt/<task>-<how>.app`): boards as grid
 /// widgets, cards that turn back on a timer, a die that tumbles, a count drawn on a canvas, a
-/// pick written apart from its heading, a Start the description never asked for.
+/// pick written apart from its heading, a Start the description never asked for, a score written
+/// inside a board's square.
 #[test]
 fn every_alternative_design_passes() {
     let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/refs/alt");

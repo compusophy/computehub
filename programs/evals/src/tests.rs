@@ -191,6 +191,10 @@ fn a_summary_reads_a_gain() {
     let text = summary::compare("a", &summary::select(&all, "a"), "b", &summary::select(&all, "b"));
     assert!(text.contains("passed by a only: x") && text.contains("passed by b only: y"), "{text}");
     assert!(text.contains("b - a: +17 points"), "{text}");
+    // A task that passed one of two trials on a side has not flipped either way.
+    let half = [all[0].clone(), rec("b", "x", true, "ok"), all[3].clone()];
+    let text = summary::compare("a", &[&half[0]], "b", &[&half[1], &half[2]]);
+    assert!(text.contains("0 tasks flipped") && text.contains("1 passed half"), "{text}");
     let table = summary::table(&all);
     assert!(
         table.contains(

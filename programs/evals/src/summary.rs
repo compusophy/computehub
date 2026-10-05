@@ -1,8 +1,9 @@
 //! Reading a gain: two runs (or two models, each all its runs) side by side. Each side's pass
 //! rate with its 95% Wilson interval, tokens and dollars per pass and seconds per make; the
 //! difference with its 95% Newcombe interval; and, task by task (a task passes on a side when
-//! most of its trials there did), the tasks that flipped, with McNemar's exact p for them. Records
-//! whose AI failed (stage `ai`) are not the model's: they are counted apart, never as fails.
+//! most of its trials there did, fails when most failed, and is neither when half did), the tasks
+//! that flipped, with McNemar's exact p for them. Records whose AI failed (stage `ai`) are not the
+//! model's: they are counted apart, never as fails.
 
 use crate::record::Record;
 
@@ -83,8 +84,9 @@ pub fn select<'a>(all: &'a [Record], sel: &str) -> Vec<&'a Record> {
     if run.is_empty() { all.iter().filter(|r| r.meta.model == sel).collect() } else { run }
 }
 
-/// Each task of `rs` and whether most of its trials passed (the AI's failures aside), in order.
-fn by_task(rs: &[&Record]) -> Vec<(String, bool)> {
+/// Each task of `rs` and whether most of its trials passed (the AI's failures aside; `None`
+/// when as many failed), in order.
+fn by_task(rs: &[&Record]) -> Vec<(String, Option<bool>)> {
     let mut tasks: Vec<(String, u32, u32)> = Vec::new();
     for r in rs.iter().filter(|r| r.stage != "ai") {
         let i = tasks.iter().position(|t| t.0 == r.task).unwrap_or_else(|| {
@@ -93,7 +95,7 @@ fn by_task(rs: &[&Record]) -> Vec<(String, bool)> {
         });
         (tasks[i].1, tasks[i].2) = (tasks[i].1 + u32::from(r.pass), tasks[i].2 + 1);
     }
-    tasks.into_iter().map(|(t, k, n)| (t, k * 2 > n)).collect()
+    tasks.into_iter().map(|(t, k, n)| (t, (k * 2 != n).then_some(k * 2 > n))).collect()
 }
 
 /// `x` as a percentage.
@@ -141,18 +143,20 @@ pub fn compare(an: &str, a: &[&Record], bn: &str, b: &[&Record]) -> String {
     let rate = |s: Stats| if s.n == 0 { 0.0 } else { f64::from(s.pass) / f64::from(s.n) };
     let d = (rate(sb) - rate(sa)) * 100.0;
     let (ta, tb) = (by_task(a), by_task(b));
-    let (mut lost, mut won) = (Vec::new(), Vec::new());
+    let (mut lost, mut won, mut ties) = (Vec::new(), Vec::new(), 0);
     for (t, pa) in &ta {
         if let Some((_, pb)) = tb.iter().find(|x| x.0 == *t) {
             match (pa, pb) {
-                (true, false) => lost.push(t.as_str()),
-                (false, true) => won.push(t.as_str()),
+                (Some(true), Some(false)) => lost.push(t.as_str()),
+                (Some(false), Some(true)) => won.push(t.as_str()),
+                (None, _) | (_, None) => ties += 1,
                 _ => {}
             }
         }
     }
     o += &format!(
-        "{bn} - {an}: {d:+.0} points, 95% CI {:+.0} to {:+.0}; {} tasks flipped, McNemar p = {:.2}\n",
+        "{bn} - {an}: {d:+.0} points, 95% CI {:+.0} to {:+.0}; {} tasks flipped, McNemar p = {:.2}; \
+         {ties} passed half their trials on a side\n",
         lo * 100.0,
         hi * 100.0,
         lost.len() + won.len(),
