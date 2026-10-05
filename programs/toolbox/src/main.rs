@@ -22,21 +22,33 @@ fn main() -> ExitCode {
     let argv: Vec<String> = std::env::args().collect();
     let (name, args) = applet(&argv);
     let (mut out, mut err) = (io::stdout().lock(), io::stderr().lock());
-    let files = &mut |path: &str| here(path).and_then(std::fs::read);
+    let depth = depth(std::env::var("PWD").ok().as_deref());
+    let files = &mut |path: &str| here(depth, path).and_then(std::fs::read);
     ExitCode::from(run(name, args, &mut io::stdin().lock(), files, &mut out, &mut err))
 }
 
-/// The path to give `std::fs` for the file an applet names: a relative one from the job's
-/// directory, `./` first. wasi-libc opens a path from the preopen whose name is its longest
-/// prefix, and the job's directory is `.` (to it, the empty name) beside `/tmp`, `/home` and
-/// the other top-level directories, so `tmp/x` would be /tmp's `x`; only `.` matches `./tmp/x`.
-/// An empty path names no file (wasi-libc would open the job's directory).
-fn here(path: &str) -> io::Result<String> {
+/// The path to give `std::fs` for the file an applet names, in a job whose directory is `depth`
+/// names down: a relative one from the job's directory, `./` first, and an absolute one from
+/// there too, up to `/` first (`..` past it stays there). wasi-libc opens a path from the
+/// preopen whose name is its longest prefix, and the job's directory is `.` (to it, the empty
+/// name, as `/` would be) beside `/tmp`, `/home` and the other top-level directories as the job
+/// started, so `tmp/x` would be /tmp's `x`, and `/x` or `/` the job directory's; only `.`
+/// matches `./`. An empty path names no file (wasi-libc would open the job's directory).
+fn here(depth: usize, path: &str) -> io::Result<String> {
+    let rest = path.trim_start_matches('/');
+    let up = if rest.len() < path.len() { "/..".repeat(depth) } else { String::new() };
     match path {
         "" => Err(io::ErrorKind::NotFound.into()),
-        _ if path.starts_with('/') => Ok(path.into()),
-        _ => Ok(["./", path].concat()),
+        _ if rest.is_empty() => Ok([".", &up].concat()),
+        _ => Ok([".", &up, "/", rest].concat()),
     }
+}
+
+/// How many names down the job's directory is, by its `PWD` (more is no harm); without one, as
+/// many as a path can have.
+fn depth(pwd: Option<&str>) -> usize {
+    pwd.filter(|p| p.starts_with('/'))
+        .map_or(64, |p| p.split('/').filter(|n| !n.is_empty()).count())
 }
 
 /// The applet `argv` names and its arguments, its own name first.
@@ -210,10 +222,14 @@ mod tests {
     }
 
     #[test]
-    fn relative_paths_are_read_from_the_jobs_directory() {
-        // `./` first, so wasi-libc opens `tmp/x` from the job's directory (`.`), not /tmp.
-        let paths = ["tmp/x", "a", "../b", "/tmp/x"].map(|p| here(p).unwrap());
-        assert_eq!(paths, ["./tmp/x", "./a", "./../b", "/tmp/x"]);
-        assert_eq!(here("").unwrap_err().kind(), io::ErrorKind::NotFound);
+    fn paths_are_read_from_the_jobs_directory() {
+        // `./` first, so wasi-libc opens `tmp/x` from the job's directory (`.`), not /tmp; an
+        // absolute path goes up to `/` from there, so `/x` is not the job directory's `x`.
+        let paths = ["tmp/x", "a", "../b", "/tmp/x", "//x", "/"].map(|p| here(2, p).unwrap());
+        assert_eq!(paths, ["./tmp/x", "./a", "./../b", "./../../tmp/x", "./../../x", "./../.."]);
+        assert_eq!([here(0, "/x").unwrap(), here(0, "/").unwrap()], ["./x", "."]);
+        assert_eq!(here(2, "").unwrap_err().kind(), io::ErrorKind::NotFound);
+        let depths = [Some("/tmp/a/"), Some("/"), Some("tmp"), None].map(depth);
+        assert_eq!(depths, [2, 0, 64, 64]);
     }
 }

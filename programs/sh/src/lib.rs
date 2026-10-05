@@ -3,12 +3,15 @@
 //! console). [`Shell::feed`] takes the console's bytes as a terminal sends them. Commands are rows
 //! of a table; what they do to paths is an `Op`. Any other word runs a program as one of the
 //! kernel's jobs ([`job`]): programs joined by `|`, the first of which may be a command (its
-//! output the job's input), reading a file with `<`, writing one with `>` (`>>` appends). What
-//! only the desktop does (open an app, switch the theme) the shell asks of its Terminal in an
-//! escape, `OSC 1729 ; verb ; arg BEL`. Files and jobs are reached through a [`Sys`]: the
-//! program's WASI calls, or a VFS in tests.
+//! output the job's input), reading a file with `<`, writing one with `>` (`>>` appends). A line's
+//! commands run in turn (`;`, `&&`, `||`), and a word with a bare `*` or `?` is the names it
+//! matches. What only the desktop does (open an app, switch the theme) the shell asks of its
+//! Terminal in an escape, `OSC 1729 ; verb ; arg BEL`. Files and jobs are reached through a
+//! [`Sys`]: the program's WASI calls, or a VFS in tests.
 
 #![forbid(unsafe_code)]
+
+use std::mem;
 
 pub use vfs::Entry;
 use vfs::Vfs;
@@ -24,7 +27,9 @@ const KEYS: &str = "Up and Down recall history, Ctrl+C cancels the line, Ctrl+L 
 screen, Ctrl+D on an empty line closes the terminal. Quotes group words: \"a b\" or 'a b'; ~ \
 is home, # starts a comment. Other words run programs from /bin or ~/.local/bin, as \
 wc [-lwmc] [file]... and rev [file]... (no file: what they are given); they join with |, read \
-a file with <, write one with > (>> appends).";
+a file with <, write one with > (>> appends). Commands join with ; (or && to run the next if \
+one succeeds, || if it fails); * and ? in a word match the names in a directory: *.app, \
+~/apps/*.";
 /// What `uname` prints: the system's name (`-s`, alone the default), its node's (`-n`), its
 /// release (`-r`) and its machine (`-m`); `-a` all.
 const UNAME: [&str; 4] = ["compusophyOS", "compusophy", "0.2", "wasm32"];
@@ -642,15 +647,60 @@ impl Shell {
         self.caret = at;
     }
 
-    /// Runs one command line. A command alone runs here, its stdout to the screen or a
-    /// redirect's file; programs run as a job, the first of them may be a command (its output
-    /// the job's input). As in POSIX, a redirect's file is made before anything runs: a path
-    /// that cannot be written runs nothing.
+    /// Runs one command line: its commands in turn (one after `&&` only if the one before
+    /// succeeded, after `||` only if it failed, else it keeps that status), till one ends the
+    /// shell; nothing for a line that
+    /// does not parse. Each word that is a pattern is first the paths it matches, as each runs.
     pub fn run(&mut self, line: &str, sys: &mut dyn Sys) {
-        let Line { stages, input, output } = match parse(line) {
+        let lines = match parse(line) {
             Ok(parsed) => parsed,
             Err(e) => return self.fail(2, &["sh: ", e]),
         };
+        for mut one in lines {
+            if self.quit {
+                break;
+            }
+            if one.when.is_none_or(|ok| ok == (self.status == 0)) {
+                self.mark.clear();
+                self.glob(&mut one, sys);
+                self.command(one, sys);
+            }
+        }
+    }
+
+    /// Replaces each pattern of `line` with the paths it matches, sorted (dot files only for a
+    /// name starting with `.`); one that matches none is kept as it is, as is one with a pattern
+    /// before its last `/` (only a path's last name may be one).
+    fn glob(&self, line: &mut Line, sys: &mut dyn Sys) {
+        for (stage, i, pat) in mem::take(&mut line.globs).into_iter().rev() {
+            let (dir, name) = pat.rsplit_once('/').map_or((None, &pat[..]), |(d, n)| (Some(d), n));
+            let Some(lit) = literal(dir.unwrap_or_default()) else { continue };
+            let at = match dir {
+                Some("") => "/",
+                Some(_) => &lit,
+                None => ".",
+            };
+            let Ok(abs) = self.abs(at) else { continue };
+            let entries = sys.list(&abs).unwrap_or_default().into_iter();
+            let shown = |e: &Entry| name.starts_with('.') || !e.name.starts_with('.');
+            let mut found: Vec<String> = entries
+                .filter(|e| shown(e) && matches(name, &e.name))
+                .map(|e| if dir.is_some() { [&lit, "/", &e.name].concat() } else { e.name })
+                .collect();
+            found.sort();
+            match line.stages.get_mut(stage).filter(|w| i < w.len()) {
+                Some(words) if !found.is_empty() => _ = words.splice(i..=i, found),
+                _ => {}
+            }
+        }
+    }
+
+    /// Runs one command. A command alone runs here, its stdout to the screen or a redirect's
+    /// file; programs run as a job, the first of them may be a command (its output the job's
+    /// input). As in POSIX, a redirect's file is made before anything runs: a path that cannot
+    /// be written runs nothing.
+    fn command(&mut self, line: Line, sys: &mut dyn Sys) {
+        let Line { stages, input, output, .. } = line;
         let is = |w: &Vec<String>| COMMANDS.iter().position(|c| c.0 == w[0]);
         let first = stages.first().and_then(is);
         if let Some(name) = stages.iter().skip(1).find(|w| is(w).is_some()) {
@@ -1007,31 +1057,54 @@ fn flags<'a, 'b>(args: &'a [&'b str], ok: &str, io: &mut Io<'_>) -> Option<(u32,
 type In = Option<String>;
 type Out = Option<(String, bool)>;
 
-/// A parsed command line: the argv of each stage of its pipe (none for a blank line), and its
-/// redirects.
+/// A parsed command: the argv of each stage of its pipe (none for a blank one), its redirects,
+/// whether it runs only if the one before succeeded (`Some(true)`, after `&&`) or failed (after
+/// `||`), and each word with an unquoted `*` or `?`: its stage, its place there, and the word as
+/// a pattern (a `\` before each quoted `*`, `?` or `\`).
 #[derive(Debug, Default, PartialEq, Eq)]
 struct Line {
     stages: Vec<Vec<String>>,
     input: In,
     output: Out,
+    when: Option<bool>,
+    globs: Vec<(usize, usize, String)>,
 }
 
-/// Splits a command line into stages of words, at `|`, and its redirects: `< path`, `> path`
-/// and `>> path`, one of each. `'…'` is literal, `"…"` takes `\"` and `\\`, a bare `\` escapes.
-/// A bare `~` alone or before a `/` starting a word is the home (for programs as for commands);
-/// a bare `#` starting a word starts a comment, to the end of the line.
-fn parse(line: &str) -> Result<Line, &'static str> {
-    let mut parsed = Line::default();
+impl Line {
+    fn blank(&self) -> bool {
+        self.stages.is_empty() && self.input.is_none() && self.output.is_none()
+    }
+}
+
+/// Splits a command line into commands, at `;`, `&&` and `||` (the next only if this one
+/// succeeds, fails), each into stages of words, at `|`, and its redirects: `< path`, `> path` and `>> path`, one
+/// of each. `'…'` is literal, `"…"` takes `\"` and `\\`, a bare `\` escapes. A bare `~` alone or
+/// before a `/` starting a word is the home (for programs as for commands); a bare `#` starting
+/// a word starts a comment, to the end of the line; a bare `*` or `?` makes the word a pattern.
+fn parse(line: &str) -> Result<Vec<Line>, &'static str> {
+    let (mut lines, mut parsed) = (Vec::new(), Line::default());
     let (mut words, mut word, mut to): (Vec<String>, Option<String>, Option<u8>) =
         (Vec::new(), None, None);
+    let (mut pat, mut wild) = (String::new(), false);
     // Trailing spaces end the last word (two, so a final `\` escapes one).
     let mut chars = line.chars().chain([' ', ' ']).peekable();
     while let Some(c) = chars.next() {
-        if matches!(c, ' ' | '\t' | '>' | '<' | '|') {
+        let when = match c {
+            '&' => chars.next_if_eq(&'&').map(|_| true),
+            '|' => chars.next_if_eq(&'|').map(|_| false),
+            _ => None,
+        };
+        if when.is_some() || matches!(c, ' ' | '\t' | '>' | '<' | '|' | ';') {
+            let glob = mem::take(&mut wild).then(|| pat.clone());
+            pat.clear();
             match (word.take(), to.take()) {
                 (Some(w), Some(b'<')) => parsed.input = Some(w),
                 (Some(w), Some(r)) => parsed.output = Some((w, r == b'+')),
-                (Some(w), None) => words.push(w),
+                (Some(w), None) => {
+                    let at = (parsed.stages.len(), words.len());
+                    parsed.globs.extend(glob.map(|p| (at.0, at.1, p)));
+                    words.push(w);
+                }
                 (None, pending) => to = pending,
             }
             match c {
@@ -1042,12 +1115,19 @@ fn parse(line: &str) -> Result<Line, &'static str> {
                         "expected a file name after >"
                     });
                 }
-                '>' if parsed.output.is_some() => return Err("only one > per line"),
-                '<' if parsed.input.is_some() => return Err("only one < per line"),
+                '>' if parsed.output.is_some() => return Err("only one > per command"),
+                '<' if parsed.input.is_some() => return Err("only one < per command"),
                 '>' => to = Some(if chars.next_if_eq(&'>').is_some() { b'+' } else { b'>' }),
                 '<' => to = Some(b'<'),
+                _ if (c == ';' || when.is_some()) && words.is_empty() && parsed.blank() => {
+                    return Err("each ; && or || needs a command before it");
+                }
+                _ if c == ';' || when.is_some() => {
+                    finish(&mut lines, mem::take(&mut parsed), mem::take(&mut words))?;
+                    parsed.when = when;
+                }
                 '|' if words.is_empty() => return Err("a | needs a program on each side"),
-                '|' => parsed.stages.push(std::mem::take(&mut words)),
+                '|' => parsed.stages.push(mem::take(&mut words)),
                 _ => {}
             }
             continue;
@@ -1055,40 +1135,94 @@ fn parse(line: &str) -> Result<Line, &'static str> {
         if word.is_none() && c == '#' {
             break;
         }
-        let ends = |c: Option<&char>| matches!(c, Some(' ' | '\t' | '/' | '|' | '<' | '>'));
+        let ends = |c: Option<&char>| matches!(c, Some(' ' | '\t' | '/' | '|' | '<' | '>' | ';'));
         if word.is_none() && c == '~' && ends(chars.peek()) {
-            word = Some(Vfs::HOME.into());
+            (word, pat) = (Some(Vfs::HOME.into()), Vfs::HOME.into());
             continue;
         }
         let w = word.get_or_insert_with(String::new);
+        // Each character as it is (`literal`: quoted or escaped) or as typed, to the word and
+        // its pattern.
+        let mut put = |x: char, literal: bool| {
+            w.push(x);
+            wild |= !literal && matches!(x, '*' | '?');
+            if literal && matches!(x, '*' | '?' | '\\') {
+                pat.push('\\');
+            }
+            pat.push(x);
+        };
         match c {
-            '\\' => w.extend(chars.next()),
+            '\\' => chars.next().into_iter().for_each(|x| put(x, true)),
             '\'' | '"' => loop {
                 match chars.next() {
                     None => return Err("unterminated quote"),
                     Some(q) if q == c => break,
                     Some('\\') if c == '"' && matches!(chars.peek(), Some('"' | '\\')) => {
-                        w.extend(chars.next());
+                        chars.next().into_iter().for_each(|x| put(x, true));
                     }
-                    Some(x) => w.push(x),
+                    Some(x) => put(x, true),
                 }
             },
-            _ => w.push(c),
+            _ => put(c, false),
         }
     }
     match to {
         Some(b'<') => Err("expected a file name after <"),
         Some(_) => Err("expected a file name after >"),
-        None if words.is_empty() && !parsed.stages.is_empty() => {
-            Err("a | needs a program on each side")
+        None if parsed.when.is_some() && words.is_empty() && parsed.blank() => {
+            Err("each && or || needs a command after it")
         }
         None => {
-            if !words.is_empty() {
-                parsed.stages.push(words);
-            }
-            Ok(parsed)
+            finish(&mut lines, parsed, words)?;
+            Ok(lines)
         }
     }
+}
+
+/// Ends the command `parsed` with its last stage, `words`, onto `lines`.
+fn finish(lines: &mut Vec<Line>, mut parsed: Line, words: Vec<String>) -> Result<(), &'static str> {
+    if words.is_empty() && !parsed.stages.is_empty() {
+        return Err("a | needs a program on each side");
+    }
+    if !words.is_empty() {
+        parsed.stages.push(words);
+    }
+    lines.push(parsed);
+    Ok(())
+}
+
+/// Whether `name` matches the pattern `pat`: `*` any run of characters, `?` any one, `\` the
+/// next as it is.
+fn matches(pat: &str, name: &str) -> bool {
+    let (p, n): (Vec<char>, Vec<char>) = (pat.chars().collect(), name.chars().collect());
+    // Where the last `*` was, and the name's character it took up to, to take one more there.
+    let (mut i, mut j, mut star) = (0, 0, None);
+    while j < n.len() {
+        match p.get(i) {
+            Some('*') => (star, i) = (Some((i, j)), i + 1),
+            Some('?') => (i, j) = (i + 1, j + 1),
+            Some('\\') if p.get(i + 1) == Some(&n[j]) => (i, j) = (i + 2, j + 1),
+            Some(&c) if c != '\\' && c == n[j] => (i, j) = (i + 1, j + 1),
+            _ => match star {
+                Some((at, took)) => (star, i, j) = (Some((at, took + 1)), at + 1, took + 1),
+                None => return false,
+            },
+        }
+    }
+    p.get(i..).unwrap_or_default().iter().all(|&c| c == '*')
+}
+
+/// The path a pattern's directory names, its escapes taken off; none if it is a pattern too.
+fn literal(pat: &str) -> Option<String> {
+    let (mut lit, mut chars) = (String::new(), pat.chars());
+    while let Some(c) = chars.next() {
+        match c {
+            '\\' => lit.extend(chars.next()),
+            '*' | '?' => return None,
+            c => lit.push(c),
+        }
+    }
+    Some(lit)
 }
 
 /// A job as the kernel reads it (its `wire::Job`): `str cwd | u8 stdin, str path | u8 stdout,
@@ -1125,6 +1259,23 @@ pub fn job(
     }
     b.extend_from_slice(data);
     Some(b)
+}
+
+/// The path `std::fs` opens for the absolute `path` in a process that started `depth` names
+/// down (as its `PWD` then said): from there, up to `/` and down. wasi-libc opens a path from the
+/// preopen whose name is its longest prefix, and names the start directory (`.`) and `/` alike,
+/// the empty name, beside each top-level directory there was at the start; so `/notes`, `/`, or
+/// a top-level directory made since, would be the start directory's. Only `.` matches `./..`,
+/// and `..` past `/` stays there, so more than `depth` does no harm.
+pub fn from_start(depth: usize, path: &str) -> String {
+    let mut out = String::from(".");
+    (0..depth).for_each(|_| out.push_str("/.."));
+    let rest = path.trim_start_matches('/');
+    if !rest.is_empty() {
+        out.push('/');
+        out.push_str(rest);
+    }
+    out
 }
 
 /// Pushes each of `parts` (one loop for every caller).

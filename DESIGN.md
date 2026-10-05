@@ -383,9 +383,14 @@ one. Forked crates keep their Apache-2.0 license and note their origin.
   the files keep no dates), `cd`, `cat`, `mkdir`, `mv`, `open`, `edit`,
   `run`, `theme`, ..., `~` for the home, `#` comments, and programs such
   as the toolbox's `wc` and `rev`, which read the files they name or else
-  their input, joined by `|`, with `<` and `>`; `sh -c line` and `sh file`
-  run scripts, ending with the last line's status), which edits its line
-  on a raw console and runs programs as the kernel's jobs on a cooked one.
+  their input, joined by `|`, with `<` and `>`; commands joined by `;`,
+  `&&` and `||`; `*` and `?` matching the names in a directory; `sh -c
+  line` and `sh file` run scripts, ending with the last line's status),
+  which edits its line on a raw console and runs programs as the kernel's
+  jobs on a cooked one. wasi-libc names a process's starting directory
+  (preopen `.`) and `/` alike, so `sh` and the toolbox open an absolute
+  path from there, up to `/` (`./../../notes` from the home): else `/notes`
+  would be the home's.
   What only the desktop can do the shell asks in its own escape,
   `OSC 1729 ; verb ; arg` (`open` an app, switch the `theme`), as programs
   already ask a terminal for its title.

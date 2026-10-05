@@ -191,7 +191,7 @@ sh: a | needs a program on each side
 $ a |
 sh: a | needs a program on each side
 $ echo a > x > y
-sh: only one > per line
+sh: only one > per command
 $ open terminal
 [open terminal]
 $ open /apps/demo.app
@@ -477,6 +477,59 @@ fn help_lists_one_command_a_line_at_any_width() {
     let mut sh = Shell { cols: 30, ..Shell::default() };
     sh.greet();
     assert!(plain(&sh.out).starts_with("compusophyOS terminal \u{2014} type\n'help'.\n"));
+}
+
+#[test]
+fn commands_join_with_semicolons_and_patterns_match_names() {
+    let (mut sh, mut w) = transcript(
+        r#"$ echo hi > /tmp/a; cat /tmp/a;echo b
+hi
+b
+$ cat nope && echo no; echo yes
+cat: nope: no such file or directory
+yes
+$ cat nope || echo b && echo c || echo no
+cat: nope: no such file or directory
+b
+c
+$ echo a && hi x && echo c
+a
+c
+[job ~ console|/bin/hi hi x|console]
+$ echo "a;b" 'c && d' e\;f g\&\&h a & b; # c; echo d
+a;b c && d e;f g&&h a & b
+$ ; echo a
+sh: each ; && or || needs a command before it
+$ echo a ;; echo b
+sh: each ; && or || needs a command before it
+$ echo a ||
+sh: each && or || needs a command after it
+$ a | || b
+sh: a | needs a program on each side
+$ mkdir g; touch g/b.app g/a.app g/.c.app g/n.txt
+$ ls g/*.app
+g/a.app  g/b.app
+$ echo g/* g/.* g/?.app *.txt '*.txt' \*.txt /apps/* nope/* */*.txt
+g/a.app g/b.app g/n.txt g/.c.app g/a.app g/b.app notes.txt *.txt *.txt /apps/demo.app nope/* */*.txt
+$ cd g; rm *.app; ls -A
+.c.app  n.txt
+$ hi ?.txt > *.out
+[job ~/g console|/bin/hi hi n.txt|file ~/g/*.out]
+"#,
+    );
+    // A failed command keeps its status past what `&&` skips; `exit` ends the line too.
+    sh.run("cat nope && echo no && echo no", &mut w);
+    assert_eq!(sh.status, 1);
+    sh.out.clear();
+    sh.run("exit 3; echo no", &mut w);
+    assert!(sh.quit && sh.exited == Some(3) && sh.out.is_empty());
+    let names = ["a.app", "ab.app", "b.txt", "a*b", "\u{e9}t\u{e9}"];
+    let pats = ["*", "a*", "*.app", "a?.app", "a\\*b", "?t?", "*b*", "a*.*p", ""];
+    let hits = pats.map(|p| names.iter().filter(|n| matches(p, n)).count());
+    assert_eq!(hits, [5, 3, 2, 1, 1, 1, 3, 2, 0]);
+    // The program opens a path from the directory it started in, up to `/` and down.
+    let paths = [(2, "/notes"), (2, "/"), (0, "/tmp/x"), (0, "/")].map(|(d, p)| from_start(d, p));
+    assert_eq!(paths, ["./../../notes", "./../..", "./tmp/x", "."]);
 }
 
 #[test]
