@@ -61,6 +61,11 @@ impl App for Probe {
                 ("theme", name) => cx.set_theme(name),
                 ("open", name) => cx.open(name),
                 ("grain", value) => cx.pref("grain", value),
+                // Stepping aside, hiding (its task done) or not.
+                ("yield" | "lend", w) => {
+                    let (win, hide) = (w.parse().unwrap(), cmd.starts_with('y'));
+                    cx.agent(ui::uiwire::Request::Yield { win, hide })
+                }
                 _ => {}
             }
         }
@@ -306,16 +311,12 @@ fn titlebars_and_edges_hold_windows_with_their_cursors() {
     // Two presses within 350 ms maximize; held on to the left edge, the preview shows where it
     // will go, then the window goes there.
     for t in [2000.0, 2300.0] {
-        s.set_now(t);
-        s.click((500.0, 261.0));
+        let _ = (s.set_now(t), s.click((500.0, 261.0)));
     }
     assert_eq!(s.placement(WinId(1)).unwrap().state, State::Maximized);
     s.rest(1000.0);
     let (area, grab) = (s.wm().area(), (500.0, 60.0));
-    s.to(grab);
-    s.down(grab);
-    s.to((520.0, 80.0));
-    s.to((3.0, 400.0));
+    let _ = (s.to(grab), s.down(grab), s.to((520.0, 80.0)), s.to((3.0, 400.0)));
     let zone = s.visuals().zone.unwrap().rect(area);
     assert!(s.animating());
     s.rest(1000.0);
@@ -326,16 +327,10 @@ fn titlebars_and_edges_hold_windows_with_their_cursors() {
     assert!(log.take().iter().all(|e| matches!(e.1, E::Focus(_) | E::Resized { .. })));
     // Edges and corners show which way they resize, and do.
     let (mut s, _) = desk();
-    let cursors = [
-        ((300.0, 300.0), Cursor::EwResize),
-        ((980.0, 300.0), Cursor::EwResize),
-        ((600.0, 152.0), Cursor::NsResize),
-        ((298.0, 152.0), Cursor::NwseResize),
-        ((979.0, 630.0), Cursor::NwseResize),
-        ((975.0, 152.0), Cursor::NeswResize),
-        ((600.0, 400.0), Cursor::Default),
-    ];
-    for (at, c) in cursors {
+    let at = [(300.0, 300.0), (980.0, 300.0), (600.0, 152.0), (298.0, 152.0), (979.0, 630.0)];
+    let (ew, nwse) = (Cursor::EwResize, Cursor::NwseResize);
+    let cursors = [ew, ew, Cursor::NsResize, nwse, nwse, Cursor::NeswResize, Cursor::Default];
+    for (at, c) in at.into_iter().chain([(975.0, 152.0), (600.0, 400.0)]).zip(cursors) {
         s.to(at);
         assert_eq!(s.cursor, c, "{at:?}");
     }
@@ -445,35 +440,27 @@ fn kept_tiles_move_along_the_dock_by_a_mouse_or_a_held_finger() {
     let pref = |v: &str| vec![Effect::Pref { key: "dock".into(), value: v.into() }];
     // A mouse carries one past 4 px (grabbing, nothing under it lit), the others giving way;
     // dropped, the order is kept and nothing opens.
-    s.to(s.tile_at(0));
-    s.down(s.tile_at(0));
+    let _ = (s.to(s.tile_at(0)), s.down(s.tile_at(0)));
     assert!(s.to(s.tile_at(2)).cursor == Some(Cursor::Grabbing) && s.hover.is_none());
     assert_eq!(shown(&s), "files,studio,terminal");
     assert!(s.up(s.tile_at(2)).effects == pref("files,studio,terminal") && s.names().is_empty());
     // The pointer leaving, or Escape, puts it back.
     for cancel in [Input::PointerLeave, Input::Key { key: Escape, mods: Mods::default() }] {
-        s.to(s.tile_at(0));
-        s.down(s.tile_at(0));
-        s.to(s.tile_at(1));
+        let _ = (s.to(s.tile_at(0)), s.down(s.tile_at(0)), s.to(s.tile_at(1)));
         assert!(s.input(cancel).redraw && s.up(s.tile_at(1)).effects.is_empty());
         assert_eq!(shown(&s), "files,studio,terminal");
     }
     // A finger held on one picks it up: lifted unmoved, its menu; moved 8 px, it drags.
     for (t, to, menu) in [(5000.0, 1, true), (7000.0, 0, false)] {
-        s.set_now(t);
-        s.push(s.tile_at(1), 0, true);
-        s.held(t + 600.0);
+        let _ = (s.set_now(t), s.push(s.tile_at(1), 0, true), s.held(t + 600.0));
         assert!(s.dock.carry.as_ref().is_some_and(|c| c.lifted) && s.menu.is_none());
-        s.to(s.tile_at(to));
-        s.up(s.tile_at(to));
+        let _ = (s.to(s.tile_at(to)), s.up(s.tile_at(to)));
         assert_eq!(s.labels().len(), if menu { 3 } else { 0 });
         s.k(Escape, "");
     }
     // An icon carried onto the row opens a gap under the pointer: dropped, its app is kept
     // there, and the icon goes back to its place (the home screen's order as it was).
-    s.to(cell(4));
-    s.down(cell(4));
-    s.to(s.tile_at(1));
+    let _ = (s.to(cell(4)), s.down(cell(4)), s.to(s.tile_at(1)));
     let got = (s.dock.strip.gap, s.up(s.tile_at(1)).effects);
     assert_eq!(got, ((1, 1), pref("studio,settings,files,terminal")));
     // A click, carrying nothing, opens it.
@@ -538,6 +525,17 @@ fn the_assistant_opens_the_overlay_which_only_escape_or_its_stop_halts() {
     assert!(s.at(now + 599.0) && !s.at(now + 600.0));
     s.click((200.0, 640.0));
     assert!(!s.overlay.open && !s.at(now + 2000.0));
+    // It steps aside for a window the person uses next: while it works, that window has the
+    // keys, the pill staying; its task done, it hides, the tile's dot the accent's until it
+    // shows again (a press on the bare desktop keeps it), as after a task that ends hidden.
+    let _ = (s.click(AI), s.host.agent.working = true, s.say(0, "lend 1"), s.to(AI));
+    assert!(s.overlay.open && s.key_target() == Some(WinId(1)));
+    let _ = (s.say(0, "yield 1"), s.host.agent.working = false, s.to(AI));
+    assert!(!s.overlay.open && s.overlay.unread && s.key_target() == Some(WinId(1)));
+    s.click((200.0, 640.0));
+    assert!(s.overlay.unread && (s.click(AI), s.overlay.open && !s.overlay.unread).1);
+    let _ = (s.click(AI), s.host.agent.ended = true, s.to((200.0, 640.0)));
+    assert!(s.overlay.unread && !s.host.agent.touch);
     // The work area keeps its place as the dock fills.
     let area = s.wm().area();
     let _ = (s.k(Enter, "a"), s.right(s.tile_at(1)), s.click(s.item("Add to dock")));
@@ -655,8 +653,7 @@ fn fingers_scroll_what_they_hold_and_fling_it_on() {
     assert!(log.take().is_empty() && !s.up(at).gesture);
     assert!(matches!(log.take()[..], [(_, E::PointerDown { .. }), (_, E::Click(W(1)))]));
     // Past 8 px the finger presses nothing, and the content follows it.
-    s.set_now(1000.0);
-    s.push(at, 0, true);
+    let _ = (s.set_now(1000.0), s.push(at, 0, true));
     for (t, dy) in [(1010.0, 5.0), (1020.0, 10.0), (1036.0, 26.0)] {
         s.set_now(t);
         s.to((at.0, at.1 - dy));
@@ -676,16 +673,12 @@ fn fingers_scroll_what_they_hold_and_fling_it_on() {
     assert!(steps.len() > 60 && slowing && (sum - 251.0).abs() < 4.0, "{sum}");
     assert!(!s.at(t + 100.0));
     // A press stops a fling; a mouse dragged over content never scrolls it.
-    s.push(at, 0, true);
-    s.set_now(t + 200.0);
-    s.to((at.0, at.1 - 100.0));
-    s.set_now(t + 210.0);
-    s.to((at.0, at.1 - 120.0));
+    let _ = (s.push(at, 0, true), s.set_now(t + 200.0), s.to((at.0, at.1 - 100.0)));
+    let _ = (s.set_now(t + 210.0), s.to((at.0, at.1 - 120.0)));
     assert!(s.up((at.0, at.1 - 120.0)).animating);
     s.down(at);
     assert!(!s.at(t + 300.0));
-    s.to((at.0, at.1 - 100.0));
-    s.up((at.0, at.1 - 100.0));
+    let _ = (s.to((at.0, at.1 - 100.0)), s.up((at.0, at.1 - 100.0)));
     assert_eq!(wheels(&log), [20.0]);
 }
 
@@ -734,12 +727,20 @@ fn the_mark_shows_the_desktop_and_again_brings_the_windows_back() {
     let (before, mark) = (s.wm().layout(), (27.0, 22.0));
     s.right((600.0, 60.0));
     assert!(s.to(mark).animating && s.hover == Some(Target::Bar(home::bar::Button::Mark)));
-    let mut list = DrawList::recording();
-    let _ = (s.set_now(s.host.now_ms + 200.0), s.draw(&mut list));
-    assert!(list.sem().unwrap().runs.iter().any(|r| r.text == "Show desktop"));
+    let tip = |s: &mut Shell| {
+        let mut list = DrawList::recording();
+        let _ = (s.set_now(s.host.now_ms + 200.0), s.draw(&mut list));
+        let tips = ["Show desktop", "Bring windows back"];
+        list.sem().unwrap().runs.iter().map(|r| r.text.clone()).find(|t| tips.contains(&&**t))
+    };
+    assert_eq!(tip(&mut s).as_deref(), Some("Show desktop"));
     s.click(mark);
     let all = s.wm().windows().iter().all(|w| w.1 == State::Minimized);
     assert!(s.menu.is_none() && s.wm().layout().is_empty() && all && s.animating());
+    // Its tooltip goes as it is pressed until the pointer leaves; back, it says what is next.
+    assert_eq!(tip(&mut s), None);
+    let _ = (s.to((200.0, 22.0)), s.to(mark));
+    assert_eq!(tip(&mut s).as_deref(), Some("Bring windows back"));
     // Again, nothing shown since (mod+D too): back in their stacking order, the top focused.
     let _ = (s.rest(1000.0), s.k(Char('d'), "a"));
     assert_eq!(s.wm().layout(), before);
@@ -767,8 +768,7 @@ fn icons_move_and_open_by_the_pointer_and_the_keys() {
     // bare) and drops it there, its own left empty, every cell kept, nothing opened; the pointer
     // leaving or Escape puts it back.
     let (mut s, log) = desk();
-    s.to(cell(0));
-    s.down(cell(0));
+    let _ = (s.to(cell(0)), s.down(cell(0)));
     let (r, c3) = (s.to(cell(3)), cell(3));
     assert!(r.cursor == Some(Cursor::Grabbing) && s.hit(c3.0, c3.1) == Some(Target::Desktop));
     let kept = "@2,studio:0.3:,assistant:0.1:,terminal:0.2:,files:0.4:,settings:0.5:,feedback:1.0:";
@@ -892,8 +892,7 @@ fn the_focused_app_gets_keys_text_and_the_pointer() {
     let down = E::PointerDown { x: 10.0, y: 10.0, id: Some(W(1)) };
     assert_eq!(log.take(), [("welcome", down), ("welcome", E::Click(W(1)))]);
     // A release elsewhere is no click; the wheel goes to the window under it.
-    s.down((c.x + 10.0, c.y + 10.0));
-    s.up((c.x + 100.0, c.y + 10.0));
+    let _ = (s.down((c.x + 10.0, c.y + 10.0)), s.up((c.x + 100.0, c.y + 10.0)));
     assert!(s.input(Input::Wheel { x: c.x + 5.0, y: c.y + 5.0, dy: 3.0 }).consumed);
     assert_eq!(log.take().len(), 2);
     // A mouse held down on content and moved: the app hears where to (a grid draws by it).
@@ -987,8 +986,8 @@ fn a_finger_taps_however_late_its_lift_is_heard() {
     // not the keyboard, which comes only once its text field is tapped (last, below).
     let (ai, title) = (s.dock_rect(), (200.0, rectf(s.rect(2).unwrap()).y + 10.0));
     assert_eq!(ai, RectF::new(336.0, 790.0, 44.0, 44.0));
-    let r = tap(&mut s, (ai.x + ai.w / 2.0, ai.y + ai.h / 2.0), 9000.0, 600.0);
-    assert_eq!((r.text_input, s.key_target()), (Some(false), Some(host::OVERLAY)));
+    let r = tap(&mut s, (ai.x + ai.w / 2.0, ai.y + ai.h / 2.0), 9000.0, 600.0).text_input;
+    assert!(r == Some(false) && s.key_target() == Some(host::OVERLAY) && s.host.agent.touch);
     assert!(tap(&mut s, title, 10_000.0, 600.0).redraw && s.menu.is_none());
     let tile = s.tile_at(0);
     tap(&mut s, tile, 11_000.0, 600.0);

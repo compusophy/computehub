@@ -1,11 +1,14 @@
 //! The screen as the model reads it: a [`Scene`] as text, each window's widgets as elements with
 //! refs (`e4`) that keep their number for the whole session, their role, label, value and state,
-//! and the text around them in reading order.
+//! and the text around them in reading order. The header says the screen's size, and a touch
+//! screen as one (the person taps, with no keys to press).
 //!
 //! - A run of text belongs to the smallest hit holding its middle (a region that scrolls holds
 //!   none: it is no element): the joined runs are that element's label (80 chars at most). A text
-//!   field's run is its value, or, when it holds none, its placeholder. Runs in no hit are the
-//!   window's text, a row a line (160 chars at most). Refs are given in reading order.
+//!   field's run is its value, or, when it holds none, its placeholder, said as that, never as
+//!   its name: the scene carries no label for a field, so it is named by its role. Runs in no
+//!   hit are the window's text, a row a line (160 chars at most). Refs are given in reading
+//!   order.
 //! - The focused window in full (60 elements, 40 lines of text), the other shown windows their
 //!   elements alone (20), minimized ones their titles; the whole at most [`MAX_TEXT`] bytes.
 
@@ -21,9 +24,14 @@ const ROLES: [&str; 12] = [
 /// A canvas's role (`ui::sem::CANVAS`): its value is its size in units, then its shapes, a line
 /// each (pixels as `pixels X Y, W x H squares of S units`, then on a small board its rows).
 pub const CANVAS: u8 = 11;
-/// A switch's role and its flag while on; a text field's role, its value what it holds.
+/// A grid's role (`ui::sem::GRID`): its value is its columns, then its squares' colors, a row a
+/// line.
+pub const GRID: u8 = 10;
+/// A switch's role and its flag while on; a text field's role, its value what it holds; a
+/// tab's.
 pub const SWITCH: (u8, u8) = (3, 2);
 pub const TEXTBOX: u8 = 5;
+pub const TAB: u8 = 2;
 /// The most refs a session keeps; past it they start over.
 const MAX_REFS: usize = 4096;
 
@@ -50,7 +58,7 @@ impl Refs {
     }
 }
 
-/// An element as last shown: its ref, window, widget id, role and label.
+/// An element as last shown: its ref, window, widget id, role and label (none for a text field).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Elem {
     pub n: usize,
@@ -62,7 +70,8 @@ pub struct Elem {
 
 /// `scene` as text, opened over window `over` (0: none), and the elements it shows.
 pub fn render(scene: &Scene, refs: &mut Refs, over: u32) -> (String, Vec<Elem>) {
-    let mut out = format!("Screen {}x{}, theme {}", scene.w, scene.h, scene.theme);
+    let touch = if scene.touch { ", a touch screen" } else { "" };
+    let mut out = format!("Screen {}x{}{touch}, theme {}", scene.w, scene.h, scene.theme);
     if scene.focus != 0 {
         out += &format!(", focused w{}", scene.focus);
     }
@@ -150,8 +159,11 @@ fn window(w: &Win, full: bool, refs: &mut Refs, out: &mut String, elems: &mut Ve
         let mark = w.marks.iter().rev().find(|m| m.id == h.id);
         let role = mark.and_then(|m| ROLES.get(usize::from(m.role))).filter(|r| !r.is_empty());
         let role = role.copied().unwrap_or(if h.sense == 1 { "textbox" } else { "button" });
-        let (n, name) = (refs.of(w.id, h.id), std::mem::take(&mut names[i]));
+        let (n, mut name) = (refs.of(w.id, h.id), std::mem::take(&mut names[i]));
         *out += &format!("  e{n} {role}{}\n", describe(role, &name, mark));
+        if role == "textbox" {
+            name.clear();
+        }
         elems.push(Elem { n, win: w.id, id: h.id, role, name });
         shown += 1;
     }

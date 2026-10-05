@@ -24,7 +24,9 @@
 //!   clipped as it was kept, a line unknown or past a bound skipped, and a file past
 //!   [`MAX_FILE`] bytes not read.
 //! - **Answers.** Whether the person's answer to a question that waits on their yes is one
-//!   ([`yes`]): yes words alone, never a question, never "I'm good".
+//!   ([`yes`]): yes words alone, never a question, never "I'm good". And the model's as the card
+//!   shows them, plain text ([`plain`]): the card prints markdown as it is. Whether a prompt asks
+//!   to be told something ([`asks`]), so its answer is the news the card keeps showing.
 
 #![forbid(unsafe_code)]
 
@@ -401,6 +403,26 @@ pub fn yes(answer: &str) -> bool {
         }
     }
     said
+}
+
+/// `said`, a model's words, as plain text: the inline markdown it may write though told not to
+/// (code's backticks, bold's `**`) taken out, every word kept.
+pub fn plain(said: &str) -> String {
+    said.replace("**", "").replace('`', "")
+}
+
+/// Whether `prompt`, the person's, asks to be told something, not only to have it done: a
+/// question mark, a question's word (or tell, explain) anywhere, or is, are, does or did first.
+pub fn asks(prompt: &str) -> bool {
+    const ANY: &str = "what which who whose when where why how tell explain";
+    const FIRST: &str = "is are was were does did";
+    let is = |list: &str, w: &str| list.split(' ').any(|v| v == w);
+    let words = prompt.split(|c: char| !c.is_ascii_alphabetic()).filter(|w| !w.is_empty());
+    let mut words = words.map(str::to_ascii_lowercase);
+    let first = words.next().unwrap_or_default();
+    prompt.contains(['?', '\u{ff1f}', '\u{bf}'])
+        || is(FIRST, &first)
+        || [first].into_iter().chain(words).any(|w| is(ANY, &w))
 }
 
 /// Keeps `memory` to its last `n` tasks, a note (the one with no prompt) first while it is there,

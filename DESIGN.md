@@ -207,8 +207,10 @@ one. Forked crates keep their Apache-2.0 license and note their origin.
   window shown since, it brings those windows back in their stacking
   order, the top focused (once another shows, the next press minimizes
   again). The date and time sit in the middle; Feedback (a bug) and
-  Settings at the right. A tooltip under each button names it. Welcome is
-  in the System folder.
+  Settings at the right. A tooltip under each button names it (the
+  mark's says what its press does next: Show desktop, or Bring windows
+  back); pressed, a button's or tile's tooltip goes until the pointer
+  leaves it and comes back. Welcome is in the System folder.
 - **Windows** float in a stack; focus is the top of it. A 40 px titlebar
   carries minimize, maximize and close at the right, as on Windows. Drag a
   titlebar to move (a maximized or snapped window comes back to its normal
@@ -286,7 +288,29 @@ one. Forked crates keep their Apache-2.0 license and note their origin.
   pill: one line of what it does, and Stop at its right edge however the
   line changes (its press reaches across the pill's height); the dot
   beats, and each act flashes what it touched. While a question waits it
-  is the card again, the question last, with Stop under it.
+  is the card again, the question last, with Stop under it. A task steps
+  aside for the window the person uses next (uiwire `Yield`, sent alone
+  in a frame, so a desktop older than it drops that alone). Once it
+  presses, types or keys into a canvas or grid (a game's Start), that
+  window takes the keys at once, the pill staying with Stop, so the game
+  is played as it starts, not lost behind the overlay. Answered in such a
+  window, or in one it opened or raised (or that came up new with the
+  keys after its act), still focused and shown, the overlay hides, that
+  window with the keys (raised only while the overlay showed: never taken
+  from what the person moved on to); the answer waits in the chat, the
+  tile's dot the accent's until the overlay shows again, as after any
+  task that ended while it hid. The card stays for a question, a failure
+  (the last result one, an AI error, Stop), a task that changed a setting
+  (a theme; in Settings any act but a tab's press), and, in a window only
+  opened or raised, an answer the person asked for (`chats::asks`: a
+  question mark or a question's word) or one that asks: there the answer
+  is the news. Answers and questions show as plain text (a model's
+  backticks and bold taken out), each receipt counting its steps ("1
+  step"); the model is told its last reply asks nothing (ask_user does)
+  and claims only what the latest screen shows (a game it started runs
+  on: it says it started it), and its screen header says a touch screen
+  (the person's last press a finger's), so its hints name taps, never
+  keys.
   Only Stop, or Escape while the overlay has the keys (which, at a question
   or before the pill shows, hides the card too), stops it: the
   person's own presses, keys and wheel go where they go beside its acts
@@ -525,7 +549,8 @@ in its home; names in it, and roots per profile, wait for R2.
   are the UI tree (windows, titles, widget hits, labels and marks). Its first
   phase is built: the Assistant is the overlay; the host draws each window
   again into a recording list to read it (`host::agent`), the model sees it as
-  text with refs (`assistant::look`) and calls tools, and each call is an act
+  text with refs (`assistant::look`; a text field named by its role, its
+  placeholder said as one) and calls tools, and each call is an act
   done the way a person's pointer and keys go (uiwire `Act`, `Acted`). Some
   tools are its own, no act: it lists, reads and writes the person's files
   over its program's WASI filesystem, paths from the home (the `files`

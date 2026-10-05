@@ -20,6 +20,11 @@
 //!   no longer working, or the person stopping it: [`Host::halt`]) drops the act settling for
 //!   it. The person's own presses, keys and wheel never stop it: they go where they go beside
 //!   its acts, and an act on a window they closed settles as [`acted::GONE`].
+//! - **Stepping aside.** For a window the person uses next ([`Request::Yield`]), still open:
+//!   it comes up focused while the overlay shows (never taken from what the person moved on
+//!   to while it hid), and the shell gives it the keys, hiding the overlay once its task is
+//!   done ([`Agent::aside`]). A task that ends while the overlay hides says so
+//!   ([`Agent::ended`]): its last words wait unread.
 
 use std::mem;
 
@@ -71,11 +76,18 @@ pub struct Agent {
     /// input went into, whose [`ui::Request::Reset`] is dropped (only the person resets).
     pub flash: Option<(RectF, f64)>,
     pub touched: Vec<WinId>,
-    /// An app asked for the Assistant: the shell opens the overlay.
+    /// An app asked for the Assistant: the shell opens the overlay. The overlay stepped aside
+    /// ([`Request::Yield`]): the shell gives the focused window the keys, and, `Some(true)`,
+    /// hides the overlay. Its task ended (no longer working): an answer the shell marks unread
+    /// if the overlay hides.
     pub summon: bool,
-    /// The home screen's apps and the screen's size, as the shell has them, for the scene.
+    pub aside: Option<bool>,
+    pub ended: bool,
+    /// The home screen's apps, the screen's size, and whether the person's last press was a
+    /// finger's, as the shell has them, for the scene.
     pub apps: Vec<String>,
     pub screen: (f32, f32),
+    pub touch: bool,
     /// Where the overlay is laid out while it shows.
     pub shown: Option<RectF>,
 }
@@ -122,7 +134,8 @@ impl Host {
         (a.acts, a.pending, a.working, a.shown) = (Vec::new(), None, false, None);
     }
 
-    /// What window `win`'s app asked of the agent: an act, or the overlay's status.
+    /// What window `win`'s app asked of the agent: an act, the overlay's status, or the overlay
+    /// stepping aside for a window still open (raised only while it shows).
     pub(crate) fn agent_request(&mut self, win: WinId, req: Request) {
         match req {
             // Bytes off the wire were checked; an app's own may be no act, which is answered
@@ -132,9 +145,15 @@ impl Host {
                 self.agent.acts.push((win, id, act));
             }
             Request::Status { working } if win == OVERLAY => {
-                self.agent.working = working;
+                self.agent.ended |= mem::replace(&mut self.agent.working, working) && !working;
                 // The task is over: so is the act it waited for.
                 self.agent.pending = self.agent.pending.take().filter(|_| working);
+            }
+            Request::Yield { win: to, hide } if win == OVERLAY && self.live(WinId(to)) => {
+                if self.agent.shown.is_some() {
+                    self.apply(Cmd::Focus(WinId(to)));
+                }
+                self.agent.aside = Some(hide);
             }
             _ => {}
         }
@@ -336,8 +355,8 @@ impl Host {
         let (now, layout) = (self.now_ms, self.wm.layout());
         let theme = self.theme.at(now);
         let name = self.theme.current().name.to_string();
-        // The bytes left as sent: the head, the apps, then each window while it fits.
-        let mut room = SCENE - 20 - name.len();
+        // The bytes left as sent: the head and touch flag, the apps, then each window that fits.
+        let mut room = SCENE - 21 - name.len();
         let fit = |a: &&String| take(&mut room, 4 + a.len());
         let apps: Vec<String> = self.agent.apps.iter().take_while(fit).cloned().collect();
         let mut wins = Vec::new();
@@ -385,7 +404,8 @@ impl Host {
             }
         }
         let ((w, h), focus) = (self.agent.screen, self.focused_app().map_or(0, |w| w.0));
-        Scene { w: w as u16, h: h as u16, theme: name, focus, apps, wins }
+        let (w, h, touch) = (w as u16, h as u16, self.agent.touch);
+        Scene { w, h, touch, theme: name, focus, apps, wins }
     }
 
     /// A scene's window `id` at `r` in `state`, with its app and title.

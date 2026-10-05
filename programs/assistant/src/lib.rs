@@ -4,7 +4,8 @@
 //! ([`uiwire::Event::Config`]) through compusophy's free AI, which needs no key
 //! ([`uiwire::Request::Ai`], the body streamed back as [`uiwire::Event::AiData`] until
 //! [`uiwire::Event::AiEnd`] and read by [`calls`]), and does what the model calls for as a person
-//! would ([`uiwire::Request::Act`]). To make an app it opens Studio, as a person would. It reads
+//! would ([`uiwire::Request::Act`]), stepping aside for the window it leaves the person in
+//! ([`uiwire::Request::Yield`]). To make an app it opens Studio, as a person would. It reads
 //! and writes the person's files itself (the [`files`] crate), and what no tool of its own can
 //! do it tells compusophy, who builds the OS ([`uiwire::Request::Feedback`]).
 //!

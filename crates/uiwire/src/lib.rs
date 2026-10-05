@@ -18,7 +18,8 @@
 //!
 //! The overlay (the Assistant over the desktop) may also act as a person would: [`Request::Act`]
 //! is answered by one [`Event::Acted`] once the screen settles, carrying the [`scene`] as it is
-//! then; [`Event::Halt`] says the person stopped its task. A request carries its [`Act`] as the
+//! then; [`Event::Halt`] says the person stopped its task; and it steps aside for a window the
+//! person uses next ([`Request::Yield`]: a game it started). A request carries its [`Act`] as the
 //! act's own bytes, so only the overlay links the act's encoder and only the desktop its decoder.
 //!
 //! The OS's own windows alone (Activity's and Settings', which run its `system` program) may
@@ -494,6 +495,12 @@ pub enum Request {
     Tty { cols: u16, rows: u16 },
     /// The Terminal's window only: bytes typed into the shell's console.
     Input { data: Vec<u8> },
+    /// The overlay only: it steps aside for window `win`, which the person uses next (a game it
+    /// started, an app it opened). That window takes the keys (raised while the overlay shows);
+    /// `hide`, the overlay hides too, its task done, its answer waiting; else its pill stays,
+    /// Stop in it, as the task goes on. Sent alone in a frame, so a desktop older than it drops
+    /// that frame alone. Dropped for a window gone.
+    Yield { win: u32, hide: bool },
 }
 
 /// Something that happened in the window, host to program.
@@ -882,6 +889,7 @@ impl Request {
             Self::Reset => o.u8(15),
             Self::Tty { cols, rows } => o.u8(16).u16(*cols).u16(*rows),
             Self::Input { data } => o.u8(17).bytes(data),
+            Self::Yield { win, hide } => o.u8(18).u32(*win).u8((*hide).into()),
         }
     }
 
@@ -907,6 +915,7 @@ impl Request {
             15 => Self::Reset,
             16 => Self::Tty { cols: r.u16()?, rows: r.u16()? },
             17 => Self::Input { data: r.bytes()?.to_vec() },
+            18 => Self::Yield { win: r.u32()?, hide: r.bool()? },
             _ => return None,
         })
     }
@@ -917,6 +926,11 @@ impl Request {
     pub fn own(&self) -> bool {
         use Request::*;
         matches!(self, Watch { .. } | End { .. } | Pref { .. } | Reset | Tty { .. } | Input { .. })
+    }
+
+    /// Whether only the overlay may ask it (the desktop's agent hears it): Act, Status and Yield.
+    pub fn overlay(&self) -> bool {
+        matches!(self, Request::Act { .. } | Request::Status { .. } | Request::Yield { .. })
     }
 }
 
