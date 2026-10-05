@@ -14,7 +14,7 @@ impl Sh {
     fn new() -> Sh {
         let (mut k, mut fs) =
             (Kernel { isolated: true, owner: 5, ..Kernel::default() }, Vfs::new());
-        fs.mkdir("/bin").and(fs.write("/bin/a", b"#!wasm bin/toolbox.wasm\n")).unwrap();
+        fs.mkdir("/bin").and(crate::install(&mut fs, "a", "toolbox")).unwrap();
         fs.write("/bin/b", b"#!wasm /tmp/w.wasm").and(fs.write("/tmp/w.wasm", b"\0asm")).unwrap();
         fs.write("/tmp/f", b"text").unwrap();
         let (argv, program) = (vec!["sh".into()], Program::Url("bin/toolbox.wasm".into()));
@@ -66,6 +66,10 @@ fn a_job_starts_its_stages_piped_on_the_console_and_its_wait_gets_the_last_statu
     let ab = job(&[("/bin/a", "a 1"), ("/bin/b", "b")], Stdin::Pipe, Stdout::Console, b"in");
     let (sh, j) = (s.sh, s.spawn(&ab));
     assert_eq!(j, (0, 3u32.to_le_bytes().to_vec()), "the job is its first pid");
+    assert!(s.k.owns(sh) && s.k.owns(4), "the shell's window owns its job");
+    s.k.set_owner(6);
+    assert!(!s.k.owns(4) && !s.k.owns(9), "another window owns none of it");
+    s.k.set_owner(5);
     let starts = s.ready(&[3, 4]);
     #[rustfmt::skip]
     let want = |pid, argv: &str, stdin, stdout| Start { role: wire::Role::Process, pid,

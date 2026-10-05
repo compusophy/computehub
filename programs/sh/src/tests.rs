@@ -533,6 +533,13 @@ $ hi ?.txt > *.out
     // The program opens a path from the directory it started in, up to `/` and down.
     let paths = [(2, "/notes"), (2, "/"), (0, "/tmp/x"), (0, "/")].map(|(d, p)| from_start(d, p));
     assert_eq!(paths, ["./../../notes", "./../..", "./tmp/x", "."]);
+    // A line's commands as it runs them: \r"m" is rm.
+    let words = |w: &[&str]| w.iter().map(|w| w.to_string()).collect::<Vec<_>>();
+    let got = commands(r#"ls -a; \r"m" -r ~ && a | b >> f"#).unwrap();
+    let rm = (vec![words(&["rm", "-r", Vfs::HOME])], None);
+    let piped = (vec![words(&["a"]), words(&["b"])], Some(("f".into(), true)));
+    assert_eq!(got, [(vec![words(&["ls", "-a"])], None), rm, piped]);
+    assert_eq!(commands("echo 'a"), None);
 }
 
 #[test]

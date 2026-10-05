@@ -363,10 +363,10 @@ fn programs_reach_the_kernel_and_its_effects_the_page() {
     // /bin holds each applet's marker; kernel events before the shell are dropped.
     let mut desk = fresh();
     let vfs = &desk.parts.as_ref().expect("unused").1;
-    assert_eq!(vfs.list("/bin").map(|l| l.len()), Ok(20));
+    assert_eq!(vfs.list("/bin").map(|l| l.len()), Ok(21));
     assert_eq!(vfs.read("/bin/sh").unwrap(), b"#!wasm bin/sh.wasm\n");
     assert_eq!(vfs.read("/bin/selftest").unwrap(), b"#!wasm bin/toolbox.wasm\n");
-    assert_eq!(vfs.read("/bin/assistant").unwrap(), b"#!wasm bin/assistant.wasm\n");
+    assert_eq!(vfs.read("/bin/agent").unwrap(), b"#!wasm bin/agent.wasm\n");
     assert_eq!(vfs.read("/bin/settings").unwrap(), b"#!wasm bin/system.wasm\n");
     assert_eq!(send(&mut desk, Event::Hidden), ((false, false), vec![]));
     // Each kernel effect is its platform call.
@@ -453,7 +453,8 @@ fn the_desktop_sends_feedback_and_reports_failures_and_tells_apps() {
     assert!(sent.iter().any(|s| s.1.contains(r#""kind":"error""#)), "{sent:?}");
     assert!(notes(1).starts_with("proc 5"));
     // An AI request's failure is noted (its stream is not a report's); others' ends are not.
-    desk.ai.ask(5, uiwire::Request::Ai { id: 1, body: "{}".into() });
+    // The Terminal's program asks: a process that runs (one that ended would stop it).
+    desk.ai.ask(2, uiwire::Request::Ai { id: 1, body: "{}".into() });
     let mut ctl = Ctl::default();
     desk.flush(&mut ctl, false);
     let asked = |e: &Fx| matches!(e, Fx::Stream { id: 1, url, .. } if url == ai::URL);

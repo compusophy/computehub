@@ -1193,6 +1193,16 @@ fn finish(lines: &mut Vec<Line>, mut parsed: Line, words: Vec<String>) -> Result
     Ok(())
 }
 
+/// A command of a line: its stages, a stage its words, and its `>` file and whether that appends.
+pub type Command = (Vec<Vec<String>>, Option<(String, bool)>);
+
+/// The commands `line` runs, as [`Shell::run`] reads it (patterns not matched yet, quotes and
+/// escapes taken off); `None` if it does not parse (then nothing runs). What a caller may judge
+/// a line by, as the coding agent does before it runs one unasked.
+pub fn commands(line: &str) -> Option<Vec<Command>> {
+    Some(parse(line).ok()?.into_iter().map(|l| (l.stages, l.output)).collect())
+}
+
 /// Whether `name` matches the pattern `pat`: `*` any run of characters, `?` any one, `\` the
 /// next as it is.
 fn matches(pat: &str, name: &str) -> bool {

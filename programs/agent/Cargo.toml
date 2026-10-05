@@ -1,0 +1,24 @@
+[package]
+name = "compusophy-agent"
+description = "compusophyOS agent: the Terminal's coding agent, a wasm32-wasip1 program on its console. Asked a task, it works on the person's files with the free AI and tools (read, write, edit, search, the OS's own shell, applang's checker), asking before it writes or runs, and learns a lesson from each failure it gets past. Fetched when it first runs, never with the boot download; built into dist/bin/, never committed."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[lib]
+name = "agent"
+
+[[bin]]
+name = "agent"
+path = "src/main.rs"
+
+[dependencies]
+compusophy-applang.workspace = true
+compusophy-assistant.workspace = true
+compusophy-coder.workspace = true
+compusophy-sh.workspace = true
+compusophy-uiwire.workspace = true
+compusophy-vfs.workspace = true

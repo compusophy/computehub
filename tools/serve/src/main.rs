@@ -6,7 +6,8 @@
 //! (a `.`, `..` or empty segment, a backslash or a drive colon) is a 404;
 //! paths are not percent-decoded, so `%2e` hides none. Two POSTs stand in for
 //! the site's server functions: `/api/ai` streams a mock model's answer
-//! ([`sse`]; to a request with tools, a scripted agent's next step, [`agent`]);
+//! ([`sse`]; to a request with tools, a scripted agent's next step, [`agent`], or the
+//! Terminal's coding agent's, [`coding`]);
 //! `/api/feedback` prints the body to stdout, prefixed with
 //! `feedback: `, and answers 201 with `{"url":"local"}`.
 
@@ -125,6 +126,9 @@ fn resolve(root: &Path, target: &str) -> Option<PathBuf> {
 /// content (else the body) says "app", a sentence and a fenced `app` block of
 /// Studio's counter, a line a chunk; else "Hello from the mock model.", a word a chunk.
 fn sse(body: &str) -> String {
+    if body.contains(r#""name":"applang_guide""#) {
+        return coding(body);
+    }
     if body.contains("\"tools\":[") {
         return agent(body);
     }
@@ -147,6 +151,41 @@ fn sse(body: &str) -> String {
     let usage = format!("\"prompt_tokens\":{i},\"completion_tokens\":{o}");
     out + &format!("{head}\"choices\":[],\"usage\":{{{usage}}}}}\n\ndata: [DONE]\n\n")
         + &receipt(i, o)
+}
+
+/// The Terminal's coding agent's next step (a request with its tools), by the tool results so
+/// far: write a note, read it back with the shell, then say so. A call's arguments come in pieces.
+fn coding(body: &str) -> String {
+    let (head, end) = (r#"data: {"id":"mock","choices":[{"index":0,"delta":"#, "}]}\n\n");
+    let note = r#"{"path":"~/notes/hello.txt","content":"hello from the agent\n"}"#;
+    let step = match body.matches(r#""role":"tool""#).count() {
+        0 => Some(("write_file", note)),
+        1 => Some(("shell", r#"{"command":"cat notes/hello.txt"}"#)),
+        _ => None,
+    };
+    let mut out = String::new();
+    match step {
+        Some((name, args)) => {
+            let call = format!(
+                r#"{{"index":0,"id":"call_{name}","type":"function","function":{{"name":"{name}","arguments":""}}}}"#
+            );
+            out += &format!("{head}{{\"tool_calls\":[{call}]}}{end}");
+            for piece in args.as_bytes().chunks(6).map(String::from_utf8_lossy) {
+                let piece = piece.replace('\\', "\\\\").replace('"', "\\\"");
+                let delta = format!(
+                    r#"{{"tool_calls":[{{"index":0,"function":{{"arguments":"{piece}"}}}}]}}"#
+                );
+                out += &format!("{head}{delta}{end}");
+            }
+        }
+        None => {
+            out +=
+                &format!("{head}{{\"content\":\"Wrote ~/notes/hello.txt and read it back.\"}}{end}")
+        }
+    }
+    out + r#"data: {"id":"mock","choices":[],"usage":{"prompt_tokens":3000,"completion_tokens":30}}"#
+        + "\n\ndata: [DONE]\n\n"
+        + &receipt(3000, 30)
 }
 
 /// The receipt the site's function ends a stream with: tokens in and out, and their cost in
@@ -292,6 +331,26 @@ fn the_mock_agent_turns_error_reports_off_a_step_at_a_time() {
     );
     let other = agent(r#"{"tools":[],"messages":[{"content":"hi"}]}"#);
     assert!(other.contains("ask me to turn error reports off"));
+}
+
+#[test]
+fn the_mock_coding_agent_writes_a_note_then_reads_it_then_says_so() {
+    // A call's arguments, joined from their pieces.
+    let args = |sse: &str| {
+        let pieces = sse.split(r#""arguments":""#).skip(1).map(|p| p.split(r#""}}]}"#).next());
+        let joined: String = pieces.flatten().collect();
+        joined.replace("\\\"", "\"").replace("\\\\", "\\")
+    };
+    let ask = r#"{"tools":[{"function":{"name":"applang_guide"}}],"messages":[]}"#;
+    let first = sse(ask);
+    let note = r#"{"path":"~/notes/hello.txt","content":"hello from the agent\n"}"#;
+    assert!(first.contains(r#""name":"write_file""#) && args(&first) == note);
+    let read = sse(&ask.replace("[]", r#"[{"role":"tool"}]"#));
+    assert!(
+        read.contains(r#""name":"shell""#) && args(&read) == r#"{"command":"cat notes/hello.txt"}"#
+    );
+    let done = sse(&ask.replace("[]", r#"[{"role":"tool"},{"role":"tool"}]"#));
+    assert!(done.contains("read it back.") && done.ends_with("microusd=4332\n\n"));
 }
 
 #[test]

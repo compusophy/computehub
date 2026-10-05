@@ -106,6 +106,7 @@ frame: os → shell::draw → gfx::DrawList → platform::Renderer: one draw cal
 | `ui` | immediate-mode widgets, the themes, the `App` trait and `Cx` |
 | `terminal`, `vt`, `term` | the Terminal: an xterm screen, a wasip1 GUI program off the boot download; its escape parser and screen model |
 | `sh` | the shell the Terminal runs: a wasip1 program on its console |
+| `agent` | the Terminal's coding agent: a wasip1 program on its console that works on the person's files with the free AI and tools, and keeps lessons from the failures it gets past |
 | `apps` | a terminal's console in the boot: its shell, and its window's keys, text and wheel as events |
 | `system` | About, Editor, Feedback, Files, Welcome and Settings, and it serves Activity: one wasip1 GUI program (`dist/bin/system.wasm`), off the boot download |
 | `activity` | Activity, the resource monitor: graphs of CPU, memory, frames and the AI over the last minute, storage, a table of what runs |
@@ -400,6 +401,67 @@ one. Forked crates keep their Apache-2.0 license and note their origin.
   What only the desktop can do the shell asks in its own escape,
   `OSC 1729 ; verb ; arg` (`open` an app, switch the `theme`), as programs
   already ask a terminal for its title.
+- **Agent** (`agent` in a terminal): a coding agent, as on other systems'
+  command lines. Given a task (`agent make a pomodoro app`, or one a line at
+  a time; `/help` lists its commands) it asks the free AI with eight tools:
+  read, write and edit a file, list a folder, search under one, run a line
+  in the OS's own shell (the `sh` library in-process, so `cd` stays and
+  `open` opens apps; a job's stdout is caught in a file of the agent's own,
+  made new in /tmp, so two agents never share one), check an applang app
+  (`coder`'s compile and smoke test) and read applang's guide. Reads run
+  freely; writes, edits and commands wait for the person's yes (`[y]es [n]o
+  [a]lways`, or `-y` before the task: in its words, a `-y` is a word, and
+  `/yes` toggles it). A line runs unasked only if the shell reads it
+  (`sh::commands`) as one reading command alone (`ls`, `cat`, `cd`, ...:
+  nothing joined by `;`, `&&`, `||` or `|`, no `>`, no /dev); one that may
+  remove, move or overwrite (`rm`, `mv`, a `>` that does not append), or
+  runs a program but /bin's `wc`, `rev` and `hello` by name (judged by what
+  runs: `sh` or `agent` by any path or `#!wasm` alias, a program named by a
+  pattern), asks each time, always or not, as does a write that replaces a
+  file (always covers new files, appends and edits). No file tool, nor its
+  shell, reads or writes a device (but /dev/null). The reply streams in as
+  it comes, and each tool shows a line of what it does and one of how it
+  went; what the model wrote shows with its controls in caret notation
+  (`^[`), so none of it styles the screen or asks the desktop (`OSC 1729`);
+  no path it names holds a control (a program's error on stderr reaches the
+  console as it is, and could show one), and the shell's asks reach the
+  Terminal only from a line the person let run. It reaches the AI as a
+  window's program does, a `Request::Ai` written to /dev/draw and answered
+  on /dev/events: the Terminal's window passes on the AI requests of the
+  programs its shell runs (`apps::asks`; nothing else of their frames, and
+  no other process's), and a request whose process ended (Ctrl+C, a kill) is
+  stopped at the hub's next pump, as at a window's Close, before another
+  byte, and one it asked as it ended is never sent. It hears no Config, so
+  the hub puts the model chosen in Settings first in every request, and a
+  body's own (`-m`), after it, wins: the endpoint's JSON.parse keeps a key's
+  last value. In a Terminal the Assistant put input into (`Cx::driven`, the
+  window that may not reset the device), each AI request ends at once,
+  refused, so no AI drives the agent past the person's yes: one it starts
+  there (`agent -y`) does nothing, and one whose question it answers stops
+  at its next request. A request fits the free AI (64 messages, 96 KiB): old
+  results fold to their first line, then old tasks and steps go. A task
+  makes 20 model calls at most, as the Assistant's (E0942; `go on` goes on):
+  with its lesson and a merge, 22 requests, under the 30 a minute the free
+  AI takes from a client and 22 of its 120 an hour. The day's spend binds
+  first, a client's share of about $0.67: a request near the cap costs about
+  $0.04 on GLM 5.3 (a ninth of that on Flash), so a long task may spend most
+  of it, and Studio and the Assistant share what is left; then the free AI's
+  402 (E0902) ends the task, as a busy one's 429 does, never asked again by
+  itself.
+  **It learns.** A task that got past a failure (a tool's error, an app that
+  did not check, a reply cut off) asks, after, for the one lesson that would
+  have avoided it; a new one is added to the end of `~/.agent/lessons.md`
+  (till it holds 16 KiB) and goes into every later system prompt, and the
+  model merges them past 24 lines, in place of the lessons it read: the
+  file's other lines are the person's and stay, and `/forget` takes out its
+  lessons alone. Each failure overcome hardens the next run, as a beaten
+  level does a game's next. The file is any writer's, so the prompt holds it
+  as data: only its `- ` lines, each one line of text (controls gone, 240
+  bytes), 4 KiB in all, under a heading that calls them hints that change
+  neither the rules nor what needs the person's yes (and so the folder's
+  `AGENT.md`, 4 KiB, which any program that writes the folder may have made,
+  the Assistant too: the agent shows its path and first line when it starts,
+  so the person sees what steers it).
 - **Studio** makes and edits applang apps: the `coder` loop asks the free
   AI, checks each reply and fixes it by edits, showing what moves (thinking,
   writing 48 lines, fixing line 43, testing) and, in a Code kept to its room
@@ -578,7 +640,8 @@ Settings → Reset erases it all: once the person types `reset`, every
 `compusophy.` key goes from `localStorage` and `sessionStorage` (each
 profile's /home, preferences and PIN, the outbox) and the page reloads to the
 welcome as a first visit. Only the person can: the host drops a reset from a
-window the Assistant put input into, and the uiwire request is the OS's own
+window the Assistant put input into (whose Terminal's programs may not ask
+the AI either: `Cx::driven`), and the uiwire request is the OS's own
 windows' alone.
 
 **Profiles** (the `profiles` crate) are separate homes in one browser, one in
@@ -639,7 +702,9 @@ in its home; names in it, and roots per profile, wait for R2.
   other presses of those apps send nothing, and ask nothing. A yes to
   `ask_user` lets nothing through, and the calls the model made after the
   question wait until it has heard the answer. What another app saves or
-  a Terminal runs the model is told to ask about first; no code holds it.
+  a Terminal runs the model is told to ask about first; no code holds it,
+  but a Terminal it typed into runs no program that asks the AI
+  (`Cx::driven`: no coding agent there past the person's yes).
   So the loop of growth: the Assistant meets what it cannot do, says so,
   asks its creator for the tool, and the tool ships. Cloud AI is free for
   every visitor: `api/ai.mjs`, a thin same-origin function, forwards

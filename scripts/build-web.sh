@@ -4,7 +4,7 @@
 # web/index.html, the deferred fonts in dist/fonts/deferred/, the lazy fonts
 # in dist/fonts/ and the font licenses in dist/licenses/; then the program
 # worker (the cpu crate, its glue and web/worker.js) in dist/cpu/ and the
-# programs (the terminal, sh, toolbox, studio, assistant and system crates, for wasm32-wasip1)
+# programs (the terminal, sh, agent, toolbox, studio, assistant and system crates, for wasm32-wasip1)
 # in dist/bin/.
 # scripts/budget.sh measures the result;
 # `cargo run -p serve --release -- dist 8080` serves it.
@@ -160,13 +160,13 @@ wasm-bindgen "${bindgen[@]}" --out-dir dist/cpu --out-name cpu "$target_dir/wasm
 optimize dist/cpu/cpu_bg.wasm
 cp web/worker.js dist/cpu/
 # The programs, each fetched when it first runs: std binaries for WASI, the
-# Terminal (terminal.wasm) and its shell (sh.wasm), the test programs (toolbox.wasm), Studio
+# Terminal (terminal.wasm), its shell (sh.wasm) and coding agent (agent.wasm), the test programs (toolbox.wasm), Studio
 # (studio.wasm), the Assistant (assistant.wasm) and the system apps (system.wasm), in one cargo
 # run.
 rustup target list --installed 2>/dev/null | tr -d '\r' | grep -qx wasm32-wasip1 || { echo "ERROR: run: rustup target add wasm32-wasip1" >&2; exit 1; }
-cargo build -p compusophy-terminal -p compusophy-sh -p compusophy-toolbox -p compusophy-studio -p compusophy-assistant -p compusophy-system --bins --release --target wasm32-wasip1
+cargo build -p compusophy-terminal -p compusophy-sh -p compusophy-agent -p compusophy-toolbox -p compusophy-studio -p compusophy-assistant -p compusophy-system --bins --release --target wasm32-wasip1
 mkdir -p dist/bin
-for p in terminal sh toolbox studio assistant system; do
+for p in terminal sh agent toolbox studio assistant system; do
   cp "$target_dir/wasm32-wasip1/release/$p.wasm" dist/bin/
   optimize "dist/bin/$p.wasm"
 done
@@ -175,14 +175,16 @@ done
 # too (same patterns; -a because the wasm and fonts are binary). A leaky
 # bundle fails the build, and scripts/deploy.sh stops on a failed build.
 # One home path belongs in the bundle: the OS's own guest home
-# (vfs::Vfs::HOME), which names no account on the build machine. It is an
-# alternative of its own so that the longest match reports it whole, and is
-# then dropped. ([g] keeps this line from matching caps.sh's own check.)
+# (vfs::Vfs::HOME), which names no account on the build machine; and one
+# path only looks like one: the home crate's sources (crates/home/), which
+# panic locations name. Each is an alternative of its own so that the
+# leftmost, longest match reports it whole, and is then dropped. ([g] and
+# [c] keep this line from matching caps.sh's own check.)
 # Each hit is shown with the 32 bytes on either side (unprintable ones as
 # '.'), so a path that leaked can be told from strings that only sit side
 # by side in a wasm's data, and found in the source.
-leaks=$(LC_ALL=C grep -r -a -o -b -E '[A-Za-z]:[/\\]+Users[/\\]|/home/[g]uest|/home/[A-Za-z]|/Users/[A-Za-z]|[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+\.[A-Za-z0-9.-]*[A-Za-z]{2,}' dist \
-  | LC_ALL=C grep -a -v -E '^[^:]*:[0-9]+:/home/[g]uest$' || true)
+leaks=$(LC_ALL=C grep -r -a -o -b -E '[A-Za-z]:[/\\]+Users[/\\]|/home/[g]uest|[c]rates/home/|/home/[A-Za-z]|/Users/[A-Za-z]|[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+\.[A-Za-z0-9.-]*[A-Za-z]{2,}' dist \
+  | LC_ALL=C grep -a -v -E '^[^:]*:[0-9]+:(/home/[g]uest|[c]rates/home/)$' || true)
 if [ -n "$leaks" ]; then
   echo "ERROR: dist/ holds a local path or email address; do not deploy it (file:byte: the bytes around it):" >&2
   printf '%s\n' "$leaks" | head -20 | while IFS=: read -r file at _; do

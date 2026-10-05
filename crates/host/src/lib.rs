@@ -392,6 +392,7 @@ impl Host {
         self.kernel.set_owner(win.0);
         let mut cx = Cx::new(&mut self.vfs, &mut self.kernel, self.now_ms);
         (cx.ai, cx.grain) = (self.ai.clone(), self.grain);
+        cx.driven = self.agent.touched.contains(&win);
         let redraw = match call {
             Call::Event(ev) => w.app.event(ev, &mut cx),
             Call::Frame(pid, frame) => w.app.frame(pid, frame, &mut cx),
