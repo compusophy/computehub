@@ -345,6 +345,9 @@ fn the_system_prompt_is_stable_and_whole() {
     assert!(!s.contains(HOME) && s.starts_with("You write apps for Studio"));
     // What is seen is drawn on a canvas; the first example draws its board as pixels.
     assert!(s.contains("chart) is drawn on a canvas, never") && shots[0].contains("pixels(cells"));
+    // A grid's cell is an index: the palette that reads its list by it compiles.
+    let (at, end) = (s.find("state pal").unwrap(), s.find("pal[cell]; }").unwrap() + 12);
+    assert!(applang::compile(&["state color = 0;\n", &s[at..end]].concat()).is_ok());
     // An icon's hard limits, as the desktop reads it.
     let m = [icons::made::MAX_SHAPES, icons::made::MAX_NUMBERS, icons::made::MAX_TEXT];
     assert!(
@@ -370,7 +373,7 @@ fn the_system_prompt_is_stable_and_whole() {
 }
 
 /// The system prompt's hash (see the test above).
-const FNV: u64 = 0x0d7c_d8ab_731d_fcab;
+const FNV: u64 = 0x0914_1db7_e75a_4b45;
 
 #[test]
 fn a_clean_write_is_one_request() {

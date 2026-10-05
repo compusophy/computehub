@@ -4,10 +4,11 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use tiny::{EOS, Model, Rng, Session, Tokenizer};
+use applang::codes;
+use tiny::{EOS, Model, Ngram, Rng, Session, Tokenizer};
 
+use crate::constrain::{self, Guide, Rule};
 use crate::corpus;
-use crate::ngram::Ngram;
 
 /// The headers prompted: five like apps in the corpus of 2026-10-05, five like none of its
 /// apps.
@@ -28,12 +29,10 @@ pub const PROMPTS: [&str; 10] = [
 pub const EACH: usize = 10;
 /// The most tokens a program may take.
 pub const MAX_TOKENS: usize = 2048;
-/// How a writer samples: temperature (chosen before anything was measured; [`SWEEP`] shows
-/// others), and top-k (the transformer's).
+/// How a writer samples: temperature (chosen before anything was measured; the first run's
+/// sweep of others, in `results.md`, found none better), and top-k (the transformer's).
 pub const TEMP: f32 = 0.8;
 pub const TOP_K: usize = 40;
-/// The other temperatures the transformers are measured at.
-pub const SWEEP: [f32; 3] = [0.2, 0.5, 1.0];
 
 /// One program written, and the verdict on it.
 #[derive(Debug, Clone, Default)]
@@ -49,11 +48,32 @@ pub struct Sample {
     pub runs: bool,
     /// No program of the corpus has its [`corpus::shape`]: not a copy, renamed or not.
     pub novel: bool,
-    /// Why not: the compiler's code, else the smoke test's (or 0: its icon).
+    /// Why not: the first error's code ([`first_error`]), else the smoke test's (or 0: its icon).
     pub code: Option<u16>,
-    /// The share of what was written (after the header) that comes before the compiler's first
-    /// error: 1 when it compiles. A broken program can still be mostly right.
+    /// The share of what was written (after the header) that comes before its first error
+    /// ([`first_error`]): 1 when it compiles. A broken program can still be mostly right.
     pub clean: f64,
+    /// Its rule let no token through: the writer stopped there ([`write`]).
+    pub stuck: bool,
+}
+
+/// Where `text`'s first error is, and its code, the compiler having reported `d`. The compiler
+/// lexes all before it parses, so a lexer error hides any parser error before it: the text cut
+/// at a lexer error is compiled again, and a parser error there (not one the cut made, at its
+/// end) comes first. The checker's errors count only when nothing before them is wrong.
+pub fn first_error(text: &str, d: &applang::Diag) -> (usize, u16) {
+    let (at, code) = (d.span.map_or(0, |s| s.start), d.code.unwrap_or(0));
+    let cut = text.get(..at).filter(|_| (1..=5).contains(&code)).unwrap_or("");
+    // The one parser error spanning a whole expression, a canvas's scene that is not a call:
+    // one that runs to the cut is the cut's own.
+    let called = |e: &applang::Diag, s: applang::Span| {
+        e.message.starts_with("expected a call") && cut.get(s.end..).is_some_and(|r| r.trim() == "")
+    };
+    let earlier = applang::compile(cut).err().filter(|_| !cut.is_empty());
+    match earlier.as_ref().and_then(|e| Some((e, e.span?, e.code?))) {
+        Some((e, s, c)) if s.start < at && c < codes::DUP_STATE && !called(e, s) => (s.start, c),
+        _ => (at, code),
+    }
 }
 
 /// Judges `text`: compiles, runs, is new to `known` (the corpus's shapes).
@@ -63,16 +83,16 @@ pub fn judge(prompt: usize, text: String, ended: bool, known: &BTreeSet<u64>) ->
     let written = text.len().saturating_sub(head).max(1) as f64;
     let (compiles, code, clean) = match applang::compile(&text) {
         Err(d) => {
-            let at = d.span.map_or(0, |s| s.start).saturating_sub(head);
-            (false, Some(d.code.unwrap_or(0)), (at as f64 / written).min(1.0))
+            let (at, code) = first_error(&text, &d);
+            (false, Some(code), (at.saturating_sub(head) as f64 / written).min(1.0))
         }
-        Ok(p) if p.widgets().is_empty() => (false, Some(applang::codes::SHOWS_NOTHING), 1.0),
+        Ok(p) if p.widgets().is_empty() => (false, Some(codes::SHOWS_NOTHING), 1.0),
         Ok(_) => (true, None, 1.0),
     };
     let fault = compiles.then(|| coder::ai::fault(&text, "", 3)).flatten();
     let code = code.or(fault.as_ref().map(|f| f.diag.code.unwrap_or(0)));
     let runs = compiles && fault.is_none();
-    Sample { prompt, text, ended, compiles, runs, novel, code, clean }
+    Sample { prompt, text, ended, compiles, runs, novel, code, clean, stuck: false }
 }
 
 /// A writer's prompt: the end token (as each program follows one in training) and the header's
@@ -111,73 +131,144 @@ pub fn program(tok: &Tokenizer, p: usize, out: &[u32]) -> (String, bool) {
     (tok.decode(&all), end.is_some())
 }
 
-/// Sample `i` of each prompt's [`EACH`]: its prompt and its seed (from `seed`).
-fn job(i: usize, seed: u64) -> (usize, Rng) {
-    (i / EACH, Rng::new(seed ^ (0x5eed_0000 + i as u64)))
+/// What draws a writer's next token: after `seq`, among the tokens `allow` lets through
+/// (none if it has none to give).
+pub(crate) type Draw<'a> = dyn FnMut(&[u32], &dyn Fn(u32) -> bool, &mut Rng) -> Option<u32> + 'a;
+
+/// The tokens a writer writes after prompt `p` under `rule`, up to [`MAX_TOKENS`] or the end
+/// token (kept), and whether it stopped at a dead end: each drawn among those the rule lets
+/// through (the first healing the prompt). One the parser refuses is drawn again without it;
+/// after [`constrain::TRIES`] refusals, every token is judged and the draw is among those the
+/// parser lets through. With none to draw the writer stops there: a dead end (the first token
+/// is then the header's own last).
+pub(crate) fn write(
+    tok: &Tokenizer,
+    p: usize,
+    rule: Rule,
+    draw: &mut Draw<'_>,
+    rng: &mut Rng,
+) -> (Vec<u32>, bool) {
+    let pr = prompt(tok, p);
+    let mut guide = Guide::new(tok, rule, &tok.decode(&pr.tokens[1..]));
+    let mut seq = pr.tokens.clone();
+    let (start, mut stuck) = (seq.len(), false);
+    while seq.len() - start < MAX_TOKENS {
+        let first = seq.len() == start;
+        let mut mask = guide.mask();
+        for (t, m) in (0u32..).zip(mask.iter_mut()).filter(|_| first) {
+            *m = *m && heals(tok, &pr, t);
+        }
+        let mut next = None;
+        for _ in 0..constrain::TRIES {
+            let Some(t) = draw(&seq, &|t: u32| mask[t as usize], rng) else { break };
+            if guide.parses(t) {
+                next = Some(t);
+                break;
+            }
+            mask[t as usize] = false;
+        }
+        if next.is_none() {
+            for (t, m) in (0u32..).zip(mask.iter_mut()) {
+                *m = *m && guide.parses(t);
+            }
+            next = draw(&seq, &|t: u32| mask[t as usize], rng);
+        }
+        let last = tok.encode(PROMPTS[p]).last().copied().unwrap_or(EOS);
+        let t = match next {
+            Some(t) => t,
+            None if first => last,
+            None => {
+                stuck = true;
+                break;
+            }
+        };
+        guide.push(t);
+        seq.push(t);
+        if t == EOS {
+            break;
+        }
+    }
+    (seq.split_off(start), stuck)
 }
 
-/// 100 programs from `model` at `temp`, judged, on `threads` threads.
+/// 100 programs written under `rule`, each by a writer `writer` makes for it, judged, on
+/// `threads` threads: sample `i` of each prompt's [`EACH`] seeded by `seed` and `i`.
+fn hundred<W: FnMut(&[u32], &dyn Fn(u32) -> bool, &mut Rng) -> Option<u32>>(
+    tok: &Tokenizer,
+    known: &BTreeSet<u64>,
+    (seed, rule): (u64, Rule),
+    threads: usize,
+    writer: impl Fn() -> W + Sync,
+) -> Vec<Sample> {
+    let jobs: Vec<usize> = (0..PROMPTS.len() * EACH).collect();
+    tiny::par_map(&jobs, threads, |&i| {
+        let (p, mut rng) = (i / EACH, Rng::new(seed ^ (0x5eed_0000 + i as u64)));
+        let (out, stuck) = write(tok, p, rule, &mut writer(), &mut rng);
+        let (text, ended) = program(tok, p, &out);
+        Sample { stuck, ..judge(p, text, ended, known) }
+    })
+}
+
+/// 100 programs from `model` at `temp` under `rule`, judged, on `threads` threads.
 pub fn from_model(
     m: &Model,
     tok: &Tokenizer,
     known: &BTreeSet<u64>,
-    (seed, temp): (u64, f32),
+    (seed, temp, rule): (u64, f32, Rule),
     threads: usize,
 ) -> Vec<Sample> {
-    let jobs: Vec<usize> = (0..PROMPTS.len() * EACH).collect();
-    corpus::par_map(&jobs, threads, |&i| {
-        let (p, mut rng) = job(i, seed);
-        let pr = prompt(tok, p);
-        let mut s = Session::new(m);
-        let mut logits = Vec::new();
-        for &t in &pr.tokens {
-            logits = s.feed(t).to_vec();
-        }
-        for (t, l) in (0u32..).zip(&mut logits) {
-            if !heals(tok, &pr, t) {
-                *l = f32::NEG_INFINITY;
+    hundred(tok, known, (seed, rule), threads, || {
+        let (ctx, mut s) = (m.cfg.ctx, Session::new(m));
+        let (mut fed, mut logits) = (0, Vec::new());
+        // The model reads what it has not yet; when its context fills, it reads the last half
+        // of it again and goes on from there (as `tiny::generate` does).
+        move |seq: &[u32], allow: &dyn Fn(u32) -> bool, rng: &mut Rng| {
+            while fed < seq.len() {
+                if s.full() {
+                    s.reset();
+                    for &t in &seq[fed - ctx / 2..fed] {
+                        s.feed(t);
+                    }
+                }
+                logits = s.feed(seq[fed]).to_vec();
+                fed += 1;
             }
+            let masked: Vec<f32> = (0u32..)
+                .zip(&logits)
+                .map(|(t, &l)| if allow(t) { l } else { f32::NEG_INFINITY })
+                .collect();
+            let any = (0u32..).zip(&logits).any(|(t, _)| allow(t));
+            any.then(|| tiny::sample(&masked, temp, TOP_K, rng))
         }
-        let mut out = vec![tiny::sample(&logits, temp, TOP_K, &mut rng)];
-        let seq = [pr.tokens.as_slice(), &out].concat();
-        out.extend(tiny::generate(m, &seq, MAX_TOKENS - 1, Some(EOS), (temp, TOP_K), &mut rng));
-        let (text, ended) = program(tok, p, &out);
-        judge(p, text, ended, known)
     })
 }
 
-/// 100 programs from `g`, as [`from_model`].
+/// 100 programs from `g` under `rule`, as [`from_model`]; it draws from the longest context
+/// it has seen followed by a token let through.
 pub fn from_ngram(
     g: &Ngram,
     tok: &Tokenizer,
     known: &BTreeSet<u64>,
-    seed: u64,
+    (seed, rule): (u64, Rule),
     threads: usize,
 ) -> Vec<Sample> {
-    let jobs: Vec<usize> = (0..PROMPTS.len() * EACH).collect();
-    corpus::par_map(&jobs, threads, |&i| {
-        let (p, mut rng) = job(i, seed);
-        let pr = prompt(tok, p);
-        let temp = f64::from(TEMP);
-        // Never seen after any context: the token backed off, as the header has it.
-        let first = g.sample_where(&pr.tokens, temp, &mut rng, &|t| heals(tok, &pr, t));
-        let last = tok.encode(PROMPTS[p]).last().copied().unwrap_or(EOS);
-        let mut out = vec![first.unwrap_or(last)];
-        let seq = [pr.tokens.as_slice(), &out].concat();
-        out.extend(g.generate(&seq, MAX_TOKENS - 1, temp, &mut rng));
-        let (text, ended) = program(tok, p, &out);
-        judge(p, text, ended, known)
+    hundred(tok, known, (seed, rule), threads, || {
+        |seq: &[u32], allow: &dyn Fn(u32) -> bool, rng: &mut Rng| {
+            let ctx = &seq[seq.len().saturating_sub(g.n - 1)..];
+            g.sample_where(ctx, f64::from(TEMP), rng, allow)
+        }
     })
 }
 
-/// A writer's line of the results table: samples, ended, compile, run clean, novel, novel and
-/// compile, novel and run clean, the mean clean share.
+/// A writer's line of the results table: samples, ended, stopped at a dead end, compile, run
+/// clean, novel, novel and compile, novel and run clean, the mean clean share.
 pub fn row(name: &str, s: &[Sample]) -> String {
     let n = |f: &dyn Fn(&Sample) -> bool| s.iter().filter(|x| f(x)).count();
     format!(
-        "| {name} | {} | {} | {} | {} | {} | {} | {} | {:.2} |\n",
+        "| {name} | {} | {} | {} | {} | {} | {} | {} | {} | {:.2} |\n",
         s.len(),
         n(&|x| x.ended),
+        n(&|x| x.stuck),
         n(&|x| x.compiles),
         n(&|x| x.runs),
         n(&|x| x.novel),

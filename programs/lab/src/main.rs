@@ -4,12 +4,14 @@
 //! - `train`: trains tiny on the corpus's training programs (the manifest must be the corpus's
 //!   as it is now), logging to `programs/lab/out/train.log` and keeping the weights at each
 //!   held-out check in `programs/lab/out/tiny.bin`, and those with the lowest held-out loss in
-//!   `best.bin`. Options: `--steps --threads --seed --vocab --ctx --dim --layers --heads
-//!   --batch --lr`, and `--found 1` to train on the found programs without their variants;
-//!   the defaults are what was trained (see `programs/lab/data/results.md`).
+//!   `best.bin`; it stops early after `--patience` checks (4; 0: never) with no new lowest.
+//!   Options: `--steps --threads --seed --vocab --ctx --dim --layers --heads --batch --lr
+//!   --patience`, and `--found 1` to train on the found programs without their variants; the
+//!   defaults are what was trained (see `programs/lab/data/results.md`).
 //! - `measure`: 100 programs from each set of weights kept and from two n-gram baselines,
-//!   judged, at each temperature; `programs/lab/data/results.md`, and every program in
-//!   `programs/lab/out/samples/`.
+//!   judged, each free and constrained by applang's lexer and by its parser;
+//!   `programs/lab/data/results.md` (its last section, the runs before, kept), and every
+//!   program in `programs/lab/out/samples/`.
 //! - `bench`: a few training steps of the shape given, timed.
 //!
 //! At most 8 threads (of the machine's 16), whatever `--threads` asks. An option not known, or
@@ -22,15 +24,15 @@ use std::fs;
 use std::io::Write as _;
 use std::time::Instant;
 
+use lab::constrain::Rule;
 use lab::corpus::Corpus;
 use lab::measure::{self, PROMPTS, Sample};
-use lab::ngram::Ngram;
 use lab::{DATA, FOUND_ONLY, OUT};
-use tiny::{Acts, Config, Model, Rng, Tokenizer, Trainer};
+use tiny::{Config, Model, Ngram, Rng, Tokenizer, Trainer};
 
 const USAGE: &str = "usage: lab corpus | train | measure | bench [--option value]...; options: \
                      --steps --threads --seed --vocab --ctx --dim --layers --heads --batch --lr \
-                     --found";
+                     --patience --found";
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -58,8 +60,10 @@ fn main() {
 struct Opts(BTreeMap<String, String>);
 
 /// The options known.
-const KEYS: [&str; 11] =
-    ["steps", "threads", "seed", "vocab", "ctx", "dim", "layers", "heads", "batch", "lr", "found"];
+const KEYS: [&str; 12] = [
+    "steps", "threads", "seed", "vocab", "ctx", "dim", "layers", "heads", "batch", "lr",
+    "patience", "found",
+];
 
 impl Opts {
     fn parse(args: &[String]) -> Result<Opts, String> {
@@ -109,14 +113,19 @@ const DIM: usize = 128;
 const LAYERS: usize = 4;
 const HEADS: usize = 4;
 const BATCH: usize = 8;
-const STEPS: usize = 600;
+/// The cosine's length, near where training stops (planned over 600, it stopped at 270).
+const STEPS: usize = 300;
 const LR: f32 = 3e-3;
 const SEED: u64 = 1729;
 /// Steps between held-out checks.
 const EVAL: usize = 30;
+/// Held-out checks in a row with no new lowest loss before training stops.
+const PATIENCE: usize = 4;
 /// The weights kept: the last checked, and those with the lowest held-out loss.
 const LAST: &str = "tiny.bin";
 const BEST: &str = "best.bin";
+/// The heading of `results.md`'s last section, the runs before, which a measure keeps.
+const EARLIER: &str = "## Earlier runs";
 
 fn corpus(o: &Opts) -> i32 {
     let root = lab::root();
@@ -214,6 +223,8 @@ fn train(o: &Opts) -> i32 {
     ));
     let (start, mut rng) = (Instant::now(), Rng::new(seed ^ 0xda7a));
     let (mut held_loss, mut best) = (f32::NAN, f32::INFINITY);
+    // Checks since the lowest held-out loss; at `patience`, training stops.
+    let (patience, mut stale, mut done) = (o.get("patience", PATIENCE), 0, steps);
     for step in 1..=steps {
         let rate = schedule(step, steps, lr);
         let windows: Vec<Vec<u32>> = (0..batch)
@@ -264,11 +275,18 @@ fn train(o: &Opts) -> i32 {
             return 1;
         }
         if checked && held_loss < best {
-            best = held_loss;
+            (best, stale) = (held_loss, 0);
+        } else if checked {
+            stale += 1;
+        }
+        if patience > 0 && stale >= patience {
+            say(format!("stopped: {stale} checks with no held-out loss under {best:.4}"));
+            done = step;
+            break;
         }
     }
     let minutes = start.elapsed().as_secs_f64() / 60.0;
-    say(format!("trained: {steps} steps in {minutes:.1} minutes on {threads} threads"));
+    say(format!("trained: {done} steps in {minutes:.1} minutes on {threads} threads"));
     0
 }
 
@@ -298,11 +316,13 @@ fn bench(o: &Opts) -> i32 {
     0
 }
 
-/// A writer of programs measured: its name, what made it, its held-out loss, its programs.
+/// A writer of programs measured: its name, what made it, its held-out loss, the rule its
+/// tokens were drawn under, its programs.
 struct Writer {
     name: String,
     made: String,
     loss: f64,
+    rule: Rule,
     samples: Vec<Sample>,
 }
 
@@ -316,42 +336,24 @@ fn weights(name: &str) -> Option<Result<(Model, Tokenizer, String), String>> {
     Some(loaded.map(|(m, tok, note)| (m, tok, format!("{note}; the file {hash:016x}"))))
 }
 
-/// The mean loss of `m` over `held`, a token at a time, in nats.
-fn held_loss(m: &Model, held: &[Vec<u32>]) -> f64 {
-    let mut acts = Acts::new(&m.cfg);
-    let (mut sum, mut count) = (0f64, 0usize);
-    for w in held {
-        let n = w.len() - 1;
-        sum += f64::from(m.loss(&mut acts, &w[..n], &w[1..])) * n as f64;
-        count += n;
-    }
-    sum / count.max(1) as f64
-}
-
 fn measure(o: &Opts) -> i32 {
     let (threads, seed) = (o.threads(), o.get("seed", SEED));
-    let last = match weights(LAST) {
-        Some(Ok(w)) => w,
-        Some(Err(e)) => {
-            eprintln!("{e}");
-            return 1;
-        }
-        None => {
-            eprintln!("no weights at {OUT}/{LAST}: run `lab train` first");
-            return 1;
-        }
-    };
+    let mut tinies = Vec::new();
+    for (name, file) in [("tiny, last", LAST), ("tiny, lowest held-out loss", BEST)] {
+        let why = match weights(file) {
+            Some(Ok(w)) => {
+                tinies.push((name, w));
+                continue;
+            }
+            Some(Err(e)) => e,
+            None if file == LAST => format!("no weights at {OUT}/{LAST}: run `lab train` first"),
+            None => continue,
+        };
+        eprintln!("{why}");
+        return 1;
+    }
     let Some(c) = checked_corpus(threads) else { return 1 };
     let id = format!("corpus {:016x}", c.id());
-    let mut tinies = vec![("tiny, last", last)];
-    match weights(BEST) {
-        Some(Ok(best)) => tinies.push(("tiny, lowest held-out loss", best)),
-        Some(Err(e)) => {
-            eprintln!("{e}");
-            return 1;
-        }
-        None => {}
-    }
     if let Some((_, (_, _, note))) = tinies.iter().find(|t| !t.1.2.starts_with(&id)) {
         eprintln!("weights trained on another corpus: {note}");
         return 1;
@@ -369,18 +371,14 @@ fn measure(o: &Opts) -> i32 {
     let held = lab::held(&c, &tok, cfg.ctx);
     let start = Instant::now();
     let mut writers = Vec::new();
-    let mut sweep = Vec::new();
     for (name, (m, _, note)) in &tinies {
-        let samples = measure::from_model(m, &tok, &known, (seed, measure::TEMP), threads);
-        writers.push(Writer {
-            name: name.to_string(),
-            made: note.clone(),
-            loss: held_loss(m, &held),
-            samples,
-        });
-        for t in measure::SWEEP {
-            let samples = measure::from_model(m, &tok, &known, (seed, t), threads);
-            sweep.push((format!("{name}, temperature {t}"), samples));
+        let loss = f64::from(Trainer::new(m.clone(), threads).eval(&held));
+        for rule in Rule::ALL {
+            let samples =
+                measure::from_model(m, &tok, &known, (seed, measure::TEMP, rule), threads);
+            let (name, made) = (format!("{name}{}", rule.suffix()), note.clone());
+            eprintln!("{name}: {:.0} s", start.elapsed().as_secs_f64());
+            writers.push(Writer { name, made, loss, rule, samples });
         }
     }
     // The baselines: every order's held-out loss; samples from the order with the lowest, and
@@ -392,31 +390,35 @@ fn measure(o: &Opts) -> i32 {
             (g, l)
         })
         .collect();
-    let Some(low) = grams.iter().enumerate().min_by(|a, b| a.1.1.total_cmp(&b.1.1)).map(|g| g.0)
-    else {
-        return 1;
-    };
+    let low = grams.iter().enumerate().min_by(|a, b| a.1.1.total_cmp(&b.1.1)).map_or(0, |g| g.0);
     for (i, why) in [(low, "the lowest held-out loss"), (grams.len() - 1, "the longest context")] {
         let (g, loss) = &grams[i];
         if writers.iter().any(|w| w.name.starts_with(&format!("{}-gram", g.n))) {
             continue;
         }
-        let samples = measure::from_ngram(g, &tok, &known, seed, threads);
-        let made =
-            format!("counts of the training tokens, sampled from the longest context seen ({why})");
-        writers.push(Writer { name: format!("{}-gram", g.n), made, loss: *loss, samples });
+        for rule in Rule::ALL {
+            let samples = measure::from_ngram(g, &tok, &known, (seed, rule), threads);
+            let made = format!(
+                "counts of the training tokens, sampled from the longest context seen ({why})"
+            );
+            let name = format!("{}-gram{}", g.n, rule.suffix());
+            writers.push(Writer { name, made, loss: *loss, rule, samples });
+        }
     }
-    let all =
-        writers.iter().map(|w| (&w.name, &w.samples)).chain(sweep.iter().map(|s| (&s.0, &s.1)));
-    for (name, samples) in all {
+    // Free first, then each rule, so a table reads as the rules' effect.
+    writers.sort_by_key(|w| Rule::ALL.iter().position(|&r| r == w.rule));
+    for Writer { name, samples, .. } in &writers {
         let slug: String =
             name.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '-' }).collect();
         for (i, x) in samples.iter().enumerate() {
             let _ = put_out(&format!("samples/{slug}-{i:03}.app"), x.text.as_bytes());
         }
     }
-    let report = results(&c, &cfg, &grams, &writers, &sweep);
     let path = lab::root().join(DATA).join("results.md");
+    // The runs before this one, as their own measure wrote them: kept below it.
+    let before = fs::read_to_string(&path).unwrap_or_default().replace("\r\n", "\n");
+    let earlier = before.find(EARLIER).map_or(String::new(), |at| ["\n", &before[at..]].concat());
+    let report = results(&c, (&cfg, &held), &grams, &writers) + &earlier;
     if let Err(e) = fs::File::create(&path).and_then(|mut f| f.write_all(report.as_bytes())) {
         eprintln!("cannot write {}: {e}", path.display());
         return 1;
@@ -433,40 +435,52 @@ type Compiled<'a> = BTreeMap<String, (Vec<(&'a String, usize)>, &'a Sample)>;
 /// The results file.
 fn results(
     c: &Corpus,
-    cfg: &Config,
+    (cfg, windows): (&Config, &[Vec<u32>]),
     grams: &[(Ngram, f64)],
     writers: &[Writer],
-    sweep: &[(String, Vec<Sample>)],
 ) -> String {
     let found = c.programs.iter().filter(|p| p.of.is_none()).count();
     let runs = c.programs.iter().filter(|p| p.runs).count();
-    let reordered =
-        c.programs.iter().filter(|p| p.of.as_ref().is_some_and(|o| o.1.contains("states")));
+    let is = |p: &lab::corpus::Program, how: &str| {
+        p.of.as_ref().is_some_and(|o| o.1.split(['+', '#']).any(|k| k == how))
+    };
+    let made = |how: &str| c.programs.iter().filter(|p| is(p, how)).count();
     let shapes: BTreeSet<u64> = c.programs.iter().map(|p| p.shape).collect();
+    // The shapes only the variants with a line dropped or numbers changed have.
+    let changed = |p: &&lab::corpus::Program| is(p, "drop") || is(p, "numbers");
+    let others: BTreeSet<u64> =
+        c.programs.iter().filter(|p| !changed(p)).map(|p| p.shape).collect();
+    let new = shapes.len() - others.len();
     let held: Vec<&lab::corpus::Program> = c.held().filter(|p| p.of.is_none()).collect();
     let train_bytes: usize = c.train().map(|p| p.text.len()).sum();
     let found_bytes: usize = c.train().filter(|p| p.of.is_none()).map(|p| p.text.len()).sum();
+    let held_bytes = held.iter().map(|p| p.text.len()).sum::<usize>();
     let mut out = String::from("# tiny writes applang: measured\n\n");
     out += "Made by `cargo run -p compusophy-lab --release -- measure` from the weights `-- train` \
             kept (`programs/lab/out/`, never committed); seeded, so run again on the corpus and \
             weights it names it says the same (`lab train` and `measure` refuse any other \
-            corpus). Derived: never edit it by hand.\n\n";
+            corpus). Derived: never edit it by hand. The last section, the runs before, is kept \
+            as their own measure wrote them, each under a heading of its own.\n\n";
     out += &format!(
         "**Corpus** `{:016x}` (`manifest.tsv`): {} programs, {found} found in the repo and {} \
-         variants of them (names renamed; {} of those also with their states reordered): {} \
-         shapes in all (a shape is a program but for its names, comments and spacing); {runs} \
-         run clean. Trained on: {train_bytes} bytes, {found_bytes} of them the found programs'. \
-         Held out, never trained on: the {} found programs of a tenth of the shapes, with every \
-         program sharing a shape with them and their variants; the held-out loss is over those \
-         {} found programs, each once ({} bytes).\n\n",
+         variants of them ({} with names renamed, {} with their states reordered, {} with a line \
+         dropped, {} with numbers changed): {} shapes in all (a shape is a program but for its \
+         names, comments and spacing). A line dropped or numbers changed makes a near-copy that \
+         is another program: those add {new} shapes (the rest are renamed copies of one \
+         another). {runs} run clean. Trained on: {train_bytes} bytes, {found_bytes} of them the \
+         found programs'. Held out, never trained on: the {} found programs of a tenth of the \
+         shapes, with every program sharing a shape with them and their variants; the held-out \
+         loss is over those {} found programs, each once ({held_bytes} bytes).\n\n",
         c.id(),
         c.programs.len(),
         c.programs.len() - found,
-        reordered.count(),
+        made("rename"),
+        made("states"),
+        made("drop"),
+        made("numbers"),
         shapes.len(),
         held.len(),
         held.len(),
-        held.iter().map(|p| p.text.len()).sum::<usize>(),
     );
     out += &format!(
         "**tiny**: {} parameters: vocab {} (the bytes, the end token and BPE merges), context {}, \
@@ -478,20 +492,28 @@ fn results(
         cfg.layers,
         cfg.heads
     );
-    for w in writers {
+    for w in writers.iter().filter(|w| w.rule == Rule::Free) {
         out += &format!("- {}: {}.\n", w.name, w.made);
     }
-    out += "\n**Held-out loss**, nats a token over the held-out programs (lower is better). The \
-            lowest-loss weights, and the n-gram sampled for its loss, were picked by this same \
-            loss, which flatters them a little:\n\n";
-    out += "| model | loss |\n|---|---|\n";
-    for w in writers.iter().filter(|w| w.name.starts_with("tiny")) {
-        out += &format!("| {} | {:.3} |\n", w.name, w.loss);
+    let tokens: usize = windows.iter().map(|w| w.len() - 1).sum();
+    out += &format!(
+        "\n**Held-out loss**, nats a token over the held-out programs (lower is better), and a \
+         byte ({tokens} tokens over {held_bytes} bytes; a byte's loss compares across \
+         tokenizers, a token's does not). The lowest-loss weights, and the n-gram sampled for \
+         its loss, were picked by this same loss, which flatters them a little; training stops \
+         by it too:\n\n"
+    );
+    out += "| model | a token | a byte |\n|---|---|---|\n";
+    let per_byte = |l: f64| l * tokens as f64 / held_bytes.max(1) as f64;
+    let free = writers.iter().filter(|w| w.rule == Rule::Free && w.name.starts_with("tiny"));
+    for w in free {
+        out += &format!("| {} | {:.3} | {:.3} |\n", w.name, w.loss, per_byte(w.loss));
     }
     for (g, l) in grams {
-        out += &format!("| {}-gram, Witten-Bell | {l:.3} |\n", g.n);
+        out += &format!("| {}-gram, Witten-Bell | {l:.3} | {:.3} |\n", g.n, per_byte(*l));
     }
-    out += &format!("| uniform | {:.3} |\n\n", (cfg.vocab as f64).ln());
+    let uniform = (cfg.vocab as f64).ln();
+    out += &format!("| uniform | {uniform:.3} | {:.3} |\n\n", per_byte(uniform));
     out += &format!(
         "**Programs written**: {} prompts (an app's header line each, below) x {}, sampled at \
          temperature {} (tiny from its top {} tokens), up to {} tokens or the end token. Each \
@@ -501,24 +523,36 @@ fn results(
          (render, click, tick, key, tap, type) finds no fault on seeds 1 to 3 and its icon line, \
          if any, draws, as Studio checks a made app. *Novel*: no program of the corpus has its \
          shape (its tokens but comments, names numbered as they first appear): not a copy, \
-         renamed or not. *Clean*: the share of what it wrote that comes before the compiler's \
-         first error (1 when it compiles), the mean.\n\n",
+         renamed or not. *Clean*: the share of what it wrote that comes before its first error \
+         (1 when it compiles), the mean. The compiler lexes a whole program before it parses, \
+         so a lexer error hides any parser error before it: the program cut at a lexer error is \
+         compiled again, and a parser error there comes first. The checker's errors (names, \
+         types) count only where nothing before them is wrong. The first run, below, took the \
+         compiler's first reported error, a lexer error anywhere before any parser error: its \
+         clean shares overstate.\n\n\
+         Each writer writes three ways. *Free*: any token. *Lexer-constrained*: only tokens that \
+         keep the program lexically valid by applang's lexer (strings closed on their line, no \
+         character the language lacks, no letter run into a number) with its brackets matched, \
+         and the end token only where all is closed. *Parser-constrained*: that, and applang's \
+         parser finds no error before the end of what is written (its last token, while it may \
+         grow, judged by each thing it can still become), and the end token only where the \
+         program parses; so nothing it writes has a lexer or parser error, and one cut at the \
+         limit has its first error at its end. A token the parser refuses is drawn again \
+         without it; after {} refusals every token is judged and the draw is among those it \
+         lets through. *Dead end*: the rule lets no token through, and the writer stops there. \
+         Neither rule looks at names or types, or runs anything: the checker and the smoke test \
+         judge every program the same way.\n\n",
         PROMPTS.len(),
         measure::EACH,
         measure::TEMP,
         measure::TOP_K,
-        measure::MAX_TOKENS
+        measure::MAX_TOKENS,
+        lab::constrain::TRIES
     );
-    const HEAD: &str = "| writer | programs | ended | compile | run clean | novel | novel, \
-                        compile | novel, run clean | clean |\n|---|---|---|---|---|---|---|---|---|\n";
-    out += HEAD;
+    out += "| writer | programs | ended | dead end | compile | run clean | novel | novel, compile \
+            | novel, run clean | clean |\n|---|---|---|---|---|---|---|---|---|---|\n";
     for w in writers {
         out += &measure::row(&w.name, &w.samples);
-    }
-    out += "\nAt other temperatures (the same prompts and seeds):\n\n";
-    out += HEAD;
-    for (name, samples) in sweep {
-        out += &measure::row(name, samples);
     }
     out += "\nWhy the rest did not run clean (the first error's code; 0: an icon that does not \
             draw):\n\n";
@@ -541,12 +575,9 @@ fn results(
         }
         out.push('\n');
     }
-    // Every program that compiled, by any writer at any temperature, once each: what the
-    // counts above are made of.
-    let all =
-        writers.iter().map(|w| (&w.name, &w.samples)).chain(sweep.iter().map(|s| (&s.0, &s.1)));
+    // Every program that compiled, by any writer, once each: what the counts above are made of.
     let mut compiled: Compiled<'_> = BTreeMap::new();
-    for (name, x) in all.flat_map(|(n, s)| s.iter().map(move |x| (n, x))) {
+    for (name, x) in writers.iter().flat_map(|w| w.samples.iter().map(move |x| (&w.name, x))) {
         if x.compiles {
             let by = &mut compiled.entry(lab::corpus::normal(&x.text)).or_insert((Vec::new(), x)).0;
             match by.last_mut() {
@@ -555,7 +586,7 @@ fn results(
             }
         }
     }
-    out += &format!("\nEvery program that compiled, at any temperature ({}):\n", compiled.len());
+    out += &format!("\nEvery program that compiled ({}):\n", compiled.len());
     if compiled.is_empty() {
         out += "\nnone.\n";
     }

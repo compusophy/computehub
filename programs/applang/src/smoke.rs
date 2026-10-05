@@ -5,14 +5,16 @@
 //! its longest, so a slow `every` runs too): every 5th it presses the next key the program
 //! handles, every 7th taps a square of a grid or a unit of a canvas that has a handler, every
 //! 11th clicks a button, every 13th types "12", "hello" or "" in each input, re-rendering after
-//! each event. Then, if it saves state, it is closed and opened again with what it saved, as a
-//! person comes back to it: it renders, each button it shows is clicked once and [`AGAIN`]
-//! ticks pass. It stops at the first fault, or after [`BUDGET`] steps in all, and says what it
-//! saw. Canvases that showed, none of whose shapes ever reached inside one, are a fault at the
-//! end (`OFF_CANVAS`): a picture drawn in the window's pixels, not the canvas's units. A text
-//! whose point is on its canvas and that is wider than it is a fault of the render that drew it
-//! (`TEXT_TOO_WIDE`): the desktop keeps such a text inside its canvas, but for one that cannot
-//! fit (one whose point is off the canvas it leaves where it is).
+//! each event and taking each from what shows by then (a key that ends a game may hide the
+//! buttons: that tick's click presses one still shown, if any). Then, if it saves state, it is
+//! closed and opened again with what it saved, as a person comes back to it: it renders, each
+//! button it shows is clicked once and [`AGAIN`] ticks pass. It stops at the first fault, or
+//! after [`BUDGET`] steps in all, and says what it saw. Canvases that showed, none of whose
+//! shapes ever reached inside one, are a fault at the end (`OFF_CANVAS`): a picture drawn in the
+//! window's pixels, not the canvas's units. A text whose point is on its canvas and that is
+//! wider than it is a fault of the render that drew it (`TEXT_TOO_WIDE`): the desktop keeps such
+//! a text inside its canvas, but for one that cannot fit (one whose point is off the canvas it
+//! leaves where it is).
 
 use applang_syntax::ast::Widget;
 
@@ -85,39 +87,8 @@ pub fn smoke_from(program: Program, seed: u64, saved: &str) -> Smoke {
             return t.out;
         }
         changed |= t.last != before;
-        let mut events = Vec::new();
-        if n % 5 == 0 && !keys.is_empty() {
-            let name = keys[(n as usize / 5) % keys.len()].clone();
-            events.push((Event::Key { name: name.clone() }, quoted("key ", &name)));
-        }
-        if n % 7 == 0 {
-            let boards = boards(&t.last);
-            if let Some(&(id, len, w)) = boards.get(t.pick(boards.len())) {
-                let cell = t.pick(len as usize) as u32;
-                let what = match w {
-                    0 => format!("tapping square {cell}"),
-                    w => format!("tapping the canvas at x {}, y {}", cell % w, cell / w),
-                };
-                events.push((Event::Tap { id, cell }, what));
-            }
-        }
-        if n % 11 == 0 {
-            let all = buttons(&t.last);
-            if let Some((id, text)) = all.get(t.pick(all.len())) {
-                events.push((Event::Click { id: *id }, quoted("clicking ", text)));
-            }
-        }
-        if n % 13 == 0 {
-            let text = ["12", "hello", ""][(n as usize / 13) % 3];
-            for state in inputs(&t.last) {
-                let what = [&quoted("typing ", text), " in ", &state].concat();
-                events.push((Event::Input { state, text: text.into() }, what));
-            }
-        }
-        for (ev, what) in events {
-            if !t.step(ev, what, false) {
-                return t.out;
-            }
+        if t.events(n, &keys).is_none() {
+            return t.out;
         }
         if t.out.spent > BUDGET {
             break;
@@ -187,6 +158,48 @@ impl Tester {
             }
         }
         true
+    }
+
+    /// Tick `n`'s events, each taken from what shows after the one before (so none is for
+    /// something gone, `E0213`): every 5th tick the next of `keys`, every 7th a tap, every 11th
+    /// a click, every 13th a text typed in each input still shown; `None` once one faults.
+    fn events(&mut self, n: u32, keys: &[String]) -> Option<()> {
+        if n % 5 == 0 && !keys.is_empty() {
+            let name = &keys[(n as usize / 5) % keys.len()];
+            self.go(Event::Key { name: name.clone() }, quoted("key ", name))?;
+        }
+        if n % 7 == 0 {
+            let boards = boards(&self.last);
+            if let Some(&(id, len, w)) = boards.get(self.pick(boards.len())) {
+                let cell = self.pick(len as usize) as u32;
+                let what = match w {
+                    0 => format!("tapping square {cell}"),
+                    w => format!("tapping the canvas at x {}, y {}", cell % w, cell / w),
+                };
+                self.go(Event::Tap { id, cell }, what)?;
+            }
+        }
+        if n % 11 == 0 {
+            let all = buttons(&self.last);
+            if let Some((id, text)) = all.get(self.pick(all.len())) {
+                self.go(Event::Click { id: *id }, quoted("clicking ", text))?;
+            }
+        }
+        if n % 13 == 0 {
+            let text = ["12", "hello", ""][(n as usize / 13) % 3];
+            for state in inputs(&self.last) {
+                if inputs(&self.last).contains(&state) {
+                    let what = [&quoted("typing ", text), " in ", &state].concat();
+                    self.go(Event::Input { state, text: text.into() }, what)?;
+                }
+            }
+        }
+        Some(())
+    }
+
+    /// [`Tester::step`] for an event a person makes: `None` once it faults.
+    fn go(&mut self, ev: Event, what: String) -> Option<()> {
+        self.step(ev, what, false).then_some(())
     }
 
     /// Closes the app and opens it again with `saved`, its saved states (anything they could

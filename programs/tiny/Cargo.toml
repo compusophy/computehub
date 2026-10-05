@@ -1,6 +1,6 @@
 [package]
 name = "compusophy-tiny"
-description = "A small decoder-only transformer in plain Rust, no dependencies: a byte-level BPE, forward and hand-written backward passes in f32, AdamW on several threads, sampling with a KV cache, and a weights file checked by its hash. Seeded: the same seed and data make the same weights."
+description = "A small decoder-only transformer in plain Rust, no dependencies: a byte-level BPE, forward and hand-written backward passes in f32, AdamW on several threads, sampling with a KV cache, and a weights file checked by its hash; and the n-gram baseline it must beat. Seeded: the same seed and data make the same weights."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

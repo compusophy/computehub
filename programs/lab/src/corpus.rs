@@ -6,15 +6,13 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::thread;
 
-use tiny::{Rng, fnv};
+use tiny::{Rng, fnv, par_map};
 
 use crate::{augment, collect};
 
 /// The variants tried for each program found.
-pub const VARIANTS: u64 = 7;
+pub const VARIANTS: u64 = 14;
 
 /// One program of the corpus.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -113,6 +111,20 @@ impl Corpus {
             programs.push(base);
             programs.extend(made);
         }
+        // A variant of a shape not its program's, that another family has too, goes: it would
+        // tie two families (and move one to the held-out side) by what augmenting made.
+        let mut families: BTreeMap<u64, BTreeSet<u64>> = BTreeMap::new();
+        let family = |p: &Program| p.of.as_ref().map_or(p.hash, |o| o.0);
+        for p in &programs {
+            families.entry(p.shape).or_default().insert(family(p));
+        }
+        let base: BTreeMap<u64, u64> =
+            programs.iter().filter(|p| p.of.is_none()).map(|p| (p.hash, p.shape)).collect();
+        programs.retain(|p| {
+            p.of.is_none()
+                || base.get(&family(p)) == Some(&p.shape)
+                || families[&p.shape].len() == 1
+        });
         hold_out(&mut programs);
         let verdicts = par_map(&programs, threads, |p| runs(&p.text));
         for (p, r) in programs.iter_mut().zip(verdicts) {
@@ -140,7 +152,8 @@ impl Corpus {
         let mut out = String::from(
             "# The applang corpus: each program in the repo that compiles and shows a widget, once\n\
              # by the FNV-1a 64 hash of its text, and the variants of each (names renamed, states\n\
-             # reordered) that compile too. shape: its hash but for names, comments and spacing.\n\
+             # reordered, a line dropped, numbers changed) that compile too and are no other\n\
+             # program's shape. shape: its hash but for names, comments and spacing.\n\
              # runs: no fault on smoke seeds 1 to 3, icon drawable. held: measured, never trained\n\
              # on; a tenth of the shapes, with every program of them. The corpus's id hashes each\n\
              # line but its last column (where a program was found). Derived: `cargo run -p\n\
@@ -214,8 +227,12 @@ pub(crate) fn hold_out(programs: &mut [Program]) {
     }
 }
 
-/// `base`'s variants that compile and are new (their hashes added to `seen`): the odd ones
-/// renamed, the even ones renamed and their states reordered, each drawn from the base's hash.
+/// An [`augment`] that may change a program.
+type Change = fn(&str, &mut Rng) -> Option<String>;
+
+/// `base`'s variants that compile and are new (their hashes added to `seen`), each drawn from
+/// the base's hash: renamed, then the first seven's even ones with their states reordered, and
+/// the next seven's odd ones with a line dropped, their even ones with numbers changed.
 fn variants(base: &Program, seen: &mut BTreeSet<u64>) -> Vec<Program> {
     let mut out = Vec::new();
     for i in 1..=VARIANTS {
@@ -225,49 +242,25 @@ fn variants(base: &Program, seen: &mut BTreeSet<u64>) -> Vec<Program> {
         if let Some(t) = augment::rename(&text, &mut rng) {
             (text, how) = (t, vec!["rename"]);
         }
-        if i % 2 == 0 {
-            if let Some(t) = augment::shuffle_states(&text, &mut rng) {
-                text = t;
-                how.push("states");
-            }
+        let (kind, change): (&str, Change) = match (i > 7, i % 2) {
+            (false, 0) => ("states", augment::shuffle_states),
+            (true, 1) => ("drop", augment::drop_line),
+            (true, _) => ("numbers", augment::vary_numbers),
+            (false, _) => ("", |_, _| None),
+        };
+        if let Some(t) = change(&text, &mut rng) {
+            text = t;
+            how.push(kind);
         }
         let text = normal(&text);
         let hash = fnv(text.as_bytes());
         if how.is_empty() || seen.contains(&hash) || !compiles(&text) {
             continue;
         }
+        let shape = shape(&text);
         seen.insert(hash);
         let of = Some((base.hash, format!("{}#{i}", how.join("+"))));
-        let shape = shape(&text);
         out.push(Program { hash, text, shape, runs: false, held: false, of, from: Vec::new() });
     }
     out
-}
-
-/// `f` of each item, on up to `threads` threads (each taking the next item left), in the
-/// items' order.
-pub fn par_map<T: Sync, R: Send>(
-    items: &[T],
-    threads: usize,
-    f: impl Fn(&T) -> R + Sync,
-) -> Vec<R> {
-    let (next, f) = (&AtomicUsize::new(0), &f);
-    let mut done: Vec<(usize, R)> = thread::scope(|s| {
-        let work = move || {
-            let mut mine = Vec::new();
-            loop {
-                let i = next.fetch_add(1, Ordering::Relaxed);
-                let Some(item) = items.get(i) else { return mine };
-                mine.push((i, f(item)));
-            }
-        };
-        let handles: Vec<_> = (0..threads.max(1)).map(|_| s.spawn(work)).collect();
-        let join = |h: thread::ScopedJoinHandle<'_, Vec<(usize, R)>>| match h.join() {
-            Ok(mine) => mine,
-            Err(panic) => std::panic::resume_unwind(panic),
-        };
-        handles.into_iter().flat_map(join).collect()
-    });
-    done.sort_by_key(|d| d.0);
-    done.into_iter().map(|d| d.1).collect()
 }

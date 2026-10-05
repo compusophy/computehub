@@ -4,7 +4,7 @@
 
 use std::collections::BTreeMap;
 
-use tiny::{Rng, fnv};
+use crate::{EOS, Rng, fnv};
 
 /// What followed one context: how often, and how often each token.
 #[derive(Debug, Clone, Default)]
@@ -76,7 +76,7 @@ impl Ngram {
     /// A token to follow `ctx`: drawn from what followed its longest context seen, each count
     /// raised to 1 / `temp`.
     pub fn sample(&self, ctx: &[u32], temp: f64, rng: &mut Rng) -> u32 {
-        self.sample_where(ctx, temp, rng, &|_| true).unwrap_or(tiny::EOS)
+        self.sample_where(ctx, temp, rng, &|_| true).unwrap_or(EOS)
     }
 
     /// [`Ngram::sample`] among the tokens `allow` lets through: from the longest context seen
@@ -107,7 +107,7 @@ impl Ngram {
         None
     }
 
-    /// Up to `max` tokens after `prompt`, stopping after [`tiny::EOS`] (kept).
+    /// Up to `max` tokens after `prompt`, stopping after [`EOS`] (kept).
     pub fn generate(&self, prompt: &[u32], max: usize, temp: f64, rng: &mut Rng) -> Vec<u32> {
         let mut seq = prompt.to_vec();
         let start = seq.len();
@@ -115,7 +115,7 @@ impl Ngram {
             let from = seq.len().saturating_sub(self.n - 1);
             let next = self.sample(&seq[from..], temp, rng);
             seq.push(next);
-            if next == tiny::EOS {
+            if next == EOS {
                 break;
             }
         }

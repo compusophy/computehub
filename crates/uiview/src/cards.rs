@@ -1,8 +1,9 @@
 //! The OS's own widgets, as Settings shows them: a window's pages ([`Node::Pages`]: a column at
 //! its left, or narrow a segmented control on top), raised cards lighter under the pointer and
 //! sunk when held (a [`Node::Choice`], ringed and checked when chosen; a [`Node::Switch`]; the
-//! desktop's themes, [`Node::Themes`], each a miniature of its desktop), a profile's faces
-//! ([`Node::Faces`]) and a link ([`uiwire::Variant::Link`]).
+//! desktop's themes, [`Node::Themes`], each a miniature of its desktop, the current one ringed
+//! and checked on it), a profile's faces ([`Node::Faces`]) and a link
+//! ([`uiwire::Variant::Link`]).
 //!
 //! [`Node::Pages`]: uiwire::Node::Pages
 //! [`Node::Choice`]: uiwire::Node::Choice
@@ -20,10 +21,12 @@ use crate::cap_base;
 const NAV_W: f32 = 172.0;
 const ITEM_H: f32 = 32.0;
 const MARGIN: f32 = 24.0;
-/// Theme cards: the gap between them, the miniature's inset in its card, the name's band.
+/// Theme cards: the gap between them, the miniature's inset in its card, the name's band, the
+/// current one's check's disc.
 const GAP: f32 = 16.0;
 const INSET: f32 = 6.0;
 const NAME_H: f32 = 34.0;
+const BADGE: f32 = 20.0;
 const CHECK: &str = "\u{2713}";
 /// The gap between faces.
 const FACE_GAP: f32 = 13.0;
@@ -290,9 +293,9 @@ pub(crate) fn themes(ui: &mut Ui<'_>, id: u32, (x, y, w): (f32, f32, f32)) {
     }
 }
 
-/// Theme card `id`: `th`'s miniature desktop, `ph` tall, over its name; when current, the check
-/// after it where every theme's name has room for one half an em from it (else the ring alone,
-/// so no card's check crowds its name, nor shows on one card and not on another).
+/// Theme card `id`: `th`'s miniature desktop, `ph` tall, over its name; when current, the ring
+/// and a check on a disc of the accent in the miniature's top right corner, clear of the name at
+/// any width.
 fn theme_card(ui: &mut Ui<'_>, id: WidgetId, r: RectF, th: &Theme, ph: f32) {
     let t = ui.theme();
     let current = t.name == th.name;
@@ -307,11 +310,10 @@ fn theme_card(ui: &mut Ui<'_>, id: WidgetId, r: RectF, th: &Theme, ph: f32) {
     let base = cap_base(ui, band, r.y + r.h - band, style);
     ui.text(r.x + INSET + 6.0, base, th.name, style);
     if current {
-        let ts = ui.text_system();
-        let widest = THEMES.iter().map(|th| ts.measure(th.name, style)).fold(0.0, f32::max);
-        if widest + style.size / 2.0 + ts.measure(CHECK, style) <= r.w - 2.0 * (INSET + 6.0) {
-            check(ui, r.x + r.w - INSET - 6.0, base);
-        }
+        let at = RectF::new(preview.x + preview.w - BADGE - INSET, preview.y + INSET, BADGE, BADGE);
+        let disc = ui.snapped(at);
+        ui.fill(disc, BADGE / 2.0, t.accent);
+        crate::label_in(ui, disc, CHECK, t.body().with_color(t.accent_text));
     }
     ui.hit(id, r, Sense::Click);
     ui.mark(id, sem::OPTION, if current { sem::SELECTED } else { 0 }, "");

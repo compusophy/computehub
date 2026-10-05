@@ -58,8 +58,12 @@ installed, in stages; the first that fails is the record's `stage`:
 2. `make`: the make installed nothing (it never compiled, or the model said applang cannot).
 3. `compile`, `smoke`: it does not compile, or faults in the coder's smoke test on seeds 1 to 3
    (rendered, clicked, ticked, keyed, tapped, typed into, closed and opened again).
-   `harness`: the smoke test's own fault (`E0213`, an event for something no longer shown; see
-   the baseline's last note), neither a pass nor a fail: counted apart, like `ai`.
+   `harness`: the smoke test's own fault (`E0213`, an event for something not shown, which only
+   what drives an app can send), neither a pass nor a fail: counted apart, like `ai`. The smoke
+   test now takes each event from what shows after the one before, so it sends none, and no
+   record has the stage. It is kept as a guard: were a bug of the smoke test's own to come back,
+   the grade would not count it as the model's fail (though the coder, which cannot tell, would
+   still send it to the model as the program's fault; the baseline's last note).
 4. `icon`: it has no icon line, or one the desktop cannot draw.
 5. `check`: its checker drives it headlessly through applang and reads what it shows.
 
@@ -105,19 +109,19 @@ Each checker is shown to be passable, fair and discerning: `refs/` holds a progr
 that passes it (`makes`' tests); `refs/alt/` nine other designs that pass too (boards on grid
 widgets, cards turned back by a timer, a count drawn on a canvas, and four the models made: a
 pick written apart from its heading, a clock with a Start, a die that tumbles, a score written
-inside a board's square); minesweeper's two designs pass with their mines laid six other ways;
-and 46 one-line breaks of the references each fail at the stage expected. The live runs found
-five checks unfair (a tumbling die read mid-tumble, a pick apart from its heading, an unasked
-Start, a score inside a square, and an unclear reason), and a review a sixth (minesweeper's win
-was read only from the sweep's last tap, though a flood fill usually wins sooner, so most
-correct games failed); each was fixed and the runs graded again from their transcripts. What
-the suite does not check: line clears in tetris, the direction tiles slide in 2048,
-minesweeper's numbers, scores beyond whack-a-mole's, and how anything looks beyond what the
-checks read. A checker lets at most 250,000 ticks of an app's timer pass in one wait; an app
-whose timer is too fast for a wait (a clock that ticks every 16 ms, waited 3 hours) fails with
-that reason, never read early. The references are the suite's answer keys, so `lab`'s corpus
-never takes them (it skips `programs/makes` and `programs/evals`): a model lab trains may be
-measured on them, never trained on them.
+inside a board's square); minesweeper's two designs pass with their mines laid six other ways,
+and tetris's with its pieces drawn in each of seven orders; and 46 one-line breaks of the
+references each fail at the stage expected. The live runs found five checks unfair (a tumbling
+die read mid-tumble, a pick apart from its heading, an unasked Start, a score inside a square,
+and an unclear reason), and a review a sixth (minesweeper's win was read only from the sweep's
+last tap, though a flood fill usually wins sooner, so most correct games failed); each was fixed
+and the runs graded again from their transcripts. What the suite does not check: line clears in
+tetris, the direction tiles slide in 2048, minesweeper's numbers, scores beyond whack-a-mole's,
+and how anything looks beyond what the checks read. A checker lets at most 250,000 ticks of an
+app's timer pass in one wait; an app whose timer is too fast for a wait (a clock that ticks
+every 16 ms, waited 3 hours) fails with that reason, never read early. The references are the
+suite's answer keys, so `lab`'s corpus never takes them (it skips `programs/makes` and
+`programs/evals`): a model lab trains may be measured on them, never trained on them.
 
 Two hashes say what graded a record. The suite's (`suite_hash`) is FNV-1a 64 of its id and the
 source of its tasks, checkers and probe, line ends aside: a change to what is asked or how the
@@ -212,23 +216,27 @@ wrote after its program.
 
 ## Baseline
 
-2026-10-05: Suite 1 at hash `ca4f2f7a761e192a`, the coder's prompt at `0d7cd8ab731dfcab`,
-Studio's knobs, the harness at `81d703122e0435d3`. GLM 5.3 ran two trials (the second at a later
+2026-10-05: Suite 1 at hash `c06e06ead847ccfe`, the coder's prompt at `0d7cd8ab731dfcab`,
+Studio's knobs, the harness at `6296e25ee6530073`. GLM 5.3 ran two trials (the second at a later
 commit, the coder the same), Flash one: 124 requests and $0.74 in all. The runs were graded again
-from their transcripts after the checkers' fixes, so every record carries the hashes above; and
-again, every grade the same, when the hash moved from `81ab7e04340b535a` as the harness's build
-script came to forbid unsafe code.
+from their transcripts after the checkers' fixes, so every record carries the hashes above; again,
+every grade the same, when the harness's hash moved from `81ab7e04340b535a` as its build script
+came to forbid unsafe code; and again when the smoke test was fixed (the harness's hash moved from
+`81d703122e0435d3`, and the suite's from `ca4f2f7a761e192a` as `judge`'s note on the `harness`
+stage changed, its tasks, checkers and probe the same). Every request still replays, and one grade
+moved: Flash's 2048, from `harness` to `check` (the last note), its make a request shorter, so
+the records count 123 requests.
 
 | run | model | commit | pass | rate (95% CI) | tiny / small / medium / hard | tokens/pass | $/pass | s/make | errors | other model |
 |---|---|---|---|---|---|---|---|---|---|---|
 | 2026-10-05-glm-5.3 | zai/glm-5.3 | 3ae876c, 3341bf8 | 37/48 | 77% (62%-87%) | 4/4 / 13/16 / 17/18 / 3/10 | 15109 | 0.0182 | 43 | 0 | 14/79 |
-| 2026-10-05-glm-5.3-flash | zai/glm-5.3-flash | 63f293b | 20/23 | 87% (68%-95%) | 2/2 / 8/8 / 9/9 / 1/4 | 15620 | 0.0035 | 33 | 1 | 0/45 |
+| 2026-10-05-glm-5.3-flash | zai/glm-5.3-flash | 63f293b | 20/24 | 83% (64%-93%) | 2/2 / 8/8 / 9/9 / 1/5 | 15228 | 0.0034 | 32 | 0 | 0/44 |
 
 ```text
                                 pass  rate     95% CI n eff  tok/pass   $/pass s/make errors
-zai/glm-5.3-flash             20/23    87%   68%-95%     23     15620   0.0035     33      1
+zai/glm-5.3-flash             20/24    83%   64%-93%     24     15228   0.0034     32      0
 zai/glm-5.3                   37/48    77%   62%-87%     41     15109   0.0182     43      0
-zai/glm-5.3 - zai/glm-5.3-flash: -10 points, 95% CI -27 to +12; 0 tasks flipped, McNemar p = 1.00; 7 passed half their trials on a side
+zai/glm-5.3 - zai/glm-5.3-flash: -6 points, 95% CI -24 to +15; 0 tasks flipped, McNemar p = 1.00; 7 passed half their trials on a side
 zai/glm-5.3: 14 of 79 requests were answered by the other model; the tasks whose every request it answered itself pass 29/36
 passed by zai/glm-5.3-flash only: none
 passed by zai/glm-5.3 only: none
@@ -260,36 +268,42 @@ Each make's stage and requests (`*`: the other model answered at least one reque
 | life | hard | check (2) | pass (3) | pass (1) |
 | minesweeper | hard | check (2) | make (3) | check (2) |
 | memory | hard | pass (4) | check (1) | check (2) |
-| 2048 | hard | smoke (4) | check (3)* | harness (5) |
+| 2048 | hard | smoke (4) | check (3)* | check (4) |
 | tetris | hard | pass (2) | smoke (5)* | smoke (5) |
 
 What it says:
 
-- **No measured difference between the models.** The difference is -10 points with an interval
-  from -27 to +12, and no task flipped (7 passed half their trials on one side). Flash costs a
+- **No measured difference between the models.** The difference is -6 points with an interval
+  from -24 to +15, and no task flipped (7 passed half their trials on one side). Flash costs a
   fifth as much per pass and makes an app in three quarters of the time. To tell them apart this
   suite needs more tasks, and harder ones: more trials narrow the interval only as far as its 24
   tasks allow.
-- **The room is in the hard tasks**: 3 of 10 and 1 of 4. Tiny to medium tasks pass 53 of 57.
+- **The room is in the hard tasks**: 3 of 10 and 1 of 5. Tiny to medium tasks pass 53 of 57.
 - **The fails are real bugs**, read from the transcripts: a die whose face 2 draws one pip, a
   guess game that picks its secret only on New game (shown only after a win), life's Play with
   no `every`, minesweeper that never sets its win or can mine the first tap, memory that never
   deals or shows card values always, a traffic light that lights green as yellow, connect four
-  whose `for r in 5..-1` never runs, 2048 packing tiles into decimal digits, tetris clearing its
-  board to length 0.
+  whose `for r in 5..-1` never runs, 2048 packing tiles into decimal digits, Flash's 2048
+  spawning 3s (`2 + 2 * random(5) / 4`), tetris clearing its board to length 0.
 - **GLM 5.3 is not always GLM 5.3**: the free AI answered 14 of its 79 requests with Flash (its
   provider busy), so its numbers are partly Flash's.
-- **A harness bug**: applang's smoke test, within a tick, picks its key, tap and click from the
-  render before any of them, so a key that ends a game leaves the click on a button no longer
-  shown (E0213, "nothing shown has id 2"). Flash's 2048 met it, and the coder sent it to the
-  model as the program's fault, five times; it is graded `harness`, counted apart, since the
-  smoke test never finished. It is not rare in the hard games: the tetris reference itself meets
-  it for about 1 piece order in 6 (4 of 24 shifts of its draws). So a hard game's make can be
-  spent on a fault that is not its own, and the hard tasks' rates are the harness's as well as
-  the model's until the smoke test is fixed (in `programs/applang/src/smoke.rs`: each event of a
-  tick taken from the render after the one before). That fix changes what the coder checks:
-  after it, a recorded run whose requests all still replay is graded again offline (`replay
-  --write`, which the test asks for), and one whose requests change needs a live run.
+- **A harness bug, fixed**: applang's smoke test took a tick's key, tap and click from the render
+  before any of them, so a key that ended a game left the click on a button no longer shown
+  (E0213, "nothing shown has id 3"). Flash's 2048 met it: its fourth program ran clean, but the
+  coder sent it back to the model as faulting, and its fifth, which met it too, was graded
+  `harness`. It was not rare in the hard games: the tetris reference met it for one piece order
+  in seven. Now each event is taken from what shows after the one before
+  (`programs/applang/src/smoke.rs`; `makes`' test runs the tetris reference on all seven orders).
+  Graded again offline, every request replays (the bug changed nothing the coder said in any
+  other make), and that 2048 ends ready after four requests and fails its check, spawning 3s. No
+  make is graded `harness` now, and none can be while the smoke test sends events only for what
+  shows. The stage is kept as a guard, since E0213 can come only from what drives an app: were
+  the smoke test to send one again, the grade would not count it as the model's fail, though the
+  coder, which cannot tell, would still send it to the model mid-make, as it did here.
+
+Since then the coder's prompt has moved to `09141db7e75a4b45` (a grid's cell is the square's
+index, never its color, shown by a palette), so no recorded request replays: the runs above are
+stale (kept as they were, never graded again) until live runs at the new prompt replace them.
 
 ## Next suites (designed, not built)
 

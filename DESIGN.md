@@ -122,8 +122,8 @@ frame: os → shell::draw → gfx::DrawList → platform::Renderer: one draw cal
 | `platform` | the browser boundary: canvas, WebGL2, input, textarea, fetch, storage, cursor |
 | `os` | the wasm entry: fonts, VFS, the app registry, theme storage, event glue |
 | `report` | telemetry: notes of what the page saw, feedback and error reports to compusophy's inbox (`api/feedback.mjs`), the outbox that keeps each until it is taken, a panic's beacon |
-| `tiny` | a decoder-only transformer in plain Rust, no dependencies: a byte-level BPE, forward and hand-written backward passes in f32, AdamW on threads, sampling with a KV cache, a weights file checked by its hash; seeded, the same bits on any number of threads |
-| `lab` | the model lab, a dev tool never shipped: the corpus of verified applang programs (`data/manifest.tsv`), an n-gram baseline, and the commands that train tiny and measure what it writes (`data/results.md`) |
+| `tiny` | a decoder-only transformer in plain Rust, no dependencies: a byte-level BPE, forward and hand-written backward passes in f32, AdamW on threads, sampling with a KV cache, a weights file checked by its hash; seeded, the same bits on any number of threads; the n-gram baseline it must beat; a map over threads |
+| `lab` | the model lab, a dev tool never shipped: the corpus of verified applang programs (`data/manifest.tsv`), decoding constrained by applang's lexer and parser, and the commands that train tiny and measure what it writes (`data/results.md`) |
 | `tools/serve` | dev-only static server for `dist/`, never shipped |
 | `tools/eval` | dev-only eval runner: the system's `curl` against the free AI, paced under its limits; never shipped |
 
@@ -312,10 +312,14 @@ one. Forked crates keep their Apache-2.0 license and note their origin.
   is the news. Answers and questions show as plain text (a model's
   backticks and bold taken out), each receipt counting its steps ("1
   step"); the model is told its last reply asks nothing (ask_user does)
-  and claims only what the latest screen shows (a game it started runs
-  on: it says it started it), and its screen header says a touch screen
-  (the person's last press a finger's), so its hints name taps, never
-  keys.
+  and claims only what the latest screen shows (after a press into a board
+  or a game, only what it did, never its live state, a length or a score,
+  which moves on before the person reads it), and its screen header says
+  a touch screen (the person's last press a finger's), so its hints name
+  taps, never keys. It opens an app by the name the home screen shows, in
+  any case, with or without `.app` (`host::Host::named`: a made app in
+  `~/apps` too, where `snake` was once no app, E0914; with `.app`, only
+  a made one, so `files.app` is never Files).
   Only Stop, or Escape while the overlay has the keys (which, at a question
   or before the pill shows, hides the card too), stops it: the
   person's own presses, keys and wheel go where they go beside its acts
@@ -364,8 +368,9 @@ one. Forked crates keep their Apache-2.0 license and note their origin.
   grays, a black accent, no light; a soft shadow and a white top edge as
   on Dawn). Settings shows them in a row, the default first and the rest
   after it, around (Mono Light, Midnight, Dawn), the current one ringed
-  in the accent (and checked where every name has room for the check);
-  narrower, two across, the dark ones over each other. A theme is plain
+  in the accent and checked at any width (a check on a disc of the accent
+  in its miniature's top right corner, clear of its name); narrower, two
+  across, the dark ones over each other. A theme is plain
   data: backdrop, surfaces, glass, text ramp, one accent and the
   terminal's 16 colors; nothing draws from a color constant. The choice
   is kept in `localStorage` under `compusophy.theme`.
@@ -546,13 +551,23 @@ one. Forked crates keep their Apache-2.0 license and note their origin.
   the window's size or its boards changed (`uiview::View::around`), the
   room left above drawn above it, so a board keeps its size and place as a
   button or label comes and goes, after each first shows; with a handler
-  they are pads. Studio's prompt asks that whatever is to be seen (a game,
-  a board, drawing, animation, a clock, a chart) be drawn on a canvas,
-  never spelled out in labels and buttons (its first example is snake on
-  pixels); that a game show the same widgets before it as after (Start,
-  hidden while it plays) and say Game over on the canvas; and that a paint
-  app show the color it paints and its squares' edges faintly (gray) under
-  the paint.
+  they are pads. A pad grid's squares are a target before the boards
+  share the room (`uiview::TAP`, 24 px, or 44 in a narrow window, as its
+  width holds them, a px less while the grids would take more than two
+  thirds of the room); then every board takes the largest share of its
+  largest that all of them fit in, never more than without the target.
+  So a palette of 7 beside a swatch is no row of 8 px squares, a painting
+  keeps a third of its share at least, and what fit still fits. In a
+  row, a grid its even share leaves short of the target takes it, where
+  what is left still holds every other grid's. Studio's prompt asks that
+  whatever is to be seen (a game, a board, drawing, animation, a clock, a
+  chart) be drawn on a canvas, never spelled out in labels and buttons
+  (its first example is snake on pixels); that a game show the same
+  widgets before it as after (Start, hidden while it plays) and say Game
+  over on the canvas; that a paint app show the color it paints and its
+  squares' edges faintly (gray) under the paint; and that a grid's
+  handler read its `cell` as the square's index, never its color (a
+  palette reads its list: `color = pal[cell]`).
   **Editor** writes plain text, a new note in `~/notes`;
   Files and the Terminal's `edit` open files in it (a `.app` in Studio).
   **Welcome** (a program, its mark revealed by the desktop's clock)
@@ -759,23 +774,40 @@ Newcombe's, cost per pass and the tasks that flipped.
   backward pass written by hand and checked against finite differences,
   AdamW on 8 threads, a KV cache, a weights file ending in its hash), and
   `lab`, a dev tool that makes the corpus (each applang program in the repo
-  that compiles, once, content-addressed: 100 found, a dozen of them real
-  apps and the rest test snippets; 570 with variants, nearly all renames, so
-  90 shapes; held out by shape; `programs/lab/data/manifest.tsv`, which a
-  test holds to the repo), trains tiny on it and judges what it writes with
-  applang's own checker and smoke test (`results.md` there). The evals'
-  answer keys (`programs/makes/refs`) never join it: a model is measured on
-  them, not trained on them. Measured 2026-10-05: 990k parameters, 600 steps
-  of 8 x 1024 tokens in 37 minutes on 8 threads. Of 100 programs prompted by
-  10 app headers, none of tiny's compiles, at any temperature tried, from its
-  last weights or from those with the lowest held-out loss; it writes real
-  openings (states, an icon line), and its first error comes 38% of the way
-  through on average. An 8-gram over the same tokens compiles 2, both copies
-  of corpus programs (its first error: 43%). Held-out loss: tiny at best
-  3.59 nats a token (step 210; then it overfits), a 3-gram 3.53: tiny is no
-  better than counting yet. The pipeline is the result; more verified data
-  is what moves the number (each app added to the repo joins on `lab
-  corpus`).
+  that compiles, once, content-addressed: 101 found, a dozen of them real
+  apps and the rest test snippets; 988 with variants: renames and, since
+  the second run, near-copies with a line dropped or numbers changed,
+  which add 267 of the 358 shapes; held out by shape;
+  `programs/lab/data/manifest.tsv`, which a test holds to the repo), trains
+  tiny on it, stopping once the held-out loss stops falling, and judges
+  what it writes with applang's own checker and smoke test (`results.md`
+  there), free and with decoding constrained by applang's lexer and by its
+  parser. The evals' answer keys (`programs/makes/refs`) never join it: a
+  model is measured on them, not trained on them. Measured 2026-10-05, each
+  run on the corpus as it was then, the one `results.md` names (the first
+  570 programs, the second and third 976, 100 found: a test of the smoke
+  test has added a program and its 11 variants since, in training, the
+  same 130 held out; `lab train` and `measure` build the corpus from the
+  repo, so they reproduce the third run at 1328b09), 990k parameters, 100
+  programs prompted by 10 app headers. First run (600 steps of 8 x 1024
+  tokens, 37 minutes on 8 threads): none of tiny's compiles, at any
+  temperature; an 8-gram compiles 2, copies of corpus programs. Second
+  run (the wider corpus; stopped at step 270, the rate still 70% of its
+  peak) and third (the cosine planned over 300 steps, all run, 21
+  minutes): still none of tiny's compiles, free or constrained.
+  Free or under the lexer's rule its first error, nearly always the
+  parser's E0101, comes 1 to 3% of the way through (the first run's 38%,
+  and the second's first figures, took the compiler's first reported
+  error, which puts a lexer error anywhere before an earlier parser one).
+  Under the parser's rule nothing it writes has a syntax error, but it
+  ends only 1 to 4 of 100 programs; the rest run to the 2,048-token cut,
+  26 to 59 of them inside a block comment they opened and never closed.
+  The 8-gram compiles 4 under every rule, the 3-gram 2 under the parser's:
+  all copies. Held-out loss a byte: tiny at best 1.505 nats (third run;
+  1.530 in the second, 1.501 in the first), a 3-gram 1.491 (1.479 in the
+  first): tiny is no better than counting yet. The pipeline is the result;
+  more verified data is what moves the number (each app added to the repo
+  joins on `lab corpus`).
 
 ## Open questions
 
