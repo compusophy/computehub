@@ -155,7 +155,7 @@ impl Shell {
         let ((x, y), now) = (self.pointer.unwrap_or_default(), self.host.now_ms);
         let hit = self.hit(x, y);
         (self.grab, self.app_press, self.armed, self.fling) = (None, None, None, None);
-        self.down = None;
+        (self.down, self.hush) = (None, hit);
         if hit == Some(Target::Off) {
             // Outside a menu, or the open folder (with none), closes it.
             (self.menu, self.grid.open) = (None, self.grid.open.filter(|_| self.menu.is_some()));
@@ -163,8 +163,11 @@ impl Shell {
         }
         let overlay = matches!(hit, Some(Target::Body(OVERLAY)));
         match hit {
-            // The bare desktop hides the overlay, but its working pill (and Stop) stays.
-            Some(Target::Desktop) if !self.host.agent.working => self.overlay = Default::default(),
+            // The bare desktop hides the overlay, but its working pill (and Stop) stays; hidden,
+            // the dot of an answer unseen stays too.
+            Some(Target::Desktop) if self.overlay.open && !self.host.agent.working => {
+                self.overlay = Default::default()
+            }
             Some(Target::Assistant) => {}
             _ => self.overlay.focus = overlay,
         }

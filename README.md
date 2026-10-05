@@ -17,14 +17,15 @@ install, and no server runs your apps: the tab is the machine.
 - **Programs.** Apps are WebAssembly programs (WASI preview 1), each in its own Web Worker,
   under a small kernel in the page: processes, a file system, consoles, jobs and pipes. A program
   with a window describes it as a widget tree; the desktop draws it.
-- **Terminal.** A program drawing an xterm screen of `/bin/sh`: Unix-like commands, pipes (`a | b`), redirects
-  (`<`, `>`, `>>`), history.
+- **Terminal.** A program drawing an xterm screen of `/bin/sh`: Unix-like commands (`ls -l`,
+  `cat -n`, `mv`, `wc`, `rev`, ...), pipes (`a | b`), redirects (`<`, `>`, `>>`), scripts
+  (`sh -c`, `sh file`), history.
 - **Studio.** Make an app by describing it. A coding agent writes it in applang, a small
   language made for this, then tests and fixes it. Games, boards, drawings, clocks and charts
   draw on a canvas: shapes, and pixels for boards of squares.
 - **Assistant.** An AI that uses the desktop as you do: it reads the screen, then clicks, types
-  and opens apps. It reads and writes your files, and with your yes tells compusophy which tool
-  it lacked.
+  and opens apps, stepping aside for the one you use next (a game it started). It reads and
+  writes your files, and with your yes tells compusophy which tool it lacked.
 - **Activity.** The resource monitor: CPU, memory, frames and AI use over the last minute, and
   a table of what runs.
 - **Files, Editor, Settings, Feedback and About.**

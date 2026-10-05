@@ -576,12 +576,12 @@ fn the_scene_holds_each_window_its_hits_its_marks_and_the_text_that_shows() {
     let (mut h, _, _) = host();
     h.open("page", None, &mut Response::default());
     h.apply(Cmd::Minimize(WinId(1)));
-    (h.agent.screen, h.agent.apps) = ((1280.0, 800.0), vec!["page".into()]);
+    (h.agent.screen, h.agent.apps, h.agent.touch) = ((1280.0, 800.0), vec!["page".into()], true);
     assert!(h.open_overlay() && h.win(OVERLAY).is_some() && !h.live(OVERLAY));
     h.text.atlas_mut().take_dirty();
     let s = h.scene();
-    let head = (s.w, s.h, &*s.theme, s.focus, &*s.apps);
-    assert_eq!(head, (1280, 800, "Midnight", 3, &["page".to_string()][..]));
+    let head = (s.w, s.h, s.touch, &*s.theme, s.focus, &*s.apps);
+    assert_eq!(head, (1280, 800, true, "Midnight", 3, &["page".to_string()][..]));
     // Shown windows top first, then the minimized; never the overlay.
     let wins: Vec<_> = s.wins.iter().map(|w| (w.id, &*w.app, &*w.title, w.state)).collect();
     let want =
@@ -767,6 +767,27 @@ fn the_overlay_acts_as_a_person_and_hears_once_the_screen_settles() {
     h.ask(1, vec![Ask::Act { id: 5, act: Act::Window { win: 1, op: WinOp::Close }.encode() }]);
     let no = Event::Acted { id: 5, code: acted::REFUSED, note: "".into(), scene: vec![] };
     assert!(log.borrow()[n..].contains(&(1, E::Agent(no))) && h.live(WinId(1)));
+}
+
+#[test]
+fn the_overlay_steps_aside_for_a_window_still_open() {
+    // Shown, it raises welcome (minimized meanwhile), the shell told whether it hides. Another
+    // window may not ask it, nor may it for a window gone. Hidden, it raises none (the person
+    // moved on); a task that ends then is the shell's to mark unread.
+    let (mut h, _, _) = host();
+    let _ = (h.open_overlay(), h.apply(Cmd::Minimize(WinId(1))));
+    let yields = |win, hide| vec![Ask::Yield { win, hide }];
+    h.agent.shown = Some(RectF::default());
+    let _ = (h.ask(2, yields(1, true)), h.ask(0, yields(9, true)));
+    assert!(h.agent.aside.is_none() && h.focused_app() == Some(WinId(2)));
+    h.ask(0, yields(1, false));
+    assert!(h.agent.aside == Some(false) && h.focused_app() == Some(WinId(1)));
+    (h.agent.shown, h.agent.aside) = (None, None);
+    let _ = (h.apply(Cmd::Focus(WinId(2))), h.ask(0, yields(1, true)));
+    assert!(h.agent.aside == Some(true) && h.focused_app() == Some(WinId(2)));
+    let working = |on| Ask::Status { working: on };
+    h.ask(0, vec![working(false)]);
+    assert!(!h.agent.ended && (h.ask(0, vec![working(true), working(false)]), h.agent.ended).1);
 }
 
 #[test]

@@ -32,7 +32,8 @@ use std::mem;
 pub mod ai;
 pub mod home;
 pub mod remote;
-pub mod report;
+/// Telemetry: notes, feedback and error reports, the outbox (its own crate).
+pub use ::report;
 
 use gfx::{DrawList, Rgba};
 use logon::profiles::{LIST, set_face};

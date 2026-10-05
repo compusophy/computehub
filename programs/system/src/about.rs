@@ -24,8 +24,9 @@ const AUTHOR: &str = "Made by compusophy. Apache-2.0.";
 const SOURCE: &str = "github.com/compusophy/computehub";
 /// Every crate and its role.
 #[rustfmt::skip]
-pub(crate) const STACK: [(&str, &str); 37] = [
-    ("os", "The wasm entry: fonts, files, telemetry"),
+pub(crate) const STACK: [(&str, &str); 38] = [
+    ("os", "The wasm entry: fonts, files, program windows"),
+    ("report", "Telemetry: notes, reports and their outbox"),
     ("platform", "The browser boundary: canvas, WebGL2, input"),
     ("logon", "The welcome: the mark, the start's record, sign-in"),
     ("profiles", "Profiles: their keys, faces, names and PINs"),

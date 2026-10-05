@@ -1,0 +1,17 @@
+[package]
+name = "compusophy-report"
+description = "compusophyOS's telemetry: notes of what the page saw, feedback and error reports to compusophy's inbox, the outbox that keeps them until it takes them, and a panic's beacon."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[lib]
+name = "report"
+
+[dependencies]
+compusophy-platform.workspace = true
+compusophy-profiles.workspace = true
+compusophy-ui.workspace = true

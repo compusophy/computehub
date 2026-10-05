@@ -4,7 +4,9 @@
 //! id indexes [`NAMES`] (the import allowlist) and [`ARITY`] and has a constant.
 //!
 //! Preopens: fd 3 is `.` (the cwd), then each top-level directory (roots `["/"]`) or each root,
-//! then /dev. Paths resolve lexically (`..` stops at "/"); main checks the roots. fds are paths:
+//! then /dev. wasi-libc names `.` as it would `/` (the empty prefix), so a program that started
+//! outside `/` reaches `/x` from `.`, up (sh: `./../../x` from the home), or it would be the
+//! cwd's `x`. Paths resolve lexically (`..` stops at "/"); main checks the roots. fds are paths:
 //! each file call is one wire op (a WRITE 64 KiB at most). fds 0 and 1 are as the Start says:
 //! the console, a file, a pipe (in a job: each read one PIPE_READ, each write one PIPE_WRITE) or,
 //! for stdout, nothing; fd 2 is the console. /dev is local: `null`, `tty` (the console: a read

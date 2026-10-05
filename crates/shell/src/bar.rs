@@ -1,4 +1,5 @@
-//! The top bar (see `home::bar`), wired to the pointer; Show desktop, the mark's (and mod+D's).
+//! The top bar (see `home::bar`), wired to the pointer; Show desktop, the mark's (and mod+D's),
+//! its tooltip saying what the next press does.
 
 use gfx::DrawList;
 use ui::Theme;
@@ -29,6 +30,11 @@ impl Shell {
             self.host.apply(Cmd::Minimize(win));
         }
         self.bare = shown;
+    }
+
+    /// Whether Show desktop would bring windows back: none shows, and one it minimized is open.
+    pub(crate) fn brings_back(&self) -> bool {
+        self.host.wm().layout().is_empty() && self.bare.iter().any(|&w| self.host.live(w))
     }
 
     /// The bar's button under the pointer, and whether it is pressed.

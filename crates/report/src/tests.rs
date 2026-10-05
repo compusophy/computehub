@@ -1,8 +1,5 @@
 use super::*;
-use crate::apply;
-use crate::tests::{desktop, screen};
-use platform::{App as _, Effect as Fx, Event};
-use shell::Effect;
+use platform::Effect as Fx;
 
 /// A context as a phone would give it.
 fn phone() -> Context {
@@ -162,44 +159,4 @@ fn errors_are_reported_once_a_session_unless_reports_are_off() {
     r.pump(&mut ctl, phone);
     assert_eq!(streamed(&ctl), [(FIRST_ID | 1, love.clone())]);
     assert!(ctl.storage_get(OUTBOX) == Some(love) && r.status(Default::default()).reports_off);
-}
-
-#[test]
-fn the_desktop_sends_feedback_and_reports_failures_and_tells_apps() {
-    // A terminal opens a file in Editor (as its shell asked it to).
-    let mut desk = desktop(true);
-    screen(&mut desk, vec![uiwire::Request::Open { name: "editor:~/diary-2026.txt".into() }]);
-    // Feedback an app asked for leaves at the flush after it, with what is open: apps, no files.
-    let mut ctl = Ctl::default();
-    let fx = Effect::Feedback { kind: "bug".into(), text: "Dock flickers".into(), context: true };
-    apply(vec![fx], &mut ctl, (&desk.ai.clone(), &mut 0.0), &mut desk.report);
-    // Of two timers asked for, the sooner stands (the page clock reads 0 here).
-    let (mut timer, ai) = (Ctl::default(), desk.ai.clone());
-    let wake = |ms| Effect::Kernel(ui::kernel::Effect::Wake { ms });
-    apply([1500, 2000, 100].map(wake).into(), &mut timer, (&ai, &mut 0.0), &mut desk.report);
-    assert_eq!(timer.effects(), [Fx::Wake(1500), Fx::Wake(100)]);
-    desk.flush(&mut ctl, false);
-    let sent = streamed(&ctl);
-    assert_eq!(sent.len(), 1);
-    assert!(sent[0].1.contains(r"windows  welcome, terminal, editor\n"), "{sent:?}");
-    assert!(sent[0].1.contains("Bug: Dock flickers") && !sent[0].1.contains("diary"));
-    // Its answer is the report's, not the AI's; a 503 holds it, and apps hear so.
-    let end = |id, status| Event::StreamEnd { id, status, error: String::new() };
-    desk.event(end(sent[0].0, 503), &mut Ctl::default());
-    assert!(desk.report.outbox().len() == 1 && desk.report.status(Default::default()).held);
-    // A worker that fails is noted with its program and reported.
-    let mut ctl = Ctl::default();
-    desk.event(Event::ProcError { pid: 5 }, &mut ctl);
-    let sent = streamed(&ctl);
-    assert!(sent.iter().any(|s| s.1.contains(r#""kind":"error""#)), "{sent:?}");
-    assert!(notes(1).starts_with("proc 5"));
-    // An AI request's failure is noted (its stream is not a report's); others' ends are not.
-    desk.ai.ask(5, uiwire::Request::Ai { id: 1, body: "{}".into() });
-    let mut ctl = Ctl::default();
-    desk.flush(&mut ctl, false);
-    let asked = |e: &Fx| matches!(e, Fx::Stream { id: 1, url, .. } if url == crate::ai::URL);
-    assert!(ctl.effects().iter().any(asked), "the AI's first stream");
-    desk.event(end(1, 429), &mut Ctl::default());
-    desk.event(end(77, 500), &mut Ctl::default());
-    assert_eq!(notes(1), "ai 429\n");
 }

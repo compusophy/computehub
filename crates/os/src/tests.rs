@@ -165,6 +165,18 @@ fn typed_keys_are_left_to_the_textarea_and_key_ups_prevent_only_modifiers() {
     assert!(["KeyA/a", "KeyQ/@/cag", "KeyV/v/c"].iter().all(|e| !prevented(&mut desk, e)));
     let shortcuts = ["Tab/Tab", "Enter/Enter", "KeyC/c/c", "/c/c", "KeyV/k/c"];
     shortcuts.iter().for_each(|e| assert!(prevented(&mut desk, e), "{e}"));
+    // A window opened then wants text input before its first frame only if its program opens
+    // on a field: About's keeps a phone's keyboard down and F5 for the page; Studio's raises it.
+    let open =
+        |d: &mut Desktop, name: &str| screen(d, vec![uiwire::Request::Open { name: name.into() }]);
+    assert!(open(&mut desk, "about").contains(&Fx::TextInput(false)));
+    assert!(!prevented(&mut desk, "F5/F5"));
+    assert!(open(&mut desk, "studio").contains(&Fx::TextInput(true)));
+    // So do Studio's on a file and the Assistant's overlay (mod+Space, over About's).
+    assert!(open(&mut desk, "about").contains(&Fx::TextInput(false)));
+    assert!(send(&mut desk, key("Space/ /a", true)).1.contains(&Fx::TextInput(true)));
+    assert!(send(&mut desk, key("Escape/Escape", true)).1.contains(&Fx::TextInput(false)));
+    assert!(open(&mut desk, "studio:x.app").contains(&Fx::TextInput(true)));
 }
 
 #[test]
@@ -398,6 +410,55 @@ fn programs_reach_the_kernel_and_its_effects_the_page() {
     for ev in [Event::Chunk { id: 1, data: vec![1] }, end] {
         assert_eq!((send(&mut desk, ev.clone()), input_of(ev)), (((false, false), vec![]), None));
     }
+}
+
+#[test]
+fn the_desktop_sends_feedback_and_reports_failures_and_tells_apps() {
+    use report::{URL, notes};
+    let streamed = |ctl: &Ctl| -> Vec<(u32, String)> {
+        let text = |body: &[u8]| String::from_utf8_lossy(body).into_owned();
+        let posts = ctl.effects().iter().filter_map(|e| match e {
+            Fx::Stream { id, url, body, .. } if url == URL => Some((*id, text(body))),
+            _ => None,
+        });
+        posts.collect()
+    };
+    // A terminal opens a file in Editor (as its shell asked it to).
+    let mut desk = desktop(true);
+    screen(&mut desk, vec![uiwire::Request::Open { name: "editor:~/diary-2026.txt".into() }]);
+    // Feedback an app asked for leaves at the flush after it, with what is open: apps, no files.
+    let mut ctl = Ctl::default();
+    let fx = Effect::Feedback { kind: "bug".into(), text: "Dock flickers".into(), context: true };
+    apply(vec![fx], &mut ctl, (&desk.ai.clone(), &mut 0.0), &mut desk.report);
+    // Of two timers asked for, the sooner stands (the page clock reads 0 here).
+    let (mut timer, ai) = (Ctl::default(), desk.ai.clone());
+    let wake = |ms| Effect::Kernel(ui::kernel::Effect::Wake { ms });
+    apply([1500, 2000, 100].map(wake).into(), &mut timer, (&ai, &mut 0.0), &mut desk.report);
+    assert_eq!(timer.effects(), [Fx::Wake(1500), Fx::Wake(100)]);
+    desk.flush(&mut ctl, false);
+    let sent = streamed(&ctl);
+    assert_eq!(sent.len(), 1);
+    assert!(sent[0].1.contains(r"windows  welcome, terminal, editor\n"), "{sent:?}");
+    assert!(sent[0].1.contains("Bug: Dock flickers") && !sent[0].1.contains("diary"));
+    // Its answer is the report's, not the AI's; a 503 holds it, and apps hear so.
+    let end = |id, status| Event::StreamEnd { id, status, error: String::new() };
+    desk.event(end(sent[0].0, 503), &mut Ctl::default());
+    assert!(desk.report.outbox().len() == 1 && desk.report.status(Default::default()).held);
+    // A worker that fails is noted with its program and reported.
+    let mut ctl = Ctl::default();
+    desk.event(Event::ProcError { pid: 5 }, &mut ctl);
+    let sent = streamed(&ctl);
+    assert!(sent.iter().any(|s| s.1.contains(r#""kind":"error""#)), "{sent:?}");
+    assert!(notes(1).starts_with("proc 5"));
+    // An AI request's failure is noted (its stream is not a report's); others' ends are not.
+    desk.ai.ask(5, uiwire::Request::Ai { id: 1, body: "{}".into() });
+    let mut ctl = Ctl::default();
+    desk.flush(&mut ctl, false);
+    let asked = |e: &Fx| matches!(e, Fx::Stream { id: 1, url, .. } if url == ai::URL);
+    assert!(ctl.effects().iter().any(asked), "the AI's first stream");
+    desk.event(end(1, 429), &mut Ctl::default());
+    desk.event(end(77, 500), &mut Ctl::default());
+    assert_eq!(notes(1), "ai 429\n");
 }
 
 #[test]

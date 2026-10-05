@@ -3,10 +3,11 @@
 //! reply streams back in, its status and the program streaming in show as they change (a frame
 //! only then), and its end installs the program it keeps: saved (a first make names the file),
 //! run, and recorded in `~/.ai/makes.jsonl` (and, when it runs clean, the corpus). Unless the
-//! code was edited meanwhile: then the edits stay.
+//! code was edited meanwhile: then the edits stay. Its status says how it ended, and how many
+//! requests it took when more than one and the AI did not fail (`ready · 53 s · 2 tries`).
 
 use crate::{Disk, Studio};
-use coder::ai::{CORPUS, corpus_line, state_path};
+use coder::ai::{CORPUS, corpus_line, put_num, state_path};
 use coder::receipt::{self, MAKES};
 use coder::{Done, Knobs, Make, Out, Outcome, Task};
 use uiwire::{Request, Style};
@@ -117,6 +118,14 @@ impl Studio {
         let (task, ready) = (mk.m.task(), done.outcome == Outcome::Ready);
         self.report = crate::report::made(task, &done);
         let mut said = done.said();
+        // How many requests it took, if more than one (but for the AI failing: its status says
+        // when to try again).
+        let tries = done.receipt.turns.len() as u64;
+        if tries > 1 && done.outcome != Outcome::Failed {
+            said += " \u{b7} ";
+            put_num(&mut said, tries);
+            said += " tries";
+        }
         let bad = !ready && done.outcome != Outcome::Stopped;
         let mut style = if bad { Style::Error } else { Style::Small };
         let edited = self.text != task.base && !(task.base.is_empty() && self.fresh());

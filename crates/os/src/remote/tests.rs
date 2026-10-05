@@ -25,7 +25,7 @@ impl Sys {
         let mut k = Kernel::new();
         k.set_isolated(true);
         let argv = ["studio", "edit", "/apps/counter.app"].map(String::from).into();
-        let r = Remote::new(STUDIO, argv, &Ai::default());
+        let r = Remote { types: true, ..Remote::new(STUDIO, argv, &Ai::default()) };
         let mut s = Sys { r, k, fs, asked: Vec::new() };
         if start {
             s.ev(AppEvent::Resized { w: 600.0, h: 400.0 });
@@ -120,9 +120,14 @@ fn names_open_studio_and_the_first_size_starts_it() {
     assert_eq!(got, [want(0, true), want(1, true), want(2, false), want(4, false)]);
     assert_eq!(sys("activity"), want(5, true));
     assert!(SYSTEM[2].2.glyph == Glyph::Folder && open("system").is_none());
-    // Before a frame: a still note, the title its own; no process yet.
+    // Until their first frames, the windows of programs that open on a field take typing.
+    let typing = |n: &str| open(n).is_some_and(|a| a.wants_text_input());
+    let fields = ["studio", "studio:a.app", "assistant", "editor:~/b", "feedback", "terminal"];
+    let none = ["about", "files:~/a", "welcome", "activity", "settings", "/tmp/x.app"];
+    assert!(fields.iter().all(|n| typing(n)) && none.iter().all(|n| !typing(n)));
+    // Before a frame: a still note, the title its own; no process yet; it takes typing.
     let mut s = Sys::new(false);
-    assert!(!s.r.wants_text_input() && s.k.procs().is_empty());
+    assert!(s.r.wants_text_input() && s.k.procs().is_empty());
     let (list, hits) = s.draw();
     assert!(hits.is_empty() && !list.is_empty() && s.r.title().is_empty());
     // The first size starts it; once the worker is ready, Start carries the marker's URL.
@@ -164,6 +169,7 @@ fn names_open_studio_and_the_first_size_starts_it() {
     let mut s = Sys::new(false);
     assert!(s.fs.remove(STUDIO, false).is_ok() && s.ev(AppEvent::Resized { w: 1.0, h: 1.0 }));
     assert_eq!((s.r.note.as_str(), s.k.procs().len()), ("/bin/studio: not found", 0));
+    assert!(!s.r.wants_text_input());
     let mut s = Sys::new(true);
     s.k.message(&mut s.fs, 2, &wire::Msg::ConsWrite { data: b"panicked\n" }.encode());
     s.k.message(&mut s.fs, 2, &wire::Msg::Exit { status: 101 }.encode());
@@ -225,6 +231,62 @@ fn clicks_keys_and_requests_go_through() {
     s.k.message(&mut s.fs, 2, &wire::Msg::Exit { status: 0 }.encode());
     s.asked.clear();
     assert!([s.ev(AppEvent::Io), s.ev(AppEvent::Io)] == [false; 2] && s.asked == [R::CloseSelf]);
+}
+
+#[test]
+fn a_quick_drag_across_a_busy_board_paints_every_unit_it_crossed() {
+    // A canvas pad on a timer, ten units across: a press taps its unit, and the stroke goes on
+    // while that tap is out, quicker than a frame's round trip; no later sample comes.
+    let mut s = Sys::new(true);
+    let canvas = |above: &str| {
+        let label = Node::Text { id: 0, style: uiwire::Style::Title, text: above.into() };
+        let pad = Node::Canvas { id: 9, w: 10, h: 10, draws: Vec::new() };
+        if above.is_empty() { vec![pad] } else { vec![label, pad] }
+    };
+    s.show(canvas(""), vec![Request::Timer { ms: 100 }]);
+    s.draw();
+    s.ev(AppEvent::Tick { now_ms: 0.0 });
+    let x = |s: &Sys, unit: f32| {
+        let b = s.r.view.grids[0].rect;
+        (b.x + b.w / 10.0 * (unit + 0.5), b.y + 1.0)
+    };
+    let stroke = |s: &mut Sys, units: &[f32]| {
+        let (x0, y) = x(s, 0.0);
+        s.ev(AppEvent::PointerDown { x: x0, y, id: Some(WidgetId(9)) });
+        units.iter().for_each(|&u| assert!(!s.ev(AppEvent::Drag { x: x(s, u).0, y })));
+    };
+    stroke(&mut s, &[3.0, 6.0, 9.0]);
+    assert_eq!(s.events(), [Event::Tap { id: 9, cell: 0 }]);
+    // Answered with a label that moves the board down, the held end waits for that answer to
+    // draw, then asks a frame and is tapped by it, where it was on the board, after the Tick
+    // then due: each unit on the way, once, busy till all ten frames are in.
+    assert!(s.show(canvas("Painted"), vec![]) && !s.r.play.held());
+    s.draw();
+    assert!(s.r.play.held() && s.r.frame_in(0.0) == Some(0));
+    s.ev(AppEvent::Tick { now_ms: 100.0 });
+    let taps = |cells: std::ops::Range<u32>| cells.map(|cell| Event::Tap { id: 9, cell });
+    let ticked = [Event::Tick { ms: 100 }].into_iter().chain(taps(1..10)).collect::<Vec<_>>();
+    assert!(s.events() == ticked && !s.r.play.held());
+    let answer = |s: &mut Sys, n: usize| (0..n).all(|_| s.r.busy() && s.show(canvas("P"), vec![]));
+    assert!(answer(&mut s, 10) && !s.r.busy());
+    // A Tick that goes while a tap is out is answered after it: a drag then waits for both.
+    stroke(&mut s, &[]);
+    s.ev(AppEvent::Tick { now_ms: 200.0 });
+    assert!(s.events() == [Event::Tap { id: 9, cell: 0 }, Event::Tick { ms: 100 }]);
+    assert!(answer(&mut s, 1) && !s.r.busy());
+    s.draw();
+    s.ev(AppEvent::Drag { x: x(&s, 3.0).0, y: x(&s, 3.0).1 });
+    assert!(s.events() == taps(1..4).collect::<Vec<_>>() && answer(&mut s, 4) && !s.r.busy());
+    // Anything else sent after a stroke (Escape here) drops its held end: out of order.
+    s.draw();
+    stroke(&mut s, &[9.0]);
+    s.ev(key(Key::Escape, ""));
+    assert!(answer(&mut s, 1) && !s.r.busy());
+    s.draw();
+    assert!(!s.r.play.held() && s.r.frame_in(250.0) == Some(50));
+    s.ev(AppEvent::Tick { now_ms: 250.0 });
+    let esc = Event::Key { id: 0, key: uiwire::Key::Escape, mods: 0, ch: '\0' };
+    assert_eq!(s.events(), [Event::Tap { id: 9, cell: 0 }, esc]);
 }
 
 #[test]
@@ -308,6 +370,63 @@ fn asks_wait_for_the_start_and_frames_move_the_keyboard() {
     ["x", "y"].into_iter().for_each(|t| _ = s.ev(text(t)));
     assert!(!s.ev(AppEvent::Ask("more".into())));
     assert_eq!(s.events(), [change(5, 1, "x"), change(5, 2, "xy"), ask("more")]);
+}
+
+#[test]
+fn typing_before_the_first_frame_goes_into_the_field_it_focuses() {
+    // As the page sends it: each character a key, then its text (an Enter's too, an echo).
+    let typed = |s: &str| {
+        let keys = s.chars().map(|c| [key(Key::Char(c), ""), text(&c.to_string())]);
+        keys.collect::<Vec<_>>().concat()
+    };
+    let enter = [key(Key::Enter, ""), text("\n")];
+    // Held while the program starts, chords too; its first frame's Input takes them as typed,
+    // Enter its Submit; the next frame, nothing.
+    let mut s = Sys::new(true);
+    let ctrl_enter = key(Key::Enter, "c");
+    let held = [typed("sn"), vec![key(Key::Backspace, "")], typed("nake"), vec![ctrl_enter]];
+    let mut held = [&held.concat()[..], &enter].concat().into_iter();
+    assert!(held.all(|ev| !s.ev(ev)) && s.r.wants_text_input() && s.events().is_empty());
+    assert!(s.show(vec![input(5, "")], vec![Request::Focus { id: 5 }]));
+    let run = Event::Key { id: 5, key: uiwire::Key::Enter, mods: mods::CTRL, ch: '\0' };
+    let submit = Event::Submit { id: 5 };
+    assert_eq!(s.events(), [change(5, 1, "s"), change(5, 7, "snake"), run, submit]);
+    s.show(vec![input(5, "")], vec![Request::Focus { id: 5 }]);
+    assert!(s.events().is_empty() && s.r.texts.inputs[0].1 == "snake");
+    // Into an Area, Enter is a new line.
+    let mut s = Sys::new(true);
+    let area = || vec![Node::Area { id: 8, value: "".into(), placeholder: "".into() }];
+    [typed("hi"), enter.to_vec(), typed("x")].concat().into_iter().for_each(|ev| _ = s.ev(ev));
+    s.show(area(), vec![Request::Focus { id: 8 }]);
+    s.show(area(), vec![]);
+    assert_eq!(s.events(), [change(8, 1, "h"), change(8, 4, "hi\nx")]);
+    // Later frames give nothing again: one between an Enter and its echo leaves one new line.
+    let [down, echo] = enter.clone();
+    assert!(s.ev(down) && s.show(area(), vec![]) && !s.ev(echo));
+    assert_eq!(s.r.texts.areas[0].1.text, "hi\nx\n");
+    // A first frame that focuses no field: Enter and the keys it asked for go as keys, text
+    // nowhere, and the window takes typing no more.
+    let mut s = Sys::new(true);
+    [text("lost"), key(Key::Left, ""), key(Key::Enter, "")].into_iter().for_each(|ev| _ = s.ev(ev));
+    let keys = vec![Request::Keys { on: true }];
+    assert!(s.show(vec![input(5, "")], keys) && !s.r.wants_text_input());
+    let k = |key| Event::Key { id: 0, key, mods: 0, ch: '\0' };
+    assert_eq!(s.events(), [k(uiwire::Key::Left), k(uiwire::Key::Enter)]);
+    s.show(vec![input(5, "")], vec![Request::Focus { id: 5 }]);
+    assert!(s.events().is_empty() && s.r.texts.inputs[0].1.is_empty());
+    // At most HELD bytes, and nothing after them: no Enter sends half a paste.
+    let mut s = Sys::new(true);
+    let full = "a".repeat(HELD);
+    [text(&full), text("b"), key(Key::Enter, "")].into_iter().for_each(|ev| _ = s.ev(ev));
+    s.show(vec![input(5, "")], vec![Request::Focus { id: 5 }]);
+    assert_eq!(s.events(), [change(5, 1, &full)]);
+    // The Terminal's console hears its keys from the start: none are held.
+    let mut s = Sys::new(false);
+    let term = Remote::new(TERMINAL, vec!["terminal".into()], &Ai::default());
+    s.r = Remote { own: Some("bin/terminal.wasm"), tty: Some(Default::default()), ..term };
+    s.ev(AppEvent::Resized { w: 1.0, h: 1.0 });
+    let enter = Event::Key { id: 0, key: uiwire::Key::Enter, mods: 0, ch: '\0' };
+    assert!(!s.ev(key(Key::Enter, "")) && s.events().ends_with(&[enter]));
 }
 
 #[test]

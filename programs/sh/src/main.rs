@@ -1,7 +1,11 @@
 //! `sh` (see the library) on its console: raw while it edits a line, cooked while a job runs,
-//! files through `std::fs` (which WASI serves from the desktop's VFS), jobs through /dev/job.
-//! With no console (`sh < script`, a pipe) each line of its input is a command and nothing is
-//! edited. Exit status 0 at `exit`, Ctrl+D on an empty line or the end of its input.
+//! files through `std::fs` (which WASI serves from the desktop's VFS; each path from the
+//! directory it started in, [`sh::from_start`]), jobs through /dev/job. It starts in its job's
+//! working directory. `sh -c line` runs the line, `sh file` each line of the file, and with no
+//! console (`sh < script`, a pipe) each line of its input is a command; then nothing is edited,
+//! and the exit status is the last line's (or `exit n`'s). On its console it is `exit n`'s,
+//! else 0 (at `exit`, Ctrl+D on an empty line or the end of its input), so its Terminal closes
+//! unless `exit` gives another.
 
 #![forbid(unsafe_code)]
 
@@ -10,13 +14,21 @@ use std::io::{self, ErrorKind, Read, Write};
 use std::process::ExitCode;
 
 use sh::{Entry, Shell, Sys, Why};
+use vfs::Vfs;
 
-/// The program's world: its console's mode, if it has a console.
+/// The program's world: its console's mode, if it has a console, and how many names down the
+/// directory it started in is (each file's path goes from there).
 struct Os {
     ctl: Option<File>,
+    depth: usize,
 }
 
 impl Os {
+    /// The path `std::fs` opens for the absolute `path`.
+    fn at(&self, path: &str) -> String {
+        sh::from_start(self.depth, path)
+    }
+
     /// Sets the console raw (`on`) or cooked; whether it took.
     fn raw(&mut self, on: bool) -> bool {
         let word: &[u8] = if on { b"rawon" } else { b"rawoff" };
@@ -49,7 +61,7 @@ fn why(e: io::Error) -> Why {
 impl Sys for Os {
     fn list(&mut self, path: &str) -> Result<Vec<Entry>, Why> {
         let mut out = Vec::new();
-        for e in fs::read_dir(path).map_err(why)? {
+        for e in fs::read_dir(self.at(path)).map_err(why)? {
             let e = e.map_err(why)?;
             let meta = e.metadata().map_err(why)?;
             let name = e.file_name().to_string_lossy().into_owned();
@@ -59,21 +71,23 @@ impl Sys for Os {
     }
 
     fn read(&mut self, path: &str) -> Result<Vec<u8>, Why> {
-        fs::read(path).map_err(why)
+        fs::read(self.at(path)).map_err(why)
     }
 
     fn write(&mut self, path: &str, data: &[u8], append: bool) -> Result<(), Why> {
         let mut o = OpenOptions::new();
-        let f = o.create(true).write(!append).append(append).truncate(!append).open(path);
+        let f = o.create(true).write(!append).append(append).truncate(!append).open(self.at(path));
         f.and_then(|mut f| f.write_all(data)).map_err(why)
     }
 
     fn mkdir(&mut self, path: &str, parents: bool) -> Result<(), Why> {
+        let path = self.at(path);
         if parents { fs::create_dir_all(path) } else { fs::create_dir(path) }.map_err(why)
     }
 
     fn remove(&mut self, path: &str, all: bool) -> Result<(), Why> {
-        match fs::metadata(path).map_err(why)?.is_dir() {
+        let path = self.at(path);
+        match fs::metadata(&path).map_err(why)?.is_dir() {
             true if all => fs::remove_dir_all(path),
             true => fs::remove_dir(path),
             false => fs::remove_file(path),
@@ -82,11 +96,11 @@ impl Sys for Os {
     }
 
     fn rename(&mut self, from: &str, to: &str) -> Result<(), Why> {
-        fs::rename(from, to).map_err(why)
+        fs::rename(self.at(from), self.at(to)).map_err(why)
     }
 
     fn kind(&mut self, path: &str) -> Option<bool> {
-        fs::metadata(path).ok().map(|m| m.is_dir())
+        fs::metadata(self.at(path)).ok().map(|m| m.is_dir())
     }
 
     /// The job goes to /dev/job in one write, cooked: its programs read lines and Ctrl+C ends
@@ -120,17 +134,37 @@ fn show(s: &str, tty: bool) {
 }
 
 fn main() -> ExitCode {
+    let args: Vec<String> = std::env::args().skip(1).collect();
     let ctl = OpenOptions::new().write(true).open("/dev/consctl").ok();
-    let mut os = Os { ctl };
     let mut sh = Shell::default();
+    let pwd = std::env::var("PWD").ok().filter(|p| p.starts_with('/'));
+    // Without its PWD, from as far down as a path goes.
+    let depth =
+        pwd.as_ref().map_or(Vfs::MAX_DEPTH, |p| p.split('/').filter(|n| !n.is_empty()).count());
+    let mut os = Os { ctl, depth };
+    if let Some(pwd) = pwd {
+        sh.cwd = pwd;
+    }
     if let Some((cols, rows)) = Os::size() {
         (sh.cols, sh.rows) = (cols, rows);
     }
-    if !os.raw(true) {
-        // No console: a script, a line a command.
+    let script = match sh.script(&args, &mut os) {
+        // The console, raw while a line is edited.
+        Ok(None) if os.raw(true) => None,
+        Ok(None) => {
+            let mut text = String::new();
+            let _ = io::stdin().read_to_string(&mut text);
+            Some(text)
+        }
+        Ok(script) => script,
+        Err((why, status)) => {
+            show(&why, false);
+            return ExitCode::from(status);
+        }
+    };
+    if let Some(text) = script {
+        // A script: a line a command, on a console left as it was.
         os.ctl = None;
-        let mut text = String::new();
-        let _ = io::stdin().read_to_string(&mut text);
         for line in text.lines() {
             sh.run(line, &mut os);
             show(&std::mem::take(&mut sh.out), false);
@@ -138,7 +172,7 @@ fn main() -> ExitCode {
                 break;
             }
         }
-        return ExitCode::SUCCESS;
+        return ExitCode::from(sh.status as u8);
     }
     sh.greet();
     show(&std::mem::take(&mut sh.out), true);
@@ -154,5 +188,5 @@ fn main() -> ExitCode {
         sh.feed(&buf[..n], &mut os);
         show(&std::mem::take(&mut sh.out), true);
     }
-    ExitCode::SUCCESS
+    ExitCode::from(sh.exited.unwrap_or(0))
 }

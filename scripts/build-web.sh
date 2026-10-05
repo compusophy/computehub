@@ -50,8 +50,8 @@ flags+=("--remap-path-prefix=$cargo_home=/cargo")
 CARGO_ENCODED_RUSTFLAGS=$(IFS=$'\x1f'; printf '%s' "${flags[*]}")
 export CARGO_ENCODED_RUSTFLAGS
 
-# The build id reports and About show (option_env! in os and system): the short
-# commit, with -dirty when the tree has uncommitted changes; dev outside git.
+# The build id reports and About show (option_env! in report and system): the
+# short commit, with -dirty when the tree has uncommitted changes; dev outside git.
 COMPUSOPHY_BUILD=$(git rev-parse --short HEAD 2>/dev/null || echo dev)
 if [ -n "$(git status --porcelain 2>/dev/null)" ]; then
   COMPUSOPHY_BUILD="$COMPUSOPHY_BUILD-dirty"

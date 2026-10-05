@@ -110,15 +110,16 @@ frame: os → shell::draw → gfx::DrawList → platform::Renderer: one draw cal
 | `system` | About, Editor, Feedback, Files, Welcome and Settings, and it serves Activity: one wasip1 GUI program (`dist/bin/system.wasm`), off the boot download |
 | `activity` | Activity, the resource monitor: graphs of CPU, memory, frames and the AI over the last minute, storage, a table of what runs |
 | `studio` | the applang editor, and `AppHost`, which runs `.app` files |
-| `coder` | the coding agent Studio runs: write, check (compile, smoke on 3 seeds), fix by SEARCH/REPLACE edits, keep the best so far, stop by budget; sans-IO, replayable |
+| `coder` | the coding agent Studio runs: write, check (compile, smoke on 3 seeds, the icon line as the desktop reads it), fix by SEARCH/REPLACE edits, keep the best so far, stop by budget; sans-IO, replayable |
 | `assistant`, `chats`, `files` | the Assistant, the overlay AI that uses the desktop: a wasip1 GUI program off the boot download; its chats: each one's transcript and memory, their file, their row on its card; its file tools, the person's files by paths from the home, clipped and coded |
 | `uiwire`, `uiview` | the remote UI protocol GUI programs speak; the desktop's half, which draws their trees |
-| `canvas` | a program's `Canvas` as the desktop draws it (its shapes and pixels in the theme, on device pixels) and lists it for the AI |
+| `canvas` | a program's `Canvas` as the desktop draws it (its shapes and pixels in the theme, on device pixels, its texts on it kept inside it) and lists it for the AI |
 | `host` | the wm plus one app per window, the home screen's apps, windows held by the pointer, the keyboard's squeeze; motion, frame geometry |
 | `home` | the top bar, the home grid in the person's order (icons carried, the selection box), the bottom row (the person's dock at the left, the Assistant at the right), menus, touch |
 | `shell` | the desktop around `host`: chrome, keys, the overlay; wires the home screen to the pointer |
 | `platform` | the browser boundary: canvas, WebGL2, input, textarea, fetch, storage, cursor |
 | `os` | the wasm entry: fonts, VFS, the app registry, theme storage, event glue |
+| `report` | telemetry: notes of what the page saw, feedback and error reports to compusophy's inbox (`api/feedback.mjs`), the outbox that keeps each until it is taken, a panic's beacon |
 | `tools/serve` | dev-only static server for `dist/`, never shipped |
 
 Package names are `compusophy-<x>`; each crate's `[lib] name` is the short
@@ -206,8 +207,10 @@ one. Forked crates keep their Apache-2.0 license and note their origin.
   window shown since, it brings those windows back in their stacking
   order, the top focused (once another shows, the next press minimizes
   again). The date and time sit in the middle; Feedback (a bug) and
-  Settings at the right. A tooltip under each button names it. Welcome is
-  in the System folder.
+  Settings at the right. A tooltip under each button names it (the
+  mark's says what its press does next: Show desktop, or Bring windows
+  back); pressed, a button's or tile's tooltip goes until the pointer
+  leaves it and comes back. Welcome is in the System folder.
 - **Windows** float in a stack; focus is the top of it. A 40 px titlebar
   carries minimize, maximize and close at the right, as on Windows. Drag a
   titlebar to move (a maximized or snapped window comes back to its normal
@@ -285,7 +288,29 @@ one. Forked crates keep their Apache-2.0 license and note their origin.
   pill: one line of what it does, and Stop at its right edge however the
   line changes (its press reaches across the pill's height); the dot
   beats, and each act flashes what it touched. While a question waits it
-  is the card again, the question last, with Stop under it.
+  is the card again, the question last, with Stop under it. A task steps
+  aside for the window the person uses next (uiwire `Yield`, sent alone
+  in a frame, so a desktop older than it drops that alone). Once it
+  presses, types or keys into a canvas or grid (a game's Start), that
+  window takes the keys at once, the pill staying with Stop, so the game
+  is played as it starts, not lost behind the overlay. Answered in such a
+  window, or in one it opened or raised (or that came up new with the
+  keys after its act), still focused and shown, the overlay hides, that
+  window with the keys (raised only while the overlay showed: never taken
+  from what the person moved on to); the answer waits in the chat, the
+  tile's dot the accent's until the overlay shows again, as after any
+  task that ended while it hid. The card stays for a question, a failure
+  (the last result one, an AI error, Stop), a task that changed a setting
+  (a theme; in Settings any act but a tab's press), and, in a window only
+  opened or raised, an answer the person asked for (`chats::asks`: a
+  question mark or a question's word) or one that asks: there the answer
+  is the news. Answers and questions show as plain text (a model's
+  backticks and bold taken out), each receipt counting its steps ("1
+  step"); the model is told its last reply asks nothing (ask_user does)
+  and claims only what the latest screen shows (a game it started runs
+  on: it says it started it), and its screen header says a touch screen
+  (the person's last press a finger's), so its hints name taps, never
+  keys.
   Only Stop, or Escape while the overlay has the keys (which, at a question
   or before the pill shows, hides the card too), stops it: the
   person's own presses, keys and wheel go where they go beside its acts
@@ -354,18 +379,47 @@ one. Forked crates keep their Apache-2.0 license and note their origin.
   shell writes and its end coming back as events, and the window's keys,
   text and wheel too; the program draws its screen as a `Node::Screen` of
   8 x 17 px cells, which the desktop paints (`ui::screen`). It runs
-  `/bin/sh` (the `sh` program: `ls`, `cd`,
-  `cat`, `mkdir`, `mv`, `open`, `edit`, `run`, `theme`, ..., and programs
-  joined by `|`, with `<` and `>`), which edits its line on a raw console
-  and runs programs as the kernel's jobs on a cooked one. What only the
-  desktop can do the shell asks in its own escape, `OSC 1729 ; verb ; arg`
-  (`open` an app, switch the `theme`), as programs already ask a terminal
-  for its title.
+  `/bin/sh` (the `sh` program: `ls` (`-l` a line each, its kind and size:
+  the files keep no dates), `cd`, `cat`, `mkdir`, `mv`, `open`, `edit`,
+  `run`, `theme`, ..., `~` for the home, `#` comments, and programs such
+  as the toolbox's `wc` and `rev`, which read the files they name or else
+  their input, joined by `|`, with `<` and `>`; commands joined by `;`,
+  `&&` and `||`; `*` and `?` matching the names in a directory; `sh -c
+  line` and `sh file` run scripts, ending with the last line's status),
+  which edits its line on a raw console and runs programs as the kernel's
+  jobs on a cooked one. wasi-libc names a process's starting directory
+  (preopen `.`) and `/` alike, so `sh` and the toolbox open an absolute
+  path from there, up to `/` (`./../../notes` from the home): else `/notes`
+  would be the home's.
+  What only the desktop can do the shell asks in its own escape,
+  `OSC 1729 ; verb ; arg` (`open` an app, switch the `theme`), as programs
+  already ask a terminal for its title.
 - **Studio** makes and edits applang apps: the `coder` loop asks the free
   AI, checks each reply and fixes it by edits, showing what moves (thinking,
-  writing 48 lines, fixing line 43, testing); `studio::AppHost` runs a `.app`
+  writing 48 lines, fixing line 43, testing) and, in a Code kept to its room
+  as the code view's, the newest lines streaming in (as many as its rows
+  hold under the plan, the line being written plain) or the program being
+  fixed, whole, its problem marked (the wheel scrolls it; what is typed
+  there goes at the next frame, and on a phone the keyboard with it). How
+  a make ended says how many requests it took, when more than one and the
+  AI did not fail (`ready · 53 s · 2 tries`). New app, by the status once
+  an app is open, asks what to make again (the app stays as it was made;
+  code edited since is saved first, saying so, or stays, its problem
+  marked; code emptied is never saved over it); Studio's home icon, as
+  every app's, brings its window back, and New window, in its dock tile's
+  menu while it runs, opens another. On a phone the status has its own
+  line, over its buttons. `studio::AppHost` runs a `.app`
   in its own window. Its prompt asks every app for its icon line (one card,
-  and one in each example), which a change keeps.
+  and one in each example, with the reader's limits: 16 shapes, 64 numbers,
+  320 bytes), which a change keeps. The coder reads that line as the
+  desktop does (`icons::made`): one that would not draw, or one never read
+  (under the code, or marked `//icon:` or `// Icon:`), is a problem it
+  fixes by edits as it does a fault (E0931 to E0937, at the word), after
+  the program runs clean; a best program whose icon still will not draw is
+  installed all the same, its problem showing (runs, but its icon won't
+  draw), but for a change of an app whose icon drew: that lands with the
+  icon line it had. No icon line is no problem: the tile is the sigil (the
+  recorded makes have none).
   A make that ends without an app that runs clean (but for a stop with
   nothing wrong showing, or the free AI busy or out of credit before any
   program came back), and the app's last fault in Studio's preview (kept
@@ -392,12 +446,39 @@ one. Forked crates keep their Apache-2.0 license and note their origin.
   fits where a busy one faults (E0222). The AI reads where pixels are and
   their size, and each board's squares, a row a line, as a grid's, while
   those listed stay within 1,024 in all (a board past what is left is its
-  place and size alone). A canvas's handler sees the tap's `x` and
-  `y`. Grids and canvases are boards: they take the room the window's
-  other widgets leave, and with a handler they are pads. Studio's prompt
-  asks that whatever is to be seen (a game, a board, drawing, animation, a
-  clock, a chart) be drawn on a canvas, never spelled out in labels and
-  buttons: its first example is snake on pixels.
+  place and size alone). A text centers on its point, a character about
+  half its size wide; one whose point is on the canvas (x from 0 to its
+  width, y to its height) stays inside it, a quarter of its size in (near
+  an edge it moves in, so a score at x 2 starts at the left edge and one at
+  the width ends at the right), and the smoke test faults such a text
+  wider than its canvas (E0225, each character reckoned 2/5 of its size);
+  one whose point is off the canvas stays where it is. A canvas's handler
+  sees the tap's `x` and `y`; a drag taps the units on its way as a drawn
+  line has them (one a column or a row: a diagonal skips a unit whose
+  corner it clips), one every 4 px or so (64 for a sample at most, so a
+  sample up to 256 px away leaves no gap), and waits until the frames of
+  all it sent (and of the Ticks before them) are answered and drawn, so a
+  paint app paints a line with no gap where a steady drag goes. Where a
+  drag goes meanwhile is held (`uiview::Play::held`, as a share of the
+  board, which may move), and once those are drawn the window
+  (`os::remote`) asks a frame and taps it then, after any Tick due, so a
+  stroke quicker than a frame's round trip, or a stroke's end, is painted
+  too, unless anything else went to the program first (a key, a click,
+  another press): it reads what the person did in order. A handler runs
+  for each unit a drag crosses, so the card asks that a tap steer, aim or
+  paint, and that turning, dropping or firing be a button. Grids and
+  canvases are boards: they take the room the window's other widgets
+  leave, the most those took above the first board and around them since
+  the window's size or its boards changed (`uiview::View::around`), the
+  room left above drawn above it, so a board keeps its size and place as a
+  button or label comes and goes, after each first shows; with a handler
+  they are pads. Studio's prompt asks that whatever is to be seen (a game,
+  a board, drawing, animation, a clock, a chart) be drawn on a canvas,
+  never spelled out in labels and buttons (its first example is snake on
+  pixels); that a game show the same widgets before it as after (Start,
+  hidden while it plays) and say Game over on the canvas; and that a paint
+  app show the color it paints and its squares' edges faintly (gray) under
+  the paint.
   **Editor** writes plain text, a new note in `~/notes`;
   Files and the Terminal's `edit` open files in it (a `.app` in Studio).
   **Welcome** (a program, its mark revealed by the desktop's clock)
@@ -446,6 +527,20 @@ one. Forked crates keep their Apache-2.0 license and note their origin.
   covers typing, dead keys, IME composition, paste and phone keyboards, so
   `os` leaves the key-downs that type unprevented. On phones a tap that
   releases on the focused window brings the keyboard back.
+- A program's window takes typing before its program has drawn: the keys
+  and text typed there are held, 4 KiB at most (a key counts one byte)
+  and nothing past that, then go as typed once the first frame is in:
+  into the field it focuses (Enter in an Input is its Submit), else Enter,
+  Escape and chords as the program's keys, text nowhere. Until then the
+  window of a program that opens on a field wants text input, so the
+  textarea and a phone's keyboard take the typing (and, as a field does,
+  F5 and Ctrl+R); any other window wants none, so a tap that opens About
+  raises no keyboard. Those windows are named in one list,
+  `os::remote::TYPING`: Studio's (on a file too, but not a `.app` it
+  runs), the Assistant's (its overlay as well), Editor's and Feedback's.
+  A program that opens on a field adds its window's name there. So
+  opening Studio or the Assistant and typing at once loses nothing. (The
+  Terminal's console hears its keys from the start.)
 - A finger's press into an app waits to be a tap (a finger that travels
   scrolls the window instead), but on a pad (`ui::Sense::Pad`: a canvas or
   grid an app plays) it presses at once and drags, as a mouse does: a
@@ -513,7 +608,8 @@ in its home; names in it, and roots per profile, wait for R2.
   are the UI tree (windows, titles, widget hits, labels and marks). Its first
   phase is built: the Assistant is the overlay; the host draws each window
   again into a recording list to read it (`host::agent`), the model sees it as
-  text with refs (`assistant::look`) and calls tools, and each call is an act
+  text with refs (`assistant::look`; a text field named by its role, its
+  placeholder said as one) and calls tools, and each call is an act
   done the way a person's pointer and keys go (uiwire `Act`, `Acted`). Some
   tools are its own, no act: it lists, reads and writes the person's files
   over its program's WASI filesystem, paths from the home (the `files`
