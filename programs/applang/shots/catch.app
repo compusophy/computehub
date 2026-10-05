@@ -24,6 +24,12 @@ fn scene() {
 
 fn steer(x: int) { bx = min(140, max(0, x)); }
 
+// One button all along, so the board never moves: it says what it does.
+fn word() -> string {
+  if speed == 0 { return "Start"; }
+  return "Restart";
+}
+
 // A star back above the top, somewhere new.
 fn again(i: int) {
   sx[i] = 8 + random(144);
@@ -59,6 +65,6 @@ on key "right" { steer(bx + 6); }
 label "Catch the stars";
 canvas 160, 120, scene() { steer(x - 10); }
 row {
-  if speed == 0 { button "Start" { start(); } }
+  button word() { start(); }
   label "Best " + best;
 }

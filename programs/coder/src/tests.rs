@@ -221,6 +221,14 @@ fn faults_are_accounted_for_a_fix() {
                 render.\n";
     assert!(f.account.contains(rule), "{}", f.account);
     assert!(fault(CLEAN, "", 3).is_none());
+    // An icon the desktop cannot draw (past 16 shapes, or under the code) is a fault of a program
+    // that runs, at its word; none at all is the sigil, as ever.
+    let many = ["\n// icon:", &" dot 9 9 3".repeat(17), "\n"].concat();
+    let f = fault(&CLEAN.replacen('\n', &many, 1), "", 3).unwrap();
+    assert!(f.runs && f.said.starts_with("E0936 2:170 `dot` is past 16 shapes"), "{}", f.said);
+    assert!(f.account.contains("draw: E0936 at line 2") && f.account.contains("Rule: the icon is"));
+    let under = fault(&[CLEAN, "// icon: dot 9 9 3\n"].concat(), "", 3).map(|f| f.said);
+    assert_eq!(under.as_deref().map(|s| &s[..14]), Some("E0937 6:1 the "));
     // A program clean afresh that faults from the states its app kept, said so.
     let todo = applang::SHOTS[1].1;
     let kept = "tasks = [\"milk\", \"eggs\"];\ndone = [false, true];\n";
@@ -342,6 +350,11 @@ fn the_system_prompt_is_stable_and_whole() {
     assert!(!s.contains(HOME) && s.starts_with("You write apps for Studio"));
     // What is seen is drawn on a canvas; the first example draws its board as pixels.
     assert!(s.contains("chart) is drawn on a canvas, never") && shots[0].contains("pixels(cells"));
+    // An icon's hard limits, as the desktop reads it.
+    let m = [icons::made::MAX_SHAPES, icons::made::MAX_NUMBERS, icons::made::MAX_TEXT];
+    assert!(
+        ai::ICON.contains(&format!("past {} shapes, {} numbers or {} bytes", m[0], m[1], m[2]))
+    );
     // FNV-1a 64: a change to the prompt is a decision (and an eval), never a drift.
     let fnv = s
         .bytes()
@@ -356,7 +369,7 @@ fn the_system_prompt_is_stable_and_whole() {
 }
 
 /// The system prompt's hash (see the test above).
-const FNV: u64 = 0x7da4_da1b_b3a3_f5c3;
+const FNV: u64 = 0xbe04_07d6_bb62_b3fb;
 
 #[test]
 fn a_clean_write_is_one_request() {
@@ -370,17 +383,13 @@ fn a_clean_write_is_one_request() {
     );
     assert_eq!((b.get("reasoning"), user(&bodies[0])), (None, "Make: a counter".into()));
     assert_eq!((done.outcome, done.install, done.draft.as_str()), (Outcome::Ready, true, CLEAN));
-    assert_eq!(
-        (done.plan.as_str(), done.said().as_str()),
-        ("Count: + adds one.", "ready \u{b7} 1 s")
-    );
+    let said = (done.plan.as_str(), done.said());
+    assert_eq!(said, ("Count: + adds one.", "ready \u{b7} 1 s".into()));
     // Its status, as the reply streamed: thinking, then the lines it wrote; its block's end stopped
     // the request, whose usage is then estimated, the system prompt's part of it cached.
     assert_eq!(seen[0], "thinking \u{b7} 0 s");
-    assert!(
-        seen.contains(&"writing \u{b7} 1 line".into())
-            && seen.contains(&"writing \u{b7} 4 lines".into())
-    );
+    let wrote = |n: &str| seen.contains(&["writing \u{b7} ", n].concat());
+    assert!(wrote("1 line") && wrote("4 lines"));
     let (r, sys) = (&done.receipt, quote(&system()).len() as u32 / 3);
     assert!(r.est && r.turns.len() == 1 && r.turns[0].input == bodies[0].len() as u32 / 3);
     assert!(r.turns[0].cached == sys && sys > 2000, "{sys}");
@@ -444,6 +453,26 @@ fn problems_get_fixes_by_edits_and_the_best_so_far_stays() {
     let replies: Vec<(&str, &str)> = replies.iter().map(|(a, f)| (a.as_str(), *f)).collect();
     let (_, _, done) = run(task("x", ""), Knobs::default(), &replies);
     assert_eq!((done.outcome, done.draft.as_str()), (Outcome::Faulting, FAULTS));
+}
+
+#[test]
+fn an_icon_that_will_not_draw_is_fixed_by_edits_as_a_fault_is() {
+    let line = |s: &str| ["// icon: ", s, "\n"].concat();
+    let (rings, ring) = (line(&"ring 12 12 9 ".repeat(17)), line("ring 12 12 9"));
+    let with = |icon: &str| CLEAN.replacen('\n', &["\n", icon].concat(), 1);
+    let (bad, good, fix) = (with(&rings), with(&ring), edit(&rings, &ring));
+    let (bodies, _, done) =
+        run(task("count", ""), Knobs::default(), &[(&app(&bad), "stop"), (&fix, "stop")]);
+    assert!(user(&bodies[1]).contains("has an icon the desktop cannot draw: E0936 at line 2"));
+    assert_eq!((done.outcome, done.draft.as_str()), (Outcome::Ready, good.as_str()));
+    // Never fixed, it runs: installed, its problem showing; for a change too.
+    let one = Knobs { requests: 1, ..Knobs::default() };
+    let (_, _, done) = run(task("count", ""), one, &[(&app(&bad), "stop")]);
+    let said = "runs, but its icon won't draw \u{b7} E0936 line 2";
+    assert_eq!((done.outcome, done.install, done.said().as_str()), (Outcome::Faulting, true, said));
+    let by2 = edit("button \"+\" { n += 1; }\n", "button \"+\" { n += 2; }\n");
+    let (_, _, done) = run(task("count by two", &bad), one, &[(&by2, "stop")]);
+    assert_eq!((done.outcome, done.install), (Outcome::Faulting, true));
 }
 
 #[test]

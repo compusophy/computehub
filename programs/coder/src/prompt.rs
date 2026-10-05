@@ -14,13 +14,17 @@ const RULES: &str = "\n\nWhat is to be seen (a game, a board, drawing, animation
                      a board of squares (tetris, snake, a painting, life), the other shapes for \
                      what moves freely or is a picture (a ball and paddles, hands, X and O); it \
                      moves with every, is steered with on key and with taps and drags on its \
-                     canvas (a phone has no arrow keys), and shows Start until it runs. Saved \
-                     states come back as they were kept, also after a change: a saved list keeps \
-                     its old length (one a change adds starts as declared), so check a list's \
-                     length before indexing it. Write small functions instead of repeating code; \
-                     keep programs under 200 lines. Decide quickly what applang can make, then \
-                     write it: your reply has room for the program, not for long \
-                     deliberation.\n\n";
+                     canvas (a phone has no arrow keys), and shows Start until it runs. The \
+                     widgets around a canvas stay while it plays, so its board never moves: \
+                     change a button's text (Start, Restart), never show or hide one, and say \
+                     Game over on the canvas. A paint app paints each square a drag crosses, \
+                     shows the color it paints (a swatch) and its squares' edges faintly under \
+                     the paint (lines a unit wide in dim ink). Saved states come back as they \
+                     were kept, also after a change: a saved list keeps its old length (one a \
+                     change adds starts as declared), so check a list's length before indexing \
+                     it. Write small functions instead of repeating code; keep programs under \
+                     200 lines. Decide quickly what applang can make, then write it: your reply \
+                     has room for the program, not for long deliberation.\n\n";
 /// What a reply holds.
 const REPLIES: &str = "A new app: the complete program in one fenced block whose info string is \
                        app, and nothing else; after its first comment, a label naming the app.\n\

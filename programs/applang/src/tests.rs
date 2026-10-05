@@ -546,7 +546,7 @@ fn each_code_has_a_rule_and_the_card_says_what_models_got_wrong() {
     );
     #[rustfmt::skip]
     let all = [1, 2, 3, 4, 5, 101, 102, 203, 204, 205, 206, 211, 212, 214, 215, 216, 217, 218, 219,
-        220, 221, 222, 223, 224, 301, 302, 303, 304, 305, 306, 307, 308, 309];
+        220, 221, 222, 223, 224, 225, 301, 302, 303, 304, 305, 306, 307, 308, 309];
     for code in all {
         assert!(rule(code).ends_with('.'), "{code}");
     }
@@ -684,6 +684,13 @@ fn the_smoke_test_taps_canvases_and_finds_a_picture_drawn_off_them() {
                label \"tap\"; canvas 50, 50, s() { if len(xs) < 99 { push(xs, x); } }";
     let report = smoke(compile(src).unwrap(), 2);
     assert!(report.fault.is_none(), "{report:?}");
+    // A text wider than its canvas, as near as its characters and size say, faults where the
+    // render drew it; one at its edge that fits does not (the desktop keeps it inside).
+    let src = |s: &str| format!("fn s() {{ text(\"{s}\", 2, 4, 10, 9); }} canvas 100, 60, s();");
+    let f = smoke(compile(&src("Score 12   Best 40   Lives 3")).unwrap(), 1).fault.unwrap();
+    assert_eq!((f.diag.code, f.during.as_str()), (Some(codes::TEXT_TOO_WIDE), "the first render"));
+    assert!(f.diag.message.contains("about 140 units wide") && f.diag.span.is_some());
+    assert!(smoke(compile(&src("Score 12")).unwrap(), 1).fault.is_none());
     // Tic-tac-toe, breakout, paint, tetris and snake on a canvas play clean, from three seeds.
     for (name, src) in [
         ("tictactoe", include_str!("../tests/tictactoe.app")),
@@ -741,7 +748,7 @@ fn paint_blocks_and_snake_play_on_pixels_that_cross_the_wire() {
     // Paint: a tap paints its square in the pen's color; one under the picture picks the pen.
     let mut p = app(include_str!("../tests/paint.app"));
     let tap = |w: u32, x: u32, y: u32| Event::Tap { id: 0, cell: y * w + x };
-    for e in [tap(160, 12, 7), tap(160, 2 + 4 * 13 + 5, 170), tap(160, 159, 159)] {
+    for e in [tap(160, 12, 7), tap(160, 2 + 4 * 11 + 5, 170), tap(160, 159, 159)] {
         assert_eq!(ev(&mut p, e), None);
     }
     let Value::List(art) = &vals(&p)[0] else { panic!("the art") };
@@ -772,4 +779,46 @@ fn paint_blocks_and_snake_play_on_pixels_that_cross_the_wire() {
         assert_eq!(ev(&mut s, Event::Tick { ms: 150 }), None);
         assert_eq!((wired(&s.render().unwrap()), wired(&b.render().unwrap())), (1, 1));
     }
+}
+
+#[test]
+fn paint_driven_by_a_drag_paints_every_square_it_crosses() {
+    // Paint's canvas as the desktop lays it out on a phone: 160 x 180 units, 2 px a unit, a pad.
+    // A finger goes down on square (1, 1) and drags in three samples to square (30, 20), the
+    // window answering each tap with a frame and drawing it before the next sample is taken.
+    let mut p = app(include_str!("../tests/paint.app"));
+    let rect = gfx::RectF::new(20.0, 60.0, 320.0, 360.0);
+    let board = uiview::Board { id: 7, nth: 0, rect, cols: 160, n: 160 * 180, fine: true };
+    let (view, mut play) =
+        (uiview::View { grids: vec![board], ..Default::default() }, uiview::Play::default());
+    let at = |sx: f32, sy: f32| (20.0 + sx * 10.0 + 5.0, 60.0 + sy * 10.0 + 5.0);
+    let (mut taps, (x, y)) = (0, at(1.0, 1.0));
+    for (i, (x, y)) in
+        [(x, y), at(11.0, 4.0), at(21.0, 14.0), at(30.0, 20.0)].into_iter().enumerate()
+    {
+        let (id, cells) = play.tap(&view, (i == 0).then_some(7), x, y);
+        assert!(id == 7 && !cells.is_empty() && cells.len() <= 16, "{cells:?}");
+        for cell in cells {
+            play.sent(false);
+            assert_eq!(ev(&mut p, Event::Tap { id: 0, cell }), None);
+            taps += 1;
+        }
+        while play.busy() {
+            play.answered();
+        }
+        play.drew();
+    }
+    // Each square on the way painted, in a line with no gap: one to three a column, touching.
+    let Value::List(art) = &vals(&p)[0] else { panic!("the art") };
+    let painted: Vec<usize> = (0..1024).filter(|&i| art[i] == Value::Int(1)).collect();
+    for col in 1..=30 {
+        let rows: Vec<usize> = painted.iter().filter(|&&i| i % 32 == col).map(|i| i / 32).collect();
+        let touch = rows.windows(2).all(|w| w[1] == w[0] + 1);
+        assert!((1..=3).contains(&rows.len()) && touch, "column {col}: {rows:?}");
+    }
+    assert!(painted.len() < taps && taps <= 1 + 3 * 16, "{} squares, {taps} taps", painted.len());
+    // It shows the pen's color as a swatch, and its squares' edges faintly under the paint.
+    let Node::Canvas { draws, .. } = &p.render().unwrap()[1] else { panic!("the canvas") };
+    let lines = draws.iter().filter(|d| d.shape == Shape::Line && d.color == 10).count();
+    assert!(lines == 62 && draws.last().is_some_and(|d| d.shape == Shape::Rect && d.color == 1));
 }

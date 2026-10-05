@@ -17,5 +17,7 @@ compusophy-lang.workspace = true
 compusophy-fuel.workspace = true
 
 [dev-dependencies]
+compusophy-gfx.workspace = true
 compusophy-icons.workspace = true
+compusophy-uiview.workspace = true
 compusophy-uiwire.workspace = true

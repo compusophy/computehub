@@ -278,8 +278,11 @@ impl Make {
         }
         self.cands.push(Cand { src, fault });
         let n = self.cands.len() - 1;
-        // How good one is: compiles, then runs clean, then newer.
-        let rank = |c: &Cand| (c.fault.as_ref().is_none_or(|f| f.compiles), c.fault.is_none());
+        // How good one is: compiles, then runs clean, then draws its icon, then newer.
+        let rank = |c: &Cand| {
+            let f = c.fault.as_ref();
+            (f.is_none_or(|f| f.compiles), f.is_none_or(|f| f.runs), f.is_none())
+        };
         if self.best.is_none_or(|b| rank(&self.cands[n]) >= rank(&self.cands[b])) {
             self.best = Some(n);
         }
@@ -463,8 +466,9 @@ impl Make {
     }
 
     /// The end, for `stop` (0: a clean program; or a code saying why): the best so far installed
-    /// if it runs clean, or a new app's that compiles; else nothing, the version open running on.
-    /// When the model said applang can make nothing close, nothing is installed or shown.
+    /// if it runs clean (its icon drawing or not), or a new app's that compiles; else nothing, the
+    /// version open running on. When the model said applang can make nothing close, nothing is
+    /// installed or shown.
     fn finish(&mut self, now: u64, stop: u16, why: String) -> Done {
         self.phase = Phase::Over;
         let change = self.change();
@@ -472,8 +476,8 @@ impl Make {
         // app's that compiles.
         let best = self.best.map(|b| (b, &self.cands[b])).filter(|(b, c)| match &c.fault {
             _ if stop == CANT => false,
-            None => *b > 0 || !change,
-            Some(f) => f.compiles && !change,
+            Some(f) if !f.runs => f.compiles && !change,
+            _ => *b > 0 || !change,
         });
         let best = best.map(|(_, c)| c);
         let install = best.is_some();

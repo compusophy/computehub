@@ -11,7 +11,10 @@
 //!   axis is a snapped fill with round ends; any other a [`gfx::Kind::Line`]. Strokes are a
 //!   device pixel at least.
 //! - A Text is set in the boot's Inter on a ladder of sizes ([`LADDER`]), so a size that moves
-//!   frame by frame never fills the glyph atlas.
+//!   frame by frame never fills the glyph atlas. One whose point is on the canvas stays inside
+//!   it, a quarter of its size in: one that would cross an edge moves in to that inset (a score
+//!   at x 2 starts at the left, one at the last unit ends at the right); wider than the canvas,
+//!   it starts at the left.
 //! - The mark lists Pixels by their place and size, and each board's squares too, a row a line,
 //!   as a Grid's, while the squares listed stay within [`SQUARES`] in all: a board past what is
 //!   left is its place and size alone, and a smaller one after it still lists its squares.
@@ -115,8 +118,18 @@ pub fn draw(ui: &mut Ui<'_>, r: RectF, id: u32, units: (u16, u16), draws: &[Draw
             Shape::Text if a > 0 => {
                 let style = TextStyle::new(FontId::Sans, rung(fa * k), color);
                 let ((cx, cy), ts) = (mid(x, y), ui.text_system());
-                let lw = ts.measure(&d.text, style);
-                let (left, base) = (ts.snap(cx - lw / 2.0), ts.snap(cy + CAP * style.size / 2.0));
+                let (lw, cap) = (ts.measure(&d.text, style), CAP * style.size);
+                let (mut left, mut top) = (cx - lw / 2.0, cy - cap / 2.0);
+                // A point on the canvas keeps its text inside, a quarter of its size in: moved
+                // in from an edge it would cross (from the left and top first).
+                if (0..i32::from(units.0)).contains(&x.into())
+                    && (0..i32::from(units.1)).contains(&y.into())
+                {
+                    let (pad, end) = (style.size / 4.0, (well.x + well.w, well.y + well.h));
+                    left = left.min(end.0 - pad - lw).max(well.x + pad);
+                    top = top.min(end.1 - pad - cap).max(well.y + pad);
+                }
+                let (left, base) = (ts.snap(left), ts.snap(top + cap));
                 ui.text(left, base, &d.text, style);
             }
             Shape::Text => {}

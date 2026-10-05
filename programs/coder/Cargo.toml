@@ -13,4 +13,5 @@ name = "coder"
 
 [dependencies]
 compusophy-applang.workspace = true
+compusophy-icons.workspace = true
 compusophy-lang.workspace = true
