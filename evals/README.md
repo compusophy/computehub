@@ -60,9 +60,10 @@ installed, in stages; the first that fails is the record's `stage`:
    (rendered, clicked, ticked, keyed, tapped, typed into, closed and opened again).
    `harness`: the smoke test's own fault (`E0213`, an event for something not shown, which only
    what drives an app can send), neither a pass nor a fail: counted apart, like `ai`. The smoke
-   test now takes each event from what shows after the one before, so it sends none and no record
-   has the stage; it stays so that a bug of its own is never charged to the model (the
-   baseline's last note).
+   test now takes each event from what shows after the one before, so it sends none, and no
+   record has the stage. It is kept as a guard: were a bug of the smoke test's own to come back,
+   the grade would not count it as the model's fail (though the coder, which cannot tell, would
+   still send it to the model as the program's fault; the baseline's last note).
 4. `icon`: it has no icon line, or one the desktop cannot draw.
 5. `check`: its checker drives it headlessly through applang and reads what it shows.
 
@@ -114,13 +115,13 @@ references each fail at the stage expected. The live runs found five checks unfa
 die read mid-tumble, a pick apart from its heading, an unasked Start, a score inside a square,
 and an unclear reason), and a review a sixth (minesweeper's win was read only from the sweep's
 last tap, though a flood fill usually wins sooner, so most correct games failed); each was fixed
-and the runs graded again from their transcripts. What the suite does not check: line clears in tetris, the direction tiles slide in 2048,
-minesweeper's numbers, scores beyond whack-a-mole's, and how anything looks beyond what the
-checks read. A checker lets at most 250,000 ticks of an app's timer pass in one wait; an app
-whose timer is too fast for a wait (a clock that ticks every 16 ms, waited 3 hours) fails with
-that reason, never read early. The references are the suite's answer keys, so `lab`'s corpus
-never takes them (it skips `programs/makes` and `programs/evals`): a model lab trains may be
-measured on them, never trained on them.
+and the runs graded again from their transcripts. What the suite does not check: line clears in
+tetris, the direction tiles slide in 2048, minesweeper's numbers, scores beyond whack-a-mole's,
+and how anything looks beyond what the checks read. A checker lets at most 250,000 ticks of an
+app's timer pass in one wait; an app whose timer is too fast for a wait (a clock that ticks
+every 16 ms, waited 3 hours) fails with that reason, never read early. The references are the
+suite's answer keys, so `lab`'s corpus never takes them (it skips `programs/makes` and
+`programs/evals`): a model lab trains may be measured on them, never trained on them.
 
 Two hashes say what graded a record. The suite's (`suite_hash`) is FNV-1a 64 of its id and the
 source of its tasks, checkers and probe, line ends aside: a change to what is asked or how the
@@ -295,8 +296,10 @@ What it says:
   (`programs/applang/src/smoke.rs`; `makes`' test runs the tetris reference on all seven orders).
   Graded again offline, every request replays (the bug changed nothing the coder said in any
   other make), and that 2048 ends ready after four requests and fails its check, spawning 3s. No
-  make is graded `harness` now; the stage stays because E0213 can come only from what drives an
-  app, so a bug of the smoke test's own would never be charged to a model.
+  make is graded `harness` now, and none can be while the smoke test sends events only for what
+  shows. The stage is kept as a guard, since E0213 can come only from what drives an app: were
+  the smoke test to send one again, the grade would not count it as the model's fail, though the
+  coder, which cannot tell, would still send it to the model mid-make, as it did here.
 
 ## Next suites (designed, not built)
 

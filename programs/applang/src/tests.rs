@@ -535,9 +535,13 @@ fn the_shots_and_a_model_written_tetris_smoke_clean() {
                button \"Left\" { x -= 1; } button \"Right\" { x += 1; } label x;";
     let report = smoke(compile(src).unwrap(), 1);
     assert!(report.fault.is_none(), "{report:?}");
-    // Each event of a tick is taken from what shows after the one before: at tick 55 the 11th
-    // escape hides Left and Right, and that tick's click presses what shows then, not a button
-    // gone (E0213, the smoke test's own fault, when it took the click from before the key).
+}
+
+/// The smoke test takes each event of a tick from what shows after the one before: at tick 55
+/// the 11th escape hides Left and Right, and that tick's click presses what shows then, not a
+/// button gone (E0213, the smoke test's own fault, when it took the click from before the key).
+#[test]
+fn a_key_that_hides_buttons_leaves_that_ticks_click_on_what_shows() {
     let src = "state paused = false; state x = 0; state zero = 0; label x;
                on key \"escape\" { paused = !paused; }
                if !paused { button \"Left\" { x -= 1; } button \"Right\" { x += 1; } }";

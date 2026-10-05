@@ -767,15 +767,16 @@ Newcombe's, cost per pass and the tasks that flipped.
   answer keys (`programs/makes/refs`) never join it: a model is measured on
   them, not trained on them. Measured 2026-10-05 on the corpus as it was
   then (570 programs, 100 found: the one `results.md` names; a test of the
-  smoke test has added a program since, in training, not held out): 990k
-  parameters, 600 steps of 8 x 1024 tokens in 37 minutes on 8 threads. Of
-  100 programs prompted by 10 app headers, none of tiny's compiles, at any
-  temperature tried, from its
-  last weights or from those with the lowest held-out loss; it writes real
-  openings (states, an icon line), and its first error comes 38% of the way
-  through on average. An 8-gram over the same tokens compiles 2, both copies
-  of corpus programs (its first error: 43%). Held-out loss: tiny at best
-  3.59 nats a token (step 210; then it overfits), a 3-gram 3.53: tiny is no
+  smoke test has added a program since, in training, not held out, and
+  `lab train` and `measure` build the corpus from the repo, so they
+  reproduce it at 0ef987d): 990k parameters, 600 steps of 8 x 1024 tokens
+  in 37 minutes on 8 threads. Of 100 programs prompted by 10 app headers,
+  none of tiny's compiles, at any temperature tried, from its last weights
+  or from those with the lowest held-out loss; it writes real openings
+  (states, an icon line), and its first error comes 38% of the way through
+  on average. An 8-gram over the same tokens compiles 2, both copies of
+  corpus programs (its first error: 43%). Held-out loss: tiny at best 3.59
+  nats a token (step 210; then it overfits), a 3-gram 3.53: tiny is no
   better than counting yet. The pipeline is the result; more verified data
   is what moves the number (each app added to the repo joins on `lab
   corpus`).
