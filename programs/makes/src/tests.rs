@@ -138,6 +138,25 @@ fn minesweeper_passes_on_other_layouts() {
     assert!(bad.is_empty(), "{bad:#?}");
 }
 
+/// The smoke test is fair to a game a key can end: each event of its tick is taken from what
+/// shows after the one before, so the Drop that ends tetris never leaves that tick's click on a
+/// button gone (`E0213`, the stage `harness`). Taken from the screen before the key, it failed
+/// the tetris reference for one of these seven piece orders.
+#[test]
+fn tetris_passes_whatever_order_its_pieces_come_in() {
+    let (t, src) = (find("tetris").unwrap(), reference("tetris"));
+    assert!(src.contains("random(7)"), "no draw to shift");
+    let mut bad = Vec::new();
+    for k in 0..7 {
+        let (pass, stage, why) =
+            judge(t, &src.replace("random(7)", &format!("(random(7) + {k}) % 7")));
+        if !pass {
+            bad.push(format!("+{k}: {stage} {why}"));
+        }
+    }
+    assert!(bad.is_empty(), "{bad:#?}");
+}
+
 #[test]
 fn the_suite_listing_is_kept() {
     let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../evals/suites/studio.jsonl");

@@ -759,20 +759,24 @@ Newcombe's, cost per pass and the tasks that flipped.
   backward pass written by hand and checked against finite differences,
   AdamW on 8 threads, a KV cache, a weights file ending in its hash), and
   `lab`, a dev tool that makes the corpus (each applang program in the repo
-  that compiles, once, content-addressed: 100 found, a dozen of them real
-  apps and the rest test snippets; 570 with variants, nearly all renames, so
-  90 shapes; held out by shape; `programs/lab/data/manifest.tsv`, which a
+  that compiles, once, content-addressed: 101 found, a dozen of them real
+  apps and the rest test snippets; 578 with variants, nearly all renames, so
+  91 shapes; held out by shape; `programs/lab/data/manifest.tsv`, which a
   test holds to the repo), trains tiny on it and judges what it writes with
   applang's own checker and smoke test (`results.md` there). The evals'
   answer keys (`programs/makes/refs`) never join it: a model is measured on
-  them, not trained on them. Measured 2026-10-05: 990k parameters, 600 steps
-  of 8 x 1024 tokens in 37 minutes on 8 threads. Of 100 programs prompted by
-  10 app headers, none of tiny's compiles, at any temperature tried, from its
-  last weights or from those with the lowest held-out loss; it writes real
-  openings (states, an icon line), and its first error comes 38% of the way
-  through on average. An 8-gram over the same tokens compiles 2, both copies
-  of corpus programs (its first error: 43%). Held-out loss: tiny at best
-  3.59 nats a token (step 210; then it overfits), a 3-gram 3.53: tiny is no
+  them, not trained on them. Measured 2026-10-05 on the corpus as it was
+  then (570 programs, 100 found: the one `results.md` names; a test of the
+  smoke test has added a program since, in training, not held out, and
+  `lab train` and `measure` build the corpus from the repo, so they
+  reproduce it at 0ef987d): 990k parameters, 600 steps of 8 x 1024 tokens
+  in 37 minutes on 8 threads. Of 100 programs prompted by 10 app headers,
+  none of tiny's compiles, at any temperature tried, from its last weights
+  or from those with the lowest held-out loss; it writes real openings
+  (states, an icon line), and its first error comes 38% of the way through
+  on average. An 8-gram over the same tokens compiles 2, both copies of
+  corpus programs (its first error: 43%). Held-out loss: tiny at best 3.59
+  nats a token (step 210; then it overfits), a 3-gram 3.53: tiny is no
   better than counting yet. The pipeline is the result; more verified data
   is what moves the number (each app added to the repo joins on `lab
   corpus`).
