@@ -409,7 +409,8 @@ one. Forked crates keep their Apache-2.0 license and note their origin.
   and `open` opens apps; a job's stdout is caught in a file), check an
   applang app (`coder`'s compile and smoke test) and read applang's guide.
   Reads run freely; writes, edits and commands wait for the person's yes
-  (`[y]es [n]o [a]lways`, or `-y`). A line runs unasked only if the shell
+  (`[y]es [n]o [a]lways`, or `-y` before the task: in its words, a `-y` is
+  a word, and `/yes` toggles it). A line runs unasked only if the shell
   reads it (`sh::commands`) as one reading command alone (`ls`, `cat`,
   `cd`, ...: nothing joined by `;`, `&&`, `||` or `|`, no `>`, no /dev);
   one that may remove, move or overwrite (`rm`, `mv`, a `>` that does not

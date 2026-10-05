@@ -617,3 +617,19 @@ fn lessons_are_hints_from_the_files_list_lines_alone_and_bounded() {
     assert!(prompt.starts_with(SYSTEM) && prompt.contains(&["\n\n", LESSONS, "- Quote"].concat()));
     assert!(prompt.ends_with(&[NOTES, "Use tabs."].concat()));
 }
+
+#[test]
+fn options_come_before_the_task_so_a_y_in_its_words_is_a_word() {
+    let mut w = fake(&[]);
+    let mut a = Agent::new(Vfs::HOME, &mut w);
+    let mut words = |args: &[&str]| options(&mut a, args.iter().map(|s| s.to_string()).collect());
+    let task = ["fix", "the", "-y", "flag"];
+    assert_eq!(words(&task), Ok(task.map(String::from).to_vec()), "a -y in the task is a word");
+    assert_eq!(words(&["--", "-y", "x"]), Ok(vec!["-y".into(), "x".into()]));
+    assert_eq!(words(&["-x", "task"]), Err(Some("-x".into())));
+    assert_eq!(words(&["-h", "task"]), Err(None));
+    assert!(!a.auto, "none of those said -y");
+    let mut words = |args: &[&str]| options(&mut a, args.iter().map(|s| s.to_string()).collect());
+    assert_eq!(words(&["-y", "-m", "m", "--no-learn"]), Ok(vec![]));
+    assert!(a.auto && !a.learn && a.model == "m");
+}

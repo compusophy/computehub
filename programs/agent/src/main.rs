@@ -1,11 +1,12 @@
 //! The `agent` program (see the library) on a terminal's console: `agent [-y] [-m model]
-//! [--no-learn] [task...]`. With a task it works on it and exits; without, it reads tasks a line
+//! [--no-learn] [--] [task...]`, its options before the task (a `-y` among the task's words is a
+//! word). With a task it works on it and exits; without, it reads tasks a line
 //! at a time (the console cooked: it edits the line) until Ctrl+D or /exit, with commands of its
 //! own (/help). Files through `std::fs`, which WASI serves from the desktop's VFS (each path
 //! from the directory it started in, as sh opens them: [`sh::from_start`]); jobs through
 //! /dev/job, their output caught in a file; the AI through /dev/draw and /dev/events. Ctrl+C
 //! ends it, as the console ends any job. Exit status: 0, or 1 when the task given did not end
-//! with an answer.
+//! with an answer, 2 for an option it does not know.
 
 #![forbid(unsafe_code)]
 
@@ -32,9 +33,10 @@ a command that may remove, move or overwrite (rm, mv, >, sh, agent).\n\
   /clear    start a fresh conversation\n  /yes      write and run without asking (again: ask)\n  \
 /lessons  what it learned from past failures (~/.agent/lessons.md)\n  /forget   forget them\n  \
 /learn    stop learning (again: learn)\n  /exit     leave (Ctrl+D too)\n";
-const USAGE: &str = "usage: agent [-y] [-m model] [--no-learn] [task...]\n  -y          write and run \
-without asking\n  -m model    the model to ask (the free AI's own by default)\n  --no-learn  keep no \
-lessons from failures\nWith a task it works on it and exits; without, it asks for tasks.\n";
+const USAGE: &str = "usage: agent [-y] [-m model] [--no-learn] [--] [task...]\n  -y          write \
+and run without asking\n  -m model    the model to ask (the free AI's own by default)\n  \
+--no-learn  keep no lessons from failures\nOptions go before the task. With a task it works on \
+it and exits; without, it asks for tasks.\n";
 
 /// The program's world: the AI's channel once opened, the request in flight, what the last
 /// shell command's jobs wrote, and how many names down the directory it started in is (each
@@ -217,21 +219,17 @@ fn main() -> ExitCode {
     let mut os = Os { depth, ..Os::default() };
     let cwd = pwd.unwrap_or_else(|| vfs::Vfs::HOME.into());
     let mut a = Agent::new(&cwd, &mut os);
-    let (args, mut words): (Vec<String>, Vec<String>) =
-        (std::env::args().skip(1).collect(), vec![]);
-    let mut it = args.into_iter();
-    while let Some(arg) = it.next() {
-        match arg.as_str() {
-            "-y" | "--yes" => a.auto = true,
-            "--no-learn" => a.learn = false,
-            "-m" | "--model" => a.model = it.next().unwrap_or_default(),
-            "-h" | "--help" => {
-                os.say(USAGE);
-                return ExitCode::SUCCESS;
-            }
-            _ => words.push(arg),
+    let words = match agent::options(&mut a, std::env::args().skip(1).collect()) {
+        Ok(words) => words,
+        Err(None) => {
+            os.say(USAGE);
+            return ExitCode::SUCCESS;
         }
-    }
+        Err(Some(o)) => {
+            os.say(&["agent: unknown option ", &o, "\n", USAGE].concat());
+            return ExitCode::from(2);
+        }
+    };
     if !words.is_empty() {
         let done = a.task(&words.join(" "), &mut os);
         return if done { ExitCode::SUCCESS } else { ExitCode::FAILURE };

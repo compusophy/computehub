@@ -500,6 +500,25 @@ impl Agent {
     }
 }
 
+/// Sets on `a` the options that start `args` (`-y`, `-m model`, `--no-learn`), as the person typed
+/// them: `--` or the first other word ends them, so a `-y` among the task's words is a word.
+/// The task's words; Err: `-h` (`None`), or an option it does not know.
+pub fn options(a: &mut Agent, args: Vec<String>) -> Result<Vec<String>, Option<String>> {
+    let mut it = args.into_iter();
+    while let Some(arg) = it.next() {
+        match arg.as_str() {
+            "-y" | "--yes" => a.auto = true,
+            "--no-learn" => a.learn = false,
+            "-m" | "--model" => a.model = it.next().unwrap_or_default(),
+            "-h" | "--help" => return Err(None),
+            "--" => break,
+            o if o.starts_with('-') => return Err(Some(arg)),
+            _ => return Ok([arg].into_iter().chain(it).collect()),
+        }
+    }
+    Ok(it.collect())
+}
+
 /// Says `why` in red: the task ends.
 fn stop(w: &mut impl World, why: &str) -> bool {
     w.say(&[RED, &safe(why), PLAIN, "\n"].concat());
