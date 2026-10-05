@@ -1,36 +1,34 @@
 //! Remote: the window of a GUI program, a kernel process that describes it as a [`uiwire`] tree,
 //! drawn here by [`uiview`] in the frame's theme; the window's input goes back as uiwire events.
 //! The program starts at the first size ([`Event::Resize`]) with the roots `/`; until its first
-//! frame the window shows a note, or why it failed (a first frame that does not decode: the
-//! program is newer than the desktop), and holds what is typed in it (not the Terminal's: its
-//! program hears it), [`HELD`] bytes at most and nothing after, to go as typed once that frame
-//! is in: into the field it focuses (Enter an Input's Submit), else Enter, Escape and chords as
-//! keys, text nowhere. Meanwhile the window of a program that opens on a field (Studio's, the
-//! Assistant's, Editor's, Feedback's) wants text input. A frame's title is the window's and its
-//! requests are
-//! honored (Size in the first only; Focus when the frame holds that Input, Code or Area; Feedback
-//! goes to the page; Watch, End, Pref (`theme` a theme), Reset, Tty and Input from the OS's own
-//! windows alone, Activity's and Settings' (its own `bin/system.wasm`) and the Terminal's (its
-//! `bin/terminal.wasm`), never what a `/bin` file names, which hear [`Event::Prefs`] and
-//! [`Event::Face`] after the first Resize, then once they change; the Terminal's runs the shell
-//! on an [`apps::Console`] and hears its own keys, text and wheel as events); a
-//! clean exit or a kill (137) closes the window, and closing it sends [`Event::Close`]. The
-//! window's focus goes to the program as [`Event::Focus`], and a prompt from the everything bar
+//! frame the window shows a note, or why it failed (a first frame that does not decode: the program
+//! is newer than the desktop), and holds what is typed in it (not the Terminal's: its program hears
+//! it), [`HELD`] bytes at most and nothing after, to go as typed once that frame is in: into the
+//! field it focuses (Enter an Input's Submit), else Enter, Escape and chords as keys, text nowhere.
+//! Meanwhile the window of a program that opens on a field ([`TYPING`]) wants text input. A frame's
+//! title is the window's and its requests are honored (Size in the first only; Focus when the frame
+//! holds that Input, Code or Area; Feedback goes to the page; Watch, End, Pref (`theme` a theme),
+//! Reset, Tty and Input from the OS's own windows alone, Activity's and Settings' (its own
+//! `bin/system.wasm`) and the Terminal's (its `bin/terminal.wasm`), never what a `/bin` file names,
+//! which hear [`Event::Prefs`] and [`Event::Face`] after the first Resize, then once they change;
+//! the Terminal's runs the shell on an [`apps::Console`] and hears its own keys, text and wheel as
+//! events); a clean exit or a kill (137) closes the window, and closing it sends [`Event::Close`].
+//! The window's focus goes to the program as [`Event::Focus`], and a prompt from the everything bar
 //! as [`Event::Ask`], held until it starts. Edited text is owned as uiwire says ([`Texts`]), one
-//! [`Event::Change`] out at a time: the next waits for a frame, or goes before any other event.
-//! The wheel scrolls the Code under it, else the Scroll, else what does not fit
-//! ([`uiview::wheel`]); a revealed mark asks for frames while it comes in. The overlay's acts and
-//! status go to the host ([`Cx::agent`]), which answers through [`AppEvent::Agent`] (a tap the
-//! overlay makes goes to the program as it is); the window is busy while its program starts, and
-//! from a click, submit, tap or plain key it was sent until it draws that: the program answers
-//! each Tick and Change with a frame too, in the order it reads them, so the frames of those
-//! out before it count first. A program that asked for a timer ([`Request::Timer`]) gets an
+//! [`Event::Change`] out at a time: the next waits for a frame, or goes before any other event. The
+//! wheel scrolls the Code under it, else the Scroll, else what does not fit ([`uiview::wheel`]); a
+//! revealed mark asks for frames while it comes in. The overlay's acts, status and steps aside
+//! ([`Request::overlay`]) go to the host ([`Cx::agent`]), which answers through [`AppEvent::Agent`]
+//! (a tap the overlay makes goes to the program as it is); the window is busy while its program
+//! starts, and from a click, submit, tap or plain key it was sent until it draws that: the program
+//! answers each Tick and Change with a frame too, in the order it reads them, so the frames of
+//! those out before it count first. A program that asked for a timer ([`Request::Timer`]) gets an
 //! [`Event::Tick`] with the ms passed each time one is due and the last was answered (or a second
-//! went by), and a frame then while the window shows (by the page's timer, none between); one
-//! that asked for keys ([`Request::Keys`]) gets plain keys while none of its text fields has the
-//! keyboard. A press on a Grid's square is an [`Event::Tap`], and so is each square the mouse
-//! then drags across, once the last tap is drawn ([`uiview::Play::tap`]); the press's Click is
-//! none.
+//! went by), and a frame then while the window shows (by the page's timer, none between); one that
+//! asked for keys ([`Request::Keys`]) gets plain keys while none of its text fields has the
+//! keyboard. A press on a Grid's square is an [`Event::Tap`], and so is each square the mouse then
+//! drags across, once the last tap is drawn ([`uiview::Play::tap`]), where it went meanwhile at the
+//! next frame ([`uiview::Play::held`]); the press's Click is none.
 
 use std::mem;
 
@@ -75,6 +73,13 @@ const NEWER: &str = "This program is newer than the desktop; reload the page";
 /// The most bytes of typing held for a first frame: a key counts one, so a hand's typing (each
 /// character a key and its text) holds about half as many characters, a paste all of them.
 pub const HELD: usize = 4 << 10;
+/// The windows whose programs open on a field, by name (before any `:`): Studio's (on a file
+/// too; not a `.app` it runs, which may have none), the Assistant's (the overlay's as well),
+/// Editor's and Feedback's. Until its first frame such a window wants text input, so the textarea
+/// and a phone's keyboard take what is typed, held for that frame; any other wants none (the
+/// Terminal's console takes its keys from the start). A program that opens on a field adds its
+/// window's name here.
+pub const TYPING: [&str; 4] = ["studio", "assistant", "editor", "feedback"];
 
 const fn icon(glyph: Glyph, hue: u32) -> AppIcon {
     AppIcon { glyph, hue: Rgba::hex(hue) }
@@ -94,7 +99,7 @@ pub fn open(name: &str, ai: &Ai) -> Option<Box<dyn App>> {
         let mut r = Remote::new(&["/bin/", prog].concat(), argv, ai);
         (r.title, r.icon, r.size, r.compact) = (title.into(), icon, Some(size), compact);
         r.own = matches!(prog, "activity" | "settings").then_some(OWN);
-        r.types = matches!(prog, "editor" | "feedback");
+        r.types = TYPING.contains(&head);
         return Some(Box::new(r));
     }
     let abs = |p: &str| Vfs::normalize("/apps", p).ok().filter(|_| !p.is_empty());
@@ -128,8 +133,7 @@ pub fn open(name: &str, ai: &Ai) -> Option<Box<dyn App>> {
         (r.own, r.tty) = (Some("bin/terminal.wasm"), Some(apps::Console::default()));
     }
     (r.title, r.icon, r.size, r.view.follow) = (title, icon, size, name == "assistant");
-    // Studio's prompt and the Assistant's input; an app Studio runs may have no field.
-    r.types = name.starts_with("studio:") || !name.ends_with(".app");
+    r.types = TYPING.contains(&name.split_once(':').map_or(name, |s| s.0));
     Some(Box::new(r))
 }
 
@@ -389,7 +393,8 @@ impl App for Remote {
     }
 
     fn frame_in(&self, now_ms: f64) -> Option<u32> {
-        if self.view.animating(now_ms) {
+        // A drag's held point waits for the next frame's Tick to tap it.
+        if self.view.animating(now_ms) || self.play.held().is_some() {
             return Some(0);
         }
         self.pid.and(self.play.due_in(now_ms))
@@ -449,6 +454,12 @@ impl App for Remote {
                 false
             }
             AppEvent::Tick { now_ms } => {
+                // Where a drag went while the window was busy, now that it drew the answer:
+                // tapped as dragged there (the point has the content's corner in it already).
+                if let Some((x, y)) = self.play.held() {
+                    let (id, cells) = self.play.tap(&self.view, None, x, y);
+                    cells.into_iter().for_each(|cell| self.post(Event::Tap { id, cell }, cx));
+                }
                 if let Some(tick) = self.play.tick(now_ms, self.drawn) {
                     self.send(tick, cx);
                 }

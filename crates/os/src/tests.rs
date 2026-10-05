@@ -172,6 +172,11 @@ fn typed_keys_are_left_to_the_textarea_and_key_ups_prevent_only_modifiers() {
     assert!(open(&mut desk, "about").contains(&Fx::TextInput(false)));
     assert!(!prevented(&mut desk, "F5/F5"));
     assert!(open(&mut desk, "studio").contains(&Fx::TextInput(true)));
+    // So do Studio's on a file and the Assistant's overlay (mod+Space, over About's).
+    assert!(open(&mut desk, "about").contains(&Fx::TextInput(false)));
+    assert!(send(&mut desk, key("Space/ /a", true)).1.contains(&Fx::TextInput(true)));
+    assert!(send(&mut desk, key("Escape/Escape", true)).1.contains(&Fx::TextInput(false)));
+    assert!(open(&mut desk, "studio:x.app").contains(&Fx::TextInput(true)));
 }
 
 #[test]

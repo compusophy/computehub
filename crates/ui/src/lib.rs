@@ -238,8 +238,8 @@ pub enum Request {
     /// Send feedback the person typed: `kind` ("bug", "idea" or "love") and their `text`, with
     /// the desktop's context (build, device, windows, recent events) if `context`.
     Feedback { kind: String, text: String, context: bool },
-    /// The overlay acts, or says it works ([`uiwire::Request::Act`], [`uiwire::Request::Status`]);
-    /// from any other app, refused.
+    /// The overlay acts, says it works, or steps aside for a window ([`uiwire::Request::Act`],
+    /// [`uiwire::Request::Status`], [`uiwire::Request::Yield`]); from any other app, refused.
     Agent(uiwire::Request),
     /// Erase all the device keeps and start again as a first visit ([`uiwire::Request::Reset`]):
     /// the person's own act, dropped from a window the overlay acted on.
@@ -330,7 +330,8 @@ impl<'a> Cx<'a> {
         self.requests.push(Request::Feedback { kind, text, context });
     }
 
-    /// Acts on the desktop as a person would, or says it works ([`Request::Agent`]).
+    /// Acts on the desktop as a person would, says it works, or steps aside for a window
+    /// ([`Request::Agent`]).
     pub fn agent(&mut self, req: uiwire::Request) {
         self.requests.push(Request::Agent(req));
     }

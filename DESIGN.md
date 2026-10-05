@@ -452,10 +452,10 @@ one. Forked crates keep their Apache-2.0 license and note their origin.
   4 px or so (64 for a sample at most, so a sample up to 256 px away leaves
   no gap), and waits until the frames of all it sent are answered and
   drawn, so a paint app paints each square a steady drag crosses. Where a
-  drag goes meanwhile is held (`uiview::Play::held`) for the window to tap
-  once those are drawn, so a quick stroke, or one's end, paints too; the
-  window (`os::remote`) does not tap it yet, so a stroke quicker than a
-  frame's round trip still paints only its first square. A handler runs
+  drag goes meanwhile is held (`uiview::Play::held`), and once those are
+  drawn the window (`os::remote`) asks a frame and taps it then, so a
+  stroke quicker than a frame's round trip, or a stroke's end, paints each
+  unit it crossed too. A handler runs
   for each unit a drag crosses, so the card asks that a tap steer, aim or
   paint, and that turning, dropping or firing be a button. Grids and
   canvases are boards: they take the room the window's other widgets
@@ -523,12 +523,15 @@ one. Forked crates keep their Apache-2.0 license and note their origin.
   and nothing past that, then go as typed once the first frame is in:
   into the field it focuses (Enter in an Input is its Submit), else Enter,
   Escape and chords as the program's keys, text nowhere. Until then the
-  window of a program that opens on a field (Studio, the Assistant,
-  Editor, Feedback) wants text input, so the textarea and a phone's
-  keyboard take the typing (and, as a field does, F5 and Ctrl+R); any
-  other window wants none, so a tap that opens About raises no keyboard.
-  So opening Studio or the Assistant and typing at once loses nothing.
-  (The Terminal's console hears its keys from the start.)
+  window of a program that opens on a field wants text input, so the
+  textarea and a phone's keyboard take the typing (and, as a field does,
+  F5 and Ctrl+R); any other window wants none, so a tap that opens About
+  raises no keyboard. Those windows are named in one list,
+  `os::remote::TYPING`: Studio's (on a file too, but not a `.app` it
+  runs), the Assistant's (its overlay as well), Editor's and Feedback's.
+  A program that opens on a field adds its window's name there. So
+  opening Studio or the Assistant and typing at once loses nothing. (The
+  Terminal's console hears its keys from the start.)
 - A finger's press into an app waits to be a tap (a finger that travels
   scrolls the window instead), but on a pad (`ui::Sense::Pad`: a canvas or
   grid an app plays) it presses at once and drags, as a mouse does: a

@@ -234,6 +234,32 @@ fn clicks_keys_and_requests_go_through() {
 }
 
 #[test]
+fn a_quick_drag_across_a_busy_board_paints_every_unit_it_crossed() {
+    // A canvas pad, ten units across: a press taps its unit, and the stroke goes on while that
+    // tap is out, quicker than a frame's round trip; no later sample comes.
+    let mut s = Sys::new(true);
+    let canvas = || vec![Node::Canvas { id: 9, w: 10, h: 10, draws: Vec::new() }];
+    s.show(canvas(), vec![]);
+    s.draw();
+    let b = s.r.view.grids[0];
+    let x = |unit: f32| b.rect.x + b.rect.w / 10.0 * (unit + 0.5);
+    let y = b.rect.y + 1.0;
+    s.ev(AppEvent::PointerDown { x: x(0.0), y, id: Some(WidgetId(9)) });
+    assert_eq!([3.0, 6.0, 9.0].map(|u| s.ev(AppEvent::Drag { x: x(u), y })), [false; 3]);
+    assert_eq!(s.events(), [Event::Tap { id: 9, cell: 0 }]);
+    // Answered, the held end waits for that answer to draw, then asks a frame and is tapped by
+    // it: each unit on the way, once; then nothing is held.
+    assert!(s.show(canvas(), vec![]) && s.r.frame_in(0.0).is_none());
+    s.draw();
+    assert_eq!(s.r.frame_in(0.0), Some(0));
+    s.ev(AppEvent::Tick { now_ms: 16.0 });
+    assert_eq!(s.events(), (1..10).map(|cell| Event::Tap { id: 9, cell }).collect::<Vec<_>>());
+    assert!(s.r.busy() && s.r.frame_in(0.0).is_none());
+    s.ev(AppEvent::Tick { now_ms: 32.0 });
+    assert!(s.events().is_empty());
+}
+
+#[test]
 fn inputs_and_codes_keep_the_text_the_user_edits() {
     let mut s = Sys::new(true);
     s.show(vec![input(5, "a"), input(6, "z")], vec![]);
