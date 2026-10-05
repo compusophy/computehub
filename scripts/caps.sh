@@ -277,14 +277,18 @@ if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   fi
 fi
 
-# 7. No unsafe code: every crate root (src/lib.rs, src/main.rs) forbids it.
+# 7. No unsafe code: every crate root forbids it: src/lib.rs, src/main.rs,
+#    and the crates cargo makes beside them (src/bin/*.rs, build.rs, each
+#    integration test, tests/*.rs).
 for c in "${crate_dirs[@]}"; do
   roots=$(find "${c}src" -maxdepth 1 \( -name lib.rs -o -name main.rs \) 2>/dev/null)
   if [ -z "$roots" ]; then
     echo "FAIL: ${c} has no src/lib.rs nor src/main.rs to forbid unsafe code in"
     fail=1
   fi
-  for f in $roots; do
+  more=$(find "${c}src/bin" "${c}tests" -maxdepth 1 -name '*.rs' 2>/dev/null)
+  if [ -f "${c}build.rs" ]; then more="$more ${c}build.rs"; fi
+  for f in $roots $more; do
     if ! grep -q '^#!\[forbid(unsafe_code)\]' "$f"; then
       echo "FAIL: $f does not #![forbid(unsafe_code)]"
       fail=1

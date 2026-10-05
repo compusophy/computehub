@@ -3,6 +3,8 @@
 //! the hash. Layouts render as `id:x,y,w,h` bottom to top, the id tagged `^` when maximized,
 //! `@Snap` when snapped and `*` when focused.
 
+#![forbid(unsafe_code)]
+
 use std::collections::BTreeSet;
 use wm::Cmd::*;
 use wm::Outcome::{Changed, Noop, Opened};

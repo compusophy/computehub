@@ -115,7 +115,9 @@ the suite does not check: line clears in tetris, the direction tiles slide in 20
 minesweeper's numbers, scores beyond whack-a-mole's, and how anything looks beyond what the
 checks read. A checker lets at most 250,000 ticks of an app's timer pass in one wait; an app
 whose timer is too fast for a wait (a clock that ticks every 16 ms, waited 3 hours) fails with
-that reason, never read early.
+that reason, never read early. The references are the suite's answer keys, so `lab`'s corpus
+never takes them (it skips `programs/makes` and `programs/evals`): a model lab trains may be
+measured on them, never trained on them.
 
 Two hashes say what graded a record. The suite's (`suite_hash`) is FNV-1a 64 of its id and the
 source of its tasks, checkers and probe, line ends aside: a change to what is asked or how the
@@ -211,9 +213,11 @@ wrote after its program.
 ## Baseline
 
 2026-10-05: Suite 1 at hash `ca4f2f7a761e192a`, the coder's prompt at `0d7cd8ab731dfcab`,
-Studio's knobs, the harness at `81ab7e04340b535a`. GLM 5.3 ran two trials (the second at a later
+Studio's knobs, the harness at `81d703122e0435d3`. GLM 5.3 ran two trials (the second at a later
 commit, the coder the same), Flash one: 124 requests and $0.74 in all. The runs were graded again
-from their transcripts after the checkers' fixes, so every record carries the hashes above.
+from their transcripts after the checkers' fixes, so every record carries the hashes above; and
+again, every grade the same, when the hash moved from `81ab7e04340b535a` as the harness's build
+script came to forbid unsafe code.
 
 | run | model | commit | pass | rate (95% CI) | tiny / small / medium / hard | tokens/pass | $/pass | s/make | errors | other model |
 |---|---|---|---|---|---|---|---|---|---|---|
@@ -314,10 +318,15 @@ The Assistant uses the desktop for the person; grade it by the state it leaves, 
 
 ### Suite 3, the Terminal agent's coding tasks
 
-Once the Terminal's agent lands (independent of it until then):
+The Terminal's agent has landed (`programs/agent`, `agent` in a Terminal):
 
-- **Harness.** The kernel (deterministic) with a project fixture in the VFS; the agent's model
-  requests over the same `Wire`; its commands run as the kernel's jobs (`sh`, the toolbox).
+- **Harness.** The kernel (deterministic) with a project fixture in the VFS, driving
+  `agent::Agent` through a `World` over them: an `sh::Sys` (files, and `run` for a program) and
+  ask, heard, say, confirm and ran; its tests' fake world is the shape. The model requests go
+  over the same `Wire`. A shell line runs as in the Terminal: the shell's own commands in
+  process (so `cd` stays), each program as a kernel job (the Terminal's agent writes it to
+  `/dev/job`; the toolbox). `confirm` answers as the task says (yes, always, or no, to grade
+  what it does when refused).
 - **Tasks.** Shell work graded by hidden checks the agent never sees: a script that counts the
   lines of every `.txt` under `~/notes`; rename every `.TXT` to `.txt`; fix `~/apps/broken.app`
   so it compiles and its + adds one (graded by a `makes` checker); write a `.app` from a spec;

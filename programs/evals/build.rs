@@ -5,6 +5,8 @@
 //! the workspace's table); their files are taken by path, tests and licenses aside, line ends
 //! aside. The suites (`makes`) are not in it: each has a hash of its own.
 
+#![forbid(unsafe_code)]
+
 use std::path::{Path, PathBuf};
 
 /// FNV-1a 64 of `bytes` onto `h`, carriage returns aside.

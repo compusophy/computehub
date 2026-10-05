@@ -2,6 +2,8 @@
 //! Node as Vercel runs it: a reply the client leaves before its usage is booked at least what the
 //! gateway bills for it, so one client never spends past its share of the day.
 
+#![forbid(unsafe_code)]
+
 use std::io::Write;
 use std::process::{Command, Stdio};
 
