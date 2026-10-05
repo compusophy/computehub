@@ -10,8 +10,9 @@
 //! ticks pass. It stops at the first fault, or after [`BUDGET`] steps in all, and says what it
 //! saw. Canvases that showed, none of whose shapes ever reached inside one, are a fault at the
 //! end (`OFF_CANVAS`): a picture drawn in the window's pixels, not the canvas's units. A text
-//! wider than its canvas is a fault of the render that drew it (`TEXT_TOO_WIDE`): the desktop
-//! keeps a text inside its canvas, but for one that cannot fit.
+//! whose point is on its canvas and that is wider than it is a fault of the render that drew it
+//! (`TEXT_TOO_WIDE`): the desktop keeps such a text inside its canvas, but for one that cannot
+//! fit (one whose point is off the canvas it leaves where it is).
 
 use applang_syntax::ast::Widget;
 
@@ -238,7 +239,7 @@ impl Tester {
                 self.canvas.get_or_insert((*w, *h));
                 self.inside |= draws.iter().any(|d| reaches(d, *w, *h));
                 if wider.is_none() {
-                    wider = draws.iter().find_map(|d| wide(d, *w));
+                    wider = draws.iter().find_map(|d| wide(d, (*w, *h)));
                 }
             }
         });
@@ -333,17 +334,19 @@ fn reaches(d: &Draw, w: u16, h: u16) -> bool {
     x0 < i64::from(w) && x1 > 0 && y0 < i64::from(h) && y1 > 0 && x0 < x1 && y0 < y1
 }
 
-/// What is wrong with `d` if it is a text wider than its canvas `w` units wide, inset a quarter
-/// of its size each side as the desktop sets it, each character reckoned 2/5 of its size (the
-/// boot font's are about half; only narrow ones, i and 1, less), so one said to be nearly
-/// always is.
-fn wide(d: &Draw, w: u16) -> Option<String> {
+/// What is wrong with `d` if it is a text the desktop keeps inside its canvas `w` x `h` units
+/// (its point on it, the far edges too) that is wider than the canvas: inset a quarter of its
+/// size each side, each character reckoned 2/5 of its size (the boot font's are about half; only
+/// narrow ones, i and 1, less), so one said to be nearly always is.
+fn wide(d: &Draw, (w, h): (u16, u16)) -> Option<String> {
     let (chars, size) = (d.text.chars().count() as i64, i64::from(d.at[2]));
-    (d.shape == Shape::Text && (4 * chars + 5) * size > 10 * i64::from(w)).then(|| {
-        let about = chars * size / 2;
+    let on = |at: i16, end: u16| (0..=i64::from(end)).contains(&i64::from(at));
+    let need = ((4 * chars + 5) * size + 9) / 10;
+    (d.shape == Shape::Text && on(d.at[0], w) && on(d.at[1], h) && need > i64::from(w)).then(|| {
         format!(
-            "the text \"{}\" is about {about} units wide ({chars} characters, each about half of \
-             size {size}), wider than its canvas of {w}: draw it smaller, or shorter",
+            "the text \"{}\" needs about {need} units across ({chars} characters at size {size}, \
+             each about 2/5 of it, and a quarter of it either side), more than its canvas's {w}: \
+             draw it smaller, or shorter",
             d.text
         )
     })

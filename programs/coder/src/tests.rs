@@ -154,16 +154,11 @@ fn json_and_streams_read_replies_split_anywhere() {
                  \"usage\":{\"prompt_tokens\":2501,\"completion_tokens\":999}}\n";
     s.feed(tried.as_bytes(), &mut out, MAX_REPLY);
     s.end(&mut out, MAX_REPLY);
-    assert_eq!(
-        (s.error.as_str(), s.finish.as_str(), s.usage.map(|u| u.output)),
-        ("", "stop", Some(999))
-    );
+    let got = (s.error.as_str(), s.finish.as_str(), s.usage.map(|u| u.output));
+    assert_eq!(got, ("", "stop", Some(999)));
     let (mut s, mut out) = (Stream::default(), String::new());
-    s.feed(
-        b"data: {\"id\":\"g\", \"error\" : {\"code\":5,\"message\":\"cut\"}}\n",
-        &mut out,
-        MAX_REPLY,
-    );
+    let cut = b"data: {\"id\":\"g\", \"error\" : {\"code\":5,\"message\":\"cut\"}}\n";
+    s.feed(cut, &mut out, MAX_REPLY);
     assert_eq!(s.error, "cut");
 }
 
@@ -227,8 +222,12 @@ fn faults_are_accounted_for_a_fix() {
     let f = fault(&CLEAN.replacen('\n', &many, 1), "", 3).unwrap();
     assert!(f.runs && f.said.starts_with("E0936 2:170 `dot` is past 16 shapes"), "{}", f.said);
     assert!(f.account.contains("draw: E0936 at line 2") && f.account.contains("Rule: the icon is"));
-    let under = fault(&[CLEAN, "// icon: dot 9 9 3\n"].concat(), "", 3).map(|f| f.said);
-    assert_eq!(under.as_deref().map(|s| &s[..14]), Some("E0937 6:1 the "));
+    let unread =
+        [CLEAN.replacen('\n', "\n//Icon: dot 9 9 3\n", 1), [CLEAN, "// icon: x\n"].concat()];
+    for (src, at) in unread.iter().zip(["2:1 the icon", "6:1 the icon"]) {
+        let said = fault(src, "", 3).map(|f| f.said).unwrap_or_default();
+        assert!(said.starts_with(&["E0937 ", at].concat()), "{said}");
+    }
     // A program clean afresh that faults from the states its app kept, said so.
     let todo = applang::SHOTS[1].1;
     let kept = "tasks = [\"milk\", \"eggs\"];\ndone = [false, true];\n";
@@ -285,10 +284,8 @@ fn replies_hold_programs_or_edits() {
     let (long, short) = (app("state a = 0;\nlabel nope;\n"), app("label 1;\n"));
     let want = Reply::Program("state a = 0;\nlabel nope;\n".into());
     assert_eq!(read(&[short.as_str(), &long, &short].concat(), false), want);
-    assert_eq!(
-        read(&[short.as_str(), "```app\nstate a = 0;\nlabel 2;\n"].concat(), true),
-        Reply::Cut
-    );
+    let unclosed = [short.as_str(), "```app\nstate a = 0;\nlabel 2;\n"].concat();
+    assert_eq!(read(&unclosed, true), Reply::Cut);
     let open = "<<<<<<< SEARCH\na\n=======\nb\n";
     assert_eq!((read(open, false), read(open, true)), (Reply::Unclosed(1), Reply::Cut));
     let nested = [&edit("a\n", "b\n"), "<<<<<<< SEARCH\nx\n", open].concat();
@@ -326,10 +323,8 @@ fn edits_apply_atomically_where_they_match_one_place() {
     let near =
         "SEARCH block 1 matched no lines. The nearest lines are:\n  2| fn f() {\n  3|     n = 1;\n";
     assert!(why.starts_with(near), "{why}");
-    assert_eq!(
-        apply(src, &block("nothing\n", "x\n")).unwrap_err(),
-        "SEARCH block 1 matched no lines."
-    );
+    let why = apply(src, &block("nothing\n", "x\n")).unwrap_err();
+    assert_eq!(why, "SEARCH block 1 matched no lines.");
     assert_eq!(apply(src, &block("\n\n", "x\n")).unwrap_err(), "SEARCH block 1 is empty.");
     // Blocks apply in order to the evolving text, all or none.
     let mut both = block("state n = 0;\n", "state n = 5;\n");
@@ -355,6 +350,12 @@ fn the_system_prompt_is_stable_and_whole() {
     assert!(
         ai::ICON.contains(&format!("past {} shapes, {} numbers or {} bytes", m[0], m[1], m[2]))
     );
+    assert!(
+        ai::ICON_RULE.contains(&format!("{} shapes, {} numbers and {} bytes", m[0], m[1], m[2]))
+    );
+    let [over, .., many, _] = ai::ICON_WHY;
+    assert!(over.ends_with(&format!("over {} bytes", m[2])));
+    assert!(many.contains(&format!("past {} shapes or {} numbers", m[0], m[1])));
     // FNV-1a 64: a change to the prompt is a decision (and an eval), never a drift.
     let fnv = s
         .bytes()
@@ -369,7 +370,7 @@ fn the_system_prompt_is_stable_and_whole() {
 }
 
 /// The system prompt's hash (see the test above).
-const FNV: u64 = 0xbe04_07d6_bb62_b3fb;
+const FNV: u64 = 0x0d7c_d8ab_731d_fcab;
 
 #[test]
 fn a_clean_write_is_one_request() {
@@ -400,10 +401,8 @@ fn a_clean_write_is_one_request() {
     assert!(matches!(m.check(3), Some(Out::Ask(_))));
     assert!(matches!(m.data(delta("content", &app(CLEAN)).as_bytes(), 4), Some(Out::Cancel)));
     let Some(Out::Done(done)) = m.check(5) else { panic!() };
-    assert_eq!(
-        (done.outcome, done.receipt.turns[0].cached, done.receipt.turns[1].cached),
-        (Outcome::Ready, 0, 0)
-    );
+    let t = &done.receipt.turns;
+    assert_eq!((done.outcome, t[0].cached, t[1].cached), (Outcome::Ready, 0, 0));
 }
 
 #[test]
@@ -418,17 +417,13 @@ fn problems_get_fixes_by_edits_and_the_best_so_far_stays() {
     assert!(asked.starts_with(want) && asked.ends_with("Reply with edit blocks."), "{asked}");
     let b = Json::parse(&bodies[1]).unwrap();
     assert_eq!(b.get("max_tokens").and_then(Json::text), Some("4096"));
-    assert!(
-        seen.contains(&"fixing line 2 \u{b7} 0 s".into())
-            && seen.contains(&"fixing line 2 \u{b7} 1 edit".into())
-    );
+    let saw = |s: &str| seen.contains(&["fixing line 2 \u{b7} ", s].concat());
+    assert!(saw("0 s") && saw("1 edit"));
     assert_eq!((done.outcome, done.draft.as_str()), (Outcome::Ready, "state n = 0;\nlabel n;\n"));
     // A write that does not compile is not the program a make stops at, so its usage came too.
     let r = &done.receipt;
-    assert_eq!(
-        (r.turns.len(), r.est, r.turns[1].usd_micros, r.turns[0].code),
-        (2, false, 8634, 302)
-    );
+    let got = (r.turns.len(), r.est, r.turns[1].usd_micros, r.turns[0].code);
+    assert_eq!(got, (2, false, 8634, 302));
     assert_eq!(r.usd_micros, 2 * 8634);
     // The same problem twice is rewritten once; a third time ends with the best so far: a new
     // app's that compiles, installed faulting.
@@ -439,10 +434,8 @@ fn problems_get_fixes_by_edits_and_the_best_so_far_stays() {
         "Two tries did not clear this. Write the program again, simpler, as one complete app block."
     ));
     assert_eq!((bodies.len(), done.outcome, done.install), (3, Outcome::Faulting, true));
-    assert_eq!(
-        (done.said().as_str(), done.draft.as_str()),
-        ("runs, but faults \u{b7} E0203 line 3", FAULTS)
-    );
+    let said = (done.said(), done.draft.as_str());
+    assert_eq!(said, ("runs, but faults \u{b7} E0203 line 3".into(), FAULTS));
     // A compiling program beats a later one that does not.
     let replies = [
         (app(FAULTS), "stop"),
@@ -473,6 +466,12 @@ fn an_icon_that_will_not_draw_is_fixed_by_edits_as_a_fault_is() {
     let by2 = edit("button \"+\" { n += 1; }\n", "button \"+\" { n += 2; }\n");
     let (_, _, done) = run(task("count by two", &bad), one, &[(&by2, "stop")]);
     assert_eq!((done.outcome, done.install), (Outcome::Faulting, true));
+    // A change of one whose icon drew, that breaks it and never fixes it: it lands, with that
+    // icon (a change keeps its icon).
+    let both = [edit(&ring, &rings), by2].concat();
+    let (_, _, done) = run(task("count by two", &good), one, &[(&both, "stop")]);
+    let by2 = good.replace("n += 1", "n += 2");
+    assert_eq!((done.outcome, done.install, done.draft), (Outcome::Ready, true, by2));
 }
 
 #[test]
@@ -489,10 +488,8 @@ fn edits_that_miss_go_back_once_then_the_program_is_rewritten() {
             .contains("SEARCH block 1 matched no lines.\nTwo tries did not clear this.")
     );
     assert_eq!((bodies.len(), done.outcome), (4, Outcome::Ready));
-    assert_eq!(
-        done.receipt.turns.iter().map(|t| t.turn).collect::<Vec<_>>(),
-        [Turn::Write, Turn::Fix, Turn::Missed, Turn::Rewrite]
-    );
+    let turns: Vec<Turn> = done.receipt.turns.iter().map(|t| t.turn).collect();
+    assert_eq!(turns, [Turn::Write, Turn::Fix, Turn::Missed, Turn::Rewrite]);
     // A fix that drops a quarter of the program is not applied.
     let long = [CLEAN, "label 1;\nlabel 2;\nlabel nope;\n"].concat();
     let gut = edit(&long, "label 1;\n");

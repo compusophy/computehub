@@ -3,12 +3,12 @@
 saved state art = [-1; 1024];   // 32 x 32 squares, row by row: -1 blank, else a color
 state pen = 1;                  // the color a tap paints; -1 erases
 
-// The squares' edges, faint under the paint; the picture, 5 units a square; under it the
+// The squares' edges, faint (gray) under the paint; the picture, 5 units a square; under it the
 // twelve colors, the pen's ringed in ink, and a swatch of what a tap paints.
 fn scene() {
   for i in 1..32 {
-    line(i * 5, 0, i * 5, 159, 1, 10);
-    line(0, i * 5, 159, i * 5, 1, 10);
+    line(i * 5, 0, i * 5, 159, 1, 8);
+    line(0, i * 5, 159, i * 5, 1, 8);
   }
   pixels(art, 0, 0, 32, 5);
   for c in 0..12 {

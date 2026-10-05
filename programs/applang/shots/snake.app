@@ -32,12 +32,6 @@ fn scene() {
   if speed == 0 && len(xs) > 0 { text("Game over", 80, 60, 16, 11); }
 }
 
-// One button all along, so the board never moves: it says what it does.
-fn word() -> string {
-  if speed == 0 { return "Start"; }
-  return "Restart";
-}
-
 // Food on a free square: the first one from a random place on.
 fn food() {
   let k = random(300);
@@ -114,4 +108,4 @@ on key "down" { turn(0, 1); }
 label "Snake";
 label "Length " + len(xs) + "   Best " + best;
 canvas 160, 120, scene() { toward(x / 8, y / 8); }
-button word() { start(); }
+if speed == 0 { button "Start" { start(); } }

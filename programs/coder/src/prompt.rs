@@ -14,12 +14,14 @@ const RULES: &str = "\n\nWhat is to be seen (a game, a board, drawing, animation
                      a board of squares (tetris, snake, a painting, life), the other shapes for \
                      what moves freely or is a picture (a ball and paddles, hands, X and O); it \
                      moves with every, is steered with on key and with taps and drags on its \
-                     canvas (a phone has no arrow keys), and shows Start until it runs. The \
-                     widgets around a canvas stay while it plays, so its board never moves: \
-                     change a button's text (Start, Restart), never show or hide one, and say \
-                     Game over on the canvas. A paint app paints each square a drag crosses, \
-                     shows the color it paints (a swatch) and its squares' edges faintly under \
-                     the paint (lines a unit wide in dim ink). Saved states come back as they \
+                     canvas (a phone has no arrow keys; a drag taps each unit it crosses, so a \
+                     tap steers, aims or paints, and turning, dropping or firing is a button), \
+                     and shows Start until it runs. A board keeps its size and place as the \
+                     widgets around it come and go, once each has shown: show the same ones \
+                     before a game as after it (Start, hidden while it plays) and say Game over \
+                     on the canvas. A paint app paints where a tap or drag goes, shows the color \
+                     it paints (a swatch) and its squares' edges faintly under the paint (lines \
+                     a unit wide in gray, 8). Saved states come back as they \
                      were kept, also after a change: a saved list keeps its old length (one a \
                      change adds starts as declared), so check a list's length before indexing \
                      it. Write small functions instead of repeating code; keep programs under \

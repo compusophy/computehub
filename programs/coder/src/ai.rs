@@ -193,21 +193,23 @@ pub struct Fault {
 }
 
 /// The rule an icon's code (E0931 to E0937) says was broken; its limits are `icons::made`'s.
-const ICON_RULE: &str = "the icon is one line under the first comment, // icon: and then shapes \
-                         on the 24 x 24 grid, each its word and whole numbers 2 to 22: line x y x \
-                         y .. (2 to 12 points), loop and fill x y .. (3 to 12), ring x y r, dot x \
-                         y r, arc x y r from to; 6 shapes is plenty, 16 shapes, 64 numbers and 320 \
-                         bytes the most. One that does not read whole draws nothing: the tile \
-                         shows a sigil instead.";
+pub(crate) const ICON_RULE: &str = "the icon is one line under the first comment, // icon: and \
+                                    then shapes on the 24 x 24 grid, each its word and whole \
+                                    numbers 2 to 22: line x y x y .. (2 to 12 points), loop and \
+                                    fill x y .. (3 to 12), ring x y r, dot x y r, arc x y r from \
+                                    to; 6 shapes is plenty, 16 shapes, 64 numbers and 320 bytes \
+                                    the most. One that does not read whole draws nothing: the tile \
+                                    shows a sigil instead.";
 /// What each icon code says, from E0931; the shape's word or the token, if any, before it.
-const ICON_WHY: [&str; 7] = [
+pub(crate) const ICON_WHY: [&str; 7] = [
     "the icon line is over 320 bytes",
     " is not a shape (line, loop, fill, ring, dot, arc) nor a whole number",
     " is a number before any shape, or of more than 3 digits",
     " has too few or too many numbers (a line's in x y pairs)",
     " leaves the 24 x 24 grid, or its radius or an angle is out of range",
     " is past 16 shapes or 64 numbers: draw the one thing the app is, in 6 shapes at most",
-    "the icon has no shape, or its line is under code, where it is never read",
+    "the icon has no shape, or its line is never read: it begins // icon: just so (lowercase, \
+     one space), among the comments above the code",
 ];
 
 /// What is wrong with `src`, if anything: that it does not compile, faults when it runs
@@ -279,10 +281,10 @@ fn account(src: &str, what: &str, d: applang::Diag, when: &str) -> Fault {
 
 /// What is wrong with the icon line of `src` (which runs clean) as the desktop reads it
 /// (`icons::made`), coded E0931 to E0937 at the token it is about: one that does not read whole,
-/// or one under the code, where it is never read (E0937, as one with no shape); none if it draws,
-/// or if there is no icon line at all (the tile is the sigil, as the person sees it).
+/// or one never read, under the code or not marked just so (`//icon:`, `// Icon:`: E0937, as one
+/// with no shape); none if it draws, or if there is no icon line at all (the tile is the sigil,
+/// as the person sees it).
 fn icon(src: &str) -> Option<applang::Diag> {
-    const MARK: &str = "// icon:";
     let (start, end, code) = match icons::made::header(src.as_bytes()) {
         Some(text) => {
             let e = icons::Made::parse(text).err()?;
@@ -292,18 +294,40 @@ fn icon(src: &str) -> Option<applang::Diag> {
         }
         None => {
             let mut next = 0;
-            let under = src.split_inclusive('\n').find_map(|line| {
-                let (at, text) = (next, line.trim_ascii_start());
+            let (under, mark) = src.split_inclusive('\n').find_map(|line| {
+                let text = line.trim_ascii_start();
+                let at = next + line.len() - text.len();
                 next += line.len();
-                text.starts_with(MARK).then_some(at + line.len() - text.len())
+                let rest = text.strip_prefix("//")?.trim_ascii_start();
+                let mark = text.len() - rest.len() + 5;
+                rest.get(..5).filter(|m| m.eq_ignore_ascii_case("icon:")).map(|_| (at, mark))
             })?;
-            (under, under + MARK.len(), 937)
+            (under, under + mark, 937)
         }
     };
     let why = ICON_WHY[usize::from(code - 931)];
     let tok = src.get(start..end).unwrap_or("");
     let message = if why.starts_with(' ') { ["`", tok, "`", why].concat() } else { why.into() };
     Some(applang::Diag::at_code(code, message, applang::Span::new(start, end)))
+}
+
+/// `src`, whose icon line (the line of byte `at`) will not draw, with that of `base` (whose icon
+/// draws, or is none) instead: where its own was read, else under its first line. None if that
+/// will not draw either. A change keeps its icon, so one that runs lands with the icon it had.
+pub fn keep_icon(src: &str, at: usize, base: &str) -> Option<String> {
+    let line = |s: &str, at: usize| {
+        let a = s.get(..at).and_then(|s| s.rfind('\n')).map_or(0, |i| i + 1);
+        (a, s.get(at..).and_then(|r| r.find('\n')).map_or(s.len(), |i| at + i + 1))
+    };
+    let (a, b) = line(src, at);
+    let mut out = [src.get(..a)?, src.get(b..)?].concat();
+    if let Some(text) = icons::made::header(base.as_bytes()) {
+        let (c, d) = line(base, text.as_ptr() as usize - base.as_ptr() as usize);
+        let read = icons::made::header(src.as_bytes()).is_some();
+        let to = if read { a } else { out.find('\n').map_or(0, |i| i + 1) };
+        out.insert_str(to, &[base.get(c..d)?.trim_end(), "\n"].concat());
+    }
+    icon(&out).is_none().then_some(out)
 }
 
 /// The first fault a smoke test finds in `src` (which compiles) on seeds 1 to `seeds`, else

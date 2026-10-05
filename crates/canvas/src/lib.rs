@@ -11,10 +11,10 @@
 //!   axis is a snapped fill with round ends; any other a [`gfx::Kind::Line`]. Strokes are a
 //!   device pixel at least.
 //! - A Text is set in the boot's Inter on a ladder of sizes ([`LADDER`]), so a size that moves
-//!   frame by frame never fills the glyph atlas. One whose point is on the canvas stays inside
-//!   it, a quarter of its size in: one that would cross an edge moves in to that inset (a score
-//!   at x 2 starts at the left, one at the last unit ends at the right); wider than the canvas,
-//!   it starts at the left.
+//!   frame by frame never fills the glyph atlas. One whose point is on the canvas (x from 0 to
+//!   its width, y to its height, the far edges too) stays inside it, a quarter of its size in:
+//!   one that would cross an edge moves in to that inset (a score at x 2 starts at the left, one
+//!   at the width ends at the right); wider than the canvas, it starts at the left.
 //! - The mark lists Pixels by their place and size, and each board's squares too, a row a line,
 //!   as a Grid's, while the squares listed stay within [`SQUARES`] in all: a board past what is
 //!   left is its place and size alone, and a smaller one after it still lists its squares.
@@ -120,10 +120,10 @@ pub fn draw(ui: &mut Ui<'_>, r: RectF, id: u32, units: (u16, u16), draws: &[Draw
                 let ((cx, cy), ts) = (mid(x, y), ui.text_system());
                 let (lw, cap) = (ts.measure(&d.text, style), CAP * style.size);
                 let (mut left, mut top) = (cx - lw / 2.0, cy - cap / 2.0);
-                // A point on the canvas keeps its text inside, a quarter of its size in: moved
-                // in from an edge it would cross (from the left and top first).
-                if (0..i32::from(units.0)).contains(&x.into())
-                    && (0..i32::from(units.1)).contains(&y.into())
+                // A point on the canvas or its far edges keeps its text inside, a quarter of its
+                // size in: moved in from an edge it would cross (from the left and top first).
+                if (0..=i32::from(units.0)).contains(&x.into())
+                    && (0..=i32::from(units.1)).contains(&y.into())
                 {
                     let (pad, end) = (style.size / 4.0, (well.x + well.w, well.y + well.h));
                     left = left.min(end.0 - pad - lw).max(well.x + pad);

@@ -95,12 +95,12 @@ fn shapes_rings_texts_and_sprites_draw_scaled() {
 #[test]
 fn a_text_whose_point_is_on_the_canvas_stays_inside_it() {
     // 160 x 120 units in 320 x 240, 2 px a unit, texts 8 units tall (set at 16 px, so 4 px in):
-    // a score at the left edge, balls at the right, a line on the bottom row, one wider than the
-    // canvas, and one whose point is off it.
+    // a score at the left edge, balls at the right edge, a line at the bottom one, one wider
+    // than the canvas, and one whose point is off it.
     let hud = |x, y, text| shape(Shape::Text, 9, [x, y, 8, 0, 0], text);
     let long = "a line of text far too long for this canvas, cut at its right";
     let draws =
-        [hud(2, 4, "Score 0"), hud(158, 4, "Balls 3"), hud(80, 119, "Over"), hud(80, 60, long)];
+        [hud(2, 4, "Score 0"), hud(160, 4, "Balls 3"), hud(80, 120, "Over"), hud(80, 60, long)];
     let r = RectF::new(O, O, 320.0, 240.0);
     let (list, sem, at) = drawn(&THEMES[0], 1.0, r, (160, 120), &draws);
     let run = |text: &str| sem.runs.iter().find(|r| r.text == text).map(|r| r.rect);

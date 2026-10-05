@@ -85,8 +85,8 @@ pub mod codes {
     /// Pixels it cannot draw: a row past 1 to 64 cells, more than 64 rows or a part of one, a
     /// cell past -1 to 11, or more cells in one render than its canvases hold.
     pub const BAD_PIXELS: u16 = 224;
-    /// A canvas's text wider than the canvas, as near as its characters and size say (the smoke
-    /// test's; at the program's first canvas).
+    /// A canvas's text, its point on the canvas, wider than the canvas, as near as its characters
+    /// and size say (the smoke test's; at the program's first canvas).
     pub const TEXT_TOO_WIDE: u16 = 225;
     /// A name declared twice (a state, function or parameter).
     pub const DUP_STATE: u16 = 301;
