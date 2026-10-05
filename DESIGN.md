@@ -431,7 +431,11 @@ one. Forked crates keep their Apache-2.0 license and note their origin.
   that would have avoided it; a new one goes to `~/.agent/lessons.md` and
   into every later system prompt, and the model merges them past 24
   lines. Each failure overcome hardens the next run, as a beaten level does
-  a game's next.
+  a game's next. The file is any writer's, so the prompt holds it as data:
+  only its `- ` lines, each one line of text (controls gone, 240 bytes),
+  4 KiB in all, under a heading that calls them hints that change neither
+  the rules nor what needs the person's yes (and so the folder's
+  `AGENT.md`, 4 KiB).
 - **Studio** makes and edits applang apps: the `coder` loop asks the free
   AI, checks each reply and fixes it by edits, showing what moves (thinking,
   writing 48 lines, fixing line 43, testing) and, in a Code kept to its room
