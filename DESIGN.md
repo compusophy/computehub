@@ -364,14 +364,18 @@ one. Forked crates keep their Apache-2.0 license and note their origin.
 - **Studio** makes and edits applang apps: the `coder` loop asks the free
   AI, checks each reply and fixes it by edits, showing what moves (thinking,
   writing 48 lines, fixing line 43, testing) and, in a Code kept to its room
-  as the code view's, the newest lines streaming in or the program being
+  as the code view's, the newest lines streaming in (as many as its rows
+  hold under the plan, the line being written plain) or the program being
   fixed, whole, its problem marked (the wheel scrolls it; what is typed
-  there goes at the next frame). A make that took more than one request
-  says how many (`ready · 53 s · 2 tries`). New app, by the status, asks
-  what to make again (the app stays as it was made; code edited since is
-  saved first, or stays, its problem marked); Studio's icon, as every
-  app's, brings its window back, and New window in the icon's menu opens
-  another. `studio::AppHost` runs a `.app`
+  there goes at the next frame, and on a phone the keyboard with it). How
+  a make ended says how many requests it took, when more than one and the
+  AI did not fail (`ready · 53 s · 2 tries`). New app, by the status once
+  an app is open, asks what to make again (the app stays as it was made;
+  code edited since is saved first, saying so, or stays, its problem
+  marked; code emptied is never saved over it); Studio's home icon, as
+  every app's, brings its window back, and New window, in its dock tile's
+  menu while it runs, opens another. On a phone the status has its own
+  line, over its buttons. `studio::AppHost` runs a `.app`
   in its own window. Its prompt asks every app for its icon line (one card,
   and one in each example), which a change keeps.
   A make that ends without an app that runs clean (but for a stop with

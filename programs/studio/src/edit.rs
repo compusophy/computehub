@@ -211,8 +211,12 @@ impl Studio {
         if *id == self.prompt_id() {
             self.prompt = clip(text, MAX_PROMPT);
         } else if *id == DRAFT {
-            // Typed into the draft: the next frame's version passes theirs.
+            // Typed into the draft: the next frame's version passes theirs, and on a phone the
+            // keyboard goes again, as the make sent it.
             self.drafts = self.drafts.max(*version);
+            if self.narrow() && self.make.is_some() {
+                self.requests.push(Request::Focus { id: 0 });
+            }
         } else if *id != self.code_id() {
             if let Some(live) = &mut self.live {
                 live.event(ev, disk);
@@ -237,11 +241,17 @@ impl Studio {
         }
     }
 
+    /// Whether New app is offered: no make runs, and there is an app (a file or code) to leave.
+    pub(crate) fn held(&self) -> bool {
+        self.make.is_none() && !(self.path.is_empty() && self.text.is_empty())
+    }
+
     /// New app: Studio with nothing open, asking what to make, the prompt as typed (the app was
-    /// saved as it was made; the code as edited is checked and saved first, and stays, its
-    /// problem marked, if it cannot be).
+    /// saved as it was made; the code as edited is checked and saved first, saying so, and
+    /// stays, its problem marked, if it cannot be; emptied, it goes, never saved over the app).
     fn new_app(&mut self, disk: &mut dyn Disk) {
-        if self.dirty {
+        let save = self.dirty && !self.text.trim().is_empty();
+        if save {
             self.check(disk);
             if self.dirty {
                 return;
@@ -255,6 +265,9 @@ impl Studio {
         (self.edits, self.set, self.last_id, self.drafts) =
             (old.edits, old.set, old.last_id, old.drafts);
         (self.width, self.height, self.asked) = (old.width, old.height, old.asked);
+        if save {
+            self.status = old.status;
+        }
         self.requests.push(Request::Focus { id: self.prompt_id() });
     }
 }
@@ -286,7 +299,7 @@ impl View for Studio {
             Some(&Event::Submit { id }) if id == self.prompt_id() => self.make(disk),
             Some(&Event::Click { id: STOP }) => self.stop(disk),
             Some(&Event::Click { id: TOGGLE }) if some => self.toggle(disk),
-            Some(&Event::Click { id: NEW }) if self.make.is_none() => self.new_app(disk),
+            Some(&Event::Click { id: NEW }) if self.held() => self.new_app(disk),
             Some(&Event::Click { id: SEND }) => return self.send() || fresh,
             // Every Change gets a frame: the desktop sends the next one then.
             Some(ev @ Event::Change { .. }) => self.change(ev, disk),

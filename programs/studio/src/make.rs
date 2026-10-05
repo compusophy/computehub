@@ -4,7 +4,7 @@
 //! only then), and its end installs the program it keeps: saved (a first make names the file),
 //! run, and recorded in `~/.ai/makes.jsonl` (and, when it runs clean, the corpus). Unless the
 //! code was edited meanwhile: then the edits stay. Its status says how it ended, and how many
-//! requests it took when more than one (`ready · 53 s · 2 tries`).
+//! requests it took when more than one and the AI did not fail (`ready · 53 s · 2 tries`).
 
 use crate::{Disk, Studio};
 use coder::ai::{CORPUS, corpus_line, put_num, state_path};
