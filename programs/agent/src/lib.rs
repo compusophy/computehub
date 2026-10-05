@@ -4,7 +4,7 @@
 //! answered on /dev/events) with the conversation and its [`tools`], shows the reply as it
 //! streams, runs each tool call (files, the OS's own shell, applang's checker) and goes on until
 //! the model answers with no call. Writes and commands wait for the person's yes, unless they
-//! said always (or `-y`).
+//! said always (or `-y`); a command that may remove, move or overwrite asks each time.
 //!
 //! - **Fitting.** The free AI takes 64 messages and 96 KiB a request. Past [`MAX_BODY`] the
 //!   oldest tool results fold to their first line (and long arguments to their size), then the
@@ -17,6 +17,10 @@
 //!   lesson that would have avoided it; lessons go to `~/.agent/lessons.md` and into every later
 //!   system prompt, merged as they grow. Each failure overcome hardens the next run, as a beaten
 //!   level does a game's next.
+//! - **Shown as text.** What the model says and what a tool shows of its words (a path, a
+//!   command, a file's lines) reach the console with their controls in caret notation
+//!   ([`safe`]): nothing the model writes styles the screen, retitles the window or asks the
+//!   desktop (`OSC 1729`) past the person's yes.
 //! - **Sans-IO at its edge.** Everything outside goes through a [`World`]: files and jobs as the
 //!   shell's [`sh::Sys`], the AI, the console. A recorded world replays a session.
 
@@ -43,6 +47,12 @@ pub const MAX_STEPS: u32 = 30;
 /// The most bytes of a tool's result the model gets, and of a file's notes or the lessons.
 pub const MAX_RESULT: usize = 12 << 10;
 pub const MAX_NOTES: usize = 4 << 10;
+
+/// What the person is asked to let it do: write (or edit) a file, run a command, and run one
+/// that may remove, move or overwrite ([`tools`]), which always never covers: each asks.
+pub const WRITE: usize = 0;
+pub const RUN: usize = 1;
+pub const RISK: usize = 2;
 
 /// The terminal's styles: dim, bold, the accent, red, green, yellow, and back to plain.
 pub const DIM: &str = "\x1b[2m";
@@ -98,8 +108,9 @@ pub trait World: sh::Sys {
     fn heard(&mut self) -> Heard;
     /// Shows `text` on the console.
     fn say(&mut self, text: &str);
-    /// Asks the person `question` (`[y/n/a]` follows): their answer; no answer is no.
-    fn confirm(&mut self, question: &str) -> Answer;
+    /// Asks the person `question` (`[y/n/a]` follows, or with no `always` on offer `[y/n]`):
+    /// their answer; no answer is no.
+    fn confirm(&mut self, question: &str, always: bool) -> Answer;
     /// What the jobs of the last shell command wrote to the console as they ran (the shell's own
     /// output before each, each job's stdout, a nonzero status), leaving none.
     fn ran(&mut self) -> String;
@@ -156,7 +167,8 @@ pub struct Agent {
     /// The lessons ([`learn`]) and the working directory's `AGENT.md`, for the system prompt.
     pub lessons: String,
     pub notes: String,
-    /// The writes and the commands the person said always to, this session.
+    /// The writes and the commands the person said always to, this session ([`WRITE`],
+    /// [`RUN`]; never [`RISK`]).
     always: [bool; 2],
     /// Tokens in and out this session, and the call ids it made.
     pub usage: (u64, u64),
@@ -182,7 +194,7 @@ impl Agent {
         };
         // Wide, so that what the shell wraps (help) stays whole for the model.
         a.shell.cols = 160;
-        a.sh(&["cd ", &quoted(cwd)].concat(), w);
+        a.sh(&["cd ", &quoted(cwd)].concat(), false, w);
         a.lessons = learn::load(w);
         let notes = w.read(&[&a.cwd, "/AGENT.md"].concat()).unwrap_or_default();
         a.notes = clip(&String::from_utf8_lossy(&notes), MAX_NOTES);
@@ -290,7 +302,7 @@ impl Agent {
                 if mem::take(&mut waiting) {
                     w.say("\r\x1b[K");
                 }
-                w.say(&reply.text[shown..]);
+                w.say(&safe(&reply.text[shown..]));
                 shown = reply.text.len();
             }
         };
@@ -406,10 +418,10 @@ impl Agent {
         true
     }
 
-    /// Runs `line` in the OS's shell: what it and its jobs wrote, escapes taken out (its asks of
-    /// the desktop, such as `open`, go to the console, which the Terminal does). The working
-    /// directory is read again after.
-    pub fn sh(&mut self, line: &str, w: &mut impl World) -> String {
+    /// Runs `line` in the OS's shell: what it and its jobs wrote, escapes taken out. Its asks of
+    /// the desktop, such as `open`, go to the console, which the Terminal does, if `send` (the
+    /// person let the line run); else none goes. The working directory is read again after.
+    pub fn sh(&mut self, line: &str, send: bool, w: &mut impl World) -> String {
         self.shell.run(line, w);
         let mut out = w.ran();
         out += &mem::take(&mut self.shell.out);
@@ -419,8 +431,8 @@ impl Agent {
         if let Some(dir) = pwd.lines().next().filter(|d| d.starts_with('/')) {
             self.cwd = dir.into();
         }
-        let (asks, text) = asks(&out);
-        if !asks.is_empty() {
+        let (asks, text) = asks(&out, send);
+        if send && !asks.is_empty() {
             w.say(&asks);
         }
         text
@@ -431,17 +443,19 @@ impl Agent {
         Vfs::normalize(&self.cwd, path).map_err(|_| ["invalid path: ", path].concat())
     }
 
-    /// Whether the person lets it do `what`, of kind `kind` (0 writes, 1 commands): at once when
-    /// acting without asking or told always, else asked.
+    /// Whether the person lets it do `what`, of kind `kind` ([`WRITE`], [`RUN`], [`RISK`]): at
+    /// once when acting without asking (`-y`) or told always (not of [`RISK`], which is asked
+    /// each time, always a yes to this one), else asked.
     pub fn allowed(&mut self, kind: usize, what: &str, w: &mut impl World) -> bool {
-        if self.auto || self.always[kind] {
+        if self.auto || self.always.get(kind) == Some(&true) {
             return true;
         }
-        match w.confirm(what) {
+        let always = self.always.get_mut(kind);
+        match w.confirm(&safe(what), always.is_some()) {
             Answer::Yes => true,
             Answer::No => false,
             Answer::Always => {
-                self.always[kind] = true;
+                always.into_iter().for_each(|a| *a = true);
                 true
             }
         }
@@ -473,8 +487,23 @@ impl Agent {
 
 /// Says `why` in red: the task ends.
 fn stop(w: &mut impl World, why: &str) -> bool {
-    w.say(&[RED, why, PLAIN, "\n"].concat());
+    w.say(&[RED, &safe(why), PLAIN, "\n"].concat());
     false
+}
+
+/// `s` as the console shows what the model wrote, or a file holds: each control but a line
+/// break or tab in caret notation (`^[`), carriage returns gone, so nothing in it is an escape.
+pub fn safe(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '\r' => {}
+            '\n' | '\t' => out.push(c),
+            '\0'..='\x1f' | '\x7f' => out.extend(['^', char::from(c as u8 ^ 0x40)]),
+            c => out.push(c),
+        }
+    }
+    out
 }
 
 /// Appends `m` as a chat message.
@@ -583,8 +612,9 @@ pub fn quoted(s: &str) -> String {
 }
 
 /// Splits what a shell command wrote: its asks of the desktop (`ESC ] 1729 ; verb ; arg BEL`),
-/// and the rest with every other escape taken out (CSI sequences, OSC strings) and CRs gone.
-pub fn asks(s: &str) -> (String, String) {
+/// and the rest with every other escape taken out (CSI sequences, OSC strings) and CRs gone,
+/// each ask noted in its place as `sent` to the desktop or not.
+pub fn asks(s: &str, sent: bool) -> (String, String) {
     let (mut asks, mut text, mut it) = (String::new(), String::new(), s.char_indices().peekable());
     while let Some((i, c)) = it.next() {
         match c {
@@ -596,7 +626,7 @@ pub fn asks(s: &str) -> (String, String) {
                     if osc.starts_with("\x1b]1729;") {
                         asks += osc;
                         asks.push('\x07');
-                        text += "[asked the desktop: ";
+                        text += if sent { "[asked the desktop: " } else { "[not sent: " };
                         text += osc.get(7..).unwrap_or_default();
                         text += "]\n";
                     }

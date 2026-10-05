@@ -409,8 +409,17 @@ one. Forked crates keep their Apache-2.0 license and note their origin.
   and `open` opens apps; a job's stdout is caught in a file), check an
   applang app (`coder`'s compile and smoke test) and read applang's guide.
   Reads run freely; writes, edits and commands wait for the person's yes
-  (`[y]es [n]o [a]lways`, or `-y`). The reply streams in as it comes, and
-  each tool shows a line of what it does and one of how it went. It reaches
+  (`[y]es [n]o [a]lways`, or `-y`). A line runs unasked only if the shell
+  reads it (`sh::commands`) as one reading command alone (`ls`, `cat`,
+  `cd`, ...: nothing joined by `;`, `&&`, `||` or `|`, no `>`, no /dev);
+  one that may remove, move or overwrite (`rm`, `mv`, a `>` that does not
+  append, a script by `sh`, another `agent`, a program named by a pattern)
+  asks each time, always or not. No file tool, nor its shell, reads or
+  writes a device (but /dev/null). The reply streams in as it comes, and
+  each tool shows a line of what it does and one of how it went; what the
+  model wrote shows with its controls in caret notation (`^[`), so none of
+  it styles the screen or asks the desktop (`OSC 1729`), and the shell's
+  asks reach the Terminal only from a line the person let run. It reaches
   the AI as a window's program does, a `Request::Ai` written to /dev/draw
   and answered on /dev/events: the Terminal's window passes on the AI
   requests of the programs its shell runs (`apps::asks`; nothing else of

@@ -2,12 +2,15 @@
 //! write and edit files, list a folder, search under one, run a command line in the OS's shell,
 //! check an applang app, and hand over applang's guide. Each shows the person a line of what it
 //! does (`● name what`) and one of how it went (`⎿ ...`); writes and edits show what changes
-//! first. Writes, edits and commands (but a few that only read) wait for the person's yes.
+//! first. Writes, edits and commands wait for the person's yes; but for a line that only reads
+//! ([`reads`]), which runs unasked, and one that may remove, move or overwrite ([`risky`]),
+//! which asks each time. No file tool reads or writes a device (/dev).
 
 use coder::ai::{put_clip, put_num, shown};
 use coder::json::Json;
 
-use crate::{ACCENT, Agent, BOLD, Call, DIM, GREEN, MAX_RESULT, PLAIN, RED, World, quoted};
+use crate::{ACCENT, Agent, BOLD, Call, DIM, GREEN, MAX_RESULT, PLAIN, RED, World, quoted, safe};
+use crate::{RISK, RUN, WRITE};
 
 /// The tools, in OpenAI's function calling form.
 pub const TOOLS: &str = r#"[{"type":"function","function":{"name":"read_file","description":"Read a text file, its lines numbered (as 12| text). A long file comes in parts: pass offset (the first line, from 1) and limit (lines, at most 1000) for more.","parameters":{"type":"object","properties":{"path":{"type":"string"},"offset":{"type":"integer","minimum":1},"limit":{"type":"integer","minimum":1,"maximum":1000}},"required":["path"],"additionalProperties":false}}},{"type":"function","function":{"name":"write_file","description":"Write a whole file, making it and its folders if missing; with append, add to its end instead. To change part of a file, use edit_file.","parameters":{"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"},"append":{"type":"boolean"}},"required":["path","content"],"additionalProperties":false}}},{"type":"function","function":{"name":"edit_file","description":"Replace old_text with new_text in a file. old_text must match the file exactly (spaces and line breaks too; copy it from read_file without the line numbers) and only once, unless replace_all.","parameters":{"type":"object","properties":{"path":{"type":"string"},"old_text":{"type":"string"},"new_text":{"type":"string"},"replace_all":{"type":"boolean"}},"required":["path","old_text","new_text"],"additionalProperties":false}}},{"type":"function","function":{"name":"list_dir","description":"List a folder: folders end in /, files show their size in bytes.","parameters":{"type":"object","properties":{"path":{"type":"string","description":"Default: the working directory."}},"additionalProperties":false}}},{"type":"function","function":{"name":"search","description":"Find text in the files under a folder (dot folders only when the path is in one): each match as path:line: text, 100 at most.","parameters":{"type":"object","properties":{"text":{"type":"string"},"path":{"type":"string","description":"A folder or file; default: the working directory."},"ignore_case":{"type":"boolean"}},"required":["text"],"additionalProperties":false}}},{"type":"function","function":{"name":"shell","description":"Run one command line in the OS's shell, sh (its commands are in the system prompt): what it wrote. The working directory it leaves stays for the next call and for paths.","parameters":{"type":"object","properties":{"command":{"type":"string"}},"required":["command"],"additionalProperties":false}}},{"type":"function","function":{"name":"check_app","description":"Test an applang app (.app): compile it, then run it on 3 seeds of the smoke test (drawn, clicked, ticked, keyed, tapped, typed into) and from its saved states. Says ok, or the first problem with its line.","parameters":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"],"additionalProperties":false}}},{"type":"function","function":{"name":"applang_guide","description":"The applang language card and example apps: read it before writing or changing an app.","parameters":{"type":"object","properties":{},"additionalProperties":false}}}]"#;
@@ -23,9 +26,12 @@ const MATCHES: usize = 100;
 const FILES: usize = 2000;
 const SEARCHED: usize = 256 << 10;
 const SHOWN: usize = 8;
-/// The first words of commands that only read (with no `>`): they run without asking.
+/// The commands that only read: one of them alone runs without asking ([`reads`]).
 const READS: [&str; 10] =
     ["ls", "cat", "pwd", "cd", "echo", "apps", "history", "whoami", "uname", "help"];
+/// What a line may run that removes, moves or overwrites, or could unseen (a script, another
+/// agent, which may be told `-y`): such a line asks each time ([`risky`]).
+const RISKS: [&str; 4] = ["rm", "mv", "sh", "agent"];
 
 /// Runs call `c`: its result for the model, and whether it failed (an `Error:` result).
 pub fn run(a: &mut Agent, c: &Call, w: &mut impl World) -> (String, bool) {
@@ -56,7 +62,7 @@ pub fn run(a: &mut Agent, c: &Call, w: &mut impl World) -> (String, bool) {
         Ok(text) => (text, false),
         Err(why) => {
             let mut said = String::from(RED);
-            put_clip(&mut said, why.lines().next().unwrap_or_default(), 200);
+            put_clip(&mut said, &safe(why.lines().next().unwrap_or_default()), 200);
             how(w, &[&said, PLAIN].concat());
             (["Error: ", &why].concat(), true)
         }
@@ -65,7 +71,7 @@ pub fn run(a: &mut Agent, c: &Call, w: &mut impl World) -> (String, bool) {
 
 /// Shows `● name what`.
 fn doing(w: &mut impl World, name: &str, what: &str) {
-    w.say(&[ACCENT, "\u{25cf} ", PLAIN, BOLD, name, PLAIN, " ", what, "\n"].concat());
+    w.say(&[ACCENT, "\u{25cf} ", PLAIN, BOLD, name, PLAIN, " ", &safe(what), "\n"].concat());
 }
 
 /// Shows `  ⎿ text`, dim.
@@ -105,8 +111,24 @@ fn count(n: usize, one: &str, many: &str) -> String {
     out
 }
 
-/// The text of the file at `path` (absolute); Err for one that is missing or binary.
+/// Whether `path` (absolute) is in /dev, where a read may wait for ever (the console, the
+/// agent's own events) and a write may start a job or draw: no file tool goes there, nor the
+/// agent's shell (but to /dev/null, which takes all and holds nothing).
+pub fn device(path: &str) -> bool {
+    (path == "/dev" || path.starts_with("/dev/")) && path != "/dev/null"
+}
+
+/// Err for a path in /dev.
+fn no_device(path: &str) -> Result<(), String> {
+    match device(path) {
+        true => Err([path, ": a device, which no file tool reads or writes"].concat()),
+        false => Ok(()),
+    }
+}
+
+/// The text of the file at `path` (absolute); Err for one that is missing, binary or a device.
 fn file(w: &mut impl World, path: &str) -> Result<String, String> {
+    no_device(path)?;
     let data = w.read(path).map_err(|why| [&shown(path), ": ", why].concat())?;
     if data.contains(&0) {
         return Err([&shown(path), ": a binary file"].concat());
@@ -184,7 +206,7 @@ fn show(w: &mut impl World, lines: &str, mark: &str, color: &str) {
         out += "    ";
         out += color;
         out += mark;
-        put_clip(&mut out, line, 120);
+        put_clip(&mut out, &safe(line), 120);
         out += PLAIN;
         out.push('\n');
     }
@@ -211,8 +233,9 @@ fn write(a: &mut Agent, v: &Json, w: &mut impl World) -> Result<String, String> 
     let (lines, name) = (count(content.lines().count(), "line", "lines"), shown(&path));
     let what = [if append { "append to " } else { "write " }, &name, " (", &lines, ")"];
     doing(w, "write_file", &what[1..].concat());
+    no_device(&path)?;
     show(w, &content, "+ ", GREEN);
-    if !a.allowed(0, &what.concat(), w) {
+    if !a.allowed(WRITE, &what.concat(), w) {
         how(w, "declined");
         return declined(&what.concat());
     }
@@ -275,7 +298,7 @@ fn edit(a: &mut Agent, v: &Json, w: &mut impl World) -> Result<String, String> {
     }
     show(w, &old, "- ", RED);
     show(w, &new, "+ ", GREEN);
-    if !a.allowed(0, &["edit ", &shown(&path)].concat(), w) {
+    if !a.allowed(WRITE, &["edit ", &shown(&path)].concat(), w) {
         how(w, "declined");
         return declined(&["edit ", &shown(&path)].concat());
     }
@@ -332,8 +355,7 @@ fn search(a: &Agent, v: &Json, w: &mut impl World) -> Result<String, String> {
     let want = low(&needle);
     let (mut out, mut hits, mut files, mut stack) = (String::new(), 0, 0, vec![root.clone()]);
     while let Some(path) = stack.pop() {
-        // /dev's files are devices: reading one waits for input.
-        if path == "/dev" || path.starts_with("/dev/") || hits >= MATCHES || files >= FILES {
+        if device(&path) || hits >= MATCHES || files >= FILES {
             continue;
         }
         match w.kind(&path) {
@@ -374,24 +396,46 @@ fn search(a: &Agent, v: &Json, w: &mut impl World) -> Result<String, String> {
     Ok(if out.is_empty() { "No matches.".into() } else { out })
 }
 
+/// Whether `line` only reads, so it runs unasked: one of [`READS`] alone, as the shell reads
+/// the line (joined to no other by `;`, `&&`, `||` or `|`, writing no file), naming no device.
+pub fn reads(line: &str) -> bool {
+    let alone = |c: &sh::Command| match (&c.0[..], &c.1) {
+        ([words], None) => words.first().is_some_and(|w| READS.contains(&w.as_str())),
+        _ => false,
+    };
+    matches!(sh::commands(line).as_deref(), Some([c]) if alone(c)) && !line.contains("/dev")
+}
+
+/// Whether `line` may remove, move or overwrite: a `>` that does not append, or a program of
+/// [`RISKS`] (by its name, wherever it is), or one named by a pattern, which could be any.
+pub fn risky(line: &str) -> bool {
+    let named = |w: &String| {
+        let name = w.rsplit('/').next().unwrap_or_default();
+        RISKS.contains(&name.strip_suffix(".wasm").unwrap_or(name)) || w.contains(['*', '?'])
+    };
+    let risk = |(stages, out): &sh::Command| {
+        out.as_ref().is_some_and(|o| !o.1) || stages.iter().filter_map(|s| s.first()).any(named)
+    };
+    sh::commands(line).unwrap_or_default().iter().any(risk)
+}
+
 fn shell(a: &mut Agent, v: &Json, w: &mut impl World) -> Result<String, String> {
     let line = need(v, "command")?;
     doing(w, "shell", &line);
-    if line.contains('\n') {
-        return Err("one command line at a time".into());
+    if line.chars().any(|c| c.is_control() && c != '\t') {
+        return Err("one command line at a time, with no control characters".into());
     }
-    let first = line.split_whitespace().next().unwrap_or_default();
-    let reads = READS.contains(&first) && !line.contains('>');
-    if !reads && !a.allowed(1, &["run ", &line].concat(), w) {
+    let (reads, kind) = (reads(&line), if risky(&line) { RISK } else { RUN });
+    if !reads && !a.allowed(kind, &["run ", &line].concat(), w) {
         how(w, "declined");
         return declined(&["run ", &line].concat());
     }
     let before = a.cwd.clone();
-    let mut out = a.sh(&line, w);
+    let mut out = a.sh(&line, !reads, w);
     let lines = out.lines().count();
     let first_line = out.lines().find(|l| !l.trim().is_empty()).unwrap_or("no output");
     let mut said = String::new();
-    put_clip(&mut said, first_line, 100);
+    put_clip(&mut said, &safe(first_line), 100);
     if lines > 1 {
         said += " \u{2026} (";
         said += &count(lines, "line", "lines");

@@ -21,11 +21,14 @@ use uiwire::{Event, Frame, Request};
 
 /// Where a job's stdout is caught while a shell command runs.
 const CAUGHT: &str = "/tmp/.agent-out";
+/// Why the shell's commands here read and write no device.
+const DEVICE: Why = "a device, which the agent's shell reads and writes none of";
 const GREETING: &str = "\x1b[1magent\x1b[m \u{2014} a coding agent on the free AI, in your files. \
 Type a task, or /help. Ctrl+C stops it.\n";
 const PROMPT: &str = "\n\x1b[1;35m\u{203a}\x1b[m ";
 const HELP: &str = "Type a task in plain words, such as: make a pomodoro timer app.\n\
-It reads freely; it asks before it writes a file or runs a command.\n\
+It reads freely; it asks before it writes a file or runs a command, and each time before\n\
+a command that may remove, move or overwrite (rm, mv, >, sh, agent).\n\
   /clear    start a fresh conversation\n  /yes      write and run without asking (again: ask)\n  \
 /lessons  what it learned from past failures (~/.agent/lessons.md)\n  /forget   forget them\n  \
 /learn    stop learning (again: learn)\n  /exit     leave (Ctrl+D too)\n";
@@ -78,11 +81,20 @@ impl Sys for Os {
         Ok(out)
     }
 
+    /// Not a device's (/dev), whose read may wait for ever (the console, the agent's own events).
     fn read(&mut self, path: &str) -> Result<Vec<u8>, Why> {
+        if agent::tools::device(path) {
+            return Err(DEVICE);
+        }
         fs::read(self.at(path)).map_err(why)
     }
 
+    /// Not a device's (/dev), where a write may start a job or draw: the shell's own commands
+    /// write files alone.
     fn write(&mut self, path: &str, data: &[u8], append: bool) -> Result<(), Why> {
+        if agent::tools::device(path) {
+            return Err(DEVICE);
+        }
         let mut o = OpenOptions::new();
         let f = o.create(true).write(!append).append(append).truncate(!append).open(self.at(path));
         f.and_then(|mut f| f.write_all(data)).map_err(why)
@@ -175,9 +187,10 @@ impl World for Os {
         let _ = out.write_all(text.as_bytes()).and_then(|()| out.flush());
     }
 
-    fn confirm(&mut self, question: &str) -> Answer {
+    fn confirm(&mut self, question: &str, always: bool) -> Answer {
         let ask = [YELLOW, "? ", PLAIN, BOLD, "Allow: ", PLAIN, question, "? "];
-        self.say(&[&ask[..], &[DIM, "[y]es [n]o [a]lways ", PLAIN]].concat().concat());
+        let keys = if always { "[y]es [n]o [a]lways " } else { "[y]es [n]o (asked each time) " };
+        self.say(&[&ask[..], &[DIM, keys, PLAIN]].concat().concat());
         let mut line = String::new();
         if io::stdin().read_line(&mut line).unwrap_or(0) == 0 {
             self.say("\n");
@@ -250,7 +263,7 @@ fn main() -> ExitCode {
                 os.say(&said(a.learn, "It learns from failures.", "It learns nothing new."));
             }
             "/lessons" if a.lessons.trim().is_empty() => os.say("No lessons yet.\n"),
-            "/lessons" => os.say(&a.lessons),
+            "/lessons" => os.say(&agent::safe(&a.lessons)),
             "/forget" => {
                 let _ = os.write(&learn::path(), b"", false);
                 a.lessons.clear();

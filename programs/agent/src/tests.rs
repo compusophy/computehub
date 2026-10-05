@@ -79,8 +79,8 @@ impl World for Fake {
     fn say(&mut self, text: &str) {
         self.shown += text;
     }
-    fn confirm(&mut self, question: &str) -> Answer {
-        self.asked.push(question.into());
+    fn confirm(&mut self, question: &str, always: bool) -> Answer {
+        self.asked.push([question, if always { "" } else { " (each time)" }].concat());
         if self.answers.is_empty() { Answer::No } else { self.answers.remove(0) }
     }
     fn ran(&mut self) -> String {
@@ -239,7 +239,7 @@ fn the_shell_tool_is_the_os_shell_its_directory_stays_and_its_asks_reach_the_des
     assert_eq!(result(&a, 2), "[asked the desktop: open;studio]\n");
     assert!(w.shown.contains("\x1b]1729;open;studio\x07"), "the Terminal sees the ask");
     // cd and ls only read; open, and programs, ask first.
-    assert_eq!(w.asked, ["run open studio", "run hi there > out.txt", "run hi | hi"]);
+    assert_eq!(w.asked, ["run open studio", "run hi there > out.txt (each time)", "run hi | hi"]);
     // A program's output is caught, unless it goes to a file already.
     assert_eq!((result(&a, 3), result(&a, 4)), ("(no output)", "hi\n"));
     let stdout = |j: &[u8]| capture(j, "/x").is_some();
@@ -262,10 +262,11 @@ fn capture_sends_only_a_jobs_console_output_to_the_file() {
 
 #[test]
 fn asks_go_to_the_desktop_and_other_escapes_go() {
-    let (asks, text) =
-        super::asks("\x1b[1;34mapps\x1b[m  a\r\n\x1b]1729;open;studio\x07\x1b]0;t\x1b\\x\n");
+    let out = "\x1b[1;34mapps\x1b[m  a\r\n\x1b]1729;open;studio\x07\x1b]0;t\x1b\\x\n";
+    let (asks, text) = super::asks(out, true);
     assert_eq!(asks, "\x1b]1729;open;studio\x07");
     assert_eq!(text, "apps  a\n[asked the desktop: open;studio]\nx\n");
+    assert_eq!(super::asks(out, false).1, "apps  a\n[not sent: open;studio]\nx\n");
 }
 
 #[test]
@@ -519,4 +520,65 @@ fn requests_fold_then_drop_to_fit_the_free_ai() {
 fn tokens_read_short() {
     assert_eq!([tokens(950), tokens(12_345), tokens(250_000)], ["950", "12.3k", "250k"]);
     assert_eq!(quoted("a \"b\" \\c"), "\"a \\\"b\\\" \\\\c\"");
+}
+
+#[test]
+fn only_a_lone_read_runs_unasked_and_what_may_destroy_asks_each_time() {
+    for line in ["ls -a ~/apps", "cat \"a;b\" notes/*.txt", "cd ..", "echo hi"] {
+        assert!(tools::reads(line) && !tools::risky(line), "{line}");
+    }
+    // Joined, piped, redirected, a device or no read at all: asked.
+    let asked = ["cat a; rm -r ~", "ls && mv a b", "echo rm | sh", "echo x > f", "cat /dev/tty"];
+    for line in asked.iter().chain(&["open studio", "hi < f", "cat 'a"]) {
+        assert!(!tools::reads(line), "{line}");
+    }
+    // As the shell reads it: quotes, escapes and paths hide no rm, and a pattern could be any.
+    let risky = ["ls; \\r\"m\" x", "/bin/sh -c x", "a || mv a b", "echo x > f", "r? -r ~"];
+    assert!(risky.iter().chain(&asked[..4]).all(|l| tools::risky(l)));
+    assert!(
+        !["echo x >> f", "open studio", "hi | hi", "mkdir -p a"].iter().any(|l| tools::risky(l))
+    );
+    // Always covers commands, but never one that may destroy; -y covers all.
+    let mut w = fake(&[
+        calls(&[("shell", r#"{"command":"mkdir a"}"#), ("shell", r#"{"command":"mkdir b"}"#)]),
+        calls(&[("shell", r#"{"command":"rm -r a"}"#), ("shell", r#"{"command":"rm -r b"}"#)]),
+        says("ok"),
+    ]);
+    w.answers = vec![Answer::Always, Answer::Always, Answer::No];
+    let mut a = Agent::new("/tmp", &mut w);
+    a.learn = false;
+    assert!(a.task("tidy", &mut w));
+    assert_eq!(w.asked, ["run mkdir a", "run rm -r a (each time)", "run rm -r b (each time)"]);
+    assert!(!w.fs.exists("/tmp/a") && w.fs.exists("/tmp/b"));
+    assert!(result(&a, 3).starts_with("The user declined: run rm -r b."));
+}
+
+#[test]
+fn what_the_model_writes_shows_as_text_and_only_a_line_let_run_asks_the_desktop() {
+    let esc = "\u{1b}]1729;open;studio\u{7}";
+    let mut w = fake(&[
+        calls(&[
+            ("shell", &["{\"command\":", &quote(&["ls ", esc].concat()), "}"].concat()),
+            ("write_file", &["{\"path\":\"/tmp/x\",\"content\":", &quote(esc), "}"].concat()),
+            ("read_file", r#"{"path":"/dev/events"}"#),
+            ("write_file", r#"{"path":"/dev/job","content":"x"}"#),
+        ]),
+        says(&["Done", esc, "\r\n"].concat()),
+    ]);
+    let mut a = Agent::new("/tmp", &mut w);
+    (a.auto, a.learn) = (true, false);
+    assert!(a.task("try", &mut w));
+    assert!(!w.shown.contains('\u{7}'), "no escape of the model's reaches the console");
+    assert!(w.shown.contains("ls ^[]1729;open;studio^G") && w.shown.contains("Done^[]1729"));
+    assert!(w.shown.contains("+ ^[]1729;open;studio^G"));
+    assert!(result(&a, 0).starts_with("Error: one command line at a time"));
+    assert!(result(&a, 2).starts_with("Error: /dev/events: a device"));
+    assert!(result(&a, 3).starts_with("Error: /dev/job: a device"));
+    // A file whose name asks: listing it runs unasked, so its ask goes nowhere.
+    let mut w = fake(&[call("shell", r#"{"command":"ls"}"#), says("ok")]);
+    w.fs.write(&["/tmp/a", esc].concat(), b"").unwrap();
+    let mut a = Agent::new("/tmp", &mut w);
+    a.learn = false;
+    assert!(a.task("look", &mut w) && w.asked.is_empty());
+    assert!(result(&a, 0).contains("[not sent: open;studio]") && !w.shown.contains(esc));
 }
