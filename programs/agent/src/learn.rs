@@ -17,7 +17,7 @@ use crate::{Agent, DIM, MAX_NOTES, Msg, PLAIN, Task, World};
 /// The most lines and bytes the lessons hold before they are merged, and a lesson's bytes.
 pub const MAX_LINES: usize = 24;
 pub const MAX_BYTES: usize = 3 << 10;
-const MAX_LESSON: usize = 240;
+pub const MAX_LESSON: usize = 240;
 
 /// What asks for a lesson.
 const REFLECT: &str = "You improve a coding agent that works in compusophyOS's terminal (its \

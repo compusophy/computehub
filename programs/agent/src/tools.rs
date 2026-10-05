@@ -27,11 +27,11 @@ const FILES: usize = 2000;
 const SEARCHED: usize = 256 << 10;
 const SHOWN: usize = 8;
 /// The commands that only read: one of them alone runs without asking ([`reads`]).
-const READS: [&str; 10] =
+pub const READS: [&str; 10] =
     ["ls", "cat", "pwd", "cd", "echo", "apps", "history", "whoami", "uname", "help"];
 /// What a line may run that removes, moves or overwrites, or could unseen (a script, another
 /// agent, which may be told `-y`): such a line asks each time ([`risky`]).
-const RISKS: [&str; 4] = ["rm", "mv", "sh", "agent"];
+pub const RISKS: [&str; 4] = ["rm", "mv", "sh", "agent"];
 
 /// Runs call `c`: its result for the model, and whether it failed (an `Error:` result).
 pub fn run(a: &mut Agent, c: &Call, w: &mut impl World) -> (String, bool) {
