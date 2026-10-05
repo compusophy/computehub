@@ -372,17 +372,34 @@ fn everything_lands_on_device_pixels() {
 
 #[test]
 fn themes_are_complete_readable_and_glow() {
-    assert_eq!(THEMES.map(|t| t.name), ["Midnight", "Dawn", "Mono"]);
-    assert_eq!(THEMES.map(|t| t.dark), [true, false, true]);
-    for (name, want) in [("Midnight", 0), ("dawn", 1), ("MONO", 2), ("", 2), ("Neon", 2)] {
+    assert_eq!(THEMES.map(|t| t.name), ["Midnight", "Dawn", "Mono Dark", "Mono Light"]);
+    assert_eq!(THEMES.map(|t| t.dark), [true, false, true, false]);
+    // Any case; Mono (Mono Dark's name before Mono Light) and unknown names are the default.
+    let names = [("dawn", 1), ("MONO DARK", 2), ("mono light", 3), ("Mono", 2), ("", 2), ("x", 2)];
+    for (name, want) in names {
         assert_eq!(theme(name), &THEMES[want], "{name}");
     }
     assert_eq!((THEMES[0].grain, THEMES[1].grain), (9, 6));
     assert_eq!((THEMES[0].base, THEMES[1].accent), (Rgba::hex(0x07080c), Rgba::hex(0x5b5bd6)));
     assert_eq!(THEMES[0].glows[0].color, Rgba::hex(0x6d5cff).with_alpha(90));
     assert_eq!((THEMES[1].glows[2].cy, THEMES[1].glows[2].rx), (0.98, 0.60));
-    assert!(THEMES[2].glows.iter().all(|g| g.color.3 == 0) && THEMES[2].grain == 5);
+    let [.., dark, light] = &THEMES;
+    for mono in [dark, light] {
+        assert!(mono.glows.iter().all(|g| g.color.3 == 0) && mono.grain == 5, "{}", mono.name);
+    }
+    // Mono Light is Mono Dark turned over: its accent black, white on it.
+    assert_eq!((light.accent, light.accent_text), (dark.accent_text, dark.accent));
     for th in &THEMES {
+        assert_eq!(theme(th.name), th);
+        // The text ramp in order, each step well apart; selected text, hairlines and, on a
+        // light base, shadows still seen.
+        let s = over(th.surface, th.base);
+        let ramp = [th.text, th.text_dim, th.text_faint].map(|c| contrast(c, s));
+        let n = th.name;
+        assert!(ramp[0] > 2.0 * ramp[1] && ramp[1] > 1.5 * ramp[2] && ramp[2] >= 2.0, "{n}");
+        assert!(contrast(th.text, over(th.selection, s)) >= 7.0, "{n} selection");
+        assert!(contrast(over(th.border, s), s) >= 1.2, "{n} border");
+        assert!(th.dark || contrast(over(th.shadow, th.base), th.base) >= 1.5, "{n} shadow");
         // The surface over the base, and over the base lit by each glow at
         // its peak: every text tone stays readable on all of them.
         let lit = th.glows.iter().map(|g| over(g.color, th.base));
@@ -432,9 +449,12 @@ fn icon_tiles_are_readable_and_crisp() {
             assert!(a >= 3.0 && b >= 3.0, "{} {hue:?}: {a} {b}", th.name);
         }
     }
-    // Mono is monochrome and flat; Midnight casts a shadow and fades its tiles.
+    // Mono Dark and Mono Light are monochrome and flat (Light's tiles white over its pale
+    // base); Midnight casts a shadow and fades its tiles.
     let (mono, hue, mut t) = (&THEMES[2], Rgba::hex(0x2dd4bf), ts());
     assert_eq!(mono.icon_colors(hue), [mono.surface_hi, mono.surface_hi, mono.text]);
+    let (light, white) = (&THEMES[3], Rgba::hex(0xffffff));
+    assert_eq!((light.icon_colors(hue), light.icon.shadow), ([white, white, light.text], 0));
     t.set_dpr(1.5);
     let tile = |t: &mut TextSystem, th: &Theme| {
         let mut list = DrawList::new();

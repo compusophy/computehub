@@ -203,17 +203,36 @@ fn item(ui: &mut Ui<'_>, id: WidgetId, label: &str, r: RectF, [on, tab]: [bool; 
     ui.mark(id, sem::TAB, if on { sem::SELECTED } else { 0 }, "");
 }
 
-/// The faces `w` wide: how many across (as many as fit, the rows even), and their height.
+/// How many of `n` items `fit` across go in a row: as many as fit (at least one), the rows even.
+fn even(n: usize, fit: usize) -> usize {
+    n.div_ceil(n.div_ceil(fit.clamp(1, n)))
+}
+
+/// The faces `w` wide: how many across (all ten in one row where they fit, else as many as
+/// fit, the rows even), and their height.
 pub(crate) fn faces_size(w: f32) -> (usize, f32) {
     let (n, side) = (usize::from(FACES), f32::from(uiwire::FACE));
     // `as` saturates (NaN is 0).
-    let rows = n.div_ceil((((w + FACE_GAP) / (side + FACE_GAP)) as usize).clamp(1, n));
-    (n.div_ceil(rows), rows as f32 * (side + FACE_GAP) - FACE_GAP)
+    let cols = even(n, ((w + FACE_GAP) / (side + FACE_GAP)) as usize);
+    (cols, n.div_ceil(cols) as f32 * (side + FACE_GAP) - FACE_GAP)
 }
 
-/// The faces from `(x, y)`, `w` wide, face `i` the button `id + i`: a ring holding `i` dots,
-/// face `on`'s ring in the accent and its dots in the text color, as under the pointer (washed
-/// there); the rest faint.
+/// Face `i`'s name, by its dots: `no dots`, `1 dot`, `2 dots`... (from a digit: no `format!`).
+pub(crate) fn dots(i: u8) -> String {
+    let mut s = String::new();
+    match i {
+        0 => s.push_str("no"),
+        _ => s.push(char::from(b'0' + i % 10)),
+    }
+    s.push_str(if i == 1 { " dot" } else { " dots" });
+    s
+}
+
+/// The faces from `(x, y)`, `w` wide, face `i` the button `id + i` (its gaps' halves around it
+/// too, a target a finger finds): a ring holding `i` dots, face `on`'s ring in the accent and its
+/// dots in the text color, as under the pointer (washed there); the rest faint. Each is named
+/// by its dots ([`dots`]) for whoever reads the screen, which sees no drawing: noted as its text
+/// (in no run with the next) and as its mark's value.
 pub(crate) fn faces(ui: &mut Ui<'_>, id: u32, on: u8, (x, y, w): (f32, f32, f32)) {
     let (cols, side, t) = (faces_size(w).0, f32::from(uiwire::FACE), ui.theme());
     for i in 0..FACES {
@@ -233,20 +252,21 @@ pub(crate) fn faces(ui: &mut Ui<'_>, id: u32, on: u8, (x, y, w): (f32, f32, f32)
             t.text_faint
         };
         ui.face(r, i, [ring, if lit { t.text } else { t.text_dim }]);
-        ui.hit(wid, r, Sense::Click);
-        let mut dots = String::new();
-        ui::push_num(&mut dots, k);
-        ui.mark(wid, sem::OPTION, if i == on { sem::SELECTED } else { 0 }, &dots);
+        ui.hit(wid, r.inset(-FACE_GAP / 2.0), Sense::Click);
+        let name = dots(i);
+        let size = t.small().size;
+        ui.list().note_text(r.x + r.w / 4.0, r.y + (r.h + size) / 2.0, size, r.w / 2.0, &name);
+        ui.mark(wid, sem::OPTION, if i == on { sem::SELECTED } else { 0 }, &name);
     }
 }
 
-/// The theme cards `w` wide: how many across, a card's width, its miniature's height, and
-/// their height.
+/// The theme cards `w` wide: how many across (as many as fit, the rows even), a card's width,
+/// its miniature's height, and their height.
 pub(crate) fn themes_size(w: f32) -> (usize, f32, f32, f32) {
     let n = THEMES.len();
     let (least, most) = (f32::from(uiwire::THEME_MIN), f32::from(uiwire::THEME_MAX));
     // `as` saturates (NaN is 0).
-    let cols = (((w + GAP) / (least + GAP)) as usize).max(1).min(n);
+    let cols = even(n, ((w + GAP) / (least + GAP)) as usize);
     let k = cols as f32;
     let cw = ((w - (k - 1.0) * GAP) / k).min(most).floor().max(2.0 * INSET);
     let ph = ((cw - 2.0 * INSET) * 0.625).round();
@@ -254,13 +274,14 @@ pub(crate) fn themes_size(w: f32) -> (usize, f32, f32, f32) {
     (cols, cw, ph, rows * (INSET + ph + NAME_H) + (rows - 1.0) * GAP)
 }
 
-/// The theme cards from `(x, y)`, `w` wide: the default first (Mono), then the rest as
-/// [`THEMES`] has them, theme `i` the button `id + i`.
+/// The theme cards from `(x, y)`, `w` wide, theme `i` the button `id + i`: the default first
+/// (Mono Dark), then the rest in [`THEMES`]'s order from it, around (Mono Light, Midnight,
+/// Dawn; two across, the dark ones over each other).
 pub(crate) fn themes(ui: &mut Ui<'_>, id: u32, (x, y, w): (f32, f32, f32)) {
     let (cols, cw, ph, _) = themes_size(w);
     let ch = INSET + ph + NAME_H;
     let first = THEMES.iter().position(|th| th.name == ui::theme("").name).unwrap_or(0);
-    let order = (0..THEMES.len()).map(|k| if k == 0 { first } else { k - usize::from(k <= first) });
+    let order = (0..THEMES.len()).map(|k| (k + first) % THEMES.len());
     for (n, i) in order.enumerate() {
         let (col, row) = ((n % cols) as f32, (n / cols) as f32);
         let at = RectF::new(x + col * (cw + GAP), y + row * (ch + GAP), cw, ch);

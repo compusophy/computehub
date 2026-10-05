@@ -269,12 +269,12 @@ pub enum Node {
     Pages { id: u32, on: u8, labels: String },
     /// The desktop's themes as cards, each a miniature of its desktop over its name (the
     /// current one ringed and checked in the accent): the default first, as many across as fit
-    /// [`THEME_MIN`] to [`THEME_MAX`] px wide. Theme `i`, in the desktop's own order, is the
-    /// button `id + i`.
+    /// [`THEME_MIN`] to [`THEME_MAX`] px wide, the rows even. Theme `i`, in the desktop's own
+    /// order, is the button `id + i`.
     Themes { id: u32 },
-    /// The faces a profile can have (a ring holding no dots to nine), in even rows across the
-    /// width, [`FACE`] px each, face `i` the button `id + i`, face `on` (if any) ringed in the
-    /// accent.
+    /// The faces a profile can have (a ring holding no dots to nine, each named by them: `no
+    /// dots`, `1 dot`, `2 dots`...), one row across the width where it fits, else in even rows,
+    /// [`FACE`] px each, face `i` the button `id + i`, face `on` (if any) ringed in the accent.
     Faces { id: u32, on: u8 },
     /// A terminal's screen, a frame's only node (elsewhere nothing): `cols` x `rows` cells
     /// ([`SCREEN_CELLS`] at most) of [`CELL`] logical px from [`INSET`] in, the window's whole
@@ -319,8 +319,8 @@ pub const WIDE: u16 = 520;
 /// A [`Node::Choice`]'s or [`Node::Switch`]'s height, and a [`Variant::Link`]'s.
 pub const CARD_H: u16 = 56;
 pub const LINK_H: u16 = 44;
-/// The side of a face of [`Node::Faces`].
-pub const FACE: u16 = 55;
+/// The side of a face of [`Node::Faces`]: small, so the ten fit a row of a Settings window.
+pub const FACE: u16 = 34;
 /// A [`Node::Screen`]'s cell (width, height), its inset in the window, the most cells it holds,
 /// and the bytes a cell takes.
 pub const CELL: (u16, u16) = (8, 17);
@@ -335,8 +335,8 @@ pub fn screen(w: u16, h: u16) -> (u16, u16) {
     let cols = fit(w, CELL.0).min(1000);
     (cols, fit(h, CELL.1).min((SCREEN_CELLS / usize::from(cols)).min(500) as u16))
 }
-/// The narrowest and the widest card of [`Node::Themes`].
-pub const THEME_MIN: u16 = 150;
+/// The narrowest and the widest card of [`Node::Themes`]: four fit across a Settings window.
+pub const THEME_MIN: u16 = 112;
 pub const THEME_MAX: u16 = 216;
 
 /// The highest color of a [`Node::Grid`]'s square.

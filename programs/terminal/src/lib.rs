@@ -17,7 +17,7 @@ use uiwire::client::Client;
 use uiwire::{CELL, Event, Frame, Key, Node, Request, mods};
 
 /// The themes an ask may switch to.
-const THEMES: [&str; 3] = ["Midnight", "Dawn", "Mono"];
+const THEMES: [&str; 4] = ["Midnight", "Dawn", "Mono Dark", "Mono Light"];
 
 /// A terminal window: the screen, the console size last asked for, rows scrolled back and wheel
 /// movement short of a whole row, whether the shell ended, and the requests since the last

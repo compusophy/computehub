@@ -483,12 +483,12 @@ fn tweens_ease_out_from_their_first_frame_replays_scale_and_themes_crossfade() {
     replay(&mut dst, &src, Vis { a: 0.0, ..vis });
     assert_eq!(dst.len(), 9);
     // Themes crossfade and switch by name.
-    let [mid, dawn, mono] = &THEMES;
+    let [mid, dawn, mono, _] = &THEMES;
     assert_eq!(blend(mid, dawn, 0.0).base, mid.base);
     assert_eq!((blend(mid, dawn, 1.0), blend(dawn, mid, 1.0)), (*dawn, *mid));
     let half = blend(mid, mono, 0.5);
-    assert_eq!((half.name, half.grain), ("Mono", 7));
-    // Mono has no lights: Midnight's stay in place and fade out.
+    assert_eq!((half.name, half.grain), ("Mono Dark", 7));
+    // Mono Dark has no lights: Midnight's stay in place and fade out.
     let (g, h) = (mid.glows[0], half.glows[0]);
     assert_eq!((h.cx, h.rx, h.color), (g.cx, g.rx, g.color.with_alpha(45)));
     assert_eq!(blend(mono, mid, 0.5).glows[1].cy, mid.glows[1].cy);
@@ -496,13 +496,13 @@ fn tweens_ease_out_from_their_first_frame_replays_scale_and_themes_crossfade() {
     let mut t = Themes::new("DAWN");
     assert_eq!(t.current().name, "Dawn");
     assert!(!t.set("nope", 0.0, 200.0) && !t.set("dawn", 0.0, 200.0) && !t.is_running(0.0));
-    assert!(t.set("mono", 100.0, 200.0));
-    assert_eq!((t.current().name, t.at(100.0).base), ("Mono", dawn.base));
+    assert!(!t.set("mono", 100.0, 200.0) && t.set("mono dark", 100.0, 200.0));
+    assert_eq!((t.current().name, t.at(100.0).base), ("Mono Dark", dawn.base));
     assert!(t.is_running(5000.0));
     t.arm(1000.0);
     assert_eq!((t.at(1000.0).grain, t.at(1100.0).grain), (6, 5));
     assert_eq!((t.at(1200.0), t.is_running(1200.0)), (*mono, false));
-    assert_eq!(Themes::new("").current().name, "Mono");
+    assert_eq!(Themes::new("Mono").current().name, "Mono Dark");
 }
 
 #[test]

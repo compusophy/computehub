@@ -215,12 +215,15 @@ compusophyOS compusophy 0.2 wasm32
 $ theme
 Midnight
 Dawn
-Mono
-$ theme MONO
-[theme Mono]
-$ theme sepia
-theme: sepia: no such theme (see 'theme')
-$ theme a b
+Mono Dark
+Mono Light
+$ theme MONO light
+[theme Mono Light]
+$ theme "mono dark"
+[theme Mono Dark]
+$ theme mono
+theme: mono: no such theme (see 'theme')
+$ theme a b c
 usage: theme [name]
 $ whoami
 guest
