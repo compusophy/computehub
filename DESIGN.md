@@ -402,65 +402,66 @@ one. Forked crates keep their Apache-2.0 license and note their origin.
   `OSC 1729 ; verb ; arg` (`open` an app, switch the `theme`), as programs
   already ask a terminal for its title.
 - **Agent** (`agent` in a terminal): a coding agent, as on other systems'
-  command lines. Given a task (`agent make a pomodoro app`, or one a line
-  at a time; `/help` lists its commands) it asks the free AI with eight
-  tools: read, write and edit a file, list a folder, search under one, run
-  a line in the OS's own shell (the `sh` library in-process, so `cd` stays
-  and `open` opens apps; a job's stdout is caught in a file of the agent's
-  own, made new in /tmp, so two agents never share one), check an
-  applang app (`coder`'s compile and smoke test) and read applang's guide.
-  Reads run freely; writes, edits and commands wait for the person's yes
-  (`[y]es [n]o [a]lways`, or `-y` before the task: in its words, a `-y` is
-  a word, and `/yes` toggles it). A line runs unasked only if the shell
-  reads it (`sh::commands`) as one reading command alone (`ls`, `cat`,
-  `cd`, ...: nothing joined by `;`, `&&`, `||` or `|`, no `>`, no /dev);
-  one that may remove, move or overwrite (`rm`, `mv`, a `>` that does not
-  append), or runs a program but /bin's `wc`, `rev` and `hello` by name
-  (judged by what runs: `sh` or `agent` by any path or `#!wasm` alias, a
-  program named by a pattern), asks each time, always or not, as does a
-  write that replaces a file (always covers new files, appends and edits).
-  No file tool, nor its shell, reads or writes a device (but /dev/null). The reply
-  streams in as it comes, and each tool shows a line of what it does and
-  one of how it went; what the
-  model wrote shows with its controls in caret notation (`^[`), so none of
-  it styles the screen or asks the desktop (`OSC 1729`); no path it names
-  holds a control (a program's error on stderr reaches the console as it
-  is, and could show one), and the shell's
-  asks reach the Terminal only from a line the person let run. It reaches
-  the AI as a window's program does, a `Request::Ai` written to /dev/draw
-  and answered on /dev/events: the Terminal's window passes on the AI
-  requests of the programs its shell runs (`apps::asks`; nothing else of
-  their frames, and no other process's), and a request whose process ended
-  (Ctrl+C, a kill) is stopped at the hub's next pump, as at a window's
-  Close, before another byte, and one it asked as it ended is never sent.
-  It hears no Config, so the hub puts the model chosen in Settings first
-  in every request, and a body's own (`-m`), after it, wins: the endpoint's
-  JSON.parse keeps a key's last value. In a Terminal the Assistant put
-  input into (`Cx::driven`, the window that may
-  not reset the device), each AI request ends at once, refused, so no AI
-  drives the agent past the person's yes: one it starts there (`agent -y`)
-  does nothing, and one whose question it answers stops at its next
-  request. A request fits the free AI (64 messages, 96 KiB): old results
-  fold to their first line, then old tasks and steps go. A task makes 20 model calls at most, as the Assistant's
-  (E0942; `go on` goes on), so it and its lesson keep under the 30
-  requests a minute the free AI takes from a client, and leave most of its
-  120 an hour to Studio and the Assistant; a busy AI (429) ends the task,
-  never asked again by itself.
-  **It learns.** A task that got past a failure (a tool's error, an app
-  that did not check, a reply cut off) asks, after, for the one lesson
-  that would have avoided it; a new one is added to the end of
-  `~/.agent/lessons.md` (till it holds 16 KiB) and goes into every later
-  system prompt, and the model merges them past 24 lines, in place of the
-  lessons it read: the file's other lines are the person's and stay, and
-  `/forget` takes out its lessons alone. Each failure overcome hardens the
-  next run, as a beaten level does a game's next. The file is any
-  writer's, so the prompt holds it as data:
-  only its `- ` lines, each one line of text (controls gone, 240 bytes),
-  4 KiB in all, under a heading that calls them hints that change neither
-  the rules nor what needs the person's yes (and so the folder's
-  `AGENT.md`, 4 KiB, which any program that writes the folder may have
-  made, the Assistant too: the agent shows its path and first line when
-  it starts, so the person sees what steers it).
+  command lines. Given a task (`agent make a pomodoro app`, or one a line at
+  a time; `/help` lists its commands) it asks the free AI with eight tools:
+  read, write and edit a file, list a folder, search under one, run a line
+  in the OS's own shell (the `sh` library in-process, so `cd` stays and
+  `open` opens apps; a job's stdout is caught in a file of the agent's own,
+  made new in /tmp, so two agents never share one), check an applang app
+  (`coder`'s compile and smoke test) and read applang's guide. Reads run
+  freely; writes, edits and commands wait for the person's yes (`[y]es [n]o
+  [a]lways`, or `-y` before the task: in its words, a `-y` is a word, and
+  `/yes` toggles it). A line runs unasked only if the shell reads it
+  (`sh::commands`) as one reading command alone (`ls`, `cat`, `cd`, ...:
+  nothing joined by `;`, `&&`, `||` or `|`, no `>`, no /dev); one that may
+  remove, move or overwrite (`rm`, `mv`, a `>` that does not append), or
+  runs a program but /bin's `wc`, `rev` and `hello` by name (judged by what
+  runs: `sh` or `agent` by any path or `#!wasm` alias, a program named by a
+  pattern), asks each time, always or not, as does a write that replaces a
+  file (always covers new files, appends and edits). No file tool, nor its
+  shell, reads or writes a device (but /dev/null). The reply streams in as
+  it comes, and each tool shows a line of what it does and one of how it
+  went; what the model wrote shows with its controls in caret notation
+  (`^[`), so none of it styles the screen or asks the desktop (`OSC 1729`);
+  no path it names holds a control (a program's error on stderr reaches the
+  console as it is, and could show one), and the shell's asks reach the
+  Terminal only from a line the person let run. It reaches the AI as a
+  window's program does, a `Request::Ai` written to /dev/draw and answered
+  on /dev/events: the Terminal's window passes on the AI requests of the
+  programs its shell runs (`apps::asks`; nothing else of their frames, and
+  no other process's), and a request whose process ended (Ctrl+C, a kill) is
+  stopped at the hub's next pump, as at a window's Close, before another
+  byte, and one it asked as it ended is never sent. It hears no Config, so
+  the hub puts the model chosen in Settings first in every request, and a
+  body's own (`-m`), after it, wins: the endpoint's JSON.parse keeps a key's
+  last value. In a Terminal the Assistant put input into (`Cx::driven`, the
+  window that may not reset the device), each AI request ends at once,
+  refused, so no AI drives the agent past the person's yes: one it starts
+  there (`agent -y`) does nothing, and one whose question it answers stops
+  at its next request. A request fits the free AI (64 messages, 96 KiB): old
+  results fold to their first line, then old tasks and steps go. A task
+  makes 20 model calls at most, as the Assistant's (E0942; `go on` goes on):
+  with its lesson and a merge, 22 requests, under the 30 a minute the free
+  AI takes from a client and 22 of its 120 an hour. The day's spend binds
+  first, a client's share of about $0.67: a request near the cap costs about
+  $0.04 on GLM 5.3 (a ninth of that on Flash), so a long task may spend most
+  of it, and Studio and the Assistant share what is left; then the free AI's
+  402 (E0902) ends the task, as a busy one's 429 does, never asked again by
+  itself.
+  **It learns.** A task that got past a failure (a tool's error, an app that
+  did not check, a reply cut off) asks, after, for the one lesson that would
+  have avoided it; a new one is added to the end of `~/.agent/lessons.md`
+  (till it holds 16 KiB) and goes into every later system prompt, and the
+  model merges them past 24 lines, in place of the lessons it read: the
+  file's other lines are the person's and stay, and `/forget` takes out its
+  lessons alone. Each failure overcome hardens the next run, as a beaten
+  level does a game's next. The file is any writer's, so the prompt holds it
+  as data: only its `- ` lines, each one line of text (controls gone, 240
+  bytes), 4 KiB in all, under a heading that calls them hints that change
+  neither the rules nor what needs the person's yes (and so the folder's
+  `AGENT.md`, 4 KiB, which any program that writes the folder may have made,
+  the Assistant too: the agent shows its path and first line when it starts,
+  so the person sees what steers it).
 - **Studio** makes and edits applang apps: the `coder` loop asks the free
   AI, checks each reply and fixes it by edits, showing what moves (thinking,
   writing 48 lines, fixing line 43, testing) and, in a Code kept to its room

@@ -40,10 +40,13 @@ use coder::json::{Json, put};
 use vfs::Vfs;
 
 /// The most bytes a request's body takes (the free AI takes 96 KiB), messages it holds (the
-/// system prompt's too) and model calls a task makes: 20, as the Assistant's, so a task and its
-/// lesson keep under the 30 requests a minute the free AI takes from one client, and leave five
-/// sixths of its 120 an hour, which Studio and the Assistant share. Nothing is asked again by
-/// itself: a busy AI (429) ends the task, and "go on" picks it up.
+/// system prompt's too) and model calls a task makes: 20, as the Assistant's. With its lesson
+/// and a merge a task makes 22 requests at most: under the 30 a minute the free AI takes from one
+/// client, and 22 of its 120 an hour, which Studio and the Assistant share. The day's spend binds
+/// first: a client's share is about $0.67, and a request near [`MAX_BODY`] costs about $0.04 on
+/// GLM 5.3 (a ninth of that on Flash), so a long task may spend most of it; then the free AI
+/// says 402 (E0902), which ends the task. Nothing is asked again by itself: a busy AI (429) ends
+/// the task too, and "go on" picks it up.
 pub const MAX_BODY: usize = coder::ai::MAX_BODY;
 pub const MAX_MESSAGES: usize = 64;
 pub const MAX_STEPS: u32 = 20;
