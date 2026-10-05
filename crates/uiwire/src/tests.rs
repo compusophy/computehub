@@ -317,6 +317,7 @@ fn agent() -> (Vec<Request>, Vec<Event>) {
     let ask = |(id, act): (u32, Act)| Request::Act { id, act: act.encode() };
     let mut requests: Vec<_> = (1..).zip(acts).map(ask).collect();
     requests.extend([Request::Status { working: true }, Request::Status { working: false }]);
+    requests.push(Request::Yield { win: 2 });
     let scene = scene().encode();
     let acted = Event::Acted { id: 9, code: acted::OFF_SCREEN, note: "e9".into(), scene };
     (requests, vec![acted, Event::Halt])
@@ -331,8 +332,8 @@ fn scene() -> scene::Scene {
     let (app, title) = ("settings".into(), "Settings".into());
     let shown = Win { id: 2, app, title, rect: [1, 2, 3, 4], state: 3, hits, marks, runs };
     let min = Win { id: 1, app: "terminal".into(), state: state::MIN, ..Win::default() };
-    let apps = vec!["settings".into(), "files".into()];
-    Scene { w: 1440, h: 900, theme: "Mono".into(), focus: 2, apps, wins: vec![shown, min] }
+    let (apps, wins) = (vec!["settings".into(), "files".into()], vec![shown, min]);
+    Scene { w: 1440, h: 900, touch: false, theme: "Mono".into(), focus: 2, apps, wins }
 }
 
 #[test]
@@ -349,10 +350,13 @@ fn acts_and_scenes_round_trip_strictly() {
     assert_eq!(scroll.encode(), [5, 1, 0, 0, 0, 0, 0, 0, 0, 254, 255]);
     // A request whose bytes are no act never decodes.
     assert!(Request::decode(&[8, 1, 0, 0, 0, 1, 0, 0, 0, 9]).is_none());
-    assert_eq!(
-        (Request::Status { working: true }.encode(), Event::Halt.encode()),
-        (vec![9, 1], vec![13])
-    );
+    let (status, aside) = (Request::Status { working: true }, Request::Yield { win: 2 });
+    let codes = [status.encode(), aside.encode(), Event::Halt.encode()];
+    assert_eq!(codes, [&[9, 1][..], &[18, 2, 0, 0, 0], &[13]]);
+    // The overlay's alone: its acts, its status, stepping aside.
+    let others = [Request::Close, Request::Reset, Request::Keys { on: true }];
+    assert!([click.clone(), status, aside].iter().all(Request::overlay));
+    assert!(!others.iter().any(Request::overlay));
     let acted = Event::Acted { id: 1, code: 916, note: "".into(), scene: vec![7] };
     assert_eq!(acted.encode(), [12, 1, 0, 0, 0, 0x94, 3, 0, 0, 0, 0, 1, 0, 0, 0, 7]);
     let ops = (0..=255).filter(|&n| WinOp::from_u8(n).is_some_and(|o| o as u8 == n)).count();
@@ -369,7 +373,15 @@ fn acts_and_scenes_round_trip_strictly() {
     assert_eq!((bytes[at], bytes[at + 1 + 4 + 4]), (3, 2));
     assert!(scene::Scene::decode(&set(bytes.clone(), at, 4)).is_none());
     assert!(scene::Scene::decode(&set(bytes.clone(), at + 9, 3)).is_none());
-    assert!(scene::Scene::decode(&set(bytes, at + 9, 0)).is_some());
+    assert!(scene::Scene::decode(&set(bytes.clone(), at + 9, 0)).is_some());
+    // A touch screen's flag comes last, a 1 only when set, so a scene with none (an older
+    // desktop's) reads as no touch screen; anything else there is malformed.
+    let touch = scene::Scene { touch: true, ..scene() };
+    let with = touch.encode();
+    assert!(with[..bytes.len()] == bytes[..] && with[bytes.len()..] == [1]);
+    assert_eq!(scene::Scene::decode(&with), Some(touch));
+    let bad = [set(with.clone(), bytes.len(), 0), [&with[..], &[1]].concat()];
+    assert!(bad.iter().all(|b| scene::Scene::decode(b).is_none()));
 }
 
 /// A grid with a handler and texts, and one without either.

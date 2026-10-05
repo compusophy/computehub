@@ -23,8 +23,8 @@ install, and no server runs your apps: the tab is the machine.
   language made for this, then tests and fixes it. Games, boards, drawings, clocks and charts
   draw on a canvas: shapes, and pixels for boards of squares.
 - **Assistant.** An AI that uses the desktop as you do: it reads the screen, then clicks, types
-  and opens apps. It reads and writes your files, and with your yes tells compusophy which tool
-  it lacked.
+  and opens apps, stepping aside for the one you use next (a game it started). It reads and
+  writes your files, and with your yes tells compusophy which tool it lacked.
 - **Activity.** The resource monitor: CPU, memory, frames and AI use over the last minute, and
   a table of what runs.
 - **Files, Editor, Settings, Feedback and About.**

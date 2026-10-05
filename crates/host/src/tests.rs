@@ -576,12 +576,12 @@ fn the_scene_holds_each_window_its_hits_its_marks_and_the_text_that_shows() {
     let (mut h, _, _) = host();
     h.open("page", None, &mut Response::default());
     h.apply(Cmd::Minimize(WinId(1)));
-    (h.agent.screen, h.agent.apps) = ((1280.0, 800.0), vec!["page".into()]);
+    (h.agent.screen, h.agent.apps, h.agent.touch) = ((1280.0, 800.0), vec!["page".into()], true);
     assert!(h.open_overlay() && h.win(OVERLAY).is_some() && !h.live(OVERLAY));
     h.text.atlas_mut().take_dirty();
     let s = h.scene();
-    let head = (s.w, s.h, &*s.theme, s.focus, &*s.apps);
-    assert_eq!(head, (1280, 800, "Midnight", 3, &["page".to_string()][..]));
+    let head = (s.w, s.h, s.touch, &*s.theme, s.focus, &*s.apps);
+    assert_eq!(head, (1280, 800, true, "Midnight", 3, &["page".to_string()][..]));
     // Shown windows top first, then the minimized; never the overlay.
     let wins: Vec<_> = s.wins.iter().map(|w| (w.id, &*w.app, &*w.title, w.state)).collect();
     let want =
@@ -767,6 +767,18 @@ fn the_overlay_acts_as_a_person_and_hears_once_the_screen_settles() {
     h.ask(1, vec![Ask::Act { id: 5, act: Act::Window { win: 1, op: WinOp::Close }.encode() }]);
     let no = Event::Acted { id: 5, code: acted::REFUSED, note: "".into(), scene: vec![] };
     assert!(log.borrow()[n..].contains(&(1, E::Agent(no))) && h.live(WinId(1)));
+}
+
+#[test]
+fn the_overlay_steps_aside_for_a_window_still_open() {
+    // Its task done in welcome, minimized meanwhile: welcome comes up focused, and the shell
+    // is told to hide the overlay. Another window may not ask it, nor may it for a window gone.
+    let (mut h, _, _) = host();
+    let _ = (h.open_overlay(), h.apply(Cmd::Minimize(WinId(1))));
+    let _ = (h.ask(2, vec![Ask::Yield { win: 1 }]), h.ask(0, vec![Ask::Yield { win: 9 }]));
+    assert!(!h.agent.yielded && h.focused_app() == Some(WinId(2)));
+    h.ask(0, vec![Ask::Yield { win: 1 }]);
+    assert!(h.agent.yielded && h.focused_app() == Some(WinId(1)) && h.rect_of(1).is_some());
 }
 
 #[test]

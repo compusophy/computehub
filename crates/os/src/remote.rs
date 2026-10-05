@@ -310,7 +310,7 @@ impl Remote {
                 Request::Focus { id } if id == 0 || self.texts.has(id) => self.texts.focus = id,
                 Request::Focus { .. } => {}
                 Request::Feedback { kind, text, context } => cx.feedback(&kind, &text, context),
-                r @ (Request::Act { .. } | Request::Status { .. }) => cx.agent(r),
+                r if r.overlay() => cx.agent(r),
                 // The OS's own windows' alone (Watch and End go to the hub); others', dropped.
                 r if self.own.is_none() && r.own() => {}
                 Request::Tty { cols, rows } => {

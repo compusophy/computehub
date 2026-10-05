@@ -343,3 +343,11 @@ fn a_yes_is_yes_words_alone_never_a_question_nor_a_no_thanks() {
         assert!(!yes(n), "{n}");
     }
 }
+
+#[test]
+fn answers_show_in_plain_words() {
+    // The card prints markdown as it is: a model's backticks and bold go, its words stay.
+    let said = "Saved to `~/.ai/notes.txt`: **3** lines, 2 * 3 = 6, ```a_b```.";
+    assert_eq!(plain(said), "Saved to ~/.ai/notes.txt: 3 lines, 2 * 3 = 6, a_b.");
+    assert_eq!(plain("Done."), "Done.");
+}

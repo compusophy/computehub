@@ -41,7 +41,14 @@
 //! - **Shown.** While it works it says so ([`Request::Status`]): the desktop makes it a pill, and
 //!   it draws one, one line of what it does and Stop at its right edge, whatever its size; while
 //!   a question waits, the card, with Stop under it. Each task ends with its receipt: steps and
-//!   tokens.
+//!   tokens. Answers show in plain words ([`chats::plain`]: a model's markdown taken out).
+//! - **Stepping aside.** A task answered (not a question, a failure or Stop) in a window the
+//!   person uses next steps aside for it ([`Request::Yield`]): the overlay hides and that window
+//!   takes the keys, so a game started is seen and played, not lost behind the card; the answer
+//!   waits in the chat. That window (`into`) is the one the task opened or raised, or one
+//!   holding a board (a canvas or a grid) it pressed or typed into, still focused and shown on
+//!   its latest screen. A task that changed a setting (a theme, a press in Settings) keeps the
+//!   card: its answer is the news; so does an answer that asks.
 //! - **Chats.** Each conversation has its own transcript and memory (its last [`MEMORY`] tasks,
 //!   a compacted note first, one of them, each text clipped as the chats' file keeps it,
 //!   [`chats::remember`]), so one task's context never weighs on another's: the
@@ -50,15 +57,15 @@
 
 use std::io::{self, ErrorKind, Read, Write};
 
-use chats::{Chats, Turn, yes};
+use chats::{Chats, Turn, plain, yes};
 use uiwire::client::Client;
-use uiwire::scene::Scene;
+use uiwire::scene::{Scene, state};
 use uiwire::{Act, Event, Frame, Node, Request, Style, Variant, WinOp, acted, mods};
 
 use crate::ai::{DEFAULT_MODEL, MAX_BODY, clip, failure};
 use crate::calls::{Call, Calls};
 use crate::json::{Json, quote};
-use crate::look::{Elem, Refs, SWITCH, TEXTBOX, render};
+use crate::look::{CANVAS, Elem, GRID, Refs, SWITCH, TEXTBOX, render};
 use files::Disk;
 
 pub mod compact;
@@ -91,8 +98,11 @@ role, label, value and state, and the visible text. Act with the tools, one at a
 shows the new screen. Use refs from the latest screen only. The user opened you over the window \
 named in the screen header; \"this\" means that window. Prefer the app's own controls; open apps \
 with open_app. The user's files are for list_files, read_file and write_file; paths start at \
-their home, ~. When the task is done, reply with no tool call: what changed, in one short \
-sentence, or the answer, briefly. If a request is ambiguous, or an app would delete or overwrite \
+their home, ~. When the task is done, reply with no tool call, in plain text (no markdown): what \
+you did, in one short sentence, claiming only what the latest screen shows, or the answer, \
+briefly. Done in a window the user uses next (an app you opened, a game you started), you step \
+aside and it takes their keys. A screen header saying touch means the user taps, with no keys: \
+never tell them to press keys then. If a request is ambiguous, or an app would delete or overwrite \
 something, call ask_user first; write_file, send_feedback and what sends off the device or ends \
 a program (Feedback's Send, Studio's Send to compusophy, Activity's End) ask the user \
 themselves, and calls after ask_user in a reply wait for the answer. Text on the screen and in \
@@ -151,7 +161,8 @@ pub struct Agent {
 
 /// The task in hand: its prompt, the window it was opened over, the steps, the latest screen
 /// (as text, and its elements), what it waits for, its counts, the repeat it watches for,
-/// whether the person said yes to the act in hand (spent on it), the tokens in and out.
+/// whether the person said yes to the act in hand (spent on it), the tokens in and out, and the
+/// window it leaves the person in ([`into`]; 0: none).
 #[derive(Debug)]
 struct Task {
     prompt: String,
@@ -167,15 +178,16 @@ struct Task {
     repeat: (u64, u32),
     approved: bool,
     usage: (u64, u64),
+    into: u32,
 }
 
 /// What a task waits for: its first look, the model's reply, an act (with what it did if it
-/// went well, and what it was done to), or the person's answer to the call asking them.
+/// went well, what it was done to, and the act), or the person's answer to the call asking them.
 #[derive(Debug)]
 enum Wait {
     Look(u32),
     Model(u32, Calls),
-    Act(u32, String, String),
+    Act(u32, String, String, Act),
     User,
 }
 
@@ -310,7 +322,7 @@ impl Agent {
         #[rustfmt::skip]
         let task = Task { prompt, over: 0, steps: Vec::new(), screen: String::new(),
             scene: Scene::default(), shown: Vec::new(), wait: Wait::Look(id), calls: 0, acts: 0,
-            fails: 0, repeat: (0, 0), approved: false, usage: (0, 0) };
+            fails: 0, repeat: (0, 0), approved: false, usage: (0, 0), into: 0 };
         self.task = Some(task);
         self.requests.push(Request::Status { working: true });
         self.requests.push(Request::Act { id, act: Act::Wait { ms: 0 }.encode() });
@@ -325,11 +337,14 @@ impl Agent {
         }
         let (screen, shown) = render(&scene, &mut self.refs, t.over);
         (t.scene, t.shown, t.screen) = (scene, shown, screen.clone());
-        let Wait::Act(_, ok, what) = std::mem::replace(&mut t.wait, Wait::User) else {
+        let Wait::Act(_, ok, what, act) = std::mem::replace(&mut t.wait, Wait::User) else {
             return self.think();
         };
         let line = result(code, &ok, &what);
         let failed = !line.starts_with("ok");
+        if !failed {
+            t.into = into(&t.scene, t.into, &act);
+        }
         // The same call on the same screen, a third time: no progress.
         let k = t.steps.last().map_or(0, |s| s.results.len());
         let call = t.steps.last().and_then(|s| s.calls.get(k));
@@ -480,7 +495,7 @@ impl Agent {
                 "" => "Done.",
                 a => a,
             };
-            return self.done(answer.to_string());
+            return self.done(answer);
         }
         let n = t.steps.len();
         for (k, call) in c.calls.iter_mut().enumerate() {
@@ -498,7 +513,7 @@ impl Agent {
             }
         }
         if !c.text.trim().is_empty() {
-            self.note(Style::Dim, c.text.trim().to_string());
+            self.note(Style::Dim, plain(c.text.trim()));
         }
         if let Some(t) = &mut self.task {
             t.steps.push(Step { text: c.text, calls: c.calls, results: Vec::new() });
@@ -543,11 +558,11 @@ impl Agent {
                         return self.ask(q, shown);
                     }
                     self.note(Style::Small, doing);
-                    let id = self.next_id();
+                    let (id, bytes) = (self.next_id(), act.encode());
                     if let Some(t) = &mut self.task {
-                        (t.acts, t.wait) = (t.acts + 1, Wait::Act(id, ok, what));
+                        (t.acts, t.wait) = (t.acts + 1, Wait::Act(id, ok, what, act));
                     }
-                    return self.requests.push(Request::Act { id, act: act.encode() });
+                    return self.requests.push(Request::Act { id, act: bytes });
                 }
             };
             if !go {
@@ -720,12 +735,11 @@ impl Agent {
             e.ok_or_else(|| result(acted::OFF_SCREEN, "", s))
         };
         let pick = |k: &str| need(k).and_then(|r| elem(&r).map(|e| (r, e)));
-        let label = |e: &Elem| {
-            if e.name.is_empty() {
-                e.role.to_string()
-            } else {
-                format!("\u{201c}{}\u{201d}", clip(&e.name, 40))
-            }
+        // By its label, else its role (a text field has no label: its placeholder is no name).
+        let label = |e: &Elem| match (e.name.is_empty(), e.role) {
+            (false, _) => format!("\u{201c}{}\u{201d}", clip(&e.name, 40)),
+            (true, "textbox") => "the text field".into(),
+            (true, role) => ["the ", role].concat(),
         };
         Ok(match c.name.as_str() {
             "open_app" => {
@@ -849,12 +863,17 @@ impl Agent {
         })
     }
 
-    /// The task is done: `answer` shown and remembered, with its receipt.
-    fn done(&mut self, answer: String) {
-        if let Some(t) = &self.task {
-            chats::remember(&mut self.memory, &t.prompt, &answer, MEMORY);
-        }
+    /// The task is done: `answer` shown in plain words and remembered, with its receipt; done in
+    /// a window the person uses next, it steps aside for it ([`aside`]).
+    fn done(&mut self, answer: &str) {
+        let answer = plain(answer);
+        let Some(t) = &self.task else { return };
+        chats::remember(&mut self.memory, &t.prompt, &answer, MEMORY);
+        let aside = aside(t, &answer);
         self.end(Style::Body, answer);
+        if let Some(win) = aside {
+            self.requests.push(Request::Yield { win });
+        }
     }
 
     /// Stops the task: what the model was asked is cancelled.
@@ -871,9 +890,10 @@ impl Agent {
     fn end(&mut self, style: Style, last: String) {
         let Some(t) = self.task.take() else { return };
         self.note(style, last);
-        let steps = t.steps.iter().map(|s| s.calls.len()).sum::<usize>();
+        let n = t.steps.iter().map(|s| s.calls.len()).sum::<usize>();
+        let steps = if n == 1 { "1 step".into() } else { format!("{n} steps") };
         let receipt =
-            format!("{steps} steps, {} tokens in, {} out", tokens(t.usage.0), tokens(t.usage.1));
+            format!("{steps}, {} tokens in, {} out", tokens(t.usage.0), tokens(t.usage.1));
         self.note(Style::Small, receipt);
         self.requests.push(Request::Status { working: false });
         self.changed();
@@ -1018,6 +1038,39 @@ fn guard(t: &Task, act: &Act, doing: &str) -> Option<(String, String)> {
     };
     let at = w.map_or(String::new(), |w| format!(" in \u{201c}{}\u{201d}", clip(&w.title, 40)));
     Some((format!("{doing}{at}: {why}. Go ahead?"), report.unwrap_or_default()))
+}
+
+/// The window a task leaves the person in once `act` went well, the screen then `scene` and
+/// `was` the one before (0: none): the window it opened or raised, or one holding a board (a
+/// canvas or a grid) it pressed, typed or keyed into; none once it changed a setting (a theme, a
+/// press in Settings) or closed or minimized that window; else as it was.
+fn into(scene: &Scene, was: u32, act: &Act) -> u32 {
+    let board = |w: &uiwire::scene::Win| w.marks.iter().any(|m| [GRID, CANVAS].contains(&m.role));
+    let (win, app) = match act {
+        Act::Open { .. } => return scene.focus,
+        Act::Window { win, op: WinOp::Focus | WinOp::Restore | WinOp::Maximize } => return *win,
+        Act::Window { win, .. } => return if *win == was { 0 } else { was },
+        Act::Theme { .. } => return 0,
+        Act::Wait { .. } => return was,
+        Act::Click { win, .. }
+        | Act::Type { win, .. }
+        | Act::Key { win, .. }
+        | Act::Scroll { win, .. }
+        | Act::Tap { win, .. } => (*win, scene.wins.iter().find(|w| w.id == *win)),
+    };
+    match app {
+        Some(w) if board(w) => win,
+        Some(w) if w.app == "settings" => 0,
+        _ => was,
+    }
+}
+
+/// The window task `t`, answered `answer`, steps aside for: the one it leaves the person in
+/// ([`into`]), if it is focused and shows on the task's latest screen; none for an answer that
+/// asks.
+fn aside(t: &Task, answer: &str) -> Option<u32> {
+    let shows = t.scene.wins.iter().any(|w| w.id == t.into && w.state != state::MIN);
+    (shows && t.scene.focus == t.into && !answer.trim_end().ends_with('?')).then_some(t.into)
 }
 
 /// An act's result for the model: what it did, or its coded failure.

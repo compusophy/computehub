@@ -70,8 +70,8 @@ impl Shell {
 
     /// The row: the dock's tiles (lifted while hovered, sliding to their places, none where one
     /// carried lands) over a dot under each running app, the hairline between the groups; the
-    /// Assistant's tile, over a dot while the overlay shows (the accent's while it has the keys
-    /// or works, beating then).
+    /// Assistant's tile, over a dot while the overlay shows or an answer it stepped aside from
+    /// waits (the accent's then, and while it has the keys or works, beating then).
     pub(crate) fn draw_dock(&mut self, list: &mut DrawList, theme: &Theme) {
         let (now, carried) = (self.host.now_ms, self.dock.carried(self.pointer).map(|c| c.0));
         let mut looks = Vec::new();
@@ -82,9 +82,9 @@ impl Shell {
         }
         let (o, working) = (self.overlay, self.host.agent.working);
         let beat = 0.65 + 0.35 * sin((now / BEAT_MS).fract() as f32 * std::f32::consts::TAU);
-        let dot = if working { beat } else { f32::from(u8::from(o.open)) };
+        let dot = if working { beat } else { f32::from(u8::from(o.open || o.unread)) };
         let (icon, r) = (self.host.icon(ASSISTANT).unwrap_or_default(), self.dock.strip.assistant);
-        let (lift, focused) = (self.motion.ai.value(now), working || o.open && o.focus);
+        let (lift, focused) = (self.motion.ai.value(now), working || o.open && o.focus || o.unread);
         looks.push(Look { icon, mark: None, r, lift, dot, focused });
         self.dock.strip.draw(list, &mut self.host.text, theme, &looks);
     }
@@ -98,8 +98,12 @@ impl Shell {
     }
 
     /// The hovered tile's name above it (the Assistant's while the overlay hides), or the top
-    /// bar's button's below it, fading in with the lift, kept on the screen.
+    /// bar's button's below it (the mark's, what its press does next), fading in with the lift,
+    /// kept on the screen; none once pressed, until the pointer leaves it and comes back.
     pub(crate) fn draw_tooltip(&mut self, list: &mut DrawList, theme: &Theme, now: f64) {
+        if self.hush.is_some() && self.hush == self.hover {
+            return;
+        }
         let (t, a, label) = match self.hover {
             Some(Target::Dock(i)) if i < self.tiles.len() => {
                 let name = &self.tiles[i].0;
@@ -111,7 +115,8 @@ impl Shell {
             }
             Some(Target::Bar(b)) => {
                 let r = home::bar::buttons(self.size.0).into_iter().find(|r| r.1 == b);
-                (r.map_or(RectF::default(), |r| r.0), self.motion.bar.value(now), b.label().into())
+                let label = b.label(self.brings_back()).into();
+                (r.map_or(RectF::default(), |r| r.0), self.motion.bar.value(now), label)
             }
             _ => return,
         };

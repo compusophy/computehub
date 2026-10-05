@@ -113,6 +113,8 @@ pub struct Shell {
     pointer: Option<(f32, f32)>,
     hover: Option<Target>,
     armed: Option<Target>,
+    /// What was last pressed, its tooltip hidden until the pointer leaves it.
+    hush: Option<Target>,
     app_hover: Option<Widget>,
     app_press: Option<Widget>,
     /// A finger's press into content, delivered when it lifts as a tap.
@@ -163,7 +165,8 @@ impl Shell {
         let dock = home::dock::Dock::new(prefs.dock.as_deref());
         let grid = home::grid::Grid::new(prefs.home.as_deref(), prefs.folders.as_deref());
         let mut shell = Shell { host, pending: Vec::new(), size, pointer: None, hover: None,
-            armed: None, app_hover: None, app_press: None, down: None, grab: None, last_title: None,
+            armed: None, hush: None, app_hover: None, app_press: None, down: None, grab: None,
+            last_title: None,
             ime: None, focus: None, cursor: Cursor::Default, clock: None, dock, tiles: Vec::new(),
             marks: Vec::new(), grid, reduced: false, menu: None, touch: None, fling: None,
             finger: false, motion: Default::default(), instant: false, startup: !prefs.seen,
@@ -474,6 +477,7 @@ impl Shell {
         let free = self.grab.is_none() && !self.carrying();
         let under = self.pointer.and_then(|(x, y)| Some((self.hit(x, y)?, x, y)));
         self.hover = under.map(|u| u.0).filter(|_| free);
+        self.hush = self.hush.filter(|h| Some(*h) == self.hover);
         let widget = under.and_then(|(t, x, y)| match t {
             Target::Body(win) if free => Some((win, self.widget_at(win, x, y)?)),
             _ => None,

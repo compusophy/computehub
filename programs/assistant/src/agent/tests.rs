@@ -281,7 +281,7 @@ fn on(a: &mut Agent, scene: Scene) -> Task {
     let (screen, shown) = render(&scene, &mut a.refs, scene.focus);
     Task { prompt: String::new(), over: scene.focus, steps: Vec::new(), screen, scene, shown,
         wait: Wait::User, calls: 0, acts: 0, fails: 0, repeat: (0, 0), approved: false,
-        usage: (0, 0) }
+        usage: (0, 0), into: 0 }
 }
 
 #[test]
@@ -297,19 +297,15 @@ fn a_scripted_model_turns_error_reports_off_on_a_real_desktop() {
     let settings = d.host.wins.iter().find(|w| w.name == "settings").map(|w| w.id).unwrap();
     assert!(!d.host.live(settings) && !d.host.agent.working);
     let said = shown(&mut a);
-    for line in
-        ["Opening settings", "Clicking \u{201c}Privacy\u{201d}", "Closing \u{201c}Settings\u{201d}"]
-    {
-        assert!(said.contains(line), "{line}: {said}");
-    }
+    let lines =
+        ["Opening settings", "Clicking \u{201c}Privacy\u{201d}", "Closing \u{201c}Settings"];
+    assert!(lines.iter().all(|l| said.contains(l)), "{said}");
     assert!(said.ends_with("Error reports are off.\n4 steps, 6.0k tokens in, 150 out"), "{said}");
     // The first request: the system prompt, the tools, the task and the screen, read as text.
     let b = &d.bodies[0];
     let get = |k| b.get(k).map(encode).unwrap_or_default();
-    assert_eq!(
-        [get("max_tokens"), get("temperature"), get("tool_choice")],
-        ["2048", "0.2", "\"auto\""]
-    );
+    let got = [get("max_tokens"), get("temperature"), get("tool_choice")];
+    assert_eq!(got, ["2048", "0.2", "\"auto\""]);
     assert_eq!(get("tools"), TOOLS);
     let m = messages(b);
     assert_eq!((m.len(), m[0].0.as_str(), &*m[0].1), (2, "system", SYSTEM));
@@ -320,18 +316,15 @@ fn a_scripted_model_turns_error_reports_off_on_a_real_desktop() {
     assert_eq!(m[1].1, "turn off error reports\n\n(screen omitted)");
     let tools: Vec<&str> = m.iter().filter(|m| m.0 == "tool").map(|m| m.1.as_str()).collect();
     assert_eq!(tools[..2], ["ok: opened settings", "ok: clicked \u{201c}Privacy\u{201d} (e4)"]);
-    assert!(
-        tools[2].starts_with("ok: clicked \u{201c}Send error reports automatically\u{201d} (e")
-    );
+    let flip = "ok: clicked \u{201c}Send error reports automatically\u{201d} (e";
+    assert!(tools[2].starts_with(flip));
     assert!(tools[2].contains("switch \"Send error reports automatically\" off"));
     // The next task remembers this one; the same refs name the same widgets.
     ask(&mut a, "now turn it back on");
     d.run(&mut a, &|_| reply("Done.", None));
     let m = messages(d.bodies.last().unwrap());
-    assert_eq!(
-        (m[1].1.as_str(), m[2].1.as_str()),
-        ("turn off error reports", "Error reports are off.")
-    );
+    let pair = (m[1].1.as_str(), m[2].1.as_str());
+    assert_eq!(pair, ("turn off error reports", "Error reports are off."));
 }
 
 #[test]
@@ -378,32 +371,16 @@ fn page(id: u32, focus: bool) -> Win {
             run(200, "compusophy."),
         ],
     );
-    let title = if focus { "Settings" } else { "Other" };
-    Win {
-        id,
-        app: "settings".into(),
-        title: title.into(),
-        rect: [100, 50, 400, 300],
-        state: 0,
-        hits,
-        marks,
-        runs,
-    }
+    let (app, title) = ("settings".into(), if focus { "Settings" } else { "Other" }.into());
+    Win { id, app, title, rect: [100, 50, 400, 300], state: 0, hits, marks, runs }
 }
 
 #[test]
 fn the_screen_reads_as_text_whose_refs_last_the_session() {
     let min =
         Win { id: 4, app: "terminal".into(), title: "Terminal".into(), state: 2, ..Win::default() };
-    let wins = vec![page(2, true), page(3, false), min];
-    let scene = Scene {
-        w: 1440,
-        h: 900,
-        theme: "Mono".into(),
-        focus: 2,
-        apps: vec!["settings".into()],
-        wins,
-    };
+    let (wins, apps) = (vec![page(2, true), page(3, false), min], vec!["settings".into()]);
+    let scene = Scene { w: 1440, h: 900, touch: false, theme: "Mono".into(), focus: 2, apps, wins };
     let mut refs = Refs::default();
     let (text, elems) = render(&scene, &mut refs, 2);
     let want = "Screen 1440x900, theme Mono, focused w2. You were opened over w2.\nApps: settings\n\
@@ -412,22 +389,20 @@ fn the_screen_reads_as_text_whose_refs_last_the_session() {
         w3 \"Other\" (settings) 400x300 at 100,50\n  e4 tab \"Privacy\" selected\n  e5 textbox placeholder \"Your name\" focused\n  \
         e6 switch \"Send reports\" on\nw4 \"Terminal\" (terminal) 0x0 at 0,0, minimized\n";
     assert_eq!(text, want);
-    assert_eq!(
-        (elems.len(), &*elems[2].name, elems[2].role, elems[2].win),
-        (6, "Send reports", "switch", 2)
-    );
-    // A widget keeps its ref however the screen changes; a value shows as one.
+    // A field has no name: its placeholder is none.
+    let e = (elems.len(), &*elems[2].name, elems[2].role, elems[2].win, &*elems[1].name);
+    assert_eq!(e, (6, "Send reports", "switch", 2, ""));
+    // A widget keeps its ref however the screen changes; a value shows as one. A touch screen
+    // says so.
     let mut again = page(2, true);
     again.hits.reverse();
     again.marks[2] = Mark { id: 5, role: 5, flags: 0, value: "Ada".into() };
     again.marks[1].flags = 0;
-    let scene = Scene { focus: 2, wins: vec![again], ..Scene::default() };
+    let scene = Scene { focus: 2, touch: true, wins: vec![again], ..Scene::default() };
     let text = render(&scene, &mut refs, 0).0;
-    assert!(
-        text.contains("e2 textbox value \"Ada\"\n")
-            && text.contains("e3 switch \"Send reports\" off"),
-        "{text}"
-    );
+    let has = |s: &str| text.contains(s);
+    assert!(has("e2 textbox value \"Ada\"\n") && has("e3 switch \"Send reports\" off"), "{text}");
+    assert!(text.starts_with("Screen 0x0, a touch screen, theme , focused w2.\n"), "{text}");
     assert_eq!((refs.get(3), refs.get(7)), (Some((2, 30)), None));
     // A grid shows the text in it and its squares, a row a line.
     let mut grid = page(2, true);
@@ -446,9 +421,8 @@ fn the_screen_reads_as_text_whose_refs_last_the_session() {
     let want = "e1 canvas \"Privacy\" shapes \"300 x 200 units\\nring 150 150 30 8 4\\npixels 0 0, \
                 8 x 4 squares of 10 units\\n11111111\\n..2..2..\\n33333333\\nab.....9\"\n";
     assert!(t.screen.contains(want), "{}", t.screen);
-    assert!(
-        SYSTEM.contains("pixels x y, w x h squares of s units (on a small board then its rows")
-    );
+    let rows = "pixels x y, w x h squares of s units (on a small board then its rows";
+    assert!(SYSTEM.contains(rows) && SYSTEM.contains("saying touch means the user taps"));
     let click = |args: &str| {
         let c = Call { id: "c".into(), name: "click".into(), args: args.into(), cut: false };
         Agent::default().prepare(&t, &c).map(|p| p.0)
@@ -470,16 +444,11 @@ fn failures_go_back_coded_and_three_end_the_task() {
     d.run(&mut a, &|_| reply("", Some(("click", r#"{"ref":"e99"}"#))));
     let m = messages(&d.bodies[2]);
     let last = m.last().unwrap();
-    assert!(
-        last.1.starts_with("E0912: e99 is not on screen now")
-            && last.1.contains("Hint: two actions failed")
-    );
+    let hint = last.1.contains("Hint: two actions failed");
+    assert!(last.1.starts_with("E0912: e99 is not on screen now") && hint);
     assert_eq!(d.bodies[2].get("reasoning").map(encode).as_deref(), Some(r#"{"max_tokens":1024}"#));
-    let said = shown(&mut a);
-    assert!(
-        d.bodies.len() == 3 && said.contains("I couldn't finish: E0912: e99 is not on screen"),
-        "{said}"
-    );
+    let (said, three) = (shown(&mut a), d.bodies.len() == 3);
+    assert!(three && said.contains("I couldn't finish: E0912: e99 is not on screen"), "{said}");
     // Unknown tools and keys, malformed arguments, an unknown app (the desktop says so): coded.
     let (mut d, mut a) = (desk(), Agent::default());
     ask(&mut a, "do odd things");
@@ -493,21 +462,15 @@ fn failures_go_back_coded_and_three_end_the_task() {
     });
     let tools: Vec<String> =
         messages(&d.bodies[2]).into_iter().filter(|m| m.0 == "tool").map(|m| m.1).collect();
-    assert!(
-        tools[0] == "E0918: there is no tool named fly"
-            && tools[1].starts_with("E0918: no key named hyper+x\n")
-    );
+    assert_eq!(tools[0], "E0918: there is no tool named fly");
+    assert!(tools[1].starts_with("E0918: no key named hyper+x\n"));
     assert!(shown(&mut a).contains("I couldn't finish: E0914: there is no app named nope"));
     // Out of steps: E0921.
     let (mut d, mut a) = (desk(), Agent::default());
     ask(&mut a, "wait forever");
     d.run(&mut a, &|b| reply("", Some(("wait", &format!("{{\"ms\":{}}}", messages(b).len())))));
-    let said = shown(&mut a);
-    assert!(
-        d.bodies.len() == MAX_STEPS as usize && said.contains("E0921 out of steps"),
-        "{} {said}",
-        d.bodies.len()
-    );
+    let (said, n) = (shown(&mut a), d.bodies.len());
+    assert!(n == MAX_STEPS as usize && said.contains("E0921 out of steps"), "{n} {said}");
     // A task that would carry more messages than the free AI takes: E0921, never sent. Each
     // reply here calls 7 tools, 3 of them acts, and no two failures follow each other.
     let (mut d, mut a) = (desk(), Agent::default());
@@ -621,7 +584,7 @@ fn halt_stops_answers_questions_and_what_sends_or_ends_waits_for_a_yes() {
     let typing = Call { name: "type_text".into(), ..Call::default() };
     let long = format!(r#"{{"ref":"e2","text":"{}"}}"#, "x".repeat(MAX_TYPED + 1));
     let long = a.prepare(&t, &Call { args: long, ..typing }).unwrap();
-    let want = "typed into \u{201c}Your name\u{201d} (e2); only its first 4000 bytes";
+    let want = "typed into the text field (e2); only its first 4000 bytes";
     let x4000 = "x".repeat(MAX_TYPED);
     assert!(matches!(long.0, Act::Type { text, .. } if text == x4000) && long.2 == want);
     // A scroll names its window: an element of another window is not one of its.
@@ -994,4 +957,33 @@ fn a_cut_call_and_a_grid_clicked_whole_say_so() {
     // A grid clicked whole (or a square it lacks): how to click one.
     assert!(result(acted::MALFORMED, "", "e4").starts_with("E0918: e4 cannot take that: a grid's"));
     assert_eq!(result(acted::MALFORMED, "", "dusk"), "E0918: dusk cannot take that");
+}
+
+#[test]
+fn a_task_done_in_a_window_to_use_steps_aside_for_it_in_plain_words() {
+    // One call on a screen of one window of `app`, its e1 of `role`, then `answer`: whether the
+    // overlay stepped aside, and for which window; what the card says.
+    let run = |app: &str, role: u8, call: (&str, &str), answer: &str| {
+        let mut w = Win { app: app.into(), ..page(2, true) };
+        w.marks[0].role = role;
+        let (scene, mut a) =
+            (Scene { focus: 2, wins: vec![w], ..Scene::default() }, Agent::default());
+        ask(&mut a, "go");
+        let model = |b: &Json| match messages(b).iter().any(|m| m.0 == "tool") {
+            true => reply(answer, None),
+            false => reply("", Some(call)),
+        };
+        let win = |r: &Request| if let Request::Yield { win } = r { Some(*win) } else { None };
+        (alone(&mut a, &scene, &model).0.iter().find_map(win), shown(&mut a))
+    };
+    // A board pressed (a game's Start), or a window opened: it steps aside for that window, the
+    // answer in plain words, the receipt counting 1 step.
+    let (click, open) = (("click", r#"{"ref":"e1"}"#), ("open_app", r#"{"name":"files"}"#));
+    let (win, said) = run("snake", CANVAS, click, "It runs: steer with `the arrows`, **go**.");
+    let end = "It runs: steer with the arrows, go.\n1 step, 2.4k tokens in, 60 out";
+    assert!(win == Some(2) && said.ends_with(end), "{said}");
+    assert_eq!(run("files", 2, open, "Files is open.").0, Some(2));
+    // A setting changed, an answer that asks, a press in a window it did not open: never.
+    let not = [run("settings", 3, click, "On."), run("snake", GRID, click, "Which level?")];
+    assert!(not.iter().chain([&run("files", 2, click, "Done.")]).all(|r| r.0.is_none()));
 }

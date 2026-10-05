@@ -1,7 +1,7 @@
 //! The top bar: compusophy's mark at the left (Show desktop: every window minimized, and back
 //! again; Welcome is in the System folder), the date and time in the middle (the time alone on a
 //! phone, or where the date does not fit), Feedback (a bug) and Settings at the right; a tooltip
-//! names each button.
+//! names each button (the mark's, what its press does next).
 
 use gfx::{DrawList, RectF};
 use host::LocalTime;
@@ -41,9 +41,11 @@ impl Button {
         }
     }
 
-    /// What its tooltip calls it.
-    pub fn label(self) -> &'static str {
+    /// What its tooltip calls it: the mark's says what its press does, Show desktop, or `back`
+    /// when it brings the windows back.
+    pub fn label(self, back: bool) -> &'static str {
         match self {
+            Button::Mark if back => "Bring windows back",
             Button::Mark => "Show desktop",
             Button::Feedback => "Send feedback",
             Button::Settings => "Settings",

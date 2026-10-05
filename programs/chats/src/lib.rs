@@ -24,7 +24,8 @@
 //!   clipped as it was kept, a line unknown or past a bound skipped, and a file past
 //!   [`MAX_FILE`] bytes not read.
 //! - **Answers.** Whether the person's answer to a question that waits on their yes is one
-//!   ([`yes`]): yes words alone, never a question, never "I'm good".
+//!   ([`yes`]): yes words alone, never a question, never "I'm good". And the model's as the card
+//!   shows them, plain text ([`plain`]): the card prints markdown as it is.
 
 #![forbid(unsafe_code)]
 
@@ -401,6 +402,12 @@ pub fn yes(answer: &str) -> bool {
         }
     }
     said
+}
+
+/// `said`, a model's words, as plain text: the inline markdown it may write though told not to
+/// (code's backticks, bold's `**`) taken out, every word kept.
+pub fn plain(said: &str) -> String {
+    said.replace("**", "").replace('`', "")
 }
 
 /// Keeps `memory` to its last `n` tasks, a note (the one with no prompt) first while it is there,

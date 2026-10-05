@@ -20,6 +20,9 @@
 //!   no longer working, or the person stopping it: [`Host::halt`]) drops the act settling for
 //!   it. The person's own presses, keys and wheel never stop it: they go where they go beside
 //!   its acts, and an act on a window they closed settles as [`acted::GONE`].
+//! - **Stepping aside.** A task done in a window the person uses next ([`Request::Yield`]):
+//!   that window comes up focused, if it is still open, and the shell hides the overlay
+//!   ([`Agent::yielded`]), so the keys are the window's.
 
 use std::mem;
 
@@ -71,11 +74,15 @@ pub struct Agent {
     /// input went into, whose [`ui::Request::Reset`] is dropped (only the person resets).
     pub flash: Option<(RectF, f64)>,
     pub touched: Vec<WinId>,
-    /// An app asked for the Assistant: the shell opens the overlay.
+    /// An app asked for the Assistant: the shell opens the overlay. The overlay stepped aside
+    /// for a window it raised ([`Request::Yield`]): the shell hides it.
     pub summon: bool,
-    /// The home screen's apps and the screen's size, as the shell has them, for the scene.
+    pub yielded: bool,
+    /// The home screen's apps, the screen's size, and whether the person's last press was a
+    /// finger's, as the shell has them, for the scene.
     pub apps: Vec<String>,
     pub screen: (f32, f32),
+    pub touch: bool,
     /// Where the overlay is laid out while it shows.
     pub shown: Option<RectF>,
 }
@@ -122,7 +129,8 @@ impl Host {
         (a.acts, a.pending, a.working, a.shown) = (Vec::new(), None, false, None);
     }
 
-    /// What window `win`'s app asked of the agent: an act, or the overlay's status.
+    /// What window `win`'s app asked of the agent: an act, the overlay's status, or the overlay
+    /// stepping aside for a window still open.
     pub(crate) fn agent_request(&mut self, win: WinId, req: Request) {
         match req {
             // Bytes off the wire were checked; an app's own may be no act, which is answered
@@ -135,6 +143,10 @@ impl Host {
                 self.agent.working = working;
                 // The task is over: so is the act it waited for.
                 self.agent.pending = self.agent.pending.take().filter(|_| working);
+            }
+            Request::Yield { win: to } if win == OVERLAY && self.live(WinId(to)) => {
+                self.apply(Cmd::Focus(WinId(to)));
+                self.agent.yielded = true;
             }
             _ => {}
         }
@@ -336,8 +348,8 @@ impl Host {
         let (now, layout) = (self.now_ms, self.wm.layout());
         let theme = self.theme.at(now);
         let name = self.theme.current().name.to_string();
-        // The bytes left as sent: the head, the apps, then each window while it fits.
-        let mut room = SCENE - 20 - name.len();
+        // The bytes left as sent: the head and touch flag, the apps, then each window that fits.
+        let mut room = SCENE - 21 - name.len();
         let fit = |a: &&String| take(&mut room, 4 + a.len());
         let apps: Vec<String> = self.agent.apps.iter().take_while(fit).cloned().collect();
         let mut wins = Vec::new();
@@ -385,7 +397,8 @@ impl Host {
             }
         }
         let ((w, h), focus) = (self.agent.screen, self.focused_app().map_or(0, |w| w.0));
-        Scene { w: w as u16, h: h as u16, theme: name, focus, apps, wins }
+        let (w, h, touch) = (w as u16, h as u16, self.agent.touch);
+        Scene { w, h, touch, theme: name, focus, apps, wins }
     }
 
     /// A scene's window `id` at `r` in `state`, with its app and title.
