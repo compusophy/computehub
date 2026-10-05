@@ -318,7 +318,8 @@ one. Forked crates keep their Apache-2.0 license and note their origin.
   a touch screen (the person's last press a finger's), so its hints name
   taps, never keys. It opens an app by the name the home screen shows, in
   any case, with or without `.app` (`host::Host::named`: a made app in
-  `~/apps` too, where `snake` was once no app, E0914).
+  `~/apps` too, where `snake` was once no app, E0914; with `.app`, only
+  a made one, so `files.app` is never Files).
   Only Stop, or Escape while the overlay has the keys (which, at a question
   or before the pill shows, hides the card too), stops it: the
   person's own presses, keys and wheel go where they go beside its acts
@@ -550,11 +551,15 @@ one. Forked crates keep their Apache-2.0 license and note their origin.
   the window's size or its boards changed (`uiview::View::around`), the
   room left above drawn above it, so a board keeps its size and place as a
   button or label comes and goes, after each first shows; with a handler
-  they are pads. A grid's squares are a target before the boards share
-  the room (`uiview::TAP`, 24 px, or 44 in a narrow window, as its width
-  and its row hold them; the grids within the room, two thirds of it
-  beside a canvas), so a palette of 7 beside a swatch is no row of 8 px
-  squares; the canvases share what is left. Studio's prompt asks that
+  they are pads. A pad grid's squares are a target before the boards
+  share the room (`uiview::TAP`, 24 px, or 44 in a narrow window, as its
+  width holds them, a px less while the grids would take more than two
+  thirds of the room); then every board takes the largest share of its
+  largest that all of them fit in, never more than without the target.
+  So a palette of 7 beside a swatch is no row of 8 px squares, a painting
+  keeps a third of its share at least, and what fit still fits. In a
+  row, a grid its even share leaves short of the target takes it, where
+  what is left still holds every other grid's. Studio's prompt asks that
   whatever is to be seen (a game, a board, drawing, animation, a clock, a
   chart) be drawn on a canvas, never spelled out in labels and buttons
   (its first example is snake on pixels); that a game show the same

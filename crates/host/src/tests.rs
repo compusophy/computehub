@@ -779,13 +779,15 @@ fn the_overlay_acts_as_a_person_and_hears_once_the_screen_settles() {
 fn the_ai_opens_an_app_by_the_name_the_home_screen_shows() {
     // The home screen's apps: the person's made app by its label, in any case, with or without
     // .app ("snake" was no app: E0914), and another in another case; a path, or a name the
-    // registry knows, as it is; else the name as given, for the registry to know or not.
+    // registry knows, as it is; else the name as given, for the registry to know or not. Named
+    // with .app, only a made app: their own files.app, not Files, though its label is too.
     let (mut h, _, _) = host();
-    let snake = [Vfs::HOME, "/apps/snake.app"].concat();
-    h.agent.apps = vec!["files".into(), snake.clone()];
+    let [snake, files] = ["snake", "files"].map(|n| [Vfs::HOME, "/apps/", n, ".app"].concat());
+    h.agent.apps = vec!["files".into(), snake.clone(), files.clone()];
     for name in ["snake", "Snake", "SNAKE.APP", "snake.app", &snake] {
         assert_eq!(h.named(name), snake, "{name}");
     }
+    assert_eq!(["files.app", "Files.App"].map(|n| h.named(n)), [files.clone(), files]);
     let same = ["files", "/apps/counter.app", "nope", "clock.app", "snake.ap"];
     assert_eq!(
         (same.map(|n| h.named(n)), h.named("Files")),

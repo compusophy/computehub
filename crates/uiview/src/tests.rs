@@ -59,12 +59,8 @@ fn paint(
     let (mut list, mut hits) = (DrawList::new(), Vec::new());
     let state = UiState { focused: true, hover: hover.map(WidgetId), now_ms, ..UiState::default() };
     let rect = RectF::new(0.0, 0.0, w, 400.0);
-    super::draw(
-        &mut Ui::new(&mut list, &mut ts, rect, &mut hits, state, &THEMES[0]),
-        nodes,
-        texts,
-        view,
-    );
+    let ui = Ui::new(&mut list, &mut ts, rect, &mut hits, state, &THEMES[0]);
+    super::draw(&mut { ui }, nodes, texts, view);
     (Drawn { list, hits }, ts)
 }
 
@@ -114,9 +110,8 @@ fn glyphs_entries_toggles_and_chips_draw_in_the_theme() {
     // The chosen chip on the accent, the other on the sunken pill; the quiet one washed under
     // the pointer. All small, in a row.
     let (on, chip, quiet) = (d.hit(1).rect, d.hit(2).rect, d.hit(3).rect);
-    assert!(
-        d.filled(on, t.accent) && d.filled(chip, t.surface_lo) && d.filled(quiet, t.wash(false))
-    );
+    assert!(d.filled(on, t.accent) && d.filled(chip, t.surface_lo));
+    assert!(d.filled(quiet, t.wash(false)));
     assert!(on.h == CHIP_H && quiet.h == BUTTON_H && chip.x > on.x + on.w && quiet.x > chip.x);
     // On a phone's window chips and quiet buttons are touch targets.
     let phone = draw_at(360.0, &nodes, &mut Texts::default(), &mut View::default(), None);
@@ -185,10 +180,8 @@ fn centers_put_each_child_and_each_line_in_the_middle() {
     // The title's glyphs span the middle evenly.
     let ink: Vec<_> =
         d.of(Kind::Glyph).into_iter().filter(|g| g.rect[1] > mark[1] + 80.0).collect();
-    let (left, right) = (
-        ink.iter().map(|g| g.rect[0]).fold(f32::MAX, f32::min),
-        ink.iter().map(|g| g.rect[0] + g.rect[2]).fold(0.0, f32::max),
-    );
+    let left = ink.iter().map(|g| g.rect[0]).fold(f32::MAX, f32::min);
+    let right = ink.iter().map(|g| g.rect[0] + g.rect[2]).fold(0.0, f32::max);
     assert!(((left + right) / 2.0 - 300.0).abs() < 4.0, "{left} {right}");
     let go = d.hit(4).rect;
     assert!(mid(go.x, go.w) && go.y > mark[1] + 89.0 + 5.0, "{go:?}");
@@ -291,10 +284,8 @@ fn a_press_on_a_control_keeps_the_keyboard_and_a_waiting_edit_keeps_its_text() {
     // stays the host's; the others take the frame's.
     t.areas[0].1.insert("typed");
     t.inputs[0].1 = "draft".into();
-    let nodes = [
-        Node::Area { id: 9, value: "old".into(), placeholder: "".into() },
-        Node::Input { id: 5, value: "old".into(), placeholder: "".into() },
-    ];
+    let area = Node::Area { id: 9, value: "old".into(), placeholder: "".into() };
+    let nodes = [area, Node::Input { id: 5, value: "old".into(), placeholder: "".into() }];
     t.adopt(&nodes, &[9]);
     assert_eq!((t.areas[0].1.text.as_str(), t.inputs[0].1.as_str()), ("typed", "old"));
     t.adopt(&nodes, &[]);
@@ -535,10 +526,8 @@ fn sem_in(nodes: &[Node], t: &Theme, texts: &mut Texts) -> gfx::Sem {
 
 #[test]
 fn a_toggle_reads_as_a_switch_and_an_area_as_the_text_it_holds() {
-    let nodes = [
-        Node::Toggle { id: 3, on: true, label: "Include what is open".into() },
-        Node::Area { id: 7, value: "the dock is small".into(), placeholder: "What?".into() },
-    ];
+    let area = Node::Area { id: 7, value: "the dock is small".into(), placeholder: "What?".into() };
+    let nodes = [Node::Toggle { id: 3, on: true, label: "Include what is open".into() }, area];
     let mut texts = Texts::default();
     texts.adopt(&nodes, &[]);
     let marks = sem_in(&nodes, &THEMES[0], &mut texts).marks;
@@ -813,14 +802,31 @@ fn a_board_keeps_its_size_and_place_as_widgets_come_and_go() {
     // are a mouse's target (a finger's on a phone), in its row and in the room; the canvases
     // share what is left, all of it in view (a tall grid alone still shrinks to fit: above).
     let canvas = |id, side| Node::Canvas { id, w: side, h: side, draws: Vec::new() };
-    let pal = Node::Grid { id: 3, cols: 7, cells: vec![1, 2, 3, 4, 5, 6, 0], texts: Vec::new() };
-    let row = Node::Row { id: 0, gap: 8, children: vec![canvas(2, 1), pal] };
-    let paint = [text(Style::Body, "Paint"), canvas(1, 32), row];
+    let grid = |id, cols, n| Node::Grid { id, cols, cells: vec![1; n], texts: Vec::new() };
+    let row = |children| Node::Row { id: 0, gap: 8, children };
+    let paint = [text(Style::Body, "Paint"), canvas(1, 32), row(vec![canvas(2, 1), grid(3, 7, 7)])];
     for (size, tap) in [((800.0, 450.0), TAP), ((409.0, 552.0), TOUCH)] {
         let (_, view, _) = boards(size, 1.0, &THEMES[0], &paint);
         let [art, swatch, pal] = [0, 1, 2].map(|i| view.grids[i].rect);
         assert!(pal.w == 7.0 * tap && pal.h == tap && swatch.h > tap && art.h > swatch.h);
         assert!(view.heights.0 <= size.1, "{view:?}");
+    }
+    // Grids beside a label or each other keep their share; a snake's board over its pad of
+    // arrows over Start fits as it did; under a painting, a board of 16 x 16 takes two thirds of
+    // the 402 px room at most for its target (16 px squares), the painting the rest (146: 4 px).
+    let start = Node::Button { id: 4, variant: Variant::Normal, label: "Start".into() };
+    let snake = vec![text(Style::Body, "Score 0"), grid(1, 15, 225), grid(2, 3, 9), start];
+    let label = vec![row(vec![text(Style::Body, "Score 12"), grid(1, 20, 20)])];
+    for (nodes, size, want) in [
+        (label, (800.0, 450.0), vec![34]),
+        (vec![row(vec![grid(1, 6, 36), grid(2, 6, 36)])], (409.0, 552.0), vec![30; 2]),
+        (snake.clone(), (409.0, 552.0), vec![16, 65]),
+        (snake, (800.0, 450.0), vec![16, 31]),
+        (vec![canvas(1, 32), grid(2, 16, 256)], (800.0, 450.0), vec![4, 16]),
+    ] {
+        let view = boards(size, 1.0, &THEMES[0], &nodes).1;
+        let sq: Vec<_> = view.grids.iter().map(|b| b.rect.w as u16 / b.cols).collect();
+        assert!(sq == want && view.heights.0 <= size.1, "{sq:?} {view:?}");
     }
 }
 

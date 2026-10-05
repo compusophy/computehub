@@ -268,7 +268,8 @@ pub enum Node {
     /// `on` starts them at the top.
     Pages { id: u32, on: u8, labels: String },
     /// The desktop's themes as cards, each a miniature of its desktop over its name (the
-    /// current one ringed in the accent, and checked where every name has room for the check):
+    /// current one ringed in the accent and checked at any width, on an accent disc in its
+    /// miniature's top right corner):
     /// the default first, as many across as fit [`THEME_MIN`] to [`THEME_MAX`] px wide, the rows
     /// even. Theme `i`, in the desktop's own order, is the button `id + i`.
     Themes { id: u32 },
