@@ -432,12 +432,11 @@ one. Forked crates keep their Apache-2.0 license and note their origin.
   one it starts there (`agent -y`) does nothing, and one whose question it
   answers stops at its next request. A request fits the free AI (64
   messages, 96 KiB): old results fold to their first line, then old tasks
-  and steps go.
-  A task makes 20 model calls at most, as the Assistant's (E0942; `go on`
-  goes on), so it and its lesson keep under the 30 requests a minute the
-  free AI takes from a client, and leave most of its 120 an hour to Studio
-  and the Assistant; a busy AI (429) ends the task, never asked again by
-  itself.
+  and steps go. A task makes 20 model calls at most, as the Assistant's
+  (E0942; `go on` goes on), so it and its lesson keep under the 30
+  requests a minute the free AI takes from a client, and leave most of its
+  120 an hour to Studio and the Assistant; a busy AI (429) ends the task,
+  never asked again by itself.
   **It learns.** A task that got past a failure (a tool's error, an app
   that did not check, a reply cut off) asks, after, for the one lesson
   that would have avoided it; a new one goes to `~/.agent/lessons.md` and
@@ -688,7 +687,9 @@ in its home; names in it, and roots per profile, wait for R2.
   other presses of those apps send nothing, and ask nothing. A yes to
   `ask_user` lets nothing through, and the calls the model made after the
   question wait until it has heard the answer. What another app saves or
-  a Terminal runs the model is told to ask about first; no code holds it.
+  a Terminal runs the model is told to ask about first; no code holds it,
+  but a Terminal it typed into runs no program that asks the AI
+  (`Cx::driven`: no coding agent there past the person's yes).
   So the loop of growth: the Assistant meets what it cannot do, says so,
   asks its creator for the tool, and the tool ships. Cloud AI is free for
   every visitor: `api/ai.mjs`, a thin same-origin function, forwards
