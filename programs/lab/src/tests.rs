@@ -1,9 +1,10 @@
 use std::collections::BTreeSet;
+use std::fs;
 
 use tiny::{EOS, Rng, Tokenizer};
 
 use crate::augment::{rename, shuffle_states};
-use crate::collect::{blocks, find, literals};
+use crate::collect::{SKIP, blocks, find, literals};
 use crate::corpus::{Corpus, Program, compiles, content, hold_out, runs, shape};
 use crate::measure::{PROMPTS, judge, program, prompt};
 use crate::ngram::Ngram;
@@ -57,10 +58,40 @@ fn the_repo_holds_the_shots_and_the_replays() {
     assert!(found.iter().any(
         |f| f.path == "programs/applang/src/tests.rs" && f.text.starts_with("state count = 0;")
     ));
+    // Nothing from the skipped folders: the lab's and tiny's own tests, and the evals' answer
+    // keys (Suite 1's reference apps, which compile and run clean).
+    let skipped =
+        |f: &&crate::collect::Found| SKIP.iter().any(|s| f.path.starts_with(&[s, "/"].concat()));
+    assert_eq!(found.iter().find(skipped), None);
+    let refs = fs::read_dir(crate::root().join("programs/makes/refs")).unwrap();
+    assert!(refs.flatten().any(|e| e.path().extension().is_some_and(|x| x == "app")));
+}
+
+/// The committed manifest is the corpus as the repo holds it now, as `lab train` and
+/// `measure` require: a change that adds a program where `collect` looks, or changes what
+/// compiles or runs clean, fails here, not at the next training run.
+#[test]
+fn the_manifest_is_the_corpus_the_repo_holds() {
+    let root = crate::root();
+    let on_disk = fs::read_to_string(root.join(crate::DATA).join("manifest.tsv")).unwrap();
+    let built = Corpus::build(&root, 8).manifest();
+    let rows = |m: &str| -> BTreeSet<String> { content(m).lines().map(String::from).collect() };
+    let (want, have) = (rows(&built), rows(&on_disk));
+    let (new, gone) = (want.difference(&have).count(), have.difference(&want).count());
+    // Where the first programs found that the manifest lacks are (their variants follow them).
+    let at: Vec<&str> = built
+        .lines()
+        .filter(|l| l.split('\t').nth(6) == Some("-"))
+        .filter_map(|l| l.rsplit_once('\t'))
+        .filter(|(row, _)| !have.contains(*row))
+        .map(|(_, from)| from)
+        .take(5)
+        .collect();
     assert!(
-        found
-            .iter()
-            .all(|f| !f.path.starts_with("programs/lab") && !f.path.starts_with("programs/tiny"))
+        content(&built) == content(&on_disk),
+        "the corpus differs from {}/manifest.tsv ({new} rows new, {gone} gone; found at \
+         {at:?}): run `cargo run -p compusophy-lab --release -- corpus`, then train and measure",
+        crate::DATA
     );
 }
 

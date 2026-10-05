@@ -3,8 +3,9 @@
 //! A dev tool, never shipped (its binary runs on the machine that builds compusophyOS). The
 //! first verifiable step from small total languages to models that compute:
 //!
-//! - [`corpus`]: every applang program in the repo that compiles ([`collect`] finds them),
-//!   once, content-addressed, with variants that keep their meaning ([`augment`]);
+//! - [`corpus`]: every applang program in the repo that compiles ([`collect`] finds them, the
+//!   evals' answer keys aside), once, content-addressed, with variants that keep their meaning
+//!   ([`augment`]);
 //! - [`ngram`]: the baseline any model must beat, over the same tokens;
 //! - [`measure`]: programs sampled from a model, each prompted by an app's header, judged by
 //!   applang's own checker and runtime: does it compile, does it run clean, is it new.
