@@ -445,6 +445,12 @@ fn an_ai_failure_ends_the_task_and_odd_calls_are_made_safe() {
             "\x1b[31mE0903 the free AI is busy, try again in a minute: rate limited\x1b[m"
         )
     );
+    assert_eq!(w.sent.len(), 1, "a busy AI is not asked again, nor for a lesson");
+    // A model that never answers ends at the step limit: under the free AI's 30 a minute.
+    let mut w = fake(&vec![call("list_dir", "{}"); 25]);
+    let mut a = Agent::new(Vfs::HOME, &mut w);
+    assert!(!a.task("loop", &mut w) && w.sent.len() == MAX_STEPS as usize && MAX_STEPS <= 20);
+    assert!(w.shown.contains("E0942 stopped after 20 steps; say \"go on\" to continue"));
     // An id and a name the free AI would refuse back are made ones it takes.
     let odd = sse(&[r#"{"tool_calls":[{"index":0,"id":"","type":"function","function":{"name":"read-file","arguments":"{}"}}]}"#.into()], "tool_calls");
     let mut w = fake(&[odd, says("ok")]);

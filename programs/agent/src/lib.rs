@@ -40,10 +40,13 @@ use coder::json::{Json, put};
 use vfs::Vfs;
 
 /// The most bytes a request's body takes (the free AI takes 96 KiB), messages it holds (the
-/// system prompt's too) and model calls a task makes.
+/// system prompt's too) and model calls a task makes: 20, as the Assistant's, so a task and its
+/// lesson keep under the 30 requests a minute the free AI takes from one client, and leave five
+/// sixths of its 120 an hour, which Studio and the Assistant share. Nothing is asked again by
+/// itself: a busy AI (429) ends the task, and "go on" picks it up.
 pub const MAX_BODY: usize = coder::ai::MAX_BODY;
 pub const MAX_MESSAGES: usize = 64;
-pub const MAX_STEPS: u32 = 30;
+pub const MAX_STEPS: u32 = 20;
 /// The most bytes of a tool's result the model gets, and of a file's notes or the lessons.
 pub const MAX_RESULT: usize = 12 << 10;
 pub const MAX_NOTES: usize = 4 << 10;

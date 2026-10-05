@@ -425,7 +425,12 @@ one. Forked crates keep their Apache-2.0 license and note their origin.
   requests of the programs its shell runs (`apps::asks`; nothing else of
   their frames, and no other process's), and a request whose process ended
   (Ctrl+C) is stopped. A request fits the free AI (64 messages, 96 KiB):
-  old results fold to their first line, then old tasks and steps go.
+  old results fold to their first line, then old tasks and steps go. A
+  task makes 20 model calls at most, as the Assistant's (E0942; `go on`
+  goes on), so it and its lesson keep under the 30 requests a minute the
+  free AI takes from a client, and leave most of its 120 an hour to Studio
+  and the Assistant; a busy AI (429) ends the task, never asked again by
+  itself.
   **It learns.** A task that got past a failure (a tool's error, an app
   that did not check, a reply cut off) asks, after, for the one lesson
   that would have avoided it; a new one goes to `~/.agent/lessons.md` and
