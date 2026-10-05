@@ -404,6 +404,17 @@ impl Kernel {
         Mode { raw: bits & wire::MODE_RAW != 0, echo: bits & wire::MODE_NOECHO == 0 }
     }
 
+    /// Whether `pid` runs.
+    pub fn runs(&self, pid: u32) -> bool {
+        self.find(pid, true).is_some()
+    }
+
+    /// Whether `pid` runs for the window the calls act for ([`Kernel::set_owner`]): a program
+    /// that window's shell started, or its own.
+    pub fn owns(&self, pid: u32) -> bool {
+        self.find(pid, true).is_some_and(|i| self.procs[i].owner == self.owner)
+    }
+
     /// The exit status of `pid` once it ended, once; then the pid is gone.
     pub fn reap(&mut self, pid: u32) -> Option<i32> {
         let i = self.find(pid, false).filter(|&i| self.procs[i].status.is_some())?;
@@ -681,6 +692,12 @@ impl Kernel {
         self.procs[i].waiting = None;
         self.reply(pid, reply);
     }
+}
+
+/// Makes `/bin/<name>` the marker [`program`] reads as the URL `bin/<wasm>.wasm`, which the page
+/// fetches when the program first runs.
+pub fn install(vfs: &mut Vfs, name: &str, wasm: &str) -> Result<(), VfsError> {
+    vfs.write(&["/bin/", name].concat(), ["#!wasm bin/", wasm, ".wasm\n"].concat().as_bytes())
 }
 
 /// The program the file at `path` (absolute) is: itself if it holds wasm, else what its marker

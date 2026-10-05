@@ -20,6 +20,9 @@ install, and no server runs your apps: the tab is the machine.
 - **Terminal.** A program drawing an xterm screen of `/bin/sh`: Unix-like commands (`ls -l`,
   `cat -n`, `mv`, `wc`, `rev`, ...), pipes (`a | b`), redirects (`<`, `>`, `>>`), scripts
   (`sh -c`, `sh file`), history.
+- **Agent.** Type `agent` in the Terminal: a coding agent on the free AI that reads, writes and
+  edits your files, runs the shell and checks apps, asking before it writes or runs. It learns a
+  lesson from each failure it gets past, and keeps it for next time.
 - **Studio.** Make an app by describing it. A coding agent writes it in applang, a small
   language made for this, then tests and fixes it. Games, boards, drawings, clocks and charts
   draw on a canvas: shapes, and pixels for boards of squares.

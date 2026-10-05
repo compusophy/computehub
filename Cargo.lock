@@ -23,6 +23,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "compusophy-agent"
+version = "0.1.0"
+dependencies = [
+ "compusophy-applang",
+ "compusophy-assistant",
+ "compusophy-coder",
+ "compusophy-sh",
+ "compusophy-uiwire",
+ "compusophy-vfs",
+]
+
+[[package]]
 name = "compusophy-applang"
 version = "0.1.0"
 dependencies = [

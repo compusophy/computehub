@@ -135,6 +135,8 @@ impl Ai {
             }
             let data = data.chunks(CHUNK).map(|d| Event::AiData { id, data: d.to_vec() });
             data.for_each(|ev| k.post_event(pid, &ev.encode()));
+            // A process that ended (Ctrl+C in a terminal) hears no more: its requests stop.
+            h.asks.extend((!k.runs(pid)).then_some((pid, Request::Close)));
         }
     }
 

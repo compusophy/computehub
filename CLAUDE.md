@@ -83,7 +83,7 @@ programs/    wasm32-wasip1 programs (dist/bin/) and their app language
   system/    About, Editor, Feedback, Files, Welcome, Settings
   activity/  the resource monitor
   terminal/  the Terminal; vt/ term/: its parser, screen model
-  sh/        the shell: line editor, commands, jobs
+  sh/ agent/ shell: editor, commands, jobs; AI coder
   toolbox/   test programs, one binary
 assets/fonts/  the fonts (see Fonts below)
 api/           server functions (Vercel, Node): ai.mjs, feedback.mjs
