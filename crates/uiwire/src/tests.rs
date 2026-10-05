@@ -334,7 +334,7 @@ fn scene() -> scene::Scene {
     let shown = Win { id: 2, app, title, rect: [1, 2, 3, 4], state: 3, hits, marks, runs };
     let min = Win { id: 1, app: "terminal".into(), state: state::MIN, ..Win::default() };
     let (apps, wins) = (vec!["settings".into(), "files".into()], vec![shown, min]);
-    Scene { w: 1440, h: 900, touch: false, theme: "Mono".into(), focus: 2, apps, wins }
+    Scene { w: 1440, h: 900, touch: false, theme: "Dawn".into(), focus: 2, apps, wins }
 }
 
 #[test]

@@ -387,8 +387,11 @@ fn themes_are_complete_readable_and_glow() {
     for mono in [dark, light] {
         assert!(mono.glows.iter().all(|g| g.color.3 == 0) && mono.grain == 5, "{}", mono.name);
     }
-    // Mono Light is Mono Dark turned over: its accent black, white on it.
+    // Mono Light is Mono Dark turned over: its accent black, white on it. Its bright black, a
+    // canvas's gray, stands apart from the ink, the dim ink and silver (its faint), as on Mono Dark.
     assert_eq!((light.accent, light.accent_text), (dark.accent_text, dark.accent));
+    let gray = [light.text, light.text_dim, light.text_faint].map(|c| contrast(c, light.ansi[8]));
+    assert!(gray[0] >= 2.0 && gray[1] >= 1.4 && gray[2] >= 2.0, "{gray:?}");
     for th in &THEMES {
         assert_eq!(theme(th.name), th);
         // The text ramp in order, each step well apart; selected text, hairlines and, on a
@@ -562,12 +565,12 @@ fn apps_and_their_context() {
     assert!(app.event(AppEvent::Click(hits[0].id), &mut cx));
     cx.close_self();
     cx.load_fallback_fonts();
-    cx.set_theme("Mono");
+    cx.set_theme("Mono Light");
     // Preferences: the AI model's shows in the status at once, others only leave.
     cx.pref(AI_MODEL, "m");
     cx.pref("dock", "left");
     let want = "[Open { name: \"about\", floating: false }, CloseSelf, LoadFallbackFonts, \
-        SetTheme(\"Mono\"), Pref { key: \"ai.model\", value: \"m\" }, \
+        SetTheme(\"Mono Light\"), Pref { key: \"ai.model\", value: \"m\" }, \
         Pref { key: \"dock\", value: \"left\" }]";
     assert_eq!(format!("{:?}", cx.take_requests()), want);
     assert!(cx.take_requests().is_empty() && cx.now_ms == 5.0);

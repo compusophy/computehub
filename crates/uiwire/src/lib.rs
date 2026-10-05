@@ -268,9 +268,9 @@ pub enum Node {
     /// `on` starts them at the top.
     Pages { id: u32, on: u8, labels: String },
     /// The desktop's themes as cards, each a miniature of its desktop over its name (the
-    /// current one ringed and checked in the accent): the default first, as many across as fit
-    /// [`THEME_MIN`] to [`THEME_MAX`] px wide, the rows even. Theme `i`, in the desktop's own
-    /// order, is the button `id + i`.
+    /// current one ringed in the accent, and checked where every name has room for the check):
+    /// the default first, as many across as fit [`THEME_MIN`] to [`THEME_MAX`] px wide, the rows
+    /// even. Theme `i`, in the desktop's own order, is the button `id + i`.
     Themes { id: u32 },
     /// The faces a profile can have (a ring holding no dots to nine, each named by them: `no
     /// dots`, `1 dot`, `2 dots`...), one row across the width where it fits, else in even rows,
@@ -335,8 +335,9 @@ pub fn screen(w: u16, h: u16) -> (u16, u16) {
     let cols = fit(w, CELL.0).min(1000);
     (cols, fit(h, CELL.1).min((SCREEN_CELLS / usize::from(cols)).min(500) as u16))
 }
-/// The narrowest and the widest card of [`Node::Themes`]: four fit across a Settings window.
-pub const THEME_MIN: u16 = 112;
+/// The narrowest and the widest card of [`Node::Themes`]: four fit across a Settings window with
+/// room to spare (it may be made 30 px narrower), and each theme's name fits the narrowest.
+pub const THEME_MIN: u16 = 104;
 pub const THEME_MAX: u16 = 216;
 
 /// The highest color of a [`Node::Grid`]'s square.

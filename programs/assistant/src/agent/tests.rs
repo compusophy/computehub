@@ -373,10 +373,10 @@ fn the_screen_reads_as_text_whose_refs_last_the_session() {
     let min =
         Win { id: 4, app: "terminal".into(), title: "Terminal".into(), state: 2, ..Win::default() };
     let (wins, apps) = (vec![page(2, true), page(3, false), min], vec!["settings".into()]);
-    let scene = Scene { w: 1440, h: 900, touch: false, theme: "Mono".into(), focus: 2, apps, wins };
+    let scene = Scene { w: 1440, h: 900, touch: false, theme: "Dawn".into(), focus: 2, apps, wins };
     let mut refs = Refs::default();
     let (text, elems) = render(&scene, &mut refs, 2);
-    let want = "Screen 1440x900, theme Mono, focused w2. You were opened over w2.\nApps: settings\n\
+    let want = "Screen 1440x900, theme Dawn, focused w2. You were opened over w2.\nApps: settings\n\
         w2 \"Settings\" (settings) 400x300 at 100,50, focused\n  \"Privacy\"\n  e1 tab \"Privacy\" selected\n  \
         e2 textbox placeholder \"Your name\" focused\n  e3 switch \"Send reports\" on\n  \"Reports go to compusophy.\"\n\
         w3 \"Other\" (settings) 400x300 at 100,50\n  e4 tab \"Privacy\" selected\n  e5 textbox placeholder \"Your name\" focused\n  \

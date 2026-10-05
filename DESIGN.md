@@ -358,11 +358,12 @@ one. Forked crates keep their Apache-2.0 license and note their origin.
   Light (its opposite: white windows over a pale gray, black ink and
   grays, a black accent, no light; a soft shadow and a white top edge as
   on Dawn). Settings shows them in a row, the default first and the rest
-  after it, around (Mono Light, Midnight, Dawn); narrower, two across,
-  the dark ones over each other. A theme is plain data: backdrop,
-  surfaces, glass, text ramp, one accent and the terminal's 16 colors;
-  nothing draws from a color constant. The choice is kept in
-  `localStorage` under `compusophy.theme`.
+  after it, around (Mono Light, Midnight, Dawn), the current one ringed
+  in the accent (and checked where every name has room for the check);
+  narrower, two across, the dark ones over each other. A theme is plain
+  data: backdrop, surfaces, glass, text ramp, one accent and the
+  terminal's 16 colors; nothing draws from a color constant. The choice
+  is kept in `localStorage` under `compusophy.theme`.
 
 ### Apps
 

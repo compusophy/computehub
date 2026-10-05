@@ -252,7 +252,7 @@ pub(crate) fn faces(ui: &mut Ui<'_>, id: u32, on: u8, (x, y, w): (f32, f32, f32)
             t.text_faint
         };
         ui.face(r, i, [ring, if lit { t.text } else { t.text_dim }]);
-        ui.hit(wid, r.inset(-FACE_GAP / 2.0), Sense::Click);
+        ui.hit(wid, ui.snapped(r.inset(-FACE_GAP / 2.0)), Sense::Click);
         let name = dots(i);
         let size = t.small().size;
         ui.list().note_text(r.x + r.w / 4.0, r.y + (r.h + size) / 2.0, size, r.w / 2.0, &name);
@@ -290,7 +290,9 @@ pub(crate) fn themes(ui: &mut Ui<'_>, id: u32, (x, y, w): (f32, f32, f32)) {
     }
 }
 
-/// Theme card `id`: `th`'s miniature desktop, `ph` tall, over its name.
+/// Theme card `id`: `th`'s miniature desktop, `ph` tall, over its name; when current, the check
+/// after it where every theme's name has room for one half an em from it (else the ring alone,
+/// so no card's check crowds its name, nor shows on one card and not on another).
 fn theme_card(ui: &mut Ui<'_>, id: WidgetId, r: RectF, th: &Theme, ph: f32) {
     let t = ui.theme();
     let current = t.name == th.name;
@@ -305,7 +307,11 @@ fn theme_card(ui: &mut Ui<'_>, id: WidgetId, r: RectF, th: &Theme, ph: f32) {
     let base = cap_base(ui, band, r.y + r.h - band, style);
     ui.text(r.x + INSET + 6.0, base, th.name, style);
     if current {
-        check(ui, r.x + r.w - INSET - 6.0, base);
+        let ts = ui.text_system();
+        let widest = THEMES.iter().map(|th| ts.measure(th.name, style)).fold(0.0, f32::max);
+        if widest + style.size / 2.0 + ts.measure(CHECK, style) <= r.w - 2.0 * (INSET + 6.0) {
+            check(ui, r.x + r.w - INSET - 6.0, base);
+        }
     }
     ui.hit(id, r, Sense::Click);
     ui.mark(id, sem::OPTION, if current { sem::SELECTED } else { 0 }, "");

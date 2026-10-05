@@ -771,7 +771,7 @@ fn settings_ends_its_appearance_with_the_faces_a_click_picks() {
     let at = |want: fn(&Node) -> bool| f.nodes.iter().position(want);
     let themes = at(|n| matches!(n, Node::Themes { .. }));
     let face = at(|n| matches!(n, Node::Faces { .. }));
-    assert!(themes < face && face == Some(f.nodes.len() - 2));
+    assert!(themes.is_some() && themes < face && face == Some(f.nodes.len() - 2));
     assert!(texts(&f.nodes).contains(&"Your face"));
     assert_eq!(faces(&w.last(&[told(2)])), Some(2));
     // A click picks one, which the desktop keeps; ours stands until its word changes.

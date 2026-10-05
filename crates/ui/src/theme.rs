@@ -170,10 +170,11 @@ const MONO_LIGHT: Theme = Theme {
     text: Rgba::hex(0x111111), text_dim: Rgba::hex(0x666666), text_faint: Rgba::hex(0x9e9e9e),
     accent: Rgba::hex(0x000000), accent_text: Rgba::hex(0xffffff), danger: Rgba::hex(0xd32f2f),
     shadow: rgba(0x000000, 60), selection: rgba(0x000000, 50),
-    // Muted inks that read on white; white and bright white are grays, as on Dawn.
+    // Muted inks that read on white; white and bright white are grays, as on Dawn. Bright black
+    // (a canvas's gray) sits between the text and its dim, apart from both and from silver.
     ansi: ansi([
         0x1f1f1f, 0xb3393b, 0x2c7047, 0x7d5c0f, 0x2f5d9e, 0x7c429e, 0x1d6d74, 0x6b6b6b, //
-        0x5c5c5c, 0x9c2c2f, 0x235e3b, 0x654a0b, 0x264e8a, 0x67348a, 0x165a61, 0x707070,
+        0x4d4d4d, 0x9c2c2f, 0x235e3b, 0x654a0b, 0x264e8a, 0x67348a, 0x165a61, 0x707070,
     ]),
     // Monochrome: flat white tiles, every glyph in text, no shadow.
     icon: IconStyle { ground: Rgba::hex(0xffffff), tile: [100, 100], ink: 100, shadow: 0 },
