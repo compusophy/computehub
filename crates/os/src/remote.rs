@@ -2,7 +2,10 @@
 //! drawn here by [`uiview`] in the frame's theme; the window's input goes back as uiwire events.
 //! The program starts at the first size ([`Event::Resize`]) with the roots `/`; until its first
 //! frame the window shows a note, or why it failed (a first frame that does not decode: the
-//! program is newer than the desktop). A frame's title is the window's and its requests are
+//! program is newer than the desktop), and holds what is typed in it: its keys and text (but
+//! the Terminal's, which its program hears), at most [`HELD`] bytes and nothing after, go as
+//! typed into the field that frame focuses (Enter an Input's Submit), else are dropped. A
+//! frame's title is the window's and its requests are
 //! honored (Size in the first only; Focus when the frame holds that Input, Code or Area; Feedback
 //! goes to the page; Watch, End, Pref (`theme` a theme), Reset, Tty and Input from the OS's own
 //! windows alone, Activity's and Settings' (its own `bin/system.wasm`) and the Terminal's (its
@@ -67,6 +70,8 @@ const OWN: &str = "bin/system.wasm";
 const STUDIO_SIZE: Option<(f32, f32)> = Some((880.0, 560.0));
 /// Shown in place of a first frame that does not decode.
 const NEWER: &str = "This program is newer than the desktop; reload the page";
+/// The most bytes of typing held for a first frame (a key counts one).
+pub const HELD: usize = 4 << 10;
 
 const fn icon(glyph: Glyph, hue: u32) -> AppIcon {
     AppIcon { glyph, hue: Rgba::hex(hue) }
@@ -153,8 +158,10 @@ pub struct Remote {
     told: Option<(u16, u16)>,
     closed: bool,
     last_key: Option<Key>,
-    /// Prompts from the everything bar that wait for the program to start.
+    /// Prompts from the everything bar that wait for the program to start, and what was typed
+    /// before its first frame, with its bytes ([`HELD`]).
     asks: Vec<String>,
+    held: (Vec<AppEvent>, usize),
     /// The content's corner as last drawn, and when (page ms); the timer, keys, taps and
     /// answers (busy).
     origin: (f32, f32),
@@ -184,6 +191,22 @@ impl Remote {
             Ok(pid) => self.pid = Some(pid),
             Err(e) => self.note = [&self.program, ": ", e].concat(),
         }
+    }
+
+    /// Whether the program has yet to draw, and has not failed: the window takes typing.
+    fn starting(&self) -> bool {
+        self.frame.is_none() && self.note.is_empty()
+    }
+
+    /// Holds a key or text typed while the program starts, for its first frame's field ([`HELD`]
+    /// bytes at most: past them, it and all after are dropped). Nothing to redraw.
+    fn hold(&mut self, ev: AppEvent) -> bool {
+        let (held, bytes) = &mut self.held;
+        *bytes = bytes.saturating_add(if let AppEvent::Text(s) = &ev { s.len() } else { 1 });
+        if *bytes <= HELD {
+            held.push(ev);
+        }
+        false
     }
 
     fn post(&mut self, ev: Event, cx: &mut Cx<'_>) {
@@ -299,6 +322,7 @@ impl Remote {
 
     /// Takes `frame` as the window's tree, keeping the text the user edits.
     fn take(&mut self, mut frame: Frame, cx: &mut Cx<'_>) {
+        let (held, _) = mem::take(&mut self.held);
         self.texts.adopt(&frame.nodes, &self.dirty);
         for r in mem::take(&mut frame.requests) {
             match r {
@@ -327,6 +351,11 @@ impl Remote {
         (self.frame, self.waiting) = (Some(frame), false);
         self.play.answered();
         self.flush(cx);
+        // What was typed while it started (held only then), into the field it focuses.
+        if self.texts.focus != 0 {
+            self.last_key = None;
+            held.into_iter().for_each(|ev| _ = self.event(ev, cx));
+        }
     }
 }
 
@@ -336,7 +365,7 @@ impl App for Remote {
     }
 
     fn wants_text_input(&self) -> bool {
-        self.texts.focus != 0 || self.tty.is_some()
+        self.texts.focus != 0 || self.tty.is_some() || self.starting()
     }
 
     fn preferred_size(&self) -> Option<(f32, f32)> {
@@ -423,6 +452,8 @@ impl App for Remote {
             {
                 apps::input(&ev).is_some_and(|ev| self.send(ev, cx))
             }
+            // Typed while the program starts: for the field its first frame focuses.
+            ev @ (AppEvent::Key { .. } | AppEvent::Text(_)) if self.starting() => self.hold(ev),
             AppEvent::Key { key, mods } => self.key(key, mods, cx),
             AppEvent::Text(s) => self.type_text(&s, last, cx),
             AppEvent::Wheel { x, y, dy } => {

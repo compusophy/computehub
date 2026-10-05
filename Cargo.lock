@@ -179,6 +179,7 @@ dependencies = [
  "compusophy-gfx",
  "compusophy-logon",
  "compusophy-platform",
+ "compusophy-report",
  "compusophy-shell",
  "compusophy-ui",
  "compusophy-uiview",
@@ -202,6 +203,15 @@ dependencies = [
 name = "compusophy-profiles"
 version = "0.1.0"
 dependencies = [
+ "compusophy-ui",
+]
+
+[[package]]
+name = "compusophy-report"
+version = "0.1.0"
+dependencies = [
+ "compusophy-platform",
+ "compusophy-profiles",
  "compusophy-ui",
 ]
 

@@ -119,6 +119,7 @@ frame: os → shell::draw → gfx::DrawList → platform::Renderer: one draw cal
 | `shell` | the desktop around `host`: chrome, keys, the overlay; wires the home screen to the pointer |
 | `platform` | the browser boundary: canvas, WebGL2, input, textarea, fetch, storage, cursor |
 | `os` | the wasm entry: fonts, VFS, the app registry, theme storage, event glue |
+| `report` | telemetry: notes of what the page saw, feedback and error reports to compusophy's inbox (`api/feedback.mjs`), the outbox that keeps each until it is taken, a panic's beacon |
 | `tools/serve` | dev-only static server for `dist/`, never shipped |
 
 Package names are `compusophy-<x>`; each crate's `[lib] name` is the short
@@ -446,6 +447,14 @@ one. Forked crates keep their Apache-2.0 license and note their origin.
   covers typing, dead keys, IME composition, paste and phone keyboards, so
   `os` leaves the key-downs that type unprevented. On phones a tap that
   releases on the focused window brings the keyboard back.
+- A program's window takes typing before its program has drawn: until
+  the first frame it wants text input (the textarea, and a phone's
+  keyboard, take it), and the keys and text typed there are held, 4 KiB
+  at most and nothing past that, then go as typed into the field that
+  frame focuses (Enter in an Input is its Submit); a first frame that
+  focuses none drops them. So opening Studio or the Assistant and typing
+  at once loses nothing. (The Terminal's console hears its keys from the
+  start.)
 - A finger's press into an app waits to be a tap (a finger that travels
   scrolls the window instead), but on a pad (`ui::Sense::Pad`: a canvas or
   grid an app plays) it presses at once and drags, as a mouse does: a

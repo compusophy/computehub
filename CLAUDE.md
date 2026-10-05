@@ -67,8 +67,8 @@ crates/      the OS (boot, kernel, worker); talks WASI and uiwire
   shell/     the desktop: window chrome, keys, overlay; wires host + home
   platform/  the browser boundary: canvas, WebGL2, input, textarea, fetch,
              frames on demand, localStorage, workers, beacon
-  os/        wasm entry: fonts, VFS, registry, prefs, events, Remote (a
-             program's window), ai, report, home (/home kept)
+  os/        wasm entry: fonts, VFS, registry, prefs, events, Remote
+             (program windows), ai, /home kept; report/: telemetry
   kernel/    deterministic: wire protocol, process table, consoles,
              jobs, file server (main), snap (/home), module
   wasi/      the kernel's worker half: WASI preview 1 Proc, fds, /dev

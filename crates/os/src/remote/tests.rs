@@ -120,9 +120,9 @@ fn names_open_studio_and_the_first_size_starts_it() {
     assert_eq!(got, [want(0, true), want(1, true), want(2, false), want(4, false)]);
     assert_eq!(sys("activity"), want(5, true));
     assert!(SYSTEM[2].2.glyph == Glyph::Folder && open("system").is_none());
-    // Before a frame: a still note, the title its own; no process yet.
+    // Before a frame: a still note, the title its own; no process yet; it takes typing.
     let mut s = Sys::new(false);
-    assert!(!s.r.wants_text_input() && s.k.procs().is_empty());
+    assert!(s.r.wants_text_input() && s.k.procs().is_empty());
     let (list, hits) = s.draw();
     assert!(hits.is_empty() && !list.is_empty() && s.r.title().is_empty());
     // The first size starts it; once the worker is ready, Start carries the marker's URL.
@@ -164,6 +164,7 @@ fn names_open_studio_and_the_first_size_starts_it() {
     let mut s = Sys::new(false);
     assert!(s.fs.remove(STUDIO, false).is_ok() && s.ev(AppEvent::Resized { w: 1.0, h: 1.0 }));
     assert_eq!((s.r.note.as_str(), s.k.procs().len()), ("/bin/studio: not found", 0));
+    assert!(!s.r.wants_text_input());
     let mut s = Sys::new(true);
     s.k.message(&mut s.fs, 2, &wire::Msg::ConsWrite { data: b"panicked\n" }.encode());
     s.k.message(&mut s.fs, 2, &wire::Msg::Exit { status: 101 }.encode());
@@ -308,6 +309,41 @@ fn asks_wait_for_the_start_and_frames_move_the_keyboard() {
     ["x", "y"].into_iter().for_each(|t| _ = s.ev(text(t)));
     assert!(!s.ev(AppEvent::Ask("more".into())));
     assert_eq!(s.events(), [change(5, 1, "x"), change(5, 2, "xy"), ask("more")]);
+}
+
+#[test]
+fn typing_before_the_first_frame_goes_into_the_field_it_focuses() {
+    // Held while the program starts, chords too; its first frame's Input takes them as typed,
+    // Enter its Submit; the next frame, nothing.
+    let mut s = Sys::new(true);
+    let typed = [text("sn"), key(Key::Backspace, ""), text("nake"), key(Key::Enter, "c")];
+    let mut typed = typed.into_iter().chain([key(Key::Enter, "")]);
+    assert!(typed.all(|ev| !s.ev(ev)) && s.r.wants_text_input() && s.events().is_empty());
+    assert!(s.show(vec![input(5, "")], vec![Request::Focus { id: 5 }]));
+    let run = Event::Key { id: 5, key: uiwire::Key::Enter, mods: mods::CTRL, ch: '\0' };
+    let submit = Event::Submit { id: 5 };
+    assert_eq!(s.events(), [change(5, 1, "sn"), change(5, 3, "snake"), run, submit]);
+    s.show(vec![input(5, "")], vec![Request::Focus { id: 5 }]);
+    assert!(s.events().is_empty() && s.r.texts.inputs[0].1 == "snake");
+    // A first frame that focuses no field drops it, and the window takes typing no more.
+    let mut s = Sys::new(true);
+    s.ev(text("lost"));
+    assert!(s.show(vec![input(5, "")], vec![]) && !s.r.wants_text_input());
+    s.show(vec![input(5, "")], vec![Request::Focus { id: 5 }]);
+    assert!(s.events().is_empty() && s.r.texts.inputs[0].1.is_empty());
+    // At most HELD bytes, and nothing after them: no Enter sends half a paste.
+    let mut s = Sys::new(true);
+    let full = "a".repeat(HELD);
+    [text(&full), text("b"), key(Key::Enter, "")].into_iter().for_each(|ev| _ = s.ev(ev));
+    s.show(vec![input(5, "")], vec![Request::Focus { id: 5 }]);
+    assert_eq!(s.events(), [change(5, 1, &full)]);
+    // The Terminal's console hears its keys from the start: none are held.
+    let mut s = Sys::new(false);
+    let term = Remote::new(TERMINAL, vec!["terminal".into()], &Ai::default());
+    s.r = Remote { own: Some("bin/terminal.wasm"), tty: Some(Default::default()), ..term };
+    s.ev(AppEvent::Resized { w: 1.0, h: 1.0 });
+    let enter = Event::Key { id: 0, key: uiwire::Key::Enter, mods: 0, ch: '\0' };
+    assert!(!s.ev(key(Key::Enter, "")) && s.events().ends_with(&[enter]));
 }
 
 #[test]

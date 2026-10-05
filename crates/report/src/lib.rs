@@ -15,8 +15,10 @@
 //!   A 400 or 413 drops it (it will never go); anything else (503 when the inbox is not set up,
 //!   429, no network) keeps it. While reports are off, only feedback waits there.
 
-use logon::own;
+#![forbid(unsafe_code)]
+
 use platform::{Ctl, Device};
+use profiles::own;
 use std::cell::RefCell;
 
 /// The inbox, and the `localStorage` keys of the outbox (reports as JSON, a line each) and of
@@ -460,7 +462,7 @@ pub fn install() {
         let text = [said, "\nat ", &at].concat();
         note(&["panic ", &text].concat());
         // The signed-in profile's consent; before a sign-in, every listed profile's.
-        if logon::quiet(&|k| Ctl::default().storage_get(k)) {
+        if profiles::quiet(&|k| Ctl::default().storage_get(k)) {
             return;
         }
         let ctx = Context { device: platform::device(), ..Context::default() };
