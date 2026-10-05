@@ -73,7 +73,7 @@ crates/      the OS (boot, kernel, worker); talks WASI and uiwire
              server (main), snap (/home), module
   wasi/      the kernel's worker half: WASI preview 1 Proc, fds, /dev
   cpu/       the program worker (cdylib; dist/cpu/): loader, WASI imports
-programs/    wasm32-wasip1 programs (dist/bin/) and their app language
+programs/    wasm32-wasip1 programs (dist/bin/), their app language, dev crates
   fuel/ lang/ forks of litelite (budgets, parse kit)
   applang-syntax/ applang/ tier 0 app language: front end, runtime
   studio/    make apps by describing them; runs `.app` files
@@ -85,7 +85,7 @@ programs/    wasm32-wasip1 programs (dist/bin/) and their app language
   terminal/  the Terminal; vt/ term/: its parser, screen model
   sh/ agent/ shell: editor, commands, jobs; AI coder
   toolbox/   test programs, one binary
-  evals/ makes/  the evals, Suite 1 (evals/README.md)
+  evals/ makes/  dev: evals, Suite 1 (evals/README.md)
 assets/fonts/  the fonts (see Fonts below)
 api/           server functions (Vercel, Node): ai.mjs, feedback.mjs
 tools/serve/   dev-only static server for dist/; mocks /api/*
@@ -118,7 +118,7 @@ bash scripts/budget.sh
 cargo run -p serve --release -- dist 8080   # preview; --plain: no COOP/COEP
 ```
 
-`?debug` marks each frame (`performance.mark`); idle adds none but the
+`?debug` marks each frame (`performance.mark("frame")`); idle, only the
 grain's.
 
 Fonts, each group with its budget: **boot** (Inter Regular, in `os`),

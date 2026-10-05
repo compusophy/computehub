@@ -110,8 +110,9 @@ wasm-bindgen = "=0.2.121"
 js-sys = "0.3"
 web-sys = "0.3"
 
-# tiny's kernels are loops over floats, vectorized only at opt-level 3 (6 times faster than at
-# "z"): so in every profile, tests too, which train small models. It ships in no build yet.
+# tiny's kernels are loops over floats, vectorized only at opt-level 3 (a training step of the
+# shape trained, `lab bench`, takes about half the time it does at "z"): so in every profile,
+# tests too, which train small models. It ships in no build yet.
 [profile.dev.package.compusophy-tiny]
 opt-level = 3
 

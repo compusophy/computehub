@@ -51,8 +51,9 @@ install, and no server runs your apps: the tab is the machine.
 | Path | What it holds |
 |---|---|
 | `crates/` | The OS: the desktop, window manager, widgets, text, kernel, program worker |
-| `programs/` | What runs in it: Studio, the Assistant, the system apps, Activity, `sh`, `agent`, applang; the evals; `tiny`, a transformer, and its lab |
+| `programs/` | What runs in it: Studio, the Assistant, the system apps, Activity, `sh`, `agent`, applang. Dev only, never shipped: the evals' suite and harness, and `tiny`, a transformer, with its lab |
 | `evals/` | The evals' records and replays, and how to run them and read a gain |
+| `tools/` | Dev only: the static server for `dist/`, and the eval runner |
 | `api/` | The server functions (Vercel, Node) |
 | `web/` | The page: a canvas and a one-line bootstrap |
 | `scripts/` | Build, budget, caps and deploy |

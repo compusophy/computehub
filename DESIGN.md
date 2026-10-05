@@ -438,11 +438,13 @@ one. Forked crates keep their Apache-2.0 license and note their origin.
   byte, and one it asked as it ended is never sent. It hears no Config, so
   the hub puts the model chosen in Settings first in every request, and a
   body's own (`-m`), after it, wins: the endpoint's JSON.parse keeps a key's
-  last value. In a Terminal the Assistant put input into (`Cx::driven`, the
-  window that may not reset the device), each AI request ends at once,
-  refused, so no AI drives the agent past the person's yes: one it starts
-  there (`agent -y`) does nothing, and one whose question it answers stops
-  at its next request. A request fits the free AI (64 messages, 96 KiB): old
+  last value. `-m` takes only a model the endpoint offers (`agent::MODELS`,
+  which a test reads from `api/ai.mjs`): it answers any other with its first,
+  which would replace the person's choice unsaid. In a Terminal the
+  Assistant put input into (`Cx::driven`, the window that may not reset the
+  device), each AI request ends at once, refused, so no AI drives the agent
+  past the person's yes: one it starts there (`agent -y`) does nothing, and
+  one whose question it answers stops at its next request. A request fits the free AI (64 messages, 96 KiB): old
   results fold to their first line, then old tasks and steps go. A task
   makes 20 model calls at most, as the Assistant's (E0942; `go on` goes on):
   with its lesson and a merge, 22 requests, under the 30 a minute the free
@@ -749,7 +751,9 @@ Newcombe's, cost per pass and the tasks that flipped.
 - **Local models, from applang up.** A model in the tab loads on first use,
   is kept in OPFS and infers in a worker, on the CPU first and WebGPU later;
   never in the boot budget. The road: a tiny applang model; bigger ones on
-  more verified data (the evals' generated programs: generate, check, keep);
+  more verified data (the evals' generated programs: generate, check, keep;
+  they sit JSON-escaped in `evals/replays/`, which lab does not read, so
+  an export of the passing ones to a folder lab searches comes first);
   open small models fine-tuned; models over opcodes. The first step is built,
   in plain Rust: `tiny`, a decoder-only transformer (byte-level BPE, a
   backward pass written by hand and checked against finite differences,
@@ -757,9 +761,11 @@ Newcombe's, cost per pass and the tasks that flipped.
   `lab`, a dev tool that makes the corpus (each applang program in the repo
   that compiles, once, content-addressed: 100 found, a dozen of them real
   apps and the rest test snippets; 570 with variants, nearly all renames, so
-  90 shapes; held out by shape; `programs/lab/data/manifest.tsv`), trains
-  tiny on it and judges what it writes with applang's own checker and smoke
-  test (`results.md` there). Measured 2026-10-05: 990k parameters, 600 steps
+  90 shapes; held out by shape; `programs/lab/data/manifest.tsv`, which a
+  test holds to the repo), trains tiny on it and judges what it writes with
+  applang's own checker and smoke test (`results.md` there). The evals'
+  answer keys (`programs/makes/refs`) never join it: a model is measured on
+  them, not trained on them. Measured 2026-10-05: 990k parameters, 600 steps
   of 8 x 1024 tokens in 37 minutes on 8 threads. Of 100 programs prompted by
   10 app headers, none of tiny's compiles, at any temperature tried, from its
   last weights or from those with the lowest held-out loss; it writes real
