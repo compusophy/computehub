@@ -1,0 +1,23 @@
+[package]
+name = "compusophy-lab"
+description = "compusophyOS's model lab, a dev tool that never ships: the corpus of verified applang programs (every one in the repo that compiles, deduplicated, content-addressed, augmented), an n-gram baseline, and the commands that train tiny on it and measure what it writes."
+publish = false
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[lib]
+name = "lab"
+
+[[bin]]
+name = "lab"
+path = "src/main.rs"
+
+[dependencies]
+compusophy-applang.workspace = true
+compusophy-applang-syntax.workspace = true
+compusophy-coder.workspace = true
+compusophy-tiny.workspace = true

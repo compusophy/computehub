@@ -16,7 +16,7 @@ AI for all); later pooled compute across tabs and devices. Author handle: compus
 1. **Rust only.** No hand-written JS beyond two one-line bootstraps
    (web/index.html, web/worker.js) and `api/*.mjs`, the server functions
    (`node:` modules only): what cannot live in a tab, the free AI's
-   credentials (`/api/ai`) and the feedback inbox (`/api/feedback`).
+   credentials and the feedback inbox.
 2. **Zero external dependencies.** Only `compusophy-*` workspace siblings.
    Exception: the web crates `platform`, `os` and `cpu` may take
    wasm-bindgen (pinned), js-sys, web-sys. Build-time tools never ship.
@@ -85,10 +85,11 @@ programs/    wasm32-wasip1 programs (dist/bin/) and their app language
   terminal/  the Terminal; vt/ term/: its parser, screen model
   sh/        the shell: line editor, commands, jobs
   toolbox/   test programs, one binary
+  tiny/ lab/ a transformer in Rust; lab: corpus, training, evals (dev)
 assets/fonts/  the fonts (see Fonts below)
 api/           server functions (Vercel, Node): ai.mjs, feedback.mjs
 tools/serve/   dev-only static server for dist/; mocks /api/*
-web/index.html the page: <canvas id="os"> + the one-line module bootstrap
+web/index.html the page: <canvas id="os"> + its one-line bootstrap
 web/worker.js  the program worker's one-line bootstrap
 scripts/       caps.sh, budget.sh, build-web.sh, deploy.sh (`prod`: production)
 ```
@@ -116,13 +117,13 @@ bash scripts/budget.sh
 cargo run -p serve --release -- dist 8080   # preview; --plain: no COOP/COEP
 ```
 
-`?debug` in the URL marks each frame (`performance.mark("frame")`); idle
-adds none but the grain's.
+`?debug` marks each frame (`performance.mark("frame")`); idle adds none
+but the grain's.
 
-Fonts, each group with its budget: **boot** (Inter Regular, in `os`),
+Fonts by budget group: **boot** (Inter Regular, in `os`),
 **deferred** (`fonts/deferred/*`, after the first frame; until then bold is
 Regular, mono cells empty), **lazy** (`fonts/symbols-*.ttf`, when a terminal
-first opens). Subsets and OFL texts: `assets/fonts/README.md`.
+first opens). Subsets, OFL: `assets/fonts/README.md`.
 
 ## Safety (the owner runs unattended; never trigger an approval prompt)
 

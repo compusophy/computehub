@@ -1,5 +1,7 @@
 target/
 dist/
+# The model lab's checkpoints, logs and samples (programs/lab/src/main.rs).
+programs/lab/out/
 *.swp
 .DS_Store
 
