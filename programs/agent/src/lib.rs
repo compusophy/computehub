@@ -454,9 +454,13 @@ impl Agent {
         text
     }
 
-    /// `path` from the working directory (`~` is home), or why it is no path.
+    /// `path` from the working directory (`~` is home), or why it is no path. One with a control
+    /// character is none: a program's error on stderr, which reaches the console as it is, could
+    /// show it later as an escape (an `OSC 1729` ask of the desktop).
     pub fn path(&self, path: &str) -> Result<String, String> {
-        Vfs::normalize(&self.cwd, path).map_err(|_| ["invalid path: ", path].concat())
+        let bad = path.chars().any(char::is_control);
+        let ok = Vfs::normalize(&self.cwd, path).ok().filter(|_| !bad);
+        ok.ok_or_else(|| ["invalid path: ", &safe(path)].concat())
     }
 
     /// Whether the person lets it do `what`, of kind `kind` ([`WRITE`], [`RUN`], [`RISK`]): at

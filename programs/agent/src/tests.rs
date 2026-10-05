@@ -628,6 +628,10 @@ fn what_the_model_writes_shows_as_text_and_only_a_line_let_run_asks_the_desktop(
             ("write_file", &["{\"path\":\"/tmp/x\",\"content\":", &quote(esc), "}"].concat()),
             ("read_file", r#"{"path":"/dev/events"}"#),
             ("write_file", r#"{"path":"/dev/job","content":"x"}"#),
+            (
+                "write_file",
+                &["{\"path\":", &quote(&["/tmp/a", esc].concat()), ",\"content\":\"\"}"].concat(),
+            ),
         ]),
         says(&["Done", esc, "\r\n"].concat()),
     ]);
@@ -640,6 +644,9 @@ fn what_the_model_writes_shows_as_text_and_only_a_line_let_run_asks_the_desktop(
     assert!(result(&a, 0).starts_with("Error: one command line at a time"));
     assert!(result(&a, 2).starts_with("Error: /dev/events: a device"));
     assert!(result(&a, 3).starts_with("Error: /dev/job: a device"));
+    // No file it makes has a name a program's error (on stderr, the console) could show as one.
+    assert!(result(&a, 4).starts_with("Error: invalid path: /tmp/a^[]1729"));
+    assert_eq!(w.fs.list("/tmp").map(|l| l.len()), Ok(1), "x alone");
     // A file whose name asks: listing it runs unasked, so its ask goes nowhere.
     let mut w = fake(&[call("shell", r#"{"command":"ls"}"#), says("ok")]);
     w.fs.write(&["/tmp/a", esc].concat(), b"").unwrap();

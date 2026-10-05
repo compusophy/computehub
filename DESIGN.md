@@ -422,7 +422,9 @@ one. Forked crates keep their Apache-2.0 license and note their origin.
   streams in as it comes, and each tool shows a line of what it does and
   one of how it went; what the
   model wrote shows with its controls in caret notation (`^[`), so none of
-  it styles the screen or asks the desktop (`OSC 1729`), and the shell's
+  it styles the screen or asks the desktop (`OSC 1729`); no path it names
+  holds a control (a program's error on stderr reaches the console as it
+  is, and could show one), and the shell's
   asks reach the Terminal only from a line the person let run. It reaches
   the AI as a window's program does, a `Request::Ai` written to /dev/draw
   and answered on /dev/events: the Terminal's window passes on the AI
