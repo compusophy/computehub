@@ -1,6 +1,8 @@
-//! Augmentation that keeps a program's meaning: the names it declares renamed consistently (a
-//! one-to-one map, so no two meet), and its state declarations reordered. Comments and strings
-//! stay. The corpus compiles every result again and keeps only those that do.
+//! Augmentation. Two kinds keep a program's meaning: the names it declares renamed consistently
+//! (a one-to-one map, so no two meet), and its state declarations reordered. Two change it, so
+//! the corpus holds programs that are not renamed copies: a line dropped, and numbers changed.
+//! Comments and strings stay. The corpus compiles every result again and keeps only those that
+//! do.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -129,4 +131,65 @@ pub fn shuffle_states(src: &str, rng: &mut Rng) -> Option<String> {
     }
     out.extend(lines[first + run..].iter().copied());
     Some(out)
+}
+
+/// `src` without one of its lines drawn by `rng`, among those that are code (not blank, not
+/// only a comment) and whose brackets close on the line: a widget, a statement, a state, a
+/// one-line function. None if there is no such line, or only one line of code.
+pub fn drop_line(src: &str, rng: &mut Rng) -> Option<String> {
+    let lines: Vec<&str> = src.split_inclusive('\n').collect();
+    let code = |l: &str| {
+        let t = l.trim();
+        !t.is_empty() && !t.starts_with("//") && !t.starts_with("/*")
+    };
+    let closed = |l: &str| {
+        let mut depth = 0i32;
+        for c in l.split("//").next().unwrap_or("").bytes() {
+            depth += match c {
+                b'(' | b'[' | b'{' => 1,
+                b')' | b']' | b'}' => -1,
+                _ => 0,
+            };
+            if depth < 0 {
+                return false;
+            }
+        }
+        depth == 0
+    };
+    let can: Vec<usize> =
+        (0..lines.len()).filter(|&i| code(lines[i]) && closed(lines[i])).collect();
+    if can.is_empty() || lines.iter().filter(|l| code(l)).count() < 2 {
+        return None;
+    }
+    let drop = can[rng.below(can.len())];
+    Some(lines.iter().enumerate().filter(|&(i, _)| i != drop).map(|(_, l)| *l).collect())
+}
+
+/// `src` with some of its numbers changed, each by a third's chance, to one near it drawn by
+/// `rng` (one more or less, double or half). None if none changed.
+pub fn vary_numbers(src: &str, rng: &mut Rng) -> Option<String> {
+    let mut out = String::with_capacity(src.len());
+    let (mut at, mut changed) = (0, false);
+    for (span, class) in highlight(src) {
+        let word = &src[span.start..span.end];
+        let n = word.parse::<i64>().ok().filter(|_| class == Class::Number && rng.below(3) == 0);
+        out.push_str(&src[at..span.start]);
+        // One more than the largest wraps to the least, which the compiler then judges.
+        let to = n.map(|n| match rng.below(4) {
+            0 => n.wrapping_add(1),
+            1 => (n - 1).max(0),
+            2 => n.saturating_mul(2).min(1 << 20),
+            _ => n / 2,
+        });
+        match to {
+            Some(m) if m.to_string() != word => {
+                out += &m.to_string();
+                changed = true;
+            }
+            _ => out.push_str(word),
+        }
+        at = span.end;
+    }
+    out.push_str(&src[at..]);
+    changed.then_some(out)
 }
