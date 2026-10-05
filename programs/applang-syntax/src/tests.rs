@@ -256,7 +256,8 @@ fn highlight_classes_every_token_and_goes_on_past_errors() {
 #[test]
 fn canvases_draw_only_where_a_canvas_calls_and_fail_coded() {
     let scene = "fn scene() { rect(0, 0, 9, 9, 1); circle(4, 4, 2, 3); ring(4, 4, 3, 1, 4); \
-                 line(0, 0, 8, 8, 1, 9); text(\"hi\", 4, 4, 3, 11); sprite([\"1.1\"], 0, 0, 2); }";
+                 line(0, 0, 8, 8, 1, 9); text(\"hi\", 4, 4, 3, 11); sprite([\"1.1\"], 0, 0, 2); \
+                 let b = [-1; 4]; b[1] = 11; pixels(b, 0, 0, 2, 1); }";
     let ok = [
         format!("{scene} canvas 9, 9, scene();"),
         format!("state n = 0; {scene} canvas 9, 9, scene() {{ n = x + y * 9; }}"),
@@ -269,6 +270,8 @@ fn canvases_draw_only_where_a_canvas_calls_and_fail_coded() {
         "fn line(a: int) -> int { return a + cos(0); } fn text() { } label line(1); \
          button \"b\" { text(); }"
             .into(),
+        // Pixels came later still: beside a canvas, its own `pixels` is its own.
+        "fn pixels(n: int) { rect(n, 0, 1, 1, 1); } fn s() { pixels(2); } canvas 9, 9, s();".into(),
         // In a row, a loop and an if; drawing a shape alone.
         "fn s(i: int) { rect(i, 0, 1, 1, 1); } for i in 0..3 { row { if i > 0 { canvas 3, 1, \
          s(i) { } } } } canvas 1, 1, rect(0, 0, 1, 1, 2);"
@@ -298,6 +301,9 @@ fn canvases_draw_only_where_a_canvas_calls_and_fail_coded() {
         ("fn s() { rect(0, 0, 1, 1); } canvas 9, 9, s();", ARITY),
         ("fn s() { text([1], 0, 0, 1, 1); } canvas 9, 9, s();", TYPE_MISMATCH),
         ("fn s() { sprite(1, 0, 0, 1); } canvas 9, 9, s();", TYPE_MISMATCH),
+        ("fn s() { pixels([\"1\"], 0, 0, 1, 1); } canvas 9, 9, s();", TYPE_MISMATCH),
+        ("fn s() { pixels([1], 0, 0, 1); } canvas 9, 9, s();", ARITY),
+        ("button \"b\" { pixels([1], 0, 0, 1, 1); }", DRAW_OUTSIDE),
         ("fn s() { rect(0, 0, 1, 1, \"red\"); } canvas 9, 9, s();", TYPE_MISMATCH),
         ("fn s() { } canvas \"9\", 9, s();", TYPE_MISMATCH),
         ("fn s() { } label sin(true);", TYPE_MISMATCH),

@@ -15,15 +15,21 @@ name = "assistant"
 name = "assistant"
 path = "src/main.rs"
 
+# Its chats, file tools and wire; and, for their ids, the apps whose presses send off the device
+# or end a program: Activity's End, Feedback's Send (the system program's), Studio's (the coder's).
 [dependencies]
+compusophy-activity.workspace = true
+compusophy-chats.workspace = true
 compusophy-coder.workspace = true
+compusophy-files.workspace = true
+compusophy-system.workspace = true
 compusophy-uiwire.workspace = true
 
 # A real desktop for the agent to drive in tests: the host, Settings (the system program, drawn
-# as the desktop draws it) and its toolkit.
+# as the desktop draws it) and its toolkit, and the draw list the pill is drawn into.
 [dev-dependencies]
+compusophy-gfx.workspace = true
 compusophy-host.workspace = true
-compusophy-system.workspace = true
 compusophy-uiview.workspace = true
 compusophy-ui.workspace = true
 compusophy-wm.workspace = true

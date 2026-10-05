@@ -68,11 +68,13 @@ pub struct Limits {
     pub max_items: usize,
     /// Ink one render draws on its canvases ([`Draw::ink`]).
     pub max_ink: usize,
+    /// Cells one render's pixels hold, on all its canvases.
+    pub max_pixels: usize,
 }
 
 impl Default for Limits {
     /// 1,000,000 steps an event and 200,000 a render, 4 KiB strings, 256 KiB of state and of
-    /// render text, 4,096 items a list and 4,096 ink a render.
+    /// render text, 4,096 items a list, and 4,096 ink and 16,384 cells of pixels a render.
     fn default() -> Self {
         Limits {
             fuel: 1_000_000,
@@ -82,6 +84,7 @@ impl Default for Limits {
             max_render_bytes: 256 * 1024,
             max_items: applang_syntax::ast::MAX_ITEMS,
             max_ink: 4096,
+            max_pixels: 16_384,
         }
     }
 }
@@ -102,7 +105,7 @@ pub enum Node {
     Canvas { id: Option<u32>, w: u16, h: u16, draws: Vec<Draw> },
 }
 
-/// What a [`Draw`] draws: the card's six shapes.
+/// What a [`Draw`] draws: the card's seven shapes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Shape {
     Rect,
@@ -111,12 +114,14 @@ pub enum Shape {
     Line,
     Text,
     Sprite,
+    Pixels,
 }
 
 /// One shape a canvas's call drew, in its units: `at` the numbers its call gave, as the card
-/// lists them (x, y, then w and h, r, width, size or side; the rest 0), its `color` (0 to 11; 0 for
-/// a sprite), a text's text or a sprite's rows (a line each). As uiwire's Draw, which Studio
-/// sends it as.
+/// lists them (x, y, then w and h, r, width, size, side, or pixels' w and side; the rest 0), its
+/// `color` (0 to 11; 0 for a sprite and pixels), a text's text, a sprite's rows (a line each) or
+/// pixels' cells (a char each, row by row: `0` to `9`, `a` and `b` the colors, `.` none). As
+/// uiwire's Draw, which Studio sends it as.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Draw {
     pub shape: Shape,
@@ -126,12 +131,18 @@ pub struct Draw {
 }
 
 impl Draw {
-    /// Its ink: 1, and 1 more for each char of a text and each painted square (digit) of a
-    /// sprite.
+    /// Its ink: 1, and 1 more for each char of a text, each painted square (digit) of a sprite
+    /// and each run of one color in a row of pixels.
     pub fn ink(&self) -> usize {
         1 + match self.shape {
             Shape::Text => self.text.chars().count(),
             Shape::Sprite => self.text.bytes().filter(u8::is_ascii_digit).count(),
+            // A painted cell (not `.`) that starts its row or follows another color.
+            Shape::Pixels => {
+                let (c, w) = (self.text.as_bytes(), usize::try_from(self.at[2]).unwrap_or(0));
+                let new = |i: usize| i % w.max(1) == 0 || c[i - 1] != c[i];
+                (0..c.len()).filter(|&i| c[i] != b'.' && new(i)).count()
+            }
             _ => 0,
         }
     }
@@ -430,8 +441,8 @@ fn dispatch(
 }
 
 /// Example programs as a reply gives them, for a prompt to show (each is tested: they compile
-/// and pass [`smoke`]): what was asked, then the program. A grid's game, an app of widgets and
-/// a canvas's game.
+/// and pass [`smoke`]): what was asked, then the program. A game on a canvas's pixels, an app of
+/// widgets and a game of a canvas's shapes.
 pub const SHOTS: [(&str, &str); 3] = [
     ("make snake", include_str!("../shots/snake.app")),
     ("make a todo list I can check off", include_str!("../shots/todo.app")),
@@ -476,18 +487,25 @@ and y down from 0, 0 at the top left):
   canvas 160, 120, scene();           -- scene() draws it anew whenever the app shows
   canvas 160, 120, scene() { STMTS }  -- a tap or drag on it runs STMTS; x, y = where, in its
                                          units (so no state or loop variable is called x or y)
-DRAWING (only in the function a canvas calls and the functions it calls, which change nothing;
-later shapes cover earlier ones; the thing first, then where, then how big, the color last):
+DRAWING (only in the function a canvas calls and the functions it calls, which change nothing
+but their lets; later shapes cover earlier ones; the thing first, then where, then how big, the
+color last):
   fn scene() { rect(0, 0, 160, 8, 4); circle(bx, by, 3, 3); text(score, 80, 4, 6, 9); }
   rect(x, y, w, h, color);   circle(x, y, r, color);   ring(x, y, r, width, color);
   line(x1, y1, x2, y2, width, color);   text(VALUE, x, y, size, color);  -- one line, centered
   sprite([\"..3..\", \".333.\", \"33333\"], x, y, side);  -- each char a square side units wide:
                                                        0-9 that color, any other shows through
+  pixels(board, x, y, 10, side);  -- a list of ints as squares side units wide, 10 a row (1 to
+                                     64, and 64 rows at most): -1 shows through, 0-11 that
+                                     color. Square i is column i % 10, row i / 10; drawn at 0, 0,
+                                     a tap at x, y is square (y / side) * 10 + x / side. A board
+                                     made from other states: let b = [-1; 200]; b[at(x, y)] = 2;
   colors: 0 the canvas, 1 red 2 green 3 yellow 4 blue 5 purple 6 cyan 7 silver 8 gray
           9 ink 10 dim ink 11 accent
-  A grid suits boards of squares and painting; a canvas things that move freely, marks, hands,
-  pictures and charts. every 33 is about 30 steps a second. A phone has no keys: let a tap or
-  a drag on the canvas steer (follow x).
+  Draw what is seen on a canvas: games, boards, drawing, animation, clocks, charts. Pixels suit
+  boards of squares and painting; the other shapes things that move freely, marks, hands and
+  pictures. every 33 is about 30 steps a second. A phone has no keys: let a tap or a drag on
+  the canvas steer (follow x).
 STATEMENTS (each ends with ; or its { } block; let works in any block):
   let x = EXPR;   x = EXPR;   x += EXPR;   xs[i] = EXPR;   f(a, b);   return EXPR;   return;
   if EXPR { } else if EXPR { } else { }   for i in A..B { }   repeat N { }
@@ -500,9 +518,11 @@ EXPRESSIONS: 42  true  \"text\" (escapes \\\" \\\\ \\n)  names  xs[i]  f(a, b)  
   No ?: operator: write a function, fn mark(on: bool) -> string { if on { return \"x\"; } return \"\"; }
 FAULTS: overflow, divide by zero, an index outside its list, a list past 4,096 items, a grid
 square past 8, a canvas color past 11, a negative size, a shape's number past 32,767 either
-way, more than 4,096 shapes, sprite squares and text characters in one render, past 1,000,000
-steps in one event or 200,000 in one render. There is no while, no recursion, no float, no
-clock to read: time comes only from every.";
+way, more than 4,096 shapes, sprite squares, pixel runs (a row's squares of one color side by
+side) and text characters in one render, pixels not whole rows of 1 to 64 or a square past -1
+to 11, more than 16,384 pixels in one render, past 1,000,000 steps in one event or 200,000 in
+one render. There is no while, no recursion, no float, no clock to read: time comes only from
+every.";
 
 /// The rule a diagnostic's code says was broken, in a line, for a model fixing its program:
 /// every code a program can earn; "" for the host's own (a bad event).
@@ -551,8 +571,13 @@ pub fn rule(code: u16) -> &'static str {
         codes::BAD_DRAW => {
             "a canvas is 1 to 1,024 units a side; colors are 0 to 11, sizes never negative, a \
              text one line, every number of a shape within -32,768 to 32,767 (drop what flies \
-             far off), and one render draws at most 4,096 shapes, sprite squares and text \
-             characters."
+             far off), and one render draws at most 4,096 shapes, sprite squares, pixel runs and \
+             text characters."
+        }
+        codes::BAD_PIXELS => {
+            "pixels(cells, x, y, w, side) takes 1 to 64 cells a row (w) and len(cells) a whole \
+             number of rows, 64 at most; each cell is -1 (none) or a color 0 to 11; one render \
+             draws at most 16,384."
         }
         codes::OFF_CANVAS => {
             "draw inside the canvas: x from 0 to its width - 1 and y from 0 to its height - 1, \
@@ -571,8 +596,8 @@ pub fn rule(code: u16) -> &'static str {
         codes::TYPE_MISMATCH => {
             "types never convert: compare like with like, conditions are bool, input binds a \
              string state, + with a string joins text, lists are not shown or compared whole, \
-             text shows an int, bool or string, sprite takes a list of strings, and only a \
-             function with -> TYPE returns a value."
+             text shows an int, bool or string, sprite takes a list of strings and pixels a \
+             list of ints, and only a function with -> TYPE returns a value."
         }
         codes::CALL_BELOW => {
             "define each function above every function that calls it; a function never calls \
@@ -587,9 +612,9 @@ pub fn rule(code: u16) -> &'static str {
         }
         codes::ARITY => "call each function with exactly its parameters.",
         codes::DRAW_OUTSIDE => {
-            "rect, circle, ring, line, text and sprite draw only in the function a canvas calls \
-             (canvas 160, 120, scene();) and the functions it calls; handlers change state, and \
-             the canvas shows it."
+            "rect, circle, ring, line, text, sprite and pixels draw only in the function a \
+             canvas calls (canvas 160, 120, scene();) and the functions it calls; handlers \
+             change state, and the canvas shows it."
         }
         _ => "",
     }

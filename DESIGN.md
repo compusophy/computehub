@@ -111,7 +111,9 @@ frame: os → shell::draw → gfx::DrawList → platform::Renderer: one draw cal
 | `activity` | Activity, the resource monitor: graphs of CPU, memory, frames and the AI over the last minute, storage, a table of what runs |
 | `studio` | the applang editor, and `AppHost`, which runs `.app` files |
 | `coder` | the coding agent Studio runs: write, check (compile, smoke on 3 seeds), fix by SEARCH/REPLACE edits, keep the best so far, stop by budget; sans-IO, replayable |
+| `assistant`, `chats`, `files` | the Assistant, the overlay AI that uses the desktop: a wasip1 GUI program off the boot download; its chats: each one's transcript and memory, their file, their row on its card; its file tools, the person's files by paths from the home, clipped and coded |
 | `uiwire`, `uiview` | the remote UI protocol GUI programs speak; the desktop's half, which draws their trees |
+| `canvas` | a program's `Canvas` as the desktop draws it (its shapes and pixels in the theme, on device pixels) and lists it for the AI |
 | `host` | the wm plus one app per window, the home screen's apps, windows held by the pointer, the keyboard's squeeze; motion, frame geometry |
 | `home` | the top bar, the home grid in the person's order (icons carried, the selection box), the bottom row (the person's dock at the left, the Assistant at the right), menus, touch |
 | `shell` | the desktop around `host`: chrome, keys, the overlay; wires the home screen to the pointer |
@@ -198,8 +200,14 @@ one. Forked crates keep their Apache-2.0 license and note their origin.
   desktop's menu) keeps /home at once, forgets the tab's profile and
   reloads; if the files could not be kept, a card offers Stay or Sign out
   anyway. Welcome no longer opens by itself.
-- **Top bar** (44 px): the mark at the left opens Welcome; the date and
-  time sit in the middle; Feedback (a bug) and Settings at the right.
+- **Top bar** (44 px): the mark at the left is Show desktop (mod+D too):
+  it minimizes every window that shows, each into its tile, and closes an
+  open folder or menu (it answers above them too); pressed again with no
+  window shown since, it brings those windows back in their stacking
+  order, the top focused (once another shows, the next press minimizes
+  again). The date and time sit in the middle; Feedback (a bug) and
+  Settings at the right. A tooltip under each button names it. Welcome is
+  in the System folder.
 - **Windows** float in a stack; focus is the top of it. A 40 px titlebar
   carries minimize, maximize and close at the right, as on Windows. Drag a
   titlebar to move (a maximized or snapped window comes back to its normal
@@ -218,8 +226,9 @@ one. Forked crates keep their Apache-2.0 license and note their origin.
   Productivity (the Editor, Files) at first; an app's menu moves it (Move
   to: a folder, or the home screen; `home::folders`, kept as `folders`). A
   folder that holds any is an icon of its first four apps' tiles, and opens
-  as a panel over the dimmed screen, its apps four across: a click opens
-  one, and anywhere else (or Escape) closes it. Each icon sits in a cell of
+  as a panel over the dimmed screen (all but the top bar's mark, which
+  still answers), its apps four across: a click opens one, and anywhere
+  else (or Escape) closes it. Each icon sits in a cell of
   a grid: down the columns from the top
   left on a wide screen, in rows of four on a phone; there is no other
   list. A `.app` file's icon is the one its header draws (`// icon:` under
@@ -252,13 +261,37 @@ one. Forked crates keep their Apache-2.0 license and note their origin.
   corner. It opens and hides the Assistant (Alt+Space too; its menu asks
   it), which is never a window: the overlay, a card above the tile, its
   right edge the tile's (a sheet on a phone, its edges the row's), that
-  uses the desktop for the person. A finger's tap leaves the keyboard down
+  uses the desktop for the person. Its card keeps **chats** (`chats`), each
+  with its own transcript and memory (its last 4 tasks), so a request
+  carries only its own chat's past; 8 at most, a new one past that letting
+  go the one left longest ago, never the one just left. One row over the
+  prompt, as much as the card's width holds (a phone's too): the current
+  chat's chip, lit, then the others' that fit (each named by its first
+  prompt) and "N more" for the rest, New chat, and Compact once the memory
+  passes 1 KiB, more than a note takes. A chip switches; the lit one, or
+  "N more", lists them all, with Delete chat (asked again). Compact has the
+  model, with no tools, condense the chat into a note of 600 bytes at most,
+  which takes the memory's first place (the 3 latest tasks follow it) until
+  the next folds it in; the pill and Stop meanwhile, and a failure leaves
+  the memory. A task is remembered as it is kept, each text 1,000 bytes
+  at most, so a chat's memory never outgrows a request. Kept in
+  `~/.assistant/chats`, a line format read defensively, 256 KiB at most
+  (one that does not read is set aside as `chats.bad`, one a newer OS kept
+  is left as it is, and one that cannot be read or set aside is never
+  written over; the card says which); the Assistant's file tools never
+  reach that folder. A finger's tap leaves the keyboard down
   until its field is tapped. A dot under the tile while the overlay shows
   (the accent's while it has the keys). While it works the overlay is a
-  pill, one line of what it does and Stop, and the dot beats; each act
-  flashes what it touched, and the person's own press, key or wheel stops
-  it. A program that failed starts again at the next summon. Later it
-  listens.
+  pill: one line of what it does, and Stop at its right edge however the
+  line changes (its press reaches across the pill's height); the dot
+  beats, and each act flashes what it touched. While a question waits it
+  is the card again, the question last, with Stop under it.
+  Only Stop, or Escape while the overlay has the keys (which, at a question
+  or before the pill shows, hides the card too), stops it: the
+  person's own presses, keys and wheel go where they go beside its acts
+  (one on the bare desktop leaves the pill in view), and an act on a
+  window they closed fails as gone. A program that failed starts again at
+  the next summon. Later it listens.
 - **Dock**: the person's own, left-aligned from the bottom-left corner:
   nothing in it at first ("Add to dock" from any app's menu, or its icon
   dragged onto the row, which opens a gap under the pointer, the icon
@@ -280,6 +313,7 @@ one. Forked crates keep their Apache-2.0 license and note their origin.
   |---|---|
   | mod+Space, mod+A | show or hide the Assistant |
   | mod+Enter | open a terminal |
+  | mod+D | show the desktop, or bring back what it minimized |
   | mod+Q | close the focused window |
   | mod+Up | maximize or restore |
   | mod+Down | restore a maximized window, else minimize |
@@ -332,14 +366,39 @@ one. Forked crates keep their Apache-2.0 license and note their origin.
   writing 48 lines, fixing line 43, testing); `studio::AppHost` runs a `.app`
   in its own window. Its prompt asks every app for its icon line (one card,
   and one in each example), which a change keeps.
+  A make that ends without an app that runs clean (but for a stop with
+  nothing wrong showing, or the free AI busy or out of credit before any
+  program came back), and the app's last fault in Studio's preview (kept
+  under the app until another shows or the program changes), offer Send to
+  compusophy by the status; an app in its own window offers none. The tap
+  is the consent (the Assistant's press asks the person's yes itself, as
+  in Feedback); each goes once (`Request::Feedback`, never the desktop's
+  context): what was asked, how it ended (its code and problem, the make's
+  own code for why it stopped, each request's kind, tokens, time and the
+  problem it left) and the program, clipped to 8 KB, so compusophy sees
+  what applang or the coder lacked; when applang can make nothing close,
+  it is an idea, else a bug.
   Made apps draw: `canvas W, H, scene();` is a picture
   of square units (y down, scaled to fit) that `scene` draws with rect,
-  circle, ring, line, text and sprite in the theme's 12 colors, sent as
-  uiwire's `Node::Canvas` (a display list, never pixels); only what a
-  canvas calls draws, and it changes nothing, so a render stays pure. A
-  canvas's handler sees the tap's `x` and `y`. Grids and canvases are
-  boards: they take the room the window's other widgets leave, and with a
-  handler they are pads. **Editor** writes plain text, a new note in `~/notes`;
+  circle, ring, line, text, sprite and pixels in the theme's 12 colors, sent
+  as uiwire's `Node::Canvas` (a display list, never a bitmap); only what a
+  canvas calls draws, and it changes nothing but its own lets, so a render
+  stays pure. `pixels(cells, x, y, w, side)` draws a list of ints as
+  squares `side` units wide, `w` a row, -1 none and 0 to 11 a color:
+  boards, paintings, life. Pixels are whole rows, 64 x 64 at most and
+  16,384 in a render, or a coded fault (E0224). Each row's run of one
+  color is one fill on the desktop and one ink of the render's 4,096 (with
+  each shape, sprite square and text character), so a plain 64 x 64 board
+  fits where a busy one faults (E0222). The AI reads where pixels are and
+  their size, and each board's squares, a row a line, as a grid's, while
+  those listed stay within 1,024 in all (a board past what is left is its
+  place and size alone). A canvas's handler sees the tap's `x` and
+  `y`. Grids and canvases are boards: they take the room the window's
+  other widgets leave, and with a handler they are pads. Studio's prompt
+  asks that whatever is to be seen (a game, a board, drawing, animation, a
+  clock, a chart) be drawn on a canvas, never spelled out in labels and
+  buttons: its first example is snake on pixels.
+  **Editor** writes plain text, a new note in `~/notes`;
   Files and the Terminal's `edit` open files in it (a `.app` in Studio).
   **Welcome** (a program, its mark revealed by the desktop's clock)
   is the first screen; **Settings** picks the profile's face, the theme,
@@ -356,8 +415,9 @@ one. Forked crates keep their Apache-2.0 license and note their origin.
   CPU and can End it. The graphs move only when a sample comes, the seconds
   between at their average: at rest nothing draws. Its window alone may send
   `Request::Watch` and `Request::End` (it runs `bin/system.wasm` whatever
-  `/bin/activity` says; the Assistant presses in it only after the person's
-  yes, as in Feedback). On a phone it watches only while it has the focus.
+  `/bin/activity` says; the Assistant's presses and keys there ask the
+  person's yes themselves, as in Feedback). On a phone it watches only
+  while it has the focus.
   The desktop answers with `Event::Stats`
   (`uiwire::stat`): the kernel's table (deterministic) and the page's meters
   (frames by cause, its own time and memory, each worker's busy ms and memory
@@ -445,16 +505,38 @@ in its home; names in it, and roots per profile, wait for R2.
   joins processes to a Terminal, cooked or raw (`/dev/consctl`), and
   `/dev/job` starts programs joined by pipes. OPFS keeps the VFS and the
   desktop across reloads. The virtual
-  GPU is the draw protocol: processes send display lists, never pixels,
+  GPU is the draw protocol: processes send display lists, never a bitmap,
   and the one instanced renderer draws them, so a program can draw from
   another device just as well.
 - **R3, AI.** An agent whose tools are the OS's capabilities (open apps,
-  press widgets, type, keys, windows; then files and programs) and whose eyes
+  press widgets, type, keys, windows, files; then programs) and whose eyes
   are the UI tree (windows, titles, widget hits, labels and marks). Its first
   phase is built: the Assistant is the overlay; the host draws each window
   again into a recording list to read it (`host::agent`), the model sees it as
   text with refs (`assistant::look`) and calls tools, and each call is an act
-  done the way a person's pointer and keys go (uiwire `Act`, `Acted`). Cloud AI is free for
+  done the way a person's pointer and keys go (uiwire `Act`, `Acted`). Some
+  tools are its own, no act: it lists, reads and writes the person's files
+  over its program's WASI filesystem, paths from the home (the `files`
+  crate: never /dev nor its own `~/.assistant`, a read clipped to 16 KB,
+  failures E0925 to E0928; the refusal is the file tools', and Files,
+  Editor or a Terminal open to the person reach that folder as any other),
+  and what no tool does it tells compusophy (`send_feedback`, an idea or a
+  bug, marked `Assistant:`, through the page's outbox as the Feedback
+  app's reports go). A call that sends a report or replaces what is kept
+  (feedback always; a write over a file or outside the home), and an act
+  that sends off the device or ends a program (a press of Feedback's Send
+  or Ctrl+Enter there, of Studio's Send to compusophy, of Activity's End),
+  shows the person what would go (Feedback's report as its field holds
+  it, and whether what is open goes too), the question under it naming
+  what it does, and runs only on their yes to it, that call alone: yes
+  words alone (`chats::yes`), never a question nor "I'm good", so an
+  answer that asks for a change is none. Typing, a kind chosen or the
+  other presses of those apps send nothing, and ask nothing. A yes to
+  `ask_user` lets nothing through, and the calls the model made after the
+  question wait until it has heard the answer. What another app saves or
+  a Terminal runs the model is told to ask about first; no code holds it.
+  So the loop of growth: the Assistant meets what it cannot do, says so,
+  asks its creator for the tool, and the tool ships. Cloud AI is free for
   every visitor: `api/ai.mjs`, a thin same-origin function, forwards
   chat-completions to the Vercel AI Gateway (GLM 5.3) with the project's
   own OIDC identity, so no key ever reaches the browser; bring-your-own-key

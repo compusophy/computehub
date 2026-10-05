@@ -30,6 +30,7 @@ dependencies = [
  "compusophy-fuel",
  "compusophy-icons",
  "compusophy-lang",
+ "compusophy-uiwire",
 ]
 
 [[package]]
@@ -52,7 +53,11 @@ dependencies = [
 name = "compusophy-assistant"
 version = "0.1.0"
 dependencies = [
+ "compusophy-activity",
+ "compusophy-chats",
  "compusophy-coder",
+ "compusophy-files",
+ "compusophy-gfx",
  "compusophy-host",
  "compusophy-system",
  "compusophy-ui",
@@ -60,6 +65,22 @@ dependencies = [
  "compusophy-uiwire",
  "compusophy-vfs",
  "compusophy-wm",
+]
+
+[[package]]
+name = "compusophy-canvas"
+version = "0.1.0"
+dependencies = [
+ "compusophy-gfx",
+ "compusophy-ui",
+ "compusophy-uiwire",
+]
+
+[[package]]
+name = "compusophy-chats"
+version = "0.1.0"
+dependencies = [
+ "compusophy-uiwire",
 ]
 
 [[package]]
@@ -79,6 +100,14 @@ dependencies = [
  "js-sys",
  "wasm-bindgen",
  "web-sys",
+]
+
+[[package]]
+name = "compusophy-files"
+version = "0.1.0"
+dependencies = [
+ "compusophy-system",
+ "compusophy-vfs",
 ]
 
 [[package]]
@@ -263,6 +292,7 @@ dependencies = [
 name = "compusophy-uiview"
 version = "0.1.0"
 dependencies = [
+ "compusophy-canvas",
  "compusophy-gfx",
  "compusophy-ui",
  "compusophy-uiwire",

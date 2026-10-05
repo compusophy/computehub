@@ -499,8 +499,8 @@ impl Make {
         let draft = shown.map_or_else(partial, |c| c.src.clone());
         let fault = shown.and_then(|c| c.fault.as_ref());
         // The make's own code (none for can't and stopped), unless a fault shows.
-        let code = if matches!(stop, CANT | STOPPED) { 0 } else { stop };
-        let (mut code, mut line, mut said, mut mark) = (code, 0, why, None);
+        let ended = if matches!(stop, CANT | STOPPED) { 0 } else { stop };
+        let (mut code, mut line, mut said, mut mark) = (ended, 0, why, None);
         if let (Some(f), false) = (fault, outcome == Outcome::Failed) {
             code = f.diag.code.unwrap_or(0);
             mark = f.diag.span;
@@ -512,7 +512,7 @@ impl Make {
         let ms = now.saturating_sub(self.t0);
         let turns = std::mem::take(&mut self.log);
         let receipt = Receipt { turns, ms, usd_micros: usd, est: self.est };
-        Done { outcome, install, draft, mark, code, line, why: said, plan, change, receipt }
+        Done { outcome, install, draft, mark, code, line, why: said, plan, change, ended, receipt }
     }
 
     /// What a person reads while it works: `asking`, `thinking · 6 s`, `writing · 48 lines`,

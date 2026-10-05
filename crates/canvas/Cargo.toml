@@ -1,0 +1,17 @@
+[package]
+name = "compusophy-canvas"
+description = "A uiwire Canvas as the compusophyOS desktop draws it: its shapes and pixels in the frame's theme, scaled to fit on device pixels, and the listing the AI reads."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[lib]
+name = "canvas"
+
+[dependencies]
+compusophy-gfx.workspace = true
+compusophy-ui.workspace = true
+compusophy-uiwire.workspace = true

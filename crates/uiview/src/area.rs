@@ -3,7 +3,7 @@
 //! Up and Down by the rows drawn.
 
 use gfx::RectF;
-use ui::{CODE_MAX, Key, RADIUS_SM, Sense, TextStyle, TextSystem, Ui, WidgetId};
+use ui::{CODE_MAX, Key, RADIUS_SM, Sense, TextStyle, TextSystem, Ui, WidgetId, sem};
 
 /// The box's least height, and its inset.
 pub(crate) const MIN_H: f32 = 144.0;
@@ -163,7 +163,7 @@ impl Area {
     }
 
     /// The box in `r` as last laid out: its rows (or `hint`), the focus ring and caret when
-    /// `focus`; a [`Sense::Text`] hit.
+    /// `focus`; a [`Sense::Text`] hit, marked a text field holding its text.
     pub(crate) fn draw(
         &mut self,
         ui: &mut Ui<'_>,
@@ -202,5 +202,12 @@ impl Area {
             ui.fill(RectF { w, ..caret }, 0.0, t.accent);
         }
         ui.hit(id, r, Sense::Text);
+        // Its first KiB: the screen the AI reads keeps less.
+        let mut end = self.text.len().min(1024);
+        while !self.text.is_char_boundary(end) {
+            end -= 1;
+        }
+        let flags = if focus { sem::FOCUSED } else { 0 };
+        ui.mark(id, sem::TEXTBOX, flags, self.text.get(..end).unwrap_or_default());
     }
 }

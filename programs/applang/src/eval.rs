@@ -24,6 +24,10 @@ pub(crate) const MAX_COLS: i64 = 100;
 pub(crate) const BYTES_A_STEP: usize = 64;
 /// The most units a canvas has a side.
 pub(crate) const MAX_SIDE: i64 = 1024;
+/// The most cells pixels have a row and a column.
+pub(crate) const PIXELS_SIDE: usize = 64;
+/// The char of a pixel of each color, as uiwire's Pixels hold them; `.` is none (-1).
+const PAINT: &[u8; 12] = b"0123456789ab";
 /// A thousand times the sine of each degree from 0 to 90, rounded.
 #[rustfmt::skip]
 const SINE: [u16; 91] = [
@@ -146,7 +150,8 @@ fn fault(code: u16, msg: impl Into<String>, sp: Span) -> Diag {
 }
 
 /// One run of code: the program, a tank of fuel, the state, the locals (the current call's
-/// from `base`), how deep calls nest, the shapes a canvas's call drew and the ink left.
+/// from `base`), how deep calls nest, the shapes a canvas's call drew, and the ink and the
+/// pixels' cells left.
 pub(crate) struct Run<'a> {
     pub p: &'a Program,
     pub fuel: Fuel,
@@ -157,12 +162,14 @@ pub(crate) struct Run<'a> {
     pub lim: &'a Limits,
     pub draws: Vec<Draw>,
     pub ink: usize,
+    cells: usize,
 }
 
 impl<'a> Run<'a> {
     pub fn new(p: &'a Program, st: &'a mut State, lim: &'a Limits, fuel: u64) -> Run<'a> {
-        let (locals, draws, ink) = (Vec::new(), Vec::new(), lim.max_ink);
-        Run { p, fuel: Fuel::new(fuel), st, locals, base: 0, depth: 0, lim, draws, ink }
+        let (locals, draws, ink, cells) = (Vec::new(), Vec::new(), lim.max_ink, lim.max_pixels);
+        let fuel = Fuel::new(fuel);
+        Run { p, fuel, st, locals, base: 0, depth: 0, lim, draws, ink, cells }
     }
 
     /// Burns `n` units, or faults at `sp`.
@@ -436,7 +443,8 @@ impl<'a> Run<'a> {
             | Builtin::Ring
             | Builtin::Line
             | Builtin::Text
-            | Builtin::Sprite => {
+            | Builtin::Sprite
+            | Builtin::Pixels => {
                 self.draw(b, c)?;
                 return Ok(None);
             }
@@ -446,13 +454,15 @@ impl<'a> Run<'a> {
 
     /// Draws shape `b` as call `c` gives it (the checker lets only a canvas's call draw): each
     /// number within an i16 and each size never negative, its color 0 to 11, a text one line,
-    /// and its ink within what the render has left; else a fault at the call.
+    /// pixels whole rows of cells (see [`Run::pixels`]), and its ink within what the render has
+    /// left; else a fault at the call.
     fn draw(&mut self, b: Builtin, c: &Call) -> Result<(), Diag> {
         let (k, sp) = (b as usize - Builtin::Rect as usize, c.span);
         let bad = |msg: String| Err(fault(codes::BAD_DRAW, msg, sp));
         let vals = c.args.iter().map(|a| self.expr(a)).collect::<Result<Vec<_>, _>>()?;
-        // The thing first (a text's value, a sprite's rows), then the numbers and the color.
-        let (words, first) = match &vals[0] {
+        // The thing first (a text's value, a sprite's rows, pixels' cells), then the numbers
+        // and the color.
+        let (mut words, first) = match &vals[0] {
             _ if b == Builtin::Text => (vals[0].to_string(), 1),
             Value::List(rows) if b == Builtin::Sprite => {
                 let rows: Vec<String> = rows.iter().map(Value::to_string).collect();
@@ -461,6 +471,7 @@ impl<'a> Run<'a> {
                 }
                 (rows.join("\n"), 1)
             }
+            Value::List(_) if b == Builtin::Pixels => (String::new(), 1),
             _ => (String::new(), 0),
         };
         if b == Builtin::Text && words.contains('\n') {
@@ -491,13 +502,17 @@ impl<'a> Run<'a> {
                 }
             }
         }
-        let shapes = [Shape::Rect, Shape::Circle, Shape::Ring, Shape::Line, Shape::Text];
-        let shape = shapes.get(k).copied().unwrap_or(Shape::Sprite);
+        if let (Builtin::Pixels, Value::List(cells)) = (b, &vals[0]) {
+            words = self.pixels(cells, at[2], sp)?;
+        }
+        use Shape::*;
+        let shape = [Rect, Circle, Ring, Line, Text, Sprite, Pixels][k];
         let d = Draw { shape, color, at, text: words };
         let Some(left) = self.ink.checked_sub(d.ink()) else {
             let msg = format!(
                 "one render draws at most {} ink (a shape is 1, a text 1 more a character, a \
-                 sprite 1 more a square): draw less at once",
+                 sprite 1 more a square, pixels 1 more a run of one color in a row): draw less \
+                 at once",
                 self.lim.max_ink
             );
             return bad(msg);
@@ -506,6 +521,41 @@ impl<'a> Run<'a> {
         self.ink = left;
         self.draws.push(d);
         Ok(())
+    }
+
+    /// Pixels' `cells`, `w` a row, as uiwire holds them (a char a cell, [`PAINT`] or `.`): 1 to
+    /// [`PIXELS_SIDE`] cells a row, as many whole rows at most, each cell -1 (none) or a color 0
+    /// to 11, and no more cells than the render has left; else a fault at `sp`.
+    fn pixels(&mut self, cells: &[Value], w: i16, sp: Span) -> Result<String, Diag> {
+        let bad = |msg: String| Err(fault(codes::BAD_PIXELS, msg, sp));
+        let (n, most) = (cells.len(), PIXELS_SIDE);
+        let w = usize::try_from(w).unwrap_or(0);
+        if !(1..=most).contains(&w) {
+            return bad(format!("pixels are 1 to {most} cells a row, not {w}"));
+        }
+        if n % w != 0 {
+            return bad(format!("{n} cells are no whole rows of {w}: {} left over", n % w));
+        }
+        if n / w > most {
+            return bad(format!("{n} cells, {w} a row, are {} rows: {most} at most", n / w));
+        }
+        let Some(left) = self.cells.checked_sub(n) else {
+            let most = self.lim.max_pixels;
+            return bad(format!("one render draws at most {most} cells of pixels: draw fewer"));
+        };
+        let mut text = String::with_capacity(n);
+        for (i, v) in cells.iter().enumerate() {
+            match *v {
+                Value::Int(-1) => text.push('.'),
+                Value::Int(k @ 0..=11) => text.push(char::from(PAINT[k as usize])),
+                Value::Int(k) => {
+                    return bad(format!("cell {i} is {k}: a cell is -1 (none) or a color 0 to 11"));
+                }
+                _ => unreachable!("checked: a list of ints"),
+            }
+        }
+        self.cells = left;
+        Ok(text)
     }
 
     pub fn block(&mut self, stmts: &[Stmt]) -> Result<Flow, Diag> {

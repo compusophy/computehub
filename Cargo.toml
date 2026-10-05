@@ -22,6 +22,7 @@ members = [
     "crates/cpu",
     "crates/uiwire",
     "crates/uiview",
+    "crates/canvas",
     # Programs: what runs in the OS, and the app language they share.
     "programs/fuel",
     "programs/lang",
@@ -30,6 +31,8 @@ members = [
     "programs/coder",
     "programs/studio",
     "programs/assistant",
+    "programs/chats",
+    "programs/files",
     "programs/system",
     "programs/activity",
     "programs/sh",
@@ -74,6 +77,7 @@ compusophy-kernel = { path = "crates/kernel", version = "0.1.0" }
 compusophy-wasi = { path = "crates/wasi", version = "0.1.0" }
 compusophy-uiwire = { path = "crates/uiwire", version = "0.1.0" }
 compusophy-uiview = { path = "crates/uiview", version = "0.1.0" }
+compusophy-canvas = { path = "crates/canvas", version = "0.1.0" }
 compusophy-fuel = { path = "programs/fuel", version = "0.1.0" }
 compusophy-lang = { path = "programs/lang", version = "0.1.0" }
 compusophy-applang-syntax = { path = "programs/applang-syntax", version = "0.1.0" }
@@ -81,6 +85,8 @@ compusophy-applang = { path = "programs/applang", version = "0.1.0" }
 compusophy-coder = { path = "programs/coder", version = "0.1.0" }
 compusophy-studio = { path = "programs/studio", version = "0.1.0" }
 compusophy-assistant = { path = "programs/assistant", version = "0.1.0" }
+compusophy-chats = { path = "programs/chats", version = "0.1.0" }
+compusophy-files = { path = "programs/files", version = "0.1.0" }
 compusophy-system = { path = "programs/system", version = "0.1.0" }
 compusophy-activity = { path = "programs/activity", version = "0.1.0" }
 

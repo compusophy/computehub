@@ -1,0 +1,17 @@
+[package]
+name = "compusophy-files"
+description = "compusophyOS file tools: the person's files as an agent reaches them, by paths from the home, clipped for a model and every failure coded. A library: the Assistant's list_files, read_file and write_file."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[lib]
+name = "files"
+
+# The Disk that Files and Editor reach (the system program's), and paths.
+[dependencies]
+compusophy-system.workspace = true
+compusophy-vfs.workspace = true

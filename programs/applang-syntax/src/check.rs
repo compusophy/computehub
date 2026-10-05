@@ -17,11 +17,11 @@ use crate::parse::{Stmt, Target, Type, UnOp, Var, Widget};
 pub const KEYS: [&str; 7] = ["left", "right", "up", "down", "space", "enter", "escape"];
 
 #[rustfmt::skip]
-const BUILTIN: [Builtin; 18] = [
+const BUILTIN: [Builtin; 19] = [
     Builtin::Len, Builtin::Min, Builtin::Max, Builtin::Abs, Builtin::Random, Builtin::Parse,
     Builtin::Push, Builtin::Insert, Builtin::Remove, Builtin::Clear, Builtin::Rect,
-    Builtin::Circle, Builtin::Ring, Builtin::Line, Builtin::Text, Builtin::Sprite, Builtin::Sin,
-    Builtin::Cos,
+    Builtin::Circle, Builtin::Ring, Builtin::Line, Builtin::Text, Builtin::Sprite,
+    Builtin::Pixels, Builtin::Sin, Builtin::Cos,
 ];
 
 /// A checked function as calls see it: name, parameter types, result, whether it changes
@@ -83,11 +83,13 @@ pub(crate) fn check(p: &mut Program) -> Result<(), Diag> {
     let names: Vec<String> = p.fns.iter().map(|f| f.name.clone()).collect();
     let (mut sigs, mut resized) = (Vec::new(), vec![false; states.len()]);
     // The names that came with the canvas are built in only beside one: an older program may
-    // have its own `line`.
+    // have its own `line`; and `pixels` came later still, so it may have its own beside one.
     let canvas = p.widgets.iter().any(has_canvas);
     for f in &mut p.fns {
         let built = BUILTINS.iter().position(|b| *b == f.name);
-        if sigs.iter().any(|s: &Sig| s.name == f.name) || built.is_some_and(|i| i < DRAWN || canvas)
+        let beside = |i| canvas && i != Builtin::Pixels as usize;
+        if sigs.iter().any(|s: &Sig| s.name == f.name)
+            || built.is_some_and(|i| i < DRAWN || beside(i))
         {
             let msg = match built {
                 Some(DRAWN..) => format!(
@@ -568,13 +570,15 @@ impl Ck<'_> {
             }
             Builtin::Min | Builtin::Max => self.args(c, &ints(2))?,
             Builtin::Abs | Builtin::Sin | Builtin::Cos => self.args(c, &ints(1))?,
-            // The shapes: the thing first (a text's value, a sprite's rows), then ints.
+            // The shapes: the thing first (a text's value, a sprite's rows, pixels' cells),
+            // then ints.
             Builtin::Rect
             | Builtin::Circle
             | Builtin::Ring
             | Builtin::Line
             | Builtin::Text
-            | Builtin::Sprite => {
+            | Builtin::Sprite
+            | Builtin::Pixels => {
                 let k = b as usize - Builtin::Rect as usize;
                 let n = SHAPES[k].split(", ").count();
                 if c.args.len() != n {
@@ -593,6 +597,10 @@ impl Ck<'_> {
                     }
                     Builtin::Sprite => {
                         self.expect(&mut c.args[0], Strs, "a sprite's rows")?;
+                        1
+                    }
+                    Builtin::Pixels => {
+                        self.expect(&mut c.args[0], Ints, "pixels' cells")?;
                         1
                     }
                     _ => 0,

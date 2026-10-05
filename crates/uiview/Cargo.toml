@@ -12,6 +12,7 @@ repository.workspace = true
 name = "uiview"
 
 [dependencies]
+compusophy-canvas.workspace = true
 compusophy-gfx.workspace = true
 compusophy-ui.workspace = true
 compusophy-uiwire.workspace = true

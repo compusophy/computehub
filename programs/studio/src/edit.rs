@@ -2,20 +2,23 @@
 //! make, [`crate::view`] draws it.
 
 use crate::make::Making;
+use crate::report::Report;
 use crate::{Disk, Live, View};
 use applang::Span;
-use coder::ai::{DEFAULT_MODEL, clip, free_path, problem, shown, slug};
+use coder::ai::{DEFAULT_MODEL, about, clip, free_path, problem, shown, slug};
 
 /// Why a new app was not saved.
 pub(crate) const TAKEN: &str = "not saved: every name for it in ~/apps is taken";
 use std::io::ErrorKind;
 use uiwire::{Event, Frame, Key, Request, Style, mods};
 
-/// Studio's own widgets, all below [`crate::APP`], where the app's begin: Make, Stop (the
-/// overlay finds these as [`coder::ids`]), the code view's toggle, the prompt and the code.
+/// Studio's own widgets, all below [`crate::APP`], where the app's begin: Make, Stop, the code
+/// view's toggle, Send to compusophy, the prompt and the code. The overlay finds Stop, Send to
+/// compusophy and the prompt as [`coder::ids`].
 pub(crate) const MAKE: u32 = 1;
 pub(crate) const STOP: u32 = coder::ids::STOP;
 pub(crate) const TOGGLE: u32 = 3;
+pub(crate) const SEND: u32 = coder::ids::SEND;
 /// The prompt Input is this plus how many times Studio set its text, and the Code this plus how
 /// many times Studio replaced the program: a fresh id takes the frame's text.
 pub(crate) const PROMPT: u32 = coder::ids::PROMPT;
@@ -58,11 +61,19 @@ pub struct Studio {
     model: String,
     pub(crate) make: Option<Making>,
     pub(crate) last_id: u32,
-    /// What the line under the app says, and how; what the program's first comment says.
+    /// What the line under the app says, and how; the caption over it: the make's plan, else the
+    /// program's leading comments ([`coder::ai::about`]).
     pub(crate) status: (Style, String),
     pub(crate) caption: String,
     /// The make's status as the last frame showed it (it moves with each line the draft gains).
     pub(crate) seen: String,
+    /// What Send to compusophy sends: a failed make's report, until the next make or until the
+    /// person runs a program of their own; and, while the program runs, the last fault the app
+    /// showed in the preview (it stays under the app) and the faults that went, so that none goes
+    /// twice.
+    pub(crate) report: Option<Report>,
+    pub(crate) fault: String,
+    pub(crate) told: Vec<String>,
     /// The content size, as the last Resize said.
     pub(crate) width: u16,
     pub(crate) height: u16,
@@ -123,12 +134,21 @@ impl Studio {
         self.blocked.as_deref().or(lost)
     }
 
-    /// Takes `text` as the program: a fresh Code, and the preview running it.
+    /// Takes `text` as the program: a fresh Code, the preview running it, and what its first
+    /// comment says over it (a make then says its plan).
     pub(crate) fn replace(&mut self, text: String, disk: &mut dyn Disk) {
         self.edits = self.edits.wrapping_add(1);
         (self.version, self.dirty, self.lost, self.mark) = (1, false, false, None);
-        self.live = Some(Live::new(&text, &self.path, disk));
+        self.preview(Live::new(&text, &self.path, disk));
+        self.caption = about(&text);
         self.text = text;
+    }
+
+    /// Runs `live` in the preview: the last program's faults go with it.
+    fn preview(&mut self, live: Live) {
+        self.live = Some(live);
+        self.fault.clear();
+        self.told.clear();
     }
 
     /// Names a new app's file after `src`, its program (its label: `~/apps/<slug>.app`, a free
@@ -167,7 +187,9 @@ impl Studio {
             }
             let live = Live::new(&self.text, &self.path, disk);
             let faults = live.faults();
-            (self.live, self.mark) = (Some(live), None);
+            // A program of the person's own: a make's report and plan are not about it.
+            (self.mark, self.report, self.caption) = (None, None, about(&self.text));
+            self.preview(live);
             let done = if faults { "faults as it starts \u{b7} saved " } else { "saved " };
             self.status = self.save(disk, done);
             if faults {
@@ -233,6 +255,7 @@ impl View for Studio {
             Some(&Event::Submit { id }) if id == self.prompt_id() => self.make(disk),
             Some(&Event::Click { id: STOP }) => self.stop(disk),
             Some(&Event::Click { id: TOGGLE }) if some => self.toggle(disk),
+            Some(&Event::Click { id: SEND }) => return self.send() || fresh,
             // Every Change gets a frame: the desktop sends the next one then.
             Some(ev @ Event::Change { .. }) => self.change(ev, disk),
             Some(&Event::Key { id, key: Key::Enter, mods, .. }) if cmd(mods) => {

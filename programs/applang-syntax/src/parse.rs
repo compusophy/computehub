@@ -68,34 +68,36 @@ pub struct Var {
 
 /// The built-in functions: values, the list changes (statements only), the shapes a canvas
 /// draws (statements, only where a canvas draws), then more values. The names from [`DRAWN`]
-/// on came later: a program without a canvas may define its own (see `check`).
+/// on came later: a program without a canvas may define its own, and one with a canvas its own
+/// `pixels`, which came after programs were kept beside one (see `check`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[rustfmt::skip]
 pub enum Builtin {
     Len, Min, Max, Abs, Random, Parse, Push, Insert, Remove, Clear,
-    Rect, Circle, Ring, Line, Text, Sprite, Sin, Cos,
+    Rect, Circle, Ring, Line, Text, Sprite, Pixels, Sin, Cos,
 }
 
 #[rustfmt::skip]
-pub const BUILTINS: [&str; 18] = ["len", "min", "max", "abs", "random", "parse", "push", "insert",
-    "remove", "clear", "rect", "circle", "ring", "line", "text", "sprite", "sin", "cos"];
+pub const BUILTINS: [&str; 19] = ["len", "min", "max", "abs", "random", "parse", "push", "insert",
+    "remove", "clear", "rect", "circle", "ring", "line", "text", "sprite", "pixels", "sin", "cos"];
 /// The first of [`BUILTINS`] that came with the canvas.
 pub const DRAWN: usize = 10;
-/// The parameters of each shape, from `rect` to `sprite`, in order: the sizes are w, h, r,
+/// The parameters of each shape, from `rect` to `pixels`, in order: the sizes are w, h, r,
 /// width, size and side.
-pub const SHAPES: [&str; 6] = [
+pub const SHAPES: [&str; 7] = [
     "x, y, w, h, color",
     "x, y, r, color",
     "x, y, r, width, color",
     "x1, y1, x2, y2, width, color",
     "value, x, y, size, color",
     "rows, x, y, side",
+    "cells, x, y, w, side",
 ];
 
 impl Builtin {
     /// Whether it draws a shape on a canvas.
     pub fn draws(self) -> bool {
-        (Builtin::Rect as usize..=Builtin::Sprite as usize).contains(&(self as usize))
+        (Builtin::Rect as usize..=Builtin::Pixels as usize).contains(&(self as usize))
     }
 }
 
