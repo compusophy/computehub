@@ -151,7 +151,7 @@ rm: c/g/x: not a directory
 $ cd c/g
 cd: c/g: not a directory
 $ mv x
-usage: mv <from> <to>
+usage: mv <from>... <to>
 $ rm -rz x
 rm: unknown option -z
 $ frobnicate --now
@@ -211,7 +211,7 @@ studio  assistant  terminal  files  editor  activity  settings  feedback  about 
 /apps/demo.app
 ~/counter.app
 $ uname -a
-compusophyOS 0.2 wasm32
+compusophyOS compusophy 0.2 wasm32
 $ theme
 Midnight
 Dawn
@@ -237,6 +237,171 @@ $ exit
     sh.run("cat /tmp/ask > /tmp/copy", &mut w);
     assert_eq!(sh.out, "^[]1729;open;studio\x07");
     assert_eq!(w.fs.read("/tmp/copy"), Ok(&b"\x1b]1729;open;studio\x07"[..]));
+}
+
+#[test]
+fn commands_take_their_common_flags_and_every_operand() {
+    transcript(
+        r#"$ mkdir d
+$ echo hello > d/a.txt
+$ echo -n 12345678901 > big
+$ touch d/.dot m1 m2
+$ ls -l
+-  11  big
+-   0  counter.app
+d   0  d
+-   0  m1
+-   0  m2
+-   0  notes.txt
+$ ls -lA d
+-  0  .dot
+-  6  a.txt
+$ ls -l notes.txt d/a.txt
+-  6  d/a.txt
+-  0  notes.txt
+$ ls d big nope
+ls: nope: no such file or directory
+big
+
+d:
+a.txt
+$ ls -1 /apps ~
+/apps:
+demo.app
+
+~:
+big
+counter.app
+d
+m1
+m2
+notes.txt
+$ ls -a | hi
+[job ~ pipe "big\ncounter.app\nd\nm1\nm2\nnotes.txt\n"|/bin/hi hi|console]
+$ ls -lt
+ls: unknown option -t
+$ mv m1 m2 d
+$ mv -f d/m1 m3
+$ ls d m3
+m3
+
+d:
+a.txt  m2
+$ mv big m3 nope
+mv: nope: not a directory
+$ mv big
+usage: mv <from>... <to>
+$ uname
+compusophyOS
+$ uname -rm
+0.2 wasm32
+$ uname -n x
+usage: uname [-asnrm]
+$ touch -- -x
+$ ls -- -x
+-x
+$ rm -- -x
+$ cd -- /apps
+$ pwd
+/apps
+$ cd
+$ echo -- a
+-- a
+$ rm
+usage: rm [-rf] <path>...
+$ rm -f
+$ ls --all
+ls: unknown option --all
+$ echo a # b
+a
+$ # nothing
+$ echo a#b '#c' \#d
+a#b #c #d
+$ hi ~/x '~' ~y # z
+[job ~ console|/bin/hi hi ~/x ~ ~y|console]
+"#,
+    );
+    // `~` is the home before a program sees it (the transcript shows the home as `~`); quoted,
+    // or before anything but `/`, it is a `~`.
+    let (mut sh, mut w) = (Shell::default(), world());
+    sh.run("echo ~ ~/x a~ '~' \"~/y\" ~guest \\~", &mut w);
+    assert_eq!(sh.out, [Vfs::HOME, " ", Vfs::HOME, "/x a~ ~ ~/y ~guest ~\n"].concat());
+    // cat -n numbers lines across files, a file ending mid-line going on with the next.
+    w.fs.write("/tmp/a", b"one\ntwo").and(w.fs.write("/tmp/b", b"three\n\nfour\n")).unwrap();
+    sh.out.clear();
+    sh.run("cat -n /tmp/a /tmp/b", &mut w);
+    let numbered = "     1\tone\n     2\ttwothree\n     3\t\n     4\tfour\n";
+    assert_eq!(sh.out, numbered);
+    // An error between the files changes no number, on screen or to a file.
+    let error = "cat: nope: no such file or directory\n";
+    sh.out.clear();
+    sh.run("cat -n /tmp/a nope /tmp/b", &mut w);
+    assert_eq!(
+        sh.out,
+        ["     1\tone\n     2\ttwo", error, "three\n     3\t\n     4\tfour\n"].concat()
+    );
+    sh.out.clear();
+    sh.run("cat -n /tmp/a nope /tmp/b > /tmp/n", &mut w);
+    assert_eq!((sh.out.as_str(), w.fs.read("/tmp/n")), (error, Ok(numbered.as_bytes())));
+    // ls -lh: from 1024 bytes in K, M, G, T, P, E, rounded up, in the first unit that then
+    // takes fewer than 1024, a tenth below 10.
+    #[rustfmt::skip]
+    let sizes = [0, 1023, 1024, 1025, 2336, 10_239, 10_240, 1_047_552, 1_048_575, 1 << 20,
+        15 << 30, 1 << 50, u64::MAX];
+    #[rustfmt::skip]
+    let human = ["0", "1023", "1.0K", "1.1K", "2.3K", "10K", "10K", "1023K", "1.0M", "1.0M",
+        "15G", "1.0P", "16E"];
+    assert_eq!(sizes.map(|n| size(n, true)), human);
+    assert_eq!(size(2336, false), "2336");
+}
+
+#[test]
+fn a_line_ends_with_a_status_and_sh_runs_scripts() {
+    let (mut sh, mut w) = (Shell::default(), world());
+    #[rustfmt::skip]
+    let lines = [
+        ("ls nope", 1), ("ls", 0), ("rm -z x", 2), ("mv x", 2), ("echo a |", 2), ("ls | ls", 2),
+        ("rm", 2), ("rm -f", 0), ("frob", 127), ("./notes.txt", 126), ("", 126),
+        ("# a comment", 126), ("hi", 0), ("hi > /nope/x", 1), ("echo a > /nope/x", 1),
+        ("exit x", 1),
+    ];
+    for (line, status) in lines {
+        sh.run(line, &mut w);
+        assert_eq!((line, sh.status, sh.quit), (line, status, false));
+    }
+    w.status = Ok(3);
+    sh.run("echo a | hi", &mut w);
+    assert_eq!(sh.status, 3);
+    // A plain exit keeps the status, which the console does not end with; `exit n`'s it does.
+    sh.run("exit", &mut w);
+    assert_eq!((sh.status, sh.quit, sh.exited), (3, true, None));
+    let mut sh = Shell::default();
+    sh.run("exit 300", &mut w);
+    sh.run("exit 4", &mut w);
+    assert_eq!((sh.status, sh.quit, sh.exited), (4, true, Some(4)));
+    // `sh -c line`, `sh file` (from the working directory), or nothing: the console, or the
+    // script on its input; else what to say and the status to end with.
+    let script = "#!/bin/sh\n# makes out, then ends\necho one > out\nexit 5\necho two > out\n";
+    w.fs.write(&[Vfs::HOME, "/s.sh"].concat(), script.as_bytes()).unwrap();
+    let mut sh = Shell::default();
+    let args =
+        |s: &str| s.split(' ').filter(|a| !a.is_empty()).map(String::from).collect::<Vec<_>>();
+    let mut run = |a: &str| sh.script(&args(a), &mut w);
+    assert_eq!(run(""), Ok(None));
+    assert_eq!(run("-c ls"), Ok(Some("ls".into())));
+    assert_eq!(run("s.sh a"), Ok(Some(script.into())));
+    assert_eq!(run("-c"), Err(("sh: -c: a command line must follow\n".into(), 2)));
+    assert_eq!(run("-x s.sh"), Err(("sh: unknown option -x\n".into(), 2)));
+    assert_eq!(run("nope"), Err(("sh: nope: no such file or directory\n".into(), 127)));
+    // As `main` runs one: a line at a time, to its end or an exit.
+    for line in script.lines() {
+        sh.run(line, &mut w);
+        if sh.quit {
+            break;
+        }
+    }
+    assert_eq!((sh.status, sh.out.as_str()), (5, ""));
+    assert_eq!(w.fs.read(&[Vfs::HOME, "/out"].concat()), Ok(&b"one\n"[..]));
 }
 
 #[test]
