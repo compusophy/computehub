@@ -111,6 +111,7 @@ frame: os → shell::draw → gfx::DrawList → platform::Renderer: one draw cal
 | `activity` | Activity, the resource monitor: graphs of CPU, memory, frames and the AI over the last minute, storage, a table of what runs |
 | `studio` | the applang editor, and `AppHost`, which runs `.app` files |
 | `coder` | the coding agent Studio runs: write, check (compile, smoke on 3 seeds, the icon line as the desktop reads it), fix by SEARCH/REPLACE edits, keep the best so far, stop by budget; sans-IO, replayable |
+| `evals`, `makes` | the evals: a suite's tasks run through the coder over a wire (the live free AI, or a recorded run replayed), each run's records and AI exchanges kept, runs compared with confidence intervals; Suite 1, Studio makes: apps described precisely, made, then driven headlessly and graded by what they show |
 | `assistant`, `chats`, `files` | the Assistant, the overlay AI that uses the desktop: a wasip1 GUI program off the boot download; its chats: each one's transcript and memory, their file, their row on its card; its file tools, the person's files by paths from the home, clipped and coded |
 | `uiwire`, `uiview` | the remote UI protocol GUI programs speak; the desktop's half, which draws their trees |
 | `canvas` | a program's `Canvas` as the desktop draws it (its shapes and pixels in the theme, on device pixels, its texts on it kept inside it) and lists it for the AI |
@@ -121,6 +122,7 @@ frame: os → shell::draw → gfx::DrawList → platform::Renderer: one draw cal
 | `os` | the wasm entry: fonts, VFS, the app registry, theme storage, event glue |
 | `report` | telemetry: notes of what the page saw, feedback and error reports to compusophy's inbox (`api/feedback.mjs`), the outbox that keeps each until it is taken, a panic's beacon |
 | `tools/serve` | dev-only static server for `dist/`, never shipped |
+| `tools/eval` | dev-only eval runner: the system's `curl` against the free AI, paced under its limits; never shipped |
 
 Package names are `compusophy-<x>`; each crate's `[lib] name` is the short
 one. Forked crates keep their Apache-2.0 license and note their origin.
@@ -600,6 +602,23 @@ panic is reported unless the signed-in profile turned reports off (before
 a sign-in, unless any listed profile did). The shell still runs as `guest`
 in its home; names in it, and roots per profile, wait for R2.
 
+### Evals
+
+So that a change to a model, a prompt, the harness or the language shows as a measured gain or
+loss, the evals (`evals/README.md`) run fixed, versioned suites with deterministic checkers.
+Suite 1, Studio makes (`makes`): 24 apps described precisely enough to check, from a counter to
+tetris, each made as Studio makes it (the `coder` loop with Studio's knobs) and graded: it
+compiles, runs clean through the smoke test on 3 seeds, its icon line draws, and its checker
+drives it headlessly (buttons by their labels, taps on board squares and canvas units, keys,
+ticks of its own timer) and reads what it shows, never its names. Each task has a reference
+program that passes, and each reference broken in one place fails. A run appends a record per
+task to `evals/results/<suite>.jsonl` (date and commit passed in, the suite's and the prompt's
+hashes, pass or fail and why, requests, tokens, the receipts' cost, the make's time) and keeps
+every AI exchange in `evals/replays/`: what the response did to the make, not its bytes, so a run
+replays offline, free and bit for bit (a test does). `tools/eval` is the live wire (`curl` to
+the free AI, under its limits) and compares runs: pass rates with Wilson intervals, their
+difference with Newcombe's, cost per pass and the tasks that flipped.
+
 ## What is next
 
 - **R2, the kernel: a virtual computer in the tab.** wasm processes are the
@@ -648,6 +667,9 @@ in its home; names in it, and roots per profile, wait for R2.
   can come back later. Local models on WebGPU, downloaded on first use, cached in OPFS,
   never part of the boot budget. Every call returns a receipt: model,
   tokens, cost.
+- **More evals.** The Assistant's desktop tasks on a headless desktop, graded by the state it
+  leaves, and the Terminal agent's coding tasks, graded by tests it cannot see (designed in
+  `evals/README.md`).
 - **R4, the OS as a fabric.** Apps load as separate wasm modules (a hello
   world under 10 KB), so the boot stays small while the OS grows. The OS
   runs as an app inside itself: the strictest test of confinement.

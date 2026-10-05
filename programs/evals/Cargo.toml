@@ -1,0 +1,17 @@
+[package]
+name = "compusophy-evals"
+description = "compusophyOS's evals: runs a suite's tasks through the coder over a wire (the live free AI, or a replay), keeps each run's records and AI transcripts, replays them deterministically, and compares runs with confidence intervals. Pure: the wire is passed in."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[lib]
+name = "evals"
+
+[dependencies]
+compusophy-coder.workspace = true
+compusophy-makes.workspace = true
+compusophy-uiwire.workspace = true
