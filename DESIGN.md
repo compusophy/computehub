@@ -425,8 +425,13 @@ one. Forked crates keep their Apache-2.0 license and note their origin.
   requests of the programs its shell runs (`apps::asks`; nothing else of
   their frames, and no other process's), and a request whose process ended
   (Ctrl+C, a kill) is stopped at the hub's next pump, as at a window's
-  Close, before another byte. A request fits the free AI (64 messages, 96
-  KiB): old results fold to their first line, then old tasks and steps go.
+  Close, before another byte. In a Terminal the Assistant put input into
+  (`Cx::driven`, the window that may not reset the device), each AI request
+  ends at once, refused, so no AI drives the agent past the person's yes:
+  one it starts there (`agent -y`) does nothing, and one whose question it
+  answers stops at its next request. A request fits the free AI (64
+  messages, 96 KiB): old results fold to their first line, then old tasks
+  and steps go.
   A task makes 20 model calls at most, as the Assistant's (E0942; `go on`
   goes on), so it and its lesson keep under the 30 requests a minute the
   free AI takes from a client, and leave most of its 120 an hour to Studio
@@ -620,7 +625,8 @@ Settings → Reset erases it all: once the person types `reset`, every
 `compusophy.` key goes from `localStorage` and `sessionStorage` (each
 profile's /home, preferences and PIN, the outbox) and the page reloads to the
 welcome as a first visit. Only the person can: the host drops a reset from a
-window the Assistant put input into, and the uiwire request is the OS's own
+window the Assistant put input into (whose Terminal's programs may not ask
+the AI either: `Cx::driven`), and the uiwire request is the OS's own
 windows' alone.
 
 **Profiles** (the `profiles` crate) are separate homes in one browser, one in
