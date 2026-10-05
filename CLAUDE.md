@@ -16,7 +16,7 @@ AI for all); later pooled compute across tabs and devices. Author handle: compus
 1. **Rust only.** No hand-written JS beyond two one-line bootstraps
    (web/index.html, web/worker.js) and `api/*.mjs`, the server functions
    (`node:` modules only): what cannot live in a tab, the free AI's
-   credentials (`/api/ai`) and the feedback inbox (`/api/feedback`).
+   credentials and the feedback inbox.
 2. **Zero external dependencies.** Only `compusophy-*` workspace siblings.
    Exception: the web crates `platform`, `os` and `cpu` may take
    wasm-bindgen (pinned), js-sys, web-sys. Build-time tools never ship.
@@ -30,7 +30,7 @@ AI for all); later pooled compute across tabs and devices. Author handle: compus
 4. **Deterministic crates** (`wm`, `vfs`, `kernel`, `wasi`): no floats, no
    HashMap/HashSet, no clocks, no randomness. State must replay bit-for-bit
    and hash identically.
-5. **wasm32 always green:** `cargo check --workspace --target wasm32-unknown-unknown`.
+5. **wasm32 always green:** the wasm32 `cargo check` below.
 6. **Budgets** (`scripts/budget.sh`, gzip -9): boot ≤224 KB (top-level
    `dist/` files), deferred fonts ≤30 KB (`dist/fonts/deferred/`), lazy
    fonts ≤60 KB (the rest of `dist/fonts/`), system ≤40 KB (`dist/cpu/`),
@@ -74,11 +74,12 @@ crates/      the OS (boot, kernel, worker); talks WASI and uiwire
   wasi/      the kernel's worker half: WASI preview 1 Proc, fds, /dev
   cpu/       the program worker (cdylib; dist/cpu/): loader, WASI imports
 programs/    wasm32-wasip1 programs (dist/bin/) and their app language
-  fuel/ lang/                 forks of litelite (budgets, parse kit)
-  applang-syntax/ applang/    tier 0 app language: front end, runtime
+  fuel/ lang/ forks of litelite (budgets, parse kit)
+  applang-syntax/ applang/ tier 0 app language: front end, runtime
   studio/    make apps by describing them; runs `.app` files
   coder/     Studio's agent: write, test, fix, keep the best
   assistant/ the AI using the desktop; chats/ files/: its chats, file tools
+  tiny/ lab/ a transformer; dev: its corpus, training, measures
   system/    About, Editor, Feedback, Files, Welcome, Settings
   activity/  the resource monitor
   terminal/  the Terminal; vt/ term/: its parser, screen model

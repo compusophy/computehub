@@ -24,7 +24,7 @@ const AUTHOR: &str = "Made by compusophy. Apache-2.0.";
 const SOURCE: &str = "github.com/compusophy/computehub";
 /// Every crate and its role.
 #[rustfmt::skip]
-pub(crate) const STACK: [(&str, &str); 41] = [
+pub(crate) const STACK: [(&str, &str); 43] = [
     ("os", "The wasm entry: fonts, files, program windows"),
     ("report", "Telemetry: notes, reports and their outbox"),
     ("platform", "The browser boundary: canvas, WebGL2, input"),
@@ -53,6 +53,8 @@ pub(crate) const STACK: [(&str, &str); 41] = [
     ("vt", "Terminal escape-sequence parser"), ("applang", "The tier 0 app language"),
     ("applang-syntax", "applang's lexer and parser"), ("lang", "Diagnostics, lexer and parser kit"),
     ("fuel", "Fuel and byte budgets"), ("toolbox", "Test programs"),
+    ("tiny", "A small transformer: train, sample, keep"),
+    ("lab", "Its applang corpus, training and measures"),
 ];
 /// The mark's side; the width of the stack's name column, and the least width with the roles
 /// beside the names (else under them).

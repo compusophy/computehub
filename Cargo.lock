@@ -181,6 +181,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "compusophy-lab"
+version = "0.1.0"
+dependencies = [
+ "compusophy-applang",
+ "compusophy-applang-syntax",
+ "compusophy-coder",
+ "compusophy-tiny",
+]
+
+[[package]]
 name = "compusophy-lang"
 version = "0.1.0"
 
@@ -314,6 +324,10 @@ dependencies = [
  "compusophy-font",
  "compusophy-gfx",
 ]
+
+[[package]]
+name = "compusophy-tiny"
+version = "0.1.0"
 
 [[package]]
 name = "compusophy-toolbox"

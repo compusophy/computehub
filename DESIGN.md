@@ -122,6 +122,8 @@ frame: os → shell::draw → gfx::DrawList → platform::Renderer: one draw cal
 | `platform` | the browser boundary: canvas, WebGL2, input, textarea, fetch, storage, cursor |
 | `os` | the wasm entry: fonts, VFS, the app registry, theme storage, event glue |
 | `report` | telemetry: notes of what the page saw, feedback and error reports to compusophy's inbox (`api/feedback.mjs`), the outbox that keeps each until it is taken, a panic's beacon |
+| `tiny` | a decoder-only transformer in plain Rust, no dependencies: a byte-level BPE, forward and hand-written backward passes in f32, AdamW on threads, sampling with a KV cache, a weights file checked by its hash; seeded, the same bits on any number of threads |
+| `lab` | the model lab, a dev tool never shipped: the corpus of verified applang programs (`data/manifest.tsv`), an n-gram baseline, and the commands that train tiny and measure what it writes (`data/results.md`) |
 | `tools/serve` | dev-only static server for `dist/`, never shipped |
 | `tools/eval` | dev-only eval runner: the system's `curl` against the free AI, paced under its limits; never shipped |
 
@@ -732,9 +734,8 @@ Newcombe's, cost per pass and the tasks that flipped.
   every visitor: `api/ai.mjs`, a thin same-origin function, forwards
   chat-completions to the Vercel AI Gateway (GLM 5.3) with the project's
   own OIDC identity, so no key ever reaches the browser; bring-your-own-key
-  can come back later. Local models on WebGPU, downloaded on first use, cached in OPFS,
-  never part of the boot budget. Every call returns a receipt: model,
-  tokens, cost.
+  can come back later. Every call returns a receipt: model, tokens, cost.
+  Local models come too (below).
 - **More evals.** The Assistant's desktop tasks on a headless desktop, graded by the state it
   leaves, and the Terminal agent's coding tasks, graded by tests it cannot see (designed in
   `evals/README.md`).
@@ -745,6 +746,30 @@ Newcombe's, cost per pass and the tasks that flipped.
   WebRTC: deterministic, fuel-metered, verified by hash. The fine-tuning
   pipeline grows from verified programs (generate, check, run, keep): first
   for applang, then for models that emit opcodes instead of English.
+- **Local models, from applang up.** A model in the tab loads on first use,
+  is kept in OPFS and infers in a worker, on the CPU first and WebGPU later;
+  never in the boot budget. The road: a tiny applang model; bigger ones on
+  more verified data (the evals' generated programs: generate, check, keep);
+  open small models fine-tuned; models over opcodes. The first step is built,
+  in plain Rust: `tiny`, a decoder-only transformer (byte-level BPE, a
+  backward pass written by hand and checked against finite differences,
+  AdamW on 8 threads, a KV cache, a weights file ending in its hash), and
+  `lab`, a dev tool that makes the corpus (each applang program in the repo
+  that compiles, once, content-addressed: 100 found, a dozen of them real
+  apps and the rest test snippets; 570 with variants, nearly all renames, so
+  90 shapes; held out by shape; `programs/lab/data/manifest.tsv`), trains
+  tiny on it and judges what it writes with applang's own checker and smoke
+  test (`results.md` there). Measured 2026-10-05: 990k parameters, 600 steps
+  of 8 x 1024 tokens in 37 minutes on 8 threads. Of 100 programs prompted by
+  10 app headers, none of tiny's compiles, at any temperature tried, from its
+  last weights or from those with the lowest held-out loss; it writes real
+  openings (states, an icon line), and its first error comes 38% of the way
+  through on average. An 8-gram over the same tokens compiles 2, both copies
+  of corpus programs (its first error: 43%). Held-out loss: tiny at best
+  3.59 nats a token (step 210; then it overfits), a 3-gram 3.53: tiny is no
+  better than counting yet. The pipeline is the result; more verified data
+  is what moves the number (each app added to the repo joins on `lab
+  corpus`).
 
 ## Open questions
 

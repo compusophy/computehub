@@ -44,6 +44,8 @@ members = [
     "programs/toolbox",
     "programs/makes",
     "programs/evals",
+    "programs/tiny",
+    "programs/lab",
     "tools/serve",
     "tools/eval",
 ]
@@ -98,6 +100,7 @@ compusophy-activity = { path = "programs/activity", version = "0.1.0" }
 compusophy-sh = { path = "programs/sh", version = "0.1.0" }
 compusophy-evals = { path = "programs/evals", version = "0.1.0" }
 compusophy-makes = { path = "programs/makes", version = "0.1.0" }
+compusophy-tiny = { path = "programs/tiny", version = "0.1.0" }
 
 # The browser boundary. Only `platform`, `os` and `cpu` may use these
 # (scripts/caps.sh).
@@ -106,6 +109,14 @@ compusophy-makes = { path = "programs/makes", version = "0.1.0" }
 wasm-bindgen = "=0.2.121"
 js-sys = "0.3"
 web-sys = "0.3"
+
+# tiny's kernels are loops over floats, vectorized only at opt-level 3 (6 times faster than at
+# "z"): so in every profile, tests too, which train small models. It ships in no build yet.
+[profile.dev.package.compusophy-tiny]
+opt-level = 3
+
+[profile.release.package.compusophy-tiny]
+opt-level = 3
 
 # Ultra lite: every shipped byte is budgeted.
 [profile.release]

@@ -51,7 +51,7 @@ install, and no server runs your apps: the tab is the machine.
 | Path | What it holds |
 |---|---|
 | `crates/` | The OS: the desktop, window manager, widgets, text, kernel, program worker |
-| `programs/` | What runs in it: Studio, the Assistant, the system apps, Activity, `sh`, applang |
+| `programs/` | What runs in it: Studio, the Assistant, the system apps, Activity, `sh`, applang; `tiny`, a transformer, and its lab |
 | `api/` | The server functions (Vercel, Node) |
 | `web/` | The page: a canvas and a one-line bootstrap |
 | `scripts/` | Build, budget, caps and deploy |
