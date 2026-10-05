@@ -110,11 +110,12 @@ impl Task {
     }
 }
 
-/// Whether `held` holds out the task `id` of `family`: by its family, or by its id's
-/// (`family-...`), so a line that lost its family is held all the same.
+/// Whether `held` holds out the task `id` of `family`: by its family, as `iq::held` splits;
+/// only a line that lost its family is judged by its id (`family-...`), so `pong-ai-spin` of
+/// the family `pong-ai` is never held for `pong`'s sake.
 pub fn is_held(held: &[String], family: &str, id: &str) -> bool {
     let by_id = |h: &str| id.strip_prefix(h).is_some_and(|rest| rest.starts_with('-'));
-    held.iter().any(|h| h == family || by_id(h))
+    held.iter().any(|h| h == family || (family.is_empty() && by_id(h)))
 }
 
 /// The families in a held-out list: one a line, blank lines and `#` comments aside.

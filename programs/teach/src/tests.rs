@@ -386,6 +386,7 @@ fn a_task_line_keeps_the_schema_and_the_stand_in_verifies_it() {
     let is = |family: &str, id: &str| crate::seam::is_held(&held, family, id);
     assert!(is("snake", "x") && is("", "snake-wrap") && is("tetris", "tetris-t"));
     assert!(!is("snakes", "snakes-wrap") && !is("", "snake") && !is("memory", "memory-snake"));
+    assert!(!is("snake-ai", "snake-ai-chase"), "a family of its own is not held for another's");
 }
 
 /// A teacher that answers each request with `answer`, keeping each request; its batches answer
