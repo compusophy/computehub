@@ -694,10 +694,24 @@ fn options_come_before_the_task_so_a_y_in_its_words_is_a_word() {
     let task = ["fix", "the", "-y", "flag"];
     assert_eq!(words(&task), Ok(task.map(String::from).to_vec()), "a -y in the task is a word");
     assert_eq!(words(&["--", "-y", "x"]), Ok(vec!["-y".into(), "x".into()]));
-    assert_eq!(words(&["-x", "task"]), Err(Some("-x".into())));
+    assert_eq!(words(&["-x", "task"]), Err(Some("unknown option -x".into())));
     assert_eq!(words(&["-h", "task"]), Err(None));
     assert!(!a.auto, "none of those said -y");
     let mut words = |args: &[&str]| options(&mut a, args.iter().map(|s| s.to_string()).collect());
-    assert_eq!(words(&["-y", "-m", "m", "--no-learn"]), Ok(vec![]));
-    assert!(a.auto && !a.learn && a.model == "m");
+    assert_eq!(words(&["-y", "-m", "zai/glm-5.3-flash", "--no-learn"]), Ok(vec![]));
+    assert!(a.auto && !a.learn && a.model == "zai/glm-5.3-flash");
+    // A model the free AI does not offer would be its first instead of the one chosen in
+    // Settings, unsaid: refused, as is -m with none.
+    let mut words = |args: &[&str]| options(&mut a, args.iter().map(|s| s.to_string()).collect());
+    let offer = " (zai/glm-5.3, zai/glm-5.3-flash)";
+    let not = ["-m flash: not a model on offer", offer].concat();
+    assert_eq!(words(&["-m", "flash", "task"]), Err(Some(not)));
+    assert_eq!(words(&["--model"]), Err(Some(["--model needs a model", offer].concat())));
+    let shown = words(&["-m", "\x1b[2J"]);
+    assert!(shown.is_err_and(|e| e.is_some_and(|e| e.starts_with("-m ^[[2J: not"))), "as text");
+    assert_eq!(a.model, "zai/glm-5.3-flash");
+    // The models are the free AI's: its MODELS line, read where it lives.
+    let proxy = include_str!("../../../api/ai.mjs");
+    let line = proxy.lines().find(|l| l.starts_with("const MODELS = {")).unwrap();
+    assert_eq!(line.split('\'').skip(1).step_by(2).collect::<Vec<_>>(), MODELS);
 }

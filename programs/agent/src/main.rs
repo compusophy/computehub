@@ -6,7 +6,7 @@
 //! from the directory it started in, as sh opens them: [`sh::from_start`]); jobs through
 //! /dev/job, their output caught in a file; the AI through /dev/draw and /dev/events. Ctrl+C
 //! ends it, as the console ends any job. Exit status: 0, or 1 when the task given did not end
-//! with an answer, 2 for an option it does not know.
+//! with an answer, 2 for an option it does not know or a model not on offer.
 
 #![forbid(unsafe_code)]
 
@@ -31,12 +31,13 @@ const PROMPT: &str = "\n\x1b[1;35m\u{203a}\x1b[m ";
 const HELP: &str = "Type a task in plain words, such as: make a pomodoro timer app.\n\
 It reads freely; it asks before it writes a file or runs a command, and each time before\n\
 it replaces a file or runs what may remove, move or overwrite (rm, mv, >, a program but\n\
-wc, rev, hello).\n\
-  /clear    start a fresh conversation\n  /yes      write and run without asking (again: ask)\n  \
+wc, rev, hello).\n  \
+/clear    start a fresh conversation\n  /yes      write and run without asking (again: ask)\n  \
 /lessons  what it learned from past failures (~/.agent/lessons.md)\n  /forget   forget them\n  \
 /learn    stop learning (again: learn)\n  /exit     leave (Ctrl+D too)\n";
 const USAGE: &str = "usage: agent [-y] [-m model] [--no-learn] [--] [task...]\n  -y          write \
-and run without asking\n  -m model    the model to ask (by default, the one chosen in Settings)\n  \
+and run without asking\n  -m model    the model to ask: zai/glm-5.3 or zai/glm-5.3-flash\n              \
+(by default, the one chosen in Settings)\n  \
 --no-learn  keep no lessons from failures\nOptions go before the task. With a task it works on \
 it and exits; without, it asks for tasks.\n";
 
@@ -247,8 +248,8 @@ fn main() -> ExitCode {
             os.say(USAGE);
             return ExitCode::SUCCESS;
         }
-        Err(Some(o)) => {
-            os.say(&["agent: unknown option ", &o, "\n", USAGE].concat());
+        Err(Some(why)) => {
+            os.say(&["agent: ", &why, "\n", USAGE].concat());
             return ExitCode::from(2);
         }
     };
@@ -294,5 +295,23 @@ fn main() -> ExitCode {
             }
             task => _ = a.task(task, &mut os),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// Each command of /help, and each option of the usage, starts its line two spaces in (a
+    /// string's line continuation eats the next line's leading spaces, so they go before it).
+    #[test]
+    fn help_and_usage_line_up() {
+        let astray = |text: &str, mark: char| -> Vec<String> {
+            let lines = text.lines().filter(|l| l.trim_start().starts_with(mark));
+            lines.filter(|l| !l.starts_with(&format!("  {mark}"))).map(String::from).collect()
+        };
+        assert_eq!(astray(super::HELP, '/'), Vec::<String>::new());
+        assert_eq!(astray(super::USAGE, '-'), Vec::<String>::new());
+        assert_eq!(super::HELP.lines().filter(|l| l.starts_with("  /")).count(), 6);
+        // The models -m takes are the ones the usage names.
+        assert!(agent::MODELS.iter().all(|m| super::USAGE.contains(m)));
     }
 }

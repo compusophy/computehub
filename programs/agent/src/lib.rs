@@ -516,19 +516,36 @@ impl Agent {
     }
 }
 
+/// The models `-m` names, as the free AI (`api/ai.mjs`) offers them (a test reads its `MODELS`
+/// line). It answers a model it does not offer with its first, so a name not here would put
+/// GLM 5.3 in place of the person's choice in Settings, unsaid.
+pub const MODELS: [&str; 2] = ["zai/glm-5.3", "zai/glm-5.3-flash"];
+
 /// Sets on `a` the options that start `args` (`-y`, `-m model`, `--no-learn`), as the person typed
 /// them: `--` or the first other word ends them, so a `-y` among the task's words is a word.
-/// The task's words; Err: `-h` (`None`), or an option it does not know.
+/// The task's words; Err: `-h` (`None`), or what is wrong: an option it does not know, or a model
+/// not one of [`MODELS`].
 pub fn options(a: &mut Agent, args: Vec<String>) -> Result<Vec<String>, Option<String>> {
     let mut it = args.into_iter();
     while let Some(arg) = it.next() {
         match arg.as_str() {
             "-y" | "--yes" => a.auto = true,
             "--no-learn" => a.learn = false,
-            "-m" | "--model" => a.model = it.next().unwrap_or_default(),
+            "-m" | "--model" => match it.next() {
+                Some(m) if MODELS.contains(&m.as_str()) => a.model = m,
+                m => {
+                    let what = m.map_or_else(
+                        || " needs a model".into(),
+                        |m| [" ", &safe(&m), ": not a model on offer"].concat(),
+                    );
+                    return Err(Some([&arg, &what, " (", &MODELS.join(", "), ")"].concat()));
+                }
+            },
             "-h" | "--help" => return Err(None),
             "--" => break,
-            o if o.starts_with('-') => return Err(Some(arg)),
+            o if o.starts_with('-') => {
+                return Err(Some(["unknown option ", &safe(&arg)].concat()));
+            }
             _ => return Ok([arg].into_iter().chain(it).collect()),
         }
     }
