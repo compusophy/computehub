@@ -21,10 +21,13 @@ pub const APPS: [&str; 10] = ["studio", "assistant", "terminal", "files", "edito
 const THEMES: [&str; 3] = ["Midnight", "Dawn", "Mono"];
 const GREETING: &str = "\x1b[1mcompusophyOS terminal\x1b[m \u{2014} type 'help'.\n";
 const KEYS: &str = "Up and Down recall history, Ctrl+C cancels the line, Ctrl+L clears the \
-screen, Ctrl+D on an empty line closes the terminal. Quotes group words: \"a b\" or 'a b'. \
-Programs join with |, read a file with <, write one with > (>> appends).";
-/// `uname`, then `uname -a`.
-const UNAME: [&str; 2] = ["compusophyOS\n", "compusophyOS 0.2 wasm32\n"];
+screen, Ctrl+D on an empty line closes the terminal. Quotes group words: \"a b\" or 'a b'; ~ \
+is home, # starts a comment. Other words run programs from /bin or ~/.local/bin, as \
+wc [-lwmc] [file]... and rev [file]... (no file: what they are given); they join with |, read \
+a file with <, write one with > (>> appends).";
+/// What `uname` prints: the system's name (`-s`, alone the default), its node's (`-n`), its
+/// release (`-r`) and its machine (`-m`); `-a` all.
+const UNAME: [&str; 4] = ["compusophyOS", "compusophy", "0.2", "wasm32"];
 /// The escape that asks the Terminal for something, and what a file shown on screen has in its
 /// place: `cat` never asks.
 const ASK: &str = "\x1b]1729;";
@@ -62,28 +65,42 @@ type Cmd = fn(&mut Shell, &[&str], u32, &mut Io<'_>, &mut dyn Sys);
 /// Any number of operands.
 const ANY: usize = usize::MAX;
 
-/// Every command: name, flag letters, fewest and most operands (flags included), synopsis
+/// Every command: name, flag letters, fewest and most operands (flags not counted), synopsis
 /// (for `help` and usage errors), what it does (for `help`; empty is left out), what it runs.
 #[rustfmt::skip]
 const COMMANDS: [(&str, &str, usize, usize, &str, &str, Cmd); 20] = [
-    ("ls", "a", 0, ANY, "ls [-a] [path]", "list a directory; -a shows dot files", ls),
+    ("ls", "aAlh1", 0, ANY, "ls [-alh1] [path]...",
+        "list directories; -a shows dot files, -l kinds (d a directory) and sizes (-h as \
+        1.5K), -1 a name a line", ls),
     ("cd", "", 0, 1, "cd [dir]", "change directory; ~ is home", |s, a, _, io, sys| {
         s.each(if a.is_empty() { &["~"][..] } else { a }, io, sys, Op::Cd);
     }),
     ("pwd", "", 0, ANY, "pwd", "print the working directory",
         |s, _, _, io, _| io.line(&[&s.cwd], "")),
-    ("cat", "", 1, ANY, "cat <file>...", "print files",
-        |s, a, _, io, sys| s.each(a, io, sys, Op::Cat)),
-    ("echo", "", 0, ANY, "echo <text>", "print text; > file writes it, >> file appends",
-        |_, a, _, io, _| io.line(a, " ")),
+    ("cat", "n", 1, ANY, "cat [-n] <file>...", "print files; -n numbers the lines",
+        |s, a, f, io, sys| s.each(a, io, sys, Op::Cat(f != 0))),
+    ("echo", "", 0, ANY, "echo [-n] <text>",
+        "print text (-n with no line break); > file writes it, >> file appends",
+        |_, a, _, io, _| match a {
+            ["-n", rest @ ..] => io.out(&rest.join(" ")),
+            _ => io.line(a, " "),
+        }),
     ("mkdir", "p", 1, ANY, "mkdir [-p] <dir>...", "make directories; -p makes parents too",
         |s, a, f, io, sys| s.each(a, io, sys, Op::Mkdir(f))),
     ("touch", "", 1, ANY, "touch <file>...", "make empty files",
         |s, a, _, io, sys| s.each(a, io, sys, Op::Touch)),
-    ("rm", "rRf", 1, ANY, "rm [-r] <path>...", "remove files; -r removes directories",
+    ("rm", "rRf", 1, ANY, "rm [-rf] <path>...",
+        "remove files; -r removes directories, -f is quiet about missing ones",
         |s, a, f, io, sys| s.each(a, io, sys, Op::Rm(f))),
-    ("mv", "", 2, 2, "mv <from> <to>", "move or rename",
-        |s, a, _, io, sys| s.each(&a[..1], io, sys, Op::Mv(a[1]))),
+    // mv never asks, so -f (do not ask) is taken and changes nothing.
+    ("mv", "f", 2, ANY, "mv <from>... <to>",
+        "move or rename; several move into the directory <to>", |s, a, _, io, sys| {
+            let [from @ .., to] = a else { return };
+            if from.len() > 1 && s.abs(to).map(|t| sys.kind(&t)) != Ok(Some(true)) {
+                return io.err(&["mv: ", to, ": ", NOT_A_DIR]);
+            }
+            s.each(from, io, sys, Op::Mv(to));
+        }),
     ("apps", "", 0, ANY, "apps", "list the apps you can open", |_, _, _, io, sys| {
         io.line(&APPS, "  ");
         for dir in ["/apps", Vfs::HOME] {
@@ -110,9 +127,20 @@ const COMMANDS: [(&str, &str, usize, usize, &str, &str, Cmd); 20] = [
     ("clear", "", 0, ANY, "clear", "clear the screen",
         |_, _, _, io, _| io.out("\x1b[3J\x1b[H\x1b[2J")),
     ("whoami", "", 0, ANY, "whoami", "print your user name", |_, _, _, io, _| io.out("guest\n")),
-    ("uname", "", 0, ANY, "uname [-a]", "print the system's name",
-        |_, a, _, io, _| io.out(UNAME[usize::from(matches!(a, ["-a"]))])),
-    ("exit", "", 0, ANY, "exit", "close this terminal", |s, _, _, _, _| s.quit = true),
+    ("uname", "asnrm", 0, 0, "uname [-asnrm]", "print the system's name; -a all about it",
+        |_, _, f, io, _| {
+            // Bit 0 is -a, bits 1 to 4 the fields; none is -s.
+            let f = if f & 1 != 0 { 30 } else { f.max(2) };
+            let parts: Vec<&str> = (0..4).filter(|i| f & (2 << i) != 0).map(|i| UNAME[i]).collect();
+            io.line(&parts, " ");
+        }),
+    ("exit", "", 0, 1, "exit [status]", "close this terminal", |s, a, _, io, _| {
+        match a.first().map(|n| (n, n.parse::<u8>())) {
+            Some((n, Err(_))) => io.err(&["exit: ", n, ": not a status (0 to 255)"]),
+            Some((_, Ok(n))) => (s.status, s.quit) = (i32::from(n), true),
+            None => s.quit = true,
+        }
+    }),
     ("help", "", 0, ANY, "", "", |s, _, _, io, _| help(io, s.cols.into())),
 ];
 /// `help`'s sections: a title and the row of [`COMMANDS`] it starts at.
@@ -211,7 +239,8 @@ fn char_width(c: char) -> usize {
 #[derive(Clone, Copy)]
 enum Op<'a> {
     Cd,
-    Cat,
+    /// `cat`, numbering the lines (`-n`).
+    Cat(bool),
     Touch,
     Write(&'a [u8], bool),
     Mkdir(u32),
@@ -305,7 +334,11 @@ pub struct Shell {
     pub rows: u16,
     /// `exit`, or Ctrl+D on an empty line: the shell is done.
     pub quit: bool,
-    cwd: String,
+    /// The last command line's status: its job's, a command's (1 when it reported an error, 2
+    /// for a misuse), 127 for a program not found, 126 for a file that is none; `exit n`'s.
+    pub status: i32,
+    /// The working directory, absolute.
+    pub cwd: String,
     line: Vec<char>,
     /// The caret, as an index into `line`.
     pos: usize,
@@ -323,11 +356,13 @@ pub struct Shell {
 
 impl Default for Shell {
     /// A shell in the guest's home, 80 columns by 24 rows.
+    #[rustfmt::skip]
     fn default() -> Shell {
         let (out, line, history, draft, mark) = Default::default();
         let (cols, rows, cwd) = (80, 24, Vfs::HOME.into());
-        let (quit, pos, browse, caret, ran) = (false, 0, None, (0, 0), false);
-        Shell { out, cols, rows, quit, cwd, line, pos, history, browse, draft, caret, mark, ran }
+        let (quit, status, pos, browse, caret, ran) = (false, 0, 0, None, (0, 0), false);
+        Shell { out, cols, rows, quit, status, cwd, line, pos, history, browse, draft, caret,
+            mark, ran }
     }
 }
 
@@ -337,9 +372,18 @@ struct Io<'a> {
     cmd: &'a str,
     screen: String,
     file: Option<String>,
+    /// The command's status: 0, or 1 once it reported an error (2 for a misuse).
+    failed: u8,
+    /// The lines `cat -n` numbered so far.
+    lines: u64,
 }
 
-impl Io<'_> {
+impl<'a> Io<'a> {
+    /// The output of `cmd`: to the screen, or (`to_file`) gathered for a file or a pipe.
+    fn new(cmd: &'a str, to_file: bool) -> Io<'a> {
+        Io { cmd, screen: String::new(), file: to_file.then(String::new), failed: 0, lines: 0 }
+    }
+
     /// Writes to stdout.
     fn out(&mut self, s: &str) {
         self.file.as_mut().unwrap_or(&mut self.screen).push_str(s);
@@ -354,10 +398,11 @@ impl Io<'_> {
         self.out("\n");
     }
 
-    /// Writes `parts` and a line break to the screen.
+    /// Writes `parts` and a line break to the screen: an error, which fails the command.
     fn err(&mut self, parts: &[&str]) {
         push_all(&mut self.screen, parts);
         self.screen.push('\n');
+        self.failed = self.failed.max(1);
     }
 
     /// Asks the Terminal to `verb` `arg` (never with a control in `arg`, which would end the
@@ -379,6 +424,28 @@ fn csi(out: &mut String, n: usize, c: char) {
 }
 
 impl Shell {
+    /// What `sh`'s arguments (its name left out) give it to run: none for no arguments (the
+    /// console, or without one the script on its input), the line after `-c`, or the script in
+    /// the file named. Else what to say, and the status to end with: 2 for a misuse, 127 for a
+    /// script that cannot be read.
+    pub fn script(
+        &self,
+        args: &[String],
+        sys: &mut dyn Sys,
+    ) -> Result<Option<String>, (String, u8)> {
+        let say = |parts: &[&str], status| Err((parts.concat() + "\n", status));
+        match args {
+            [] => Ok(None),
+            [c, line, ..] if c == "-c" => Ok(Some(line.clone())),
+            [c] if c == "-c" => say(&["sh: -c: a command line must follow"], 2),
+            [o, ..] if o.len() > 1 && o.starts_with('-') => say(&["sh: unknown option ", o], 2),
+            [path, ..] => match self.abs(path).and_then(|a| sys.read(&a)) {
+                Ok(text) => Ok(Some(String::from_utf8_lossy(&text).into_owned())),
+                Err(e) => say(&["sh: ", path, ": ", e], 127),
+            },
+        }
+    }
+
     /// The greeting, wrapped to the terminal, and the first prompt.
     pub fn greet(&mut self) {
         let mut text = String::new();
@@ -563,36 +630,39 @@ impl Shell {
     pub fn run(&mut self, line: &str, sys: &mut dyn Sys) {
         let Line { stages, input, output } = match parse(line) {
             Ok(parsed) => parsed,
-            Err(e) => return push_all(&mut self.out, &["sh: ", e, "\n"]),
+            Err(e) => return self.fail(2, &["sh: ", e]),
         };
         let is = |w: &Vec<String>| COMMANDS.iter().position(|c| c.0 == w[0]);
         let first = stages.first().and_then(is);
         if let Some(name) = stages.iter().skip(1).find(|w| is(w).is_some()) {
-            return push_all(&mut self.out, &["sh: ", &name[0], ": a command reads no pipe\n"]);
+            return self.fail(2, &["sh: ", &name[0], ": a command reads no pipe"]);
         }
         if let (Some(i), Some(_)) = (first, &input) {
-            return push_all(
-                &mut self.out,
-                &["sh: ", COMMANDS[i].0, ": a command reads no file\n"],
-            );
+            return self.fail(2, &["sh: ", COMMANDS[i].0, ": a command reads no file"]);
         }
         let alone = stages.len() == 1 && first.is_some();
-        let file = (output.is_some() || !alone).then(String::new);
-        let mut io = Io { cmd: "sh", screen: String::new(), file };
+        let mut io = Io::new("sh", output.is_some() || !alone);
         if let Some(i) = first {
-            let (_, ok, min, max, synopsis, _, run) = COMMANDS[i];
+            let (name, ok, min, max, synopsis, _, run) = COMMANDS[i];
             let args: Vec<&str> = stages[0].iter().skip(1).map(String::as_str).collect();
-            io.cmd = COMMANDS[i].0;
-            if !(min..=max).contains(&args.len()) {
-                io.err(&["usage: ", synopsis]);
-            } else if let Some((f, operands)) = flags(&args, ok, &mut io) {
-                run(self, operands, f, &mut io, sys);
+            io.cmd = name;
+            if let Some((f, operands)) = flags(&args, ok, &mut io) {
+                if (min..=max).contains(&operands.len()) {
+                    run(self, operands, f, &mut io, sys);
+                } else {
+                    io.err(&["usage: ", synopsis]);
+                    io.failed = 2;
+                }
             }
             io.cmd = "sh";
         }
         if alone || stages.is_empty() {
             if let (Some((path, append)), Some(data)) = (&output, io.file.take()) {
                 self.each(&[path], &mut io, sys, Op::Write(data.as_bytes(), *append));
+            }
+            // A blank line keeps the status; `exit` keeps the one it ends with.
+            if !self.quit && (first.is_some() || output.is_some()) {
+                self.status = i32::from(io.failed);
             }
             return self.out.push_str(&io.screen);
         }
@@ -616,7 +686,7 @@ impl Shell {
         for argv in stages {
             match self.program(&argv[0], sys) {
                 Some(path) => found.push((path, argv.clone())),
-                None => return push_all(&mut self.out, &[&argv[0], ": command not found\n"]),
+                None => return self.fail(127, &[&argv[0], ": command not found"]),
             }
         }
         let cwd = self.cwd.clone();
@@ -625,7 +695,7 @@ impl Shell {
             Some((p, append)) => {
                 let path = abs(p);
                 if let Err(e) = sys.write(&path, b"", *append) {
-                    return push_all(&mut self.out, &["sh: ", p, ": ", e, "\n"]);
+                    return self.fail(1, &["sh: ", p, ": ", e]);
                 }
                 (1 + u8::from(*append), path)
             }
@@ -635,28 +705,36 @@ impl Shell {
             _ if piped => (2, String::new()),
             Some(path) => match sys.kind(&abs(path)) {
                 Some(false) => (1, abs(path)),
-                Some(true) => {
-                    return push_all(&mut self.out, &["sh: ", path, ": ", IS_A_DIR, "\n"]);
-                }
-                None => return push_all(&mut self.out, &["sh: ", path, ": ", NOT_FOUND, "\n"]),
+                Some(true) => return self.fail(1, &["sh: ", path, ": ", IS_A_DIR]),
+                None => return self.fail(1, &["sh: ", path, ": ", NOT_FOUND]),
             },
             None => (0, String::new()),
         };
         let name = &stages[0][0];
         let Some(bytes) = job(&self.cwd, (stdin.0, &stdin.1), (stdout.0, &stdout.1), &found, data)
         else {
-            return push_all(&mut self.out, &["sh: ", name, ": ", TOO_LONG, "\n"]);
+            return self.fail(1, &["sh: ", name, ": ", TOO_LONG]);
         };
         match sys.run(&std::mem::take(&mut self.out), &bytes) {
             Ok(status) => {
-                self.ran = true;
+                (self.ran, self.status) = (true, status);
                 if status != 0 {
                     push_int(&mut self.mark, u64::from(status as u32), 0);
                     self.mark.push(' ');
                 }
             }
-            Err(errno) => push_all(&mut self.out, &["sh: ", name, ": ", refused(errno), "\n"]),
+            Err(errno) => {
+                let (why, status) = refused(errno);
+                self.fail(status, &["sh: ", name, ": ", why]);
+            }
         }
+    }
+
+    /// Says the error `parts` on a line of its own; the command line's status is `status`.
+    fn fail(&mut self, status: i32, parts: &[&str]) {
+        push_all(&mut self.out, parts);
+        self.out.push('\n');
+        self.status = status;
     }
 
     /// The program the word `w` names: the file `w` if it has a `/`, else the first file of
@@ -696,8 +774,24 @@ impl Shell {
         match op {
             Op::Cd if kind == Some(true) => self.cwd = a.to_string(),
             Op::Cd if kind.is_some() => return Err(NOT_A_DIR),
-            Op::Cat => {
-                let text = String::from_utf8_lossy(&sys.read(a)?).into_owned();
+            Op::Cat(number) => {
+                let mut text = String::from_utf8_lossy(&sys.read(a)?).into_owned();
+                if number {
+                    // `%6d\t` before each line, counting on from the files before; a file that
+                    // ends mid-line goes on with the next one's first.
+                    let shown = io.file.as_ref().unwrap_or(&io.screen);
+                    let mut fresh = io.lines == 0 || shown.ends_with('\n');
+                    let mut lines = String::new();
+                    for line in text.split_inclusive('\n') {
+                        if std::mem::replace(&mut fresh, true) {
+                            io.lines += 1;
+                            push_int(&mut lines, io.lines, 6);
+                            lines.push('\t');
+                        }
+                        lines.push_str(line);
+                    }
+                    text = lines;
+                }
                 // On screen, a file never asks the Terminal for anything.
                 let text = if io.file.is_none() { text.replace(ASK, DEFUSED) } else { text };
                 io.out(&text);
@@ -736,24 +830,94 @@ impl Shell {
     }
 }
 
-fn ls(s: &mut Shell, paths: &[&str], all: u32, io: &mut Io<'_>, sys: &mut dyn Sys) {
+/// `ls`'s flags, as bits of its row's letters `aAlh1`.
+const DOTS: u32 = 3;
+const LONG: u32 = 4;
+const HUMAN: u32 = 8;
+const ONE: u32 = 16;
+
+/// `ls`: the files named, then each directory's entries (dot files only with -a or -A), under
+/// its name when several are named, each sorted by name.
+fn ls(s: &mut Shell, paths: &[&str], f: u32, io: &mut Io<'_>, sys: &mut dyn Sys) {
+    let named = if paths.is_empty() { &["."][..] } else { paths };
+    let (mut files, mut dirs) = (Vec::new(), Vec::new());
+    for &p in named {
+        match s.abs(p).map(|a| (sys.list(&a), a)) {
+            Ok((Ok(list), _)) => dirs.push((p, list)),
+            Ok((Err(e), a)) => match stat(sys, &a) {
+                Some(file) if !file.is_dir => files.push(Entry { name: p.into(), ..file }),
+                _ => io.err(&["ls: ", p, ": ", e]),
+            },
+            Err(e) => io.err(&["ls: ", p, ": ", e]),
+        }
+    }
+    files.sort_by(|a, b| a.name.cmp(&b.name));
+    dirs.sort_by(|a, b| a.0.cmp(b.0));
+    let mut gap = !files.is_empty();
+    entries(&files, f, io);
+    for (p, mut list) in dirs {
+        if named.len() > 1 {
+            io.out(if gap { "\n" } else { "" });
+            io.line(&[p, ":"], "");
+            gap = true;
+        }
+        list.retain(|e| f & DOTS != 0 || !e.name.starts_with('.'));
+        entries(&list, f, io);
+    }
+}
+
+/// The entry of the absolute path `a`, from its directory's list.
+fn stat(sys: &mut dyn Sys, a: &str) -> Option<Entry> {
+    let (dir, name) = a.rsplit_once('/')?;
+    let list = sys.list(if dir.is_empty() { "/" } else { dir }).ok()?;
+    list.into_iter().find(|e| e.name == name)
+}
+
+/// Writes `list` as `ls` does with flags `f`: on screen the names share a line, directories in
+/// blue; to a file or a pipe (or with -1) each has its own. With -l each has a line: its kind
+/// (`d` a directory, `-` a file), its size in bytes (with -h as 1.5K, 12M), its name. The files
+/// keep no dates, owners or modes, so neither does the line.
+fn entries(list: &[Entry], f: u32, io: &mut Io<'_>) {
     const BLUE: [&str; 2] = ["\x1b[1;34m", "\x1b[m"];
-    let p = paths.first().copied().unwrap_or(".");
-    let entries = match s.abs(p).and_then(|a| sys.list(&a)) {
-        Ok(entries) => entries,
-        Err(_) if s.abs(p).is_ok_and(|a| sys.kind(&a) == Some(false)) => return io.line(&[p], ""),
-        Err(e) => return io.err(&["ls: ", p, ": ", e]),
-    };
-    let (color, mut names) = (io.file.is_none(), String::new());
-    let shown = |e: &&Entry| all != 0 || !e.name.starts_with('.');
-    for e in entries.iter().filter(shown) {
-        let sep = if names.is_empty() { "" } else { "  " };
+    let color = io.file.is_none();
+    let name = |e: &Entry| {
         let [open, close] = if e.is_dir && color { BLUE } else { ["", ""] };
-        push_all(&mut names, &[sep, open, &e.name, close]);
+        [open, &e.name, close].concat()
+    };
+    if f & LONG != 0 {
+        let sizes: Vec<String> = list.iter().map(|e| size(e.size, f & HUMAN != 0)).collect();
+        let width = sizes.iter().map(String::len).max().unwrap_or(0);
+        for (e, n) in list.iter().zip(&sizes) {
+            let pad = " ".repeat(width - n.len());
+            io.line(&[if e.is_dir { "d" } else { "-" }, "  ", &pad, n, "  ", &name(e)], "");
+        }
+    } else if !list.is_empty() {
+        let names: Vec<String> = list.iter().map(name).collect();
+        let names: Vec<&str> = names.iter().map(String::as_str).collect();
+        io.line(&names, if color && f & ONE == 0 { "  " } else { "\n" });
     }
-    if !names.is_empty() {
-        io.line(&[&names], "");
+}
+
+/// `n` bytes as `ls -l` shows them: in full, or (`human`) from 1024 in K, M, G or T, rounded
+/// up, with a tenth below 10 (1.5K, 12M).
+fn size(n: u64, human: bool) -> String {
+    let mut s = String::new();
+    let unit = (1..5u32).take_while(|&u| human && n >= 1 << (10 * u)).last().unwrap_or(0);
+    if unit == 0 {
+        push_int(&mut s, n, 0);
+        return s;
     }
+    let scale = 1u64 << (10 * unit);
+    let tenths = n.saturating_mul(10).div_ceil(scale);
+    if tenths < 100 {
+        push_int(&mut s, tenths / 10, 0);
+        s.push('.');
+        push_int(&mut s, tenths % 10, 0);
+    } else {
+        push_int(&mut s, n.div_ceil(scale), 0);
+    }
+    s.push(char::from(b"KMGT"[unit as usize - 1]));
+    s
 }
 
 fn open(s: &mut Shell, args: &[&str], _: u32, io: &mut Io<'_>, sys: &mut dyn Sys) {
@@ -778,29 +942,33 @@ fn theme(_: &mut Shell, args: &[&str], _: u32, io: &mut Io<'_>, _: &mut dyn Sys)
 /// What a job too long for the kernel is told.
 const TOO_LONG: &str = "too long to run (64 KB at most, piped input too)";
 
-/// Why the kernel did not start a job, by its errno.
-fn refused(errno: u16) -> &'static str {
+/// Why the kernel did not start a job, by its errno, and the command line's status.
+fn refused(errno: u16) -> (&'static str, i32) {
     match errno {
-        44 => "command not found",
-        45 => "cannot execute",
-        6 => "too many programs are running",
-        1 => TOO_LONG,
-        _ => "cannot run",
+        44 => ("command not found", 127),
+        45 => ("cannot execute", 126),
+        6 => ("too many programs are running", 1),
+        1 => (TOO_LONG, 1),
+        _ => ("cannot run", 1),
     }
 }
 
-/// Splits leading `-xyz` flags (chars of `ok`, as bits) from the operands; `None`, after
-/// reporting it, for an unknown flag.
+/// Splits leading `-xyz` flags (chars of `ok`, as bits) from the operands, which `--` may
+/// start; `None`, after reporting it (a misuse), for an unknown flag.
 fn flags<'a, 'b>(args: &'a [&'b str], ok: &str, io: &mut Io<'_>) -> Option<(u32, &'a [&'b str])> {
     let mut set = 0;
     for (n, arg) in args.iter().enumerate() {
         if ok.is_empty() || arg.len() < 2 || !arg.starts_with('-') {
             return Some((set, &args[n..]));
         }
+        if *arg == "--" {
+            return Some((set, &args[n + 1..]));
+        }
         for c in arg.chars().skip(1) {
             let Some(i) = ok.bytes().position(|o| char::from(o) == c) else {
                 let cmd = io.cmd;
                 io.err(&[cmd, ": unknown option -", c.encode_utf8(&mut [0; 4])]);
+                io.failed = 2;
                 return None;
             };
             set |= 1 << i;
@@ -824,6 +992,8 @@ struct Line {
 
 /// Splits a command line into stages of words, at `|`, and its redirects: `< path`, `> path`
 /// and `>> path`, one of each. `'…'` is literal, `"…"` takes `\"` and `\\`, a bare `\` escapes.
+/// A bare `~` alone or before a `/` starting a word is the home (for programs as for commands);
+/// a bare `#` starting a word starts a comment, to the end of the line.
 fn parse(line: &str) -> Result<Line, &'static str> {
     let mut parsed = Line::default();
     let (mut words, mut word, mut to): (Vec<String>, Option<String>, Option<u8>) =
@@ -854,6 +1024,14 @@ fn parse(line: &str) -> Result<Line, &'static str> {
                 '|' => parsed.stages.push(std::mem::take(&mut words)),
                 _ => {}
             }
+            continue;
+        }
+        if word.is_none() && c == '#' {
+            break;
+        }
+        let ends = |c: Option<&char>| matches!(c, Some(' ' | '\t' | '/' | '|' | '<' | '>'));
+        if word.is_none() && c == '~' && ends(chars.peek()) {
+            word = Some(Vfs::HOME.into());
             continue;
         }
         let w = word.get_or_insert_with(String::new);

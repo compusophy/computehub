@@ -17,8 +17,9 @@ install, and no server runs your apps: the tab is the machine.
 - **Programs.** Apps are WebAssembly programs (WASI preview 1), each in its own Web Worker,
   under a small kernel in the page: processes, a file system, consoles, jobs and pipes. A program
   with a window describes it as a widget tree; the desktop draws it.
-- **Terminal.** A program drawing an xterm screen of `/bin/sh`: Unix-like commands, pipes (`a | b`), redirects
-  (`<`, `>`, `>>`), history.
+- **Terminal.** A program drawing an xterm screen of `/bin/sh`: Unix-like commands (`ls -l`,
+  `cat -n`, `mv`, `wc`, `rev`, ...), pipes (`a | b`), redirects (`<`, `>`, `>>`), scripts
+  (`sh -c`, `sh file`), history.
 - **Studio.** Make an app by describing it. A coding agent writes it in applang, a small
   language made for this, then tests and fixes it. Games, boards, drawings, clocks and charts
   draw on a canvas: shapes, and pixels for boards of squares.

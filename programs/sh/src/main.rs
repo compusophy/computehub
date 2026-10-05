@@ -1,7 +1,9 @@
 //! `sh` (see the library) on its console: raw while it edits a line, cooked while a job runs,
 //! files through `std::fs` (which WASI serves from the desktop's VFS), jobs through /dev/job.
-//! With no console (`sh < script`, a pipe) each line of its input is a command and nothing is
-//! edited. Exit status 0 at `exit`, Ctrl+D on an empty line or the end of its input.
+//! It starts in its job's working directory. `sh -c line` runs the line, `sh file` each line of
+//! the file, and with no console (`sh < script`, a pipe) each line of its input is a command;
+//! then nothing is edited, and the exit status is the last line's (or `exit n`'s). On its
+//! console the status is 0 at `exit`, Ctrl+D on an empty line or the end of its input.
 
 #![forbid(unsafe_code)]
 
@@ -120,17 +122,33 @@ fn show(s: &str, tty: bool) {
 }
 
 fn main() -> ExitCode {
+    let args: Vec<String> = std::env::args().skip(1).collect();
     let ctl = OpenOptions::new().write(true).open("/dev/consctl").ok();
     let mut os = Os { ctl };
     let mut sh = Shell::default();
+    if let Some(pwd) = std::env::var("PWD").ok().filter(|p| p.starts_with('/')) {
+        sh.cwd = pwd;
+    }
     if let Some((cols, rows)) = Os::size() {
         (sh.cols, sh.rows) = (cols, rows);
     }
-    if !os.raw(true) {
-        // No console: a script, a line a command.
+    let script = match sh.script(&args, &mut os) {
+        // The console, raw while a line is edited.
+        Ok(None) if os.raw(true) => None,
+        Ok(None) => {
+            let mut text = String::new();
+            let _ = io::stdin().read_to_string(&mut text);
+            Some(text)
+        }
+        Ok(script) => script,
+        Err((why, status)) => {
+            show(&why, false);
+            return ExitCode::from(status);
+        }
+    };
+    if let Some(text) = script {
+        // A script: a line a command, on a console left as it was.
         os.ctl = None;
-        let mut text = String::new();
-        let _ = io::stdin().read_to_string(&mut text);
         for line in text.lines() {
             sh.run(line, &mut os);
             show(&std::mem::take(&mut sh.out), false);
@@ -138,7 +156,7 @@ fn main() -> ExitCode {
                 break;
             }
         }
-        return ExitCode::SUCCESS;
+        return ExitCode::from(sh.status as u8);
     }
     sh.greet();
     show(&std::mem::take(&mut sh.out), true);

@@ -7,9 +7,12 @@
 #![forbid(unsafe_code)]
 
 mod fstest;
+mod text;
 
 use std::io::{self, Read, Write};
 use std::process::ExitCode;
+
+use text::Files;
 
 /// Every applet, in the order `toolbox` lists them.
 const APPLETS: [&str; 9] =
@@ -19,7 +22,8 @@ fn main() -> ExitCode {
     let argv: Vec<String> = std::env::args().collect();
     let (name, args) = applet(&argv);
     let (mut out, mut err) = (io::stdout().lock(), io::stderr().lock());
-    ExitCode::from(run(name, args, &mut io::stdin().lock(), &mut out, &mut err))
+    let files = &mut |path: &str| std::fs::read(path);
+    ExitCode::from(run(name, args, &mut io::stdin().lock(), files, &mut out, &mut err))
 }
 
 /// The applet `argv` names and its arguments, its own name first.
@@ -37,18 +41,19 @@ fn base(path: &str) -> &str {
     name.strip_suffix(".wasm").unwrap_or(name)
 }
 
-/// Runs applet `name` on `args` (its own name first) and its input; its exit status.
+/// Runs applet `name` on `args` (its own name first), its input and the files; its exit status.
 fn run(
     name: &str,
     args: &[String],
     inp: &mut dyn Read,
+    files: Files<'_>,
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> u8 {
     let words = args.get(1..).unwrap_or(&[]);
     match name {
         "hello" => hello(words, out, err),
-        "rev" | "wc" => filter(name, words, inp, out, err),
+        "rev" | "wc" => text::filter(name, words, inp, files, out, err),
         "spin" => spin(),
         "fstest" => fstest::fstest(args, out),
         _ if APPLETS.contains(&name) => {
@@ -75,44 +80,6 @@ fn hello(words: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8 {
     }
 }
 
-/// `rev`: each line of the input, its characters reversed. `wc [-l|-w|-c]`: the input's lines,
-/// words and bytes, or the one count asked for. 1 if the input cannot be read or the output
-/// written, 2 for an option `wc` does not know.
-fn filter(
-    name: &str,
-    words: &[String],
-    inp: &mut dyn Read,
-    out: &mut dyn Write,
-    err: &mut dyn Write,
-) -> u8 {
-    let mut data = Vec::new();
-    if let Err(e) = inp.read_to_end(&mut data) {
-        let _ = writeln!(err, "{name}: {e}");
-        return 1;
-    }
-    let text = String::from_utf8_lossy(&data);
-    let said = match (name, words.first().map(String::as_str)) {
-        ("rev", _) => text.lines().map(|l| l.chars().rev().collect::<String>() + "\n").collect(),
-        (_, None) => {
-            format!("{} {} {}\n", text.lines().count(), text.split_whitespace().count(), data.len())
-        }
-        (_, Some("-l")) => format!("{}\n", text.lines().count()),
-        (_, Some("-w")) => format!("{}\n", text.split_whitespace().count()),
-        (_, Some("-c")) => format!("{}\n", data.len()),
-        (_, Some(other)) => {
-            let _ = writeln!(err, "wc: unknown option {other}; use -l, -w or -c");
-            return 2;
-        }
-    };
-    match out.write_all(said.as_bytes()).and_then(|()| out.flush()) {
-        Ok(()) => 0,
-        Err(e) => {
-            let _ = writeln!(err, "{name}: {e}");
-            1
-        }
-    }
-}
-
 /// `spin`: loops forever without a syscall, to test that the kernel kills a
 /// guest mid-loop (Ctrl+C gives 130, closing the window 137).
 fn spin() -> ! {
@@ -134,11 +101,20 @@ mod tests {
         piped(argv, "")
     }
 
+    /// The files the applets read in tests: a directory (no text), and the rest missing.
+    const FILES: [(&str, Option<&str>); 3] =
+        [("a", Some("one two\nthree\n")), ("/b/c", Some("é x")), ("d", None)];
+
     /// The same on `input`.
     fn piped(argv: &[String], input: &str) -> (u8, String, String) {
         let (mut out, mut err) = (Vec::new(), Vec::new());
         let (name, rest) = applet(argv);
-        let status = run(name, rest, &mut input.as_bytes(), &mut out, &mut err);
+        let files = &mut |path: &str| match FILES.iter().find(|f| f.0 == path) {
+            Some((_, Some(text))) => Ok(text.as_bytes().to_vec()),
+            Some((_, None)) => Err(io::Error::from(io::ErrorKind::IsADirectory)),
+            None => Err(io::Error::from(io::ErrorKind::NotFound)),
+        };
+        let status = run(name, rest, &mut input.as_bytes(), files, &mut out, &mut err);
         let text = |b: Vec<u8>| String::from_utf8(b).unwrap();
         (status, text(out), text(err))
     }
@@ -178,13 +154,43 @@ mod tests {
     }
 
     #[test]
-    fn rev_and_wc_read_their_input() {
+    fn rev_and_wc_read_their_input_when_they_name_no_file() {
         let ok = |s: &str| (0, s.to_owned(), String::new());
         assert_eq!(piped(&args("rev"), "abc\nhé\n\n"), ok("cba\néh\n\n"));
         assert_eq!(piped(&args("wc"), "one two\nthree\n"), ok("2 3 14\n"));
-        let counts = ["-l", "-w", "-c"].map(|f| piped(&args(&format!("wc {f}")), "a b\n").1);
-        assert_eq!(counts, ["1\n", "2\n", "4\n"]);
-        assert_eq!(piped(&args("wc -x"), "").0, 2);
+        let counts = ["-l", "-w", "-c", "-m"].map(|f| piped(&args(&format!("wc {f}")), "a é\n").1);
+        assert_eq!(counts, ["1\n", "2\n", "5\n", "4\n"]);
+        // Lines are line breaks: a last line without one is not counted.
+        assert_eq!(piped(&args("wc -l"), "a\nb").1, "1\n");
         assert_eq!((exec(&args("rev")), exec(&args("wc"))), (ok(""), ok("0 0 0\n")));
+    }
+
+    #[test]
+    fn rev_and_wc_read_the_files_they_name() {
+        let ok = |s: &str| (0, s.to_owned(), String::new());
+        let wc = |argv: &str| piped(&args(argv), "x\n");
+        assert_eq!(wc("wc a"), ok("2 3 14 a\n"));
+        assert_eq!(wc("wc a /b/c"), ok("2 3 14 a\n0 2 4 /b/c\n2 5 18 total\n"));
+        // Flags pick counts, always printed lines, words, characters, bytes.
+        assert_eq!(wc("wc -l a"), ok("2 a\n"));
+        assert_eq!(wc("wc -cm -w /b/c"), ok("2 3 4 /b/c\n"));
+        // `-` is the input, `--` ends the flags.
+        assert_eq!(wc("wc -w - a"), ok("1 -\n3 a\n4 total\n"));
+        let missing = "wc: -l: no such file or directory\n";
+        assert_eq!(wc("wc -- -l"), (1, String::new(), missing.into()));
+        // A file that cannot be read is said, the rest still are, and the status is 1.
+        let (status, out, err) = wc("wc nope a d");
+        assert_eq!((status, out.as_str()), (1, "2 3 14 a\n2 3 14 total\n"));
+        assert_eq!(err, "wc: nope: no such file or directory\nwc: d: is a directory\n");
+        let empty = "wc: : no such file or directory\n";
+        assert_eq!(wc("wc "), (1, String::new(), empty.into()));
+        // An unknown option is a misuse: status 2, nothing read.
+        assert_eq!(wc("wc -lx a"), (2, String::new(), "wc: unknown option -x\n".into()));
+        assert_eq!(piped(&args("rev a /b/c"), ""), ok("owt eno\neerht\nx é\n"));
+        assert_eq!(piped(&args("rev nope"), "").2, "rev: nope: no such file or directory\n");
+        assert_eq!(
+            piped(&args("rev -l a"), ""),
+            (2, String::new(), "rev: unknown option -l\n".into())
+        );
     }
 }

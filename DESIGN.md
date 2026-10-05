@@ -354,13 +354,16 @@ one. Forked crates keep their Apache-2.0 license and note their origin.
   shell writes and its end coming back as events, and the window's keys,
   text and wheel too; the program draws its screen as a `Node::Screen` of
   8 x 17 px cells, which the desktop paints (`ui::screen`). It runs
-  `/bin/sh` (the `sh` program: `ls`, `cd`,
-  `cat`, `mkdir`, `mv`, `open`, `edit`, `run`, `theme`, ..., and programs
-  joined by `|`, with `<` and `>`), which edits its line on a raw console
-  and runs programs as the kernel's jobs on a cooked one. What only the
-  desktop can do the shell asks in its own escape, `OSC 1729 ; verb ; arg`
-  (`open` an app, switch the `theme`), as programs already ask a terminal
-  for its title.
+  `/bin/sh` (the `sh` program: `ls` (`-l` a line each, its kind and size:
+  the files keep no dates), `cd`, `cat`, `mkdir`, `mv`, `open`, `edit`,
+  `run`, `theme`, ..., `~` for the home, `#` comments, and programs such
+  as the toolbox's `wc` and `rev`, which read the files they name or else
+  their input, joined by `|`, with `<` and `>`; `sh -c line` and `sh file`
+  run scripts, ending with the last line's status), which edits its line
+  on a raw console and runs programs as the kernel's jobs on a cooked one.
+  What only the desktop can do the shell asks in its own escape,
+  `OSC 1729 ; verb ; arg` (`open` an app, switch the `theme`), as programs
+  already ask a terminal for its title.
 - **Studio** makes and edits applang apps: the `coder` loop asks the free
   AI, checks each reply and fixes it by edits, showing what moves (thinking,
   writing 48 lines, fixing line 43, testing); `studio::AppHost` runs a `.app`
