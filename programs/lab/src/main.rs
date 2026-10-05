@@ -8,10 +8,12 @@
 //!   --batch --lr`, and `--found 1` to train on the found programs without their variants;
 //!   the defaults are what was trained (see `programs/lab/data/results.md`).
 //! - `measure`: 100 programs from each set of weights kept and from two n-gram baselines,
-//!   judged; `programs/lab/data/results.md`, and every program in `programs/lab/out/samples/`.
+//!   judged, at each temperature; `programs/lab/data/results.md`, and every program in
+//!   `programs/lab/out/samples/`.
 //! - `bench`: a few training steps of the shape given, timed.
 //!
-//! At most 8 threads (of the machine's 16), whatever `--threads` asks.
+//! At most 8 threads (of the machine's 16), whatever `--threads` asks. An option not known, or
+//! a value that does not read as its kind, is refused.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -21,41 +23,64 @@ use std::time::Instant;
 use lab::corpus::Corpus;
 use lab::measure::{self, PROMPTS, Sample};
 use lab::ngram::Ngram;
-use lab::{DATA, OUT};
+use lab::{DATA, FOUND_ONLY, OUT};
 use tiny::{Acts, Config, Model, Rng, Tokenizer, Trainer};
+
+const USAGE: &str = "usage: lab corpus | train | measure | bench [--option value]...; options: \
+                     --steps --threads --seed --vocab --ctx --dim --layers --heads --batch --lr \
+                     --found";
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let o = Opts::parse(args.get(1..).unwrap_or(&[]));
+    let o = match Opts::parse(args.get(1..).unwrap_or(&[])) {
+        Ok(o) => o,
+        Err(e) => {
+            eprintln!("{e}\n{USAGE}");
+            std::process::exit(2);
+        }
+    };
     let code = match args.first().map(String::as_str) {
         Some("corpus") => corpus(&o),
         Some("train") => train(&o),
         Some("measure") => measure(&o),
         Some("bench") => bench(&o),
         _ => {
-            eprintln!("usage: lab corpus | train | measure | bench [--option value]...");
+            eprintln!("{USAGE}");
             2
         }
     };
     std::process::exit(code);
 }
 
-/// `--key value` pairs.
+/// `--key value` pairs, each key one of [`USAGE`]'s.
 struct Opts(BTreeMap<String, String>);
 
+/// The options known.
+const KEYS: [&str; 11] =
+    ["steps", "threads", "seed", "vocab", "ctx", "dim", "layers", "heads", "batch", "lr", "found"];
+
 impl Opts {
-    fn parse(args: &[String]) -> Opts {
+    fn parse(args: &[String]) -> Result<Opts, String> {
         let mut map = BTreeMap::new();
         for pair in args.chunks(2) {
-            if let [k, v] = pair {
-                map.insert(k.trim_start_matches('-').to_string(), v.clone());
+            let key = pair[0].strip_prefix("--").filter(|k| KEYS.contains(k));
+            match (key, pair.get(1)) {
+                (None, _) => return Err(format!("{}: not an option", pair[0])),
+                (Some(k), None) => return Err(format!("--{k} needs a value")),
+                (Some(k), Some(v)) => _ = map.insert(k.to_string(), v.clone()),
             }
         }
-        Opts(map)
+        Ok(Opts(map))
     }
 
+    /// The value of `key`, or `or` if not given; a value that does not read as a `T` ends the
+    /// run.
     fn get<T: std::str::FromStr>(&self, key: &str, or: T) -> T {
-        self.0.get(key).and_then(|v| v.parse().ok()).unwrap_or(or)
+        let Some(v) = self.0.get(key) else { return or };
+        v.parse().unwrap_or_else(|_| {
+            eprintln!("--{key} {v}: not a {}\n{USAGE}", std::any::type_name::<T>());
+            std::process::exit(2)
+        })
     }
 
     fn threads(&self) -> usize {
@@ -101,17 +126,19 @@ fn corpus(o: &Opts) -> i32 {
         return 1;
     }
     let bytes: usize = c.programs.iter().map(|p| p.text.len()).sum();
-    println!("{}", manifest.lines().nth(5).unwrap_or(""));
+    let counts = manifest.lines().find(|l| l.contains(" programs: "));
+    println!("{}", counts.unwrap_or(""));
     println!("{bytes} bytes; corpus {:016x}; written to {DATA}/manifest.tsv", c.id());
     0
 }
 
-/// The corpus as the repo has it now, if its manifest on disk says the same.
+/// The corpus as the repo has it now, if its manifest on disk holds the same programs (where
+/// each was found may have moved).
 fn checked_corpus(threads: usize) -> Option<Corpus> {
     let root = lab::root();
     let c = Corpus::build(&root, threads);
     let on_disk = fs::read_to_string(root.join(DATA).join("manifest.tsv")).unwrap_or_default();
-    if on_disk != c.manifest() {
+    if lab::corpus::content(&on_disk) != lab::corpus::content(&c.manifest()) {
         eprintln!("the corpus differs from {DATA}/manifest.tsv: run `lab corpus` first");
         return None;
     }
@@ -148,14 +175,13 @@ fn train(o: &Opts) -> i32 {
         (o.get("seed", SEED), o.get("steps", STEPS), o.get("batch", BATCH), o.get("lr", LR));
     // `--found 1`: the programs found alone, without their variants.
     let found = o.get("found", 0u8) == 1;
-    let kept = c.programs.iter().filter(|p| !found || p.of.is_none()).cloned().collect();
-    let trained = Corpus { programs: kept };
+    let trained = lab::trained(&c, found);
     let texts: Vec<&str> = trained.train().map(|p| p.text.as_str()).collect();
     let tok = Tokenizer::train(&texts, o.get("vocab", VOCAB));
     let cfg = o.config(tok.vocab());
     let stream = lab::stream(&trained, &tok, seed);
     let held = lab::held(&c, &tok, cfg.ctx);
-    let what = if found { " on the found programs alone" } else { "" };
+    let what = if found { FOUND_ONLY } else { "" };
     let Ok(model) = Model::new(cfg, seed) else {
         eprintln!("no model has the shape {cfg:?}");
         return 1;
@@ -169,12 +195,15 @@ fn train(o: &Opts) -> i32 {
         let _ = put_out("train.log", log.as_bytes());
     };
     say(format!(
-        "corpus {:016x}: {} programs trained on, {} held out; {} tokens ({:.2} bytes each)",
+        "corpus {:016x}: {} programs trained on, {} held out ({} found, measured); {} tokens \
+         ({:.2} bytes each), {} held out",
         c.id(),
         texts.len(),
         c.held().count(),
+        c.held().filter(|p| p.of.is_none()).count(),
         stream.len(),
-        texts.iter().map(|t| t.len()).sum::<usize>() as f64 / stream.len() as f64
+        texts.iter().map(|t| t.len()).sum::<usize>() as f64 / stream.len() as f64,
+        held.iter().map(|w| w.len() - 1).sum::<usize>()
     ));
     say(format!(
         "{cfg:?}: {} parameters; {steps} steps of {batch} x {}, lr {lr}, seed {seed}, {threads} threads",
@@ -208,13 +237,15 @@ fn train(o: &Opts) -> i32 {
                 secs / 60.0
             ));
         }
-        // The last weights at each check, and the weights with the lowest held-out loss.
+        // The last weights at each check, and the weights with the lowest held-out loss. The
+        // note says what made them and nothing that varies run to run (the time and threads
+        // are in train.log), so the same training makes the same file, hash and all.
         let note = format!(
-            "corpus {:016x} seed {seed}{what}: step {step} of {steps}, batch {batch} x {}, {} tokens, lr {lr}, {threads} threads, {:.1} minutes; loss {:.4}, held-out {held_loss:.4}",
+            "corpus {:016x} seed {seed}{what}: step {step} of {steps}, batch {batch} x {}, {} \
+             tokens, lr {lr}; loss {:.4}, held-out {held_loss:.4}",
             c.id(),
             cfg.ctx,
             step * batch * cfg.ctx,
-            secs / 60.0,
             s.loss
         );
         let keep = |name: &str| {
@@ -234,6 +265,8 @@ fn train(o: &Opts) -> i32 {
             best = held_loss;
         }
     }
+    let minutes = start.elapsed().as_secs_f64() / 60.0;
+    say(format!("trained: {steps} steps in {minutes:.1} minutes on {threads} threads"));
     0
 }
 
@@ -271,10 +304,14 @@ struct Writer {
     samples: Vec<Sample>,
 }
 
-/// The weights kept as `name`, if there are any, and readable.
+/// The weights kept as `name`, if there are any, and readable; their note ends with the file's
+/// own hash, which names it.
 fn weights(name: &str) -> Option<Result<(Model, Tokenizer, String), String>> {
     let bytes = fs::read(lab::root().join(OUT).join(name)).ok()?;
-    Some(tiny::load(&bytes).map_err(|e| format!("{OUT}/{name}: {e}")))
+    let loaded = tiny::load(&bytes).map_err(|e| format!("{OUT}/{name}: {e}"));
+    // Loaded: the file ends in the hash of what comes before it.
+    let hash = tiny::fnv(bytes.get(..bytes.len().saturating_sub(8)).unwrap_or(&[]));
+    Some(loaded.map(|(m, tok, note)| (m, tok, format!("{note}; the file {hash:016x}"))))
 }
 
 /// The mean loss of `m` over `held`, a token at a time, in nats.
@@ -305,16 +342,28 @@ fn measure(o: &Opts) -> i32 {
     let Some(c) = checked_corpus(threads) else { return 1 };
     let id = format!("corpus {:016x}", c.id());
     let mut tinies = vec![("tiny, last", last)];
-    if let Some(Ok(best)) = weights(BEST) {
-        tinies.push(("tiny, lowest held-out loss", best));
+    match weights(BEST) {
+        Some(Ok(best)) => tinies.push(("tiny, lowest held-out loss", best)),
+        Some(Err(e)) => {
+            eprintln!("{e}");
+            return 1;
+        }
+        None => {}
     }
     if let Some((_, (_, _, note))) = tinies.iter().find(|t| !t.1.2.starts_with(&id)) {
         eprintln!("weights trained on another corpus: {note}");
         return 1;
     }
-    let (cfg, tok) = (tinies[0].1.0.cfg, tinies[0].1.1.clone());
-    let known: BTreeSet<u64> = c.programs.iter().map(|p| lab::corpus::shape(&p.text)).collect();
-    let stream = lab::stream(&c, &tok, seed);
+    // Both from one training run: one tokenizer, one stream.
+    let (cfg, tok, note) = (tinies[0].1.0.cfg, tinies[0].1.1.clone(), tinies[0].1.2.clone());
+    let found = note.contains(FOUND_ONLY);
+    if tinies.iter().any(|t| t.1.1 != tok || t.1.2.contains(FOUND_ONLY) != found) {
+        eprintln!("{OUT}/{LAST} and {OUT}/{BEST} are not from one training run: train again");
+        return 1;
+    }
+    let known: BTreeSet<u64> = c.programs.iter().map(|p| p.shape).collect();
+    // The baselines count what tiny was trained on, token for token.
+    let stream = lab::stream(&lab::trained(&c, found), &tok, seed);
     let held = lab::held(&c, &tok, cfg.ctx);
     let start = Instant::now();
     let mut writers = Vec::new();
@@ -355,10 +404,12 @@ fn measure(o: &Opts) -> i32 {
             format!("counts of the training tokens, sampled from the longest context seen ({why})");
         writers.push(Writer { name: format!("{}-gram", g.n), made, loss: *loss, samples });
     }
-    for w in &writers {
+    let all =
+        writers.iter().map(|w| (&w.name, &w.samples)).chain(sweep.iter().map(|s| (&s.0, &s.1)));
+    for (name, samples) in all {
         let slug: String =
-            w.name.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '-' }).collect();
-        for (i, x) in w.samples.iter().enumerate() {
+            name.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '-' }).collect();
+        for (i, x) in samples.iter().enumerate() {
             let _ = put_out(&format!("samples/{slug}-{i:03}.app"), x.text.as_bytes());
         }
     }
@@ -373,6 +424,10 @@ fn measure(o: &Opts) -> i32 {
     0
 }
 
+/// Each program that compiled (its text, [`lab::corpus::normal`]): who wrote it, how many
+/// times each, and its verdict.
+type Compiled<'a> = BTreeMap<String, (Vec<(&'a String, usize)>, &'a Sample)>;
+
 /// The results file.
 fn results(
     c: &Corpus,
@@ -383,22 +438,37 @@ fn results(
 ) -> String {
     let found = c.programs.iter().filter(|p| p.of.is_none()).count();
     let runs = c.programs.iter().filter(|p| p.runs).count();
+    let reordered =
+        c.programs.iter().filter(|p| p.of.as_ref().is_some_and(|o| o.1.contains("states")));
+    let shapes: BTreeSet<u64> = c.programs.iter().map(|p| p.shape).collect();
+    let held: Vec<&lab::corpus::Program> = c.held().filter(|p| p.of.is_none()).collect();
+    let train_bytes: usize = c.train().map(|p| p.text.len()).sum();
+    let found_bytes: usize = c.train().filter(|p| p.of.is_none()).map(|p| p.text.len()).sum();
     let mut out = String::from("# tiny writes applang: measured\n\n");
     out += "Made by `cargo run -p compusophy-lab --release -- measure` from the weights `-- train` \
-            kept (`programs/lab/out/`, never committed); seeded, so run again it says the same. \
-            Derived: never edit it by hand.\n\n";
+            kept (`programs/lab/out/`, never committed); seeded, so run again on the corpus and \
+            weights it names it says the same (`lab train` and `measure` refuse any other \
+            corpus). Derived: never edit it by hand.\n\n";
     out += &format!(
         "**Corpus** `{:016x}` (`manifest.tsv`): {} programs, {found} found in the repo and {} \
-         variants of them (names renamed, states reordered), {runs} of them running clean; {} \
-         found programs held out with their variants, never trained on.\n\n",
+         variants of them (names renamed; {} of those also with their states reordered): {} \
+         shapes in all (a shape is a program but for its names, comments and spacing); {runs} \
+         run clean. Trained on: {train_bytes} bytes, {found_bytes} of them the found programs'. \
+         Held out, never trained on: the {} found programs of a tenth of the shapes, with every \
+         program sharing a shape with them and their variants; the held-out loss is over those \
+         {} found programs, each once ({} bytes).\n\n",
         c.id(),
         c.programs.len(),
         c.programs.len() - found,
-        c.held().filter(|p| p.of.is_none()).count(),
+        reordered.count(),
+        shapes.len(),
+        held.len(),
+        held.len(),
+        held.iter().map(|p| p.text.len()).sum::<usize>(),
     );
     out += &format!(
         "**tiny**: {} parameters: vocab {} (the bytes, the end token and BPE merges), context {}, \
-         width {}, {} layers of {} heads, f32, trained on 8 CPU threads.\n\n",
+         width {}, {} layers of {} heads, f32.\n\n",
         cfg.params(),
         cfg.vocab,
         cfg.ctx,
@@ -409,7 +479,9 @@ fn results(
     for w in writers {
         out += &format!("- {}: {}.\n", w.name, w.made);
     }
-    out += "\n**Held-out loss**, nats a token over the held-out programs (lower is better):\n\n";
+    out += "\n**Held-out loss**, nats a token over the held-out programs (lower is better). The \
+            lowest-loss weights, and the n-gram sampled for its loss, were picked by this same \
+            loss, which flatters them a little:\n\n";
     out += "| model | loss |\n|---|---|\n";
     for w in writers.iter().filter(|w| w.name.starts_with("tiny")) {
         out += &format!("| {} | {:.3} |\n", w.name, w.loss);
@@ -420,7 +492,9 @@ fn results(
     out += &format!("| uniform | {:.3} |\n\n", (cfg.vocab as f64).ln());
     out += &format!(
         "**Programs written**: {} prompts (an app's header line each, below) x {}, sampled at \
-         temperature {} (tiny from its top {} tokens), up to {} tokens or the end token. \
+         temperature {} (tiny from its top {} tokens), up to {} tokens or the end token. Each \
+         writer reads the end token and the header but its last token, and redraws that token \
+         with what follows it (BPE joins a line's end to the next line's start, as `\\nstate `). \
          *Compile*: applang's checker passes it and it has a widget. *Run clean*: the smoke test \
          (render, click, tick, key, tap, type) finds no fault on seeds 1 to 3 and its icon line, \
          if any, draws, as Studio checks a made app. *Novel*: no program of the corpus has its \
@@ -465,18 +539,40 @@ fn results(
         }
         out.push('\n');
     }
-    // The longest novel program tiny wrote that compiles, at any temperature.
-    let tinies = writers.iter().filter(|w| w.name.starts_with("tiny"));
-    let all = tinies.map(|w| (&w.name, &w.samples)).chain(sweep.iter().map(|(n, s)| (n, s)));
-    let each = all.flat_map(|(n, s)| s.iter().map(move |x| (n, x)));
-    let best = each.filter(|(_, x)| x.novel && x.compiles).max_by_key(|(_, x)| x.text.len());
-    if let Some((name, x)) = best {
-        let what = if x.runs { "runs clean" } else { "compiles but faults" };
-        let text = lab::corpus::normal(&x.text);
-        out += &format!(
-            "\nThe longest novel program tiny wrote that compiles ({name}; it {what}):\n\n\
-             ```app\n{text}```\n"
-        );
+    // Every program that compiled, by any writer at any temperature, once each: what the
+    // counts above are made of.
+    let all =
+        writers.iter().map(|w| (&w.name, &w.samples)).chain(sweep.iter().map(|s| (&s.0, &s.1)));
+    let mut compiled: Compiled<'_> = BTreeMap::new();
+    for (name, x) in all.flat_map(|(n, s)| s.iter().map(move |x| (n, x))) {
+        if x.compiles {
+            let by = &mut compiled.entry(lab::corpus::normal(&x.text)).or_insert((Vec::new(), x)).0;
+            match by.last_mut() {
+                Some((n, times)) if *n == name => *times += 1,
+                _ => by.push((name, 1)),
+            }
+        }
+    }
+    out += &format!("\nEvery program that compiled, at any temperature ({}):\n", compiled.len());
+    if compiled.is_empty() {
+        out += "\nnone.\n";
+    }
+    const SHOWN: usize = 12;
+    for (text, (names, x)) in compiled.iter().take(SHOWN) {
+        let what = match (x.runs, x.novel) {
+            (true, true) => "runs clean, novel",
+            (true, false) => "runs clean, a copy",
+            (false, true) => "faults, novel",
+            (false, false) => "faults, a copy",
+        };
+        let by: Vec<String> = names
+            .iter()
+            .map(|(n, k)| if *k == 1 { n.to_string() } else { format!("{n}, {k} times") })
+            .collect();
+        out += &format!("\n{} ({what}):\n\n```app\n{text}```\n", by.join("; "));
+    }
+    if compiled.len() > SHOWN {
+        out += &format!("\nand {} more, in `programs/lab/out/samples/`.\n", compiled.len() - SHOWN);
     }
     out
 }

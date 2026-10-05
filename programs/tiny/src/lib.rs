@@ -39,7 +39,7 @@ mod ops;
 mod tests;
 mod train;
 
-pub use bpe::{EOS, Tokenizer};
+pub use bpe::{EOS, PIECE, Tokenizer};
 pub use file::{fnv, load, save};
 pub use infer::{Session, generate, sample};
 pub use model::{Acts, Model};
@@ -60,6 +60,9 @@ pub struct Config {
 
 /// The largest config a file may hold: 2^24 tokens, positions or widths, 256 layers.
 const MOST: usize = 1 << 24;
+/// The most floats a model's parameters, or one sequence's activations, may take: 2^29 (2 GiB),
+/// so that either fits a wasm32 tab's memory and every size fits a 32-bit `usize`.
+const FLOATS: usize = 1 << 29;
 
 impl Config {
     /// The parameters in one layer: two layer norms, attention's in and out, the MLP's.
@@ -67,19 +70,42 @@ impl Config {
         model::sizes(self.dim).iter().sum()
     }
 
-    /// Every parameter: the embeddings, the layers and the final layer norm.
-    pub fn params(&self) -> usize {
-        (self.vocab + self.ctx) * self.dim + self.layers * self.layer_size() + 2 * self.dim
+    /// Every parameter, none if the count overflows: the embeddings, the layers (each
+    /// `12 dim^2 + 13 dim`: [`model::sizes`]) and the final layer norm.
+    fn count(&self) -> Option<usize> {
+        let c = self.dim;
+        let layer = c.checked_mul(c)?.checked_mul(12)?.checked_add(c.checked_mul(13)?)?;
+        let embed = self.vocab.checked_add(self.ctx)?.checked_mul(c)?;
+        embed.checked_add(self.layers.checked_mul(layer)?)?.checked_add(c.checked_mul(2)?)
     }
 
-    /// Whether a model can have this shape: nothing zero or past 2^24 (layers past 256), and
-    /// `dim` a multiple of `heads`.
+    /// The floats of one sequence's [`Acts`], none if the count overflows: a layer's are
+    /// `16 dim + 4` and `heads x ctx` (attention) a position, and the rest `vocab + 13 dim + 3`.
+    fn acts(&self) -> Option<usize> {
+        let (t, c) = (self.ctx, self.dim);
+        let per = c.checked_mul(16)?.checked_add(self.heads.checked_mul(t)?)?.checked_add(4)?;
+        let layers = self.layers.checked_mul(t)?.checked_mul(per)?;
+        let rest = t.checked_mul(self.vocab.checked_add(c.checked_mul(13)?)?.checked_add(3)?)?;
+        layers.checked_add(rest)
+    }
+
+    /// Every parameter: the embeddings, the layers and the final layer norm (`usize::MAX` for a
+    /// shape so big the count overflows, which [`Config::check`] refuses).
+    pub fn params(&self) -> usize {
+        self.count().unwrap_or(usize::MAX)
+    }
+
+    /// Whether a model can have this shape: nothing zero or past 2^24 (layers past 256), `dim`
+    /// a multiple of `heads`, and its parameters and one sequence's activations each at most
+    /// 2^29 floats. Counted without overflow on any `usize`.
     pub fn check(&self) -> Result<(), Error> {
         let sizes = [self.vocab, self.ctx, self.dim, self.heads];
+        let fits = |n: Option<usize>| n.is_some_and(|n| n <= FLOATS);
         let ok = sizes.iter().all(|&n| (1..=MOST).contains(&n))
             && (1..=256).contains(&self.layers)
             && self.dim % self.heads == 0
-            && self.params() <= 1 << 31;
+            && fits(self.count())
+            && fits(self.acts());
         if ok { Ok(()) } else { Err(Error::Config) }
     }
 }
@@ -98,7 +124,8 @@ pub enum Error {
     Hash { want: u64, got: u64 },
     /// E0965: a shape no model can have, or one its tokenizer disagrees with.
     Config,
-    /// E0966: a merge (by its index) of a token not made before it.
+    /// E0966: a merge (by its index) of a token not made before it, or making one longer than
+    /// [`PIECE`] bytes.
     Merge(usize),
 }
 
@@ -127,7 +154,9 @@ impl std::fmt::Display for Error {
                 write!(f, "the file hashes to {got:016x}, not the {want:016x} it ends with")
             }
             Error::Config => write!(f, "no model can have this shape"),
-            Error::Merge(i) => write!(f, "merge {i} names a token not made before it"),
+            Error::Merge(i) => {
+                write!(f, "merge {i} names a token not made before it, or makes one too long")
+            }
         }
     }
 }

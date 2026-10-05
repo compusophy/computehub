@@ -4,12 +4,13 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use tiny::{EOS, Model, Rng, Tokenizer};
+use tiny::{EOS, Model, Rng, Session, Tokenizer};
 
 use crate::corpus;
 use crate::ngram::Ngram;
 
-/// The headers prompted: five like apps in the corpus, five unlike any.
+/// The headers prompted: five like apps in the corpus of 2026-10-05, five like none of its
+/// apps.
 pub const PROMPTS: [&str; 10] = [
     "// Counter: two buttons change one number; Reset sets it back to 0.",
     "// Todo: type a task and press Add; tap its box to check it off.",
@@ -58,7 +59,7 @@ pub struct Sample {
 /// Judges `text`: compiles, runs, is new to `known` (the corpus's shapes).
 pub fn judge(prompt: usize, text: String, ended: bool, known: &BTreeSet<u64>) -> Sample {
     let novel = !known.contains(&corpus::shape(&text));
-    let head = if text.starts_with(PROMPTS[prompt]) { PROMPTS[prompt].len() + 1 } else { 0 };
+    let head = if text.starts_with(PROMPTS[prompt]) { PROMPTS[prompt].len() } else { 0 };
     let written = text.len().saturating_sub(head).max(1) as f64;
     let (compiles, code, clean) = match applang::compile(&text) {
         Err(d) => {
@@ -74,20 +75,40 @@ pub fn judge(prompt: usize, text: String, ended: bool, known: &BTreeSet<u64>) ->
     Sample { prompt, text, ended, compiles, runs, novel, code, clean }
 }
 
-/// The prompt's tokens: the end token (as each program follows one in training), the header
-/// and its newline.
-pub fn prompt_tokens(tok: &Tokenizer, prompt: usize) -> Vec<u32> {
-    let mut out = vec![EOS];
-    out.extend(tok.encode(&[PROMPTS[prompt], "\n"].concat()));
-    out
+/// A writer's prompt: the end token (as each program follows one in training) and the header's
+/// tokens but its last; and the bytes that last stood for, with which the writer's first token
+/// must begin. BPE joins the end of a line to what follows (`\nstate `, `.\n`), so a header
+/// encoded alone, or with its newline, may end in tokens training never shows there; backed off
+/// one token, the writer redraws it with whatever follows (token healing).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Prompt {
+    pub tokens: Vec<u32>,
+    pub heal: Vec<u8>,
 }
 
-/// The program a writer's tokens make after `prompt`: the header, then the tokens up to the
-/// end token; and whether it came.
-pub fn program(tok: &Tokenizer, prompt: usize, out: &[u32]) -> (String, bool) {
+/// Prompt `p`'s [`Prompt`].
+pub fn prompt(tok: &Tokenizer, p: usize) -> Prompt {
+    let mut tokens = vec![EOS];
+    tokens.extend(tok.encode(PROMPTS[p]));
+    let heal = match tokens.len() {
+        1 => Vec::new(),
+        _ => tokens.pop().map_or(Vec::new(), |last| tok.piece(last).to_vec()),
+    };
+    Prompt { tokens, heal }
+}
+
+/// Whether `token` may come first after `p`: its bytes begin with the healed ones.
+fn heals(tok: &Tokenizer, p: &Prompt, token: u32) -> bool {
+    token != EOS && tok.piece(token).starts_with(&p.heal)
+}
+
+/// The program a writer's tokens `out` make after prompt `p` (the first of them heals it):
+/// the prompt's text, then the tokens up to the end token; and whether it came.
+pub fn program(tok: &Tokenizer, p: usize, out: &[u32]) -> (String, bool) {
     let end = out.iter().position(|&t| t == EOS);
-    let body = tok.decode(&out[..end.unwrap_or(out.len())]);
-    ([PROMPTS[prompt], "\n", &body].concat(), end.is_some())
+    let mut all = prompt(tok, p).tokens.split_off(1);
+    all.extend_from_slice(&out[..end.unwrap_or(out.len())]);
+    (tok.decode(&all), end.is_some())
 }
 
 /// Sample `i` of each prompt's [`EACH`]: its prompt and its seed (from `seed`).
@@ -106,14 +127,20 @@ pub fn from_model(
     let jobs: Vec<usize> = (0..PROMPTS.len() * EACH).collect();
     corpus::par_map(&jobs, threads, |&i| {
         let (p, mut rng) = job(i, seed);
-        let out = tiny::generate(
-            m,
-            &prompt_tokens(tok, p),
-            MAX_TOKENS,
-            Some(EOS),
-            (temp, TOP_K),
-            &mut rng,
-        );
+        let pr = prompt(tok, p);
+        let mut s = Session::new(m);
+        let mut logits = Vec::new();
+        for &t in &pr.tokens {
+            logits = s.feed(t).to_vec();
+        }
+        for (t, l) in (0u32..).zip(&mut logits) {
+            if !heals(tok, &pr, t) {
+                *l = f32::NEG_INFINITY;
+            }
+        }
+        let mut out = vec![tiny::sample(&logits, temp, TOP_K, &mut rng)];
+        let seq = [pr.tokens.as_slice(), &out].concat();
+        out.extend(tiny::generate(m, &seq, MAX_TOKENS - 1, Some(EOS), (temp, TOP_K), &mut rng));
         let (text, ended) = program(tok, p, &out);
         judge(p, text, ended, known)
     })
@@ -130,7 +157,14 @@ pub fn from_ngram(
     let jobs: Vec<usize> = (0..PROMPTS.len() * EACH).collect();
     corpus::par_map(&jobs, threads, |&i| {
         let (p, mut rng) = job(i, seed);
-        let out = g.generate(&prompt_tokens(tok, p), MAX_TOKENS, f64::from(TEMP), &mut rng);
+        let pr = prompt(tok, p);
+        let temp = f64::from(TEMP);
+        // Never seen after any context: the token backed off, as the header has it.
+        let first = g.sample_where(&pr.tokens, temp, &mut rng, &|t| heals(tok, &pr, t));
+        let last = tok.encode(PROMPTS[p]).last().copied().unwrap_or(EOS);
+        let mut out = vec![first.unwrap_or(last)];
+        let seq = [pr.tokens.as_slice(), &out].concat();
+        out.extend(g.generate(&seq, MAX_TOKENS - 1, temp, &mut rng));
         let (text, ended) = program(tok, p, &out);
         judge(p, text, ended, known)
     })

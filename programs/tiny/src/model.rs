@@ -121,15 +121,27 @@ impl Model {
 
     /// The forward pass over `tokens` (at most `ctx`), its activations kept in `acts`: the next
     /// token's probabilities at each position are in [`Acts::probs`] after. With `targets`, the
-    /// mean cross-entropy against them.
+    /// mean cross-entropy against them (0 over no tokens).
+    ///
+    /// # Panics
+    ///
+    /// If a token or a target is not below `vocab`, or there are fewer targets than tokens
+    /// read: a caller's mistake (the model's own tokenizer makes no such token), refused alike
+    /// for both.
     pub fn forward(&self, acts: &mut Acts, tokens: &[u32], targets: Option<&[u32]>) -> f32 {
         let Config { vocab: v, dim: c, heads, layers, .. } = self.cfg;
         let (t, p) = (tokens.len().min(self.cfg.ctx), &self.params);
         let tokens = &tokens[..t];
+        let targets = targets.map(|y| y.get(..t).expect("tiny: fewer targets than tokens"));
+        let known = |s: &[u32]| s.iter().all(|&x| (x as usize) < v);
+        assert!(known(tokens) && targets.is_none_or(known), "tiny: a token id past the vocab");
         acts.t = t;
+        if t == 0 {
+            return 0.0;
+        }
         let (wte, wpe) = (&p[self.cfg.wte()], &p[self.cfg.wpe()]);
         for (i, (row, &tok)) in acts.encoded.chunks_exact_mut(c).zip(tokens).enumerate() {
-            let e = &wte[(tok as usize).min(v - 1) * c..][..c];
+            let e = &wte[tok as usize * c..][..c];
             for ((o, e), q) in row.iter_mut().zip(e).zip(&wpe[i * c..][..c]) {
                 *o = e + q;
             }
@@ -174,7 +186,7 @@ impl Model {
         layernorm((&mut a.lnf[..tc], &mut a.lnf_mean[..t], &mut a.lnf_rstd[..t]), last, w, b);
         matmul(&mut a.probs[..t * v], &a.lnf[..tc], wte, None, c);
         match targets {
-            Some(y) => (softmax_ce(&mut a.probs[..t * v], &y[..t], v) / t as f64) as f32,
+            Some(y) => (softmax_ce(&mut a.probs[..t * v], y, v) / t as f64) as f32,
             None => {
                 a.probs[..t * v].chunks_exact_mut(v).for_each(ops::softmax);
                 0.0
@@ -182,13 +194,15 @@ impl Model {
         }
     }
 
-    /// The mean cross-entropy of predicting `targets` from `tokens`.
+    /// The mean cross-entropy of predicting `targets` from `tokens` (0 over no tokens; panics
+    /// as [`Model::forward`] does).
     pub fn loss(&self, acts: &mut Acts, tokens: &[u32], targets: &[u32]) -> f32 {
         self.forward(acts, tokens, Some(targets))
     }
 
     /// The forward pass, then the backward: the gradient of `scale` times the summed
-    /// cross-entropy added to `grads` (as long as the parameters). Returns the mean loss.
+    /// cross-entropy added to `grads` (as long as the parameters; nothing over no tokens).
+    /// Returns the mean loss. Panics as [`Model::forward`] does.
     pub fn grad(
         &self,
         acts: &mut Acts,
@@ -204,6 +218,9 @@ impl Model {
     fn backward(&self, a: &mut Acts, tokens: &[u32], targets: &[u32], scale: f32, g: &mut [f32]) {
         let Config { vocab: v, dim: c, heads, layers, .. } = self.cfg;
         let (t, p, cfg) = (a.t, &self.params, &self.cfg);
+        if t == 0 {
+            return;
+        }
         let tc = t * c;
         // The loss to the logits: p - 1 at the target, each times scale.
         for (row, &y) in a.probs[..t * v].chunks_exact_mut(v).zip(targets) {
@@ -286,7 +303,7 @@ impl Model {
         }
         let (dwte, dwpe) = g[..cfg.wpe().end].split_at_mut(cfg.wte().end);
         for (i, (d, &tok)) in a.dres[..tc].chunks_exact(c).zip(tokens).enumerate() {
-            ops::axpy(&mut dwte[(tok as usize).min(v - 1) * c..][..c], 1.0, d);
+            ops::axpy(&mut dwte[tok as usize * c..][..c], 1.0, d);
             ops::axpy(&mut dwpe[i * c..][..c], 1.0, d);
         }
     }

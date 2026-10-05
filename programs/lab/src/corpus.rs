@@ -1,7 +1,8 @@
 //! The corpus: each program [`collect::find`] finds that compiles and shows a widget, once (by
 //! the FNV-1a hash of its text: its content address), with every place it was found; each
 //! one's [`augment`]ed variants that compile too; whether each runs clean as Studio checks a
-//! made app; and which are held out. All derived from the repo: [`Corpus::manifest`] lists it.
+//! made app; and which are held out, by [`shape`]. All derived from the repo:
+//! [`Corpus::manifest`] lists it, and [`Corpus::id`] names it by what it holds.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -22,10 +23,13 @@ pub struct Program {
     pub hash: u64,
     /// Its text, [`normal`].
     pub text: String,
+    /// Its [`shape`]: what it is but for names, comments and spacing.
+    pub shape: u64,
     /// Whether it runs clean: [`runs`].
     pub runs: bool,
-    /// Held out: never trained on, only measured (a tenth of the programs found, by hash, and
-    /// their variants).
+    /// Held out: never trained on, only measured. The found programs of a tenth of the shapes
+    /// (0 mod 10), with every program sharing a shape with one held and all their variants:
+    /// no program on one side is one on the other renamed.
     pub held: bool,
     /// The program it was made from and how (`rename#3`, `rename+states#4`); none if found.
     pub of: Option<(u64, String)>,
@@ -91,12 +95,12 @@ impl Corpus {
                 continue;
             }
             let hash = fnv(text.as_bytes());
-            let held = hash % 10 == 0;
             let p = found.entry(hash).or_insert_with(|| Program {
                 hash,
+                shape: shape(&text),
                 text,
                 runs: false,
-                held,
+                held: false,
                 of: None,
                 from: Vec::new(),
             });
@@ -109,6 +113,7 @@ impl Corpus {
             programs.push(base);
             programs.extend(made);
         }
+        hold_out(&mut programs);
         let verdicts = par_map(&programs, threads, |p| runs(&p.text));
         for (p, r) in programs.iter_mut().zip(verdicts) {
             p.runs = r;
@@ -126,27 +131,31 @@ impl Corpus {
         self.programs.iter().filter(|p| p.held)
     }
 
-    /// The manifest: a line per program (hash, bytes, lines, runs, split, made of, how, found
-    /// at), under a header saying what it is and how it was made.
+    /// The manifest: a line per program (hash, shape, bytes, lines, runs, split, made of, how,
+    /// found at), under a header saying what it is and how it was made.
     pub fn manifest(&self) -> String {
         let found = self.programs.iter().filter(|p| p.of.is_none()).count();
         let runs = self.programs.iter().filter(|p| p.runs).count();
+        let shapes: BTreeSet<u64> = self.programs.iter().map(|p| p.shape).collect();
         let mut out = String::from(
             "# The applang corpus: each program in the repo that compiles and shows a widget, once\n\
              # by the FNV-1a 64 hash of its text, and the variants of each (names renamed, states\n\
-             # reordered) that compile too. runs: no fault on smoke seeds 1 to 3, icon drawable.\n\
-             # held: measured, never trained on. Derived: `cargo run -p compusophy-lab --release\n\
-             # -- corpus` writes it; never edit it by hand.\n",
+             # reordered) that compile too. shape: its hash but for names, comments and spacing.\n\
+             # runs: no fault on smoke seeds 1 to 3, icon drawable. held: measured, never trained\n\
+             # on; a tenth of the shapes, with every program of them. The corpus's id hashes each\n\
+             # line but its last column (where a program was found). Derived: `cargo run -p\n\
+             # compusophy-lab --release -- corpus` writes it; never edit it by hand.\n",
         );
         out += &format!(
-            "# {} programs: {} found, {} variants; {} run clean; {} held out.\n",
+            "# {} programs: {} found, {} variants, {} shapes; {} run clean; {} held out.\n",
             self.programs.len(),
             found,
             self.programs.len() - found,
+            shapes.len(),
             runs,
             self.held().count()
         );
-        out += "hash\tbytes\tlines\truns\tsplit\tof\thow\tfrom\n";
+        out += "hash\tshape\tbytes\tlines\truns\tsplit\tof\thow\tfrom\n";
         for p in &self.programs {
             let (of, how) = match &p.of {
                 Some((h, how)) => (format!("{h:016x}"), how.as_str()),
@@ -154,8 +163,9 @@ impl Corpus {
             };
             let from = if p.from.is_empty() { "-".into() } else { p.from.join(",") };
             out += &format!(
-                "{:016x}\t{}\t{}\t{}\t{}\t{of}\t{how}\t{from}\n",
+                "{:016x}\t{:016x}\t{}\t{}\t{}\t{}\t{of}\t{how}\t{from}\n",
                 p.hash,
+                p.shape,
                 p.text.len(),
                 p.text.lines().count(),
                 if p.runs { "runs" } else { "faults" },
@@ -165,9 +175,42 @@ impl Corpus {
         out
     }
 
-    /// The corpus's own name: the hash of its manifest.
+    /// The corpus's own name: the hash of its manifest's [`content`], what it holds and not
+    /// where in the repo each program sits (so moving a test's lines renames nothing).
     pub fn id(&self) -> u64 {
-        fnv(self.manifest().as_bytes())
+        fnv(content(&self.manifest()).as_bytes())
+    }
+}
+
+/// What a manifest says the corpus holds: its rows (and their header) without the last
+/// column, where each program was found; the comment lines go too.
+pub fn content(manifest: &str) -> String {
+    let rows = manifest.lines().filter(|l| !l.starts_with('#'));
+    rows.flat_map(|l| [l.rsplit_once('\t').map_or(l, |(row, _)| row), "\n"]).collect()
+}
+
+/// Marks the programs held out: each found program whose shape is 0 mod 10, with its
+/// variants; then, until there is none, each program of a shape a held one has, with its found
+/// program and their variants. So no shape is on both sides.
+pub(crate) fn hold_out(programs: &mut [Program]) {
+    let family = |p: &Program| p.of.as_ref().map_or(p.hash, |o| o.0);
+    let mut held: BTreeSet<u64> =
+        programs.iter().filter(|p| p.of.is_none() && p.shape % 10 == 0).map(|p| p.hash).collect();
+    loop {
+        let shapes: BTreeSet<u64> =
+            programs.iter().filter(|p| held.contains(&family(p))).map(|p| p.shape).collect();
+        let more: Vec<u64> = programs
+            .iter()
+            .filter(|p| shapes.contains(&p.shape) && !held.contains(&family(p)))
+            .map(family)
+            .collect();
+        if more.is_empty() {
+            break;
+        }
+        held.extend(more);
+    }
+    for p in programs {
+        p.held = held.contains(&family(p));
     }
 }
 
@@ -195,7 +238,8 @@ fn variants(base: &Program, seen: &mut BTreeSet<u64>) -> Vec<Program> {
         }
         seen.insert(hash);
         let of = Some((base.hash, format!("{}#{i}", how.join("+"))));
-        out.push(Program { hash, text, runs: false, held: base.held, of, from: Vec::new() });
+        let shape = shape(&text);
+        out.push(Program { hash, text, shape, runs: false, held: false, of, from: Vec::new() });
     }
     out
 }

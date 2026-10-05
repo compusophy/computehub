@@ -42,8 +42,8 @@ fn the_backward_pass_matches_finite_differences() {
         let diff = norm(&mut a.iter().zip(n).map(|(a, n)| a - n));
         let size = norm(&mut n.iter().copied());
         assert!(size > 1e-3, "tensor {r:?} has no gradient to check: {size}");
-        // Measured: 3e-5 to 5e-4 (f32 rounding in the differences).
-        assert!(diff / size < 2e-3, "tensor {r:?}: relative error {}", diff / size);
+        // Measured: 3e-5 to 4.7e-4 (f32 rounding in the differences); checked under 1e-3.
+        assert!(diff / size < 1e-3, "tensor {r:?}: relative error {}", diff / size);
     }
 }
 
@@ -96,6 +96,14 @@ fn weights_round_trip_and_a_changed_byte_is_caught() {
     assert_eq!(resealed(&|b| b[4] = 2), Error::Version(2));
     assert_eq!(resealed(&|b| b[8] = 0), Error::Config);
     assert_eq!(resealed(&|b| b.push(0)), Error::Size);
+    // A header asking for 2^24 - 257 merges (a vocab of 2^24) in a file of 200 bytes: refused
+    // by its size, before room for them is made.
+    let big = |b: &mut Vec<u8>| {
+        b[8..12].copy_from_slice(&(1u32 << 24).to_le_bytes());
+        b[28..32].copy_from_slice(&((1u32 << 24) - 257).to_le_bytes());
+        b.truncate(200);
+    };
+    assert_eq!(resealed(&big), Error::Size);
     // A tokenizer that disagrees with the model is never saved.
     assert_eq!(save(&m, &Tokenizer::bytes(), "").unwrap_err(), Error::Config);
 }
@@ -133,8 +141,80 @@ fn threads_change_no_bit_of_training() {
     let (one, three) = (run(1), run(3));
     assert!(one == three, "one thread and three differ");
     assert!(one.1[2].loss < one.1[0].loss, "{:?}", one.1);
-    // Clipping: a norm over the clip scales the step, and the stats say the norm before it.
     assert!(one.1.iter().all(|s| s.norm > 0.0 && s.norm.is_finite()));
+}
+
+#[test]
+fn a_gradient_over_the_clip_is_scaled_down_to_it() {
+    let c = cfg(23, 8, 16, 2, 2);
+    let batch: Vec<Vec<u32>> =
+        (0..3).map(|b| (0..9).map(|i| ((b * 5 + i * 3) % 23) as u32).collect()).collect();
+    // A plain step (no momentum, no decay, epsilon 1) moves each parameter by g / (|g| + 1) at
+    // lr 1, so the gradient it took is read back from the move: g = u / (1 - |u|).
+    let step = |clip: f32| {
+        let mut t = Trainer::new(Model::new(c, 4).unwrap(), 2);
+        (t.opt.beta1, t.opt.beta2, t.opt.eps, t.opt.decay) = (0.0, 0.0, 1.0, 0.0);
+        let before = t.model.params.clone();
+        let stats = t.step(&batch, 1.0, clip);
+        let taken = before.iter().zip(&t.model.params).map(|(a, b)| {
+            let u = f64::from(a - b);
+            (u / (1.0 - u.abs())).powi(2)
+        });
+        (stats.norm, taken.sum::<f64>().sqrt())
+    };
+    let (norm, unclipped) = step(0.0);
+    assert!(norm > 0.1 && (unclipped / f64::from(norm) - 1.0).abs() < 1e-4, "{unclipped} {norm}");
+    // Over the clip: the gradient taken has the clip's norm; the stats say the norm before.
+    let (before, clipped) = step(norm / 4.0);
+    assert_eq!(before, norm);
+    assert!((clipped / f64::from(norm / 4.0) - 1.0).abs() < 1e-4, "{clipped}");
+    // Under it: untouched.
+    assert_eq!(step(norm * 2.0).1, unclipped);
+}
+
+#[test]
+fn sequences_too_short_to_train_add_nothing() {
+    let c = cfg(11, 6, 8, 1, 2);
+    let mut acts = Acts::new(&c);
+    let m = Model::new(c, 6).unwrap();
+    assert_eq!(m.loss(&mut acts, &[], &[]), 0.0);
+    let mut grad = vec![0f32; c.params()];
+    assert_eq!(m.grad(&mut acts, (&[], &[]), 1.0, &mut grad), 0.0);
+    assert!(grad.iter().all(|&g| g == 0.0));
+    let after = |batch: &[Vec<u32>]| {
+        let mut t = Trainer::new(m.clone(), 2);
+        let s = t.step(batch, 1e-2, 1.0);
+        let eval = t.eval(batch);
+        (t.model.params, s, eval)
+    };
+    // One token, or none: no position to train, so the step changes nothing.
+    let (params, s, eval) = after(&[vec![4], vec![]]);
+    assert!(params == m.params && s == Stats { loss: 0.0, norm: 0.0 } && eval == 0.0);
+    // Beside a sequence that trains, they change nothing either.
+    let (alone, s1, _) = after(&[vec![1, 2, 3]]);
+    let (with, s2, _) = after(&[vec![1, 2, 3], vec![4], vec![]]);
+    assert!(alone == with && s1 == s2 && alone != m.params);
+}
+
+#[test]
+#[should_panic(expected = "a token id past the vocab")]
+fn an_input_past_the_vocab_is_refused() {
+    let c = cfg(11, 6, 8, 1, 2);
+    Model::new(c, 1).unwrap().loss(&mut Acts::new(&c), &[1, 11], &[2, 3]);
+}
+
+#[test]
+#[should_panic(expected = "a token id past the vocab")]
+fn a_target_past_the_vocab_is_refused_alike() {
+    let c = cfg(11, 6, 8, 1, 2);
+    Model::new(c, 1).unwrap().loss(&mut Acts::new(&c), &[1, 2], &[2, 9999]);
+}
+
+#[test]
+#[should_panic(expected = "a token id past the vocab")]
+fn a_session_refuses_a_token_past_the_vocab() {
+    let m = Model::new(cfg(11, 6, 8, 1, 2), 1).unwrap();
+    Session::new(&m).feed(11);
 }
 
 #[test]
@@ -150,6 +230,18 @@ fn bpe_learns_the_commonest_pairs_and_round_trips() {
     assert_eq!(tok.decode(&[EOS, 97, 9999]), "a");
     assert_eq!(Tokenizer::from_merges(vec![(97, 300)]).unwrap_err(), Error::Merge(0));
     assert_eq!(Tokenizer::from_merges(vec![(97, EOS)]).unwrap_err().code(), 966);
+    // Merges of merges double: the ninth would make 512 bytes, past PIECE, and is refused (a
+    // file's 30 such merges would ask for a gigabyte).
+    let doubling = |n: u32| (0..n).map(|i| if i == 0 { (97, 97) } else { (256 + i, 256 + i) });
+    let eight = Tokenizer::from_merges(doubling(8).collect()).unwrap();
+    assert_eq!(eight.piece(264).len(), PIECE);
+    assert_eq!(Tokenizer::from_merges(doubling(9).collect()).unwrap_err(), Error::Merge(8));
+    // Training never makes one: a run of 1000 a's doubles up to PIECE bytes and no further.
+    let run = "a".repeat(1000);
+    let tok = Tokenizer::train(&[&run, &run], 300);
+    let longest = (257..tok.vocab() as u32).map(|t| tok.piece(t).len()).max();
+    assert_eq!((tok.piece(264).len(), longest), (PIECE, Some(PIECE)));
+    assert_eq!(tok.decode(&tok.encode(&run)), run);
 }
 
 #[test]
@@ -166,12 +258,33 @@ fn sampling_is_greedy_cold_and_follows_the_odds_warm() {
     assert_eq!(seen[0], 0);
     assert!((1700..2050).contains(&seen[1]) && (1700..2050).contains(&seen[3]), "{seen:?}");
     assert!((180..330).contains(&seen[2]), "{seen:?}");
+    // A NaN of either sign (x86 makes them negative, wasm and ARM positive) is never drawn.
+    for nan in [f32::NAN, -f32::NAN] {
+        assert_eq!(sample(&[1.0, nan, 0.5], 0.0, 0, &mut rng), 0);
+        assert!((0..200).all(|_| sample(&[0.0, nan, 0.0], 1.0, 0, &mut rng) != 1));
+        assert!((0..200).all(|_| sample(&[nan, -1.0, nan], 2.0, 2, &mut rng) == 1));
+    }
+    // Nothing drawable: the lowest id, as when cold.
+    let masked = [f32::NEG_INFINITY; 3];
+    assert_eq!(sample(&masked, 1.0, 0, &mut rng), 0);
 }
 
 #[test]
 fn configs_are_checked_and_init_is_seeded() {
     assert_eq!(Model::new(cfg(10, 4, 6, 1, 4), 1).unwrap_err(), Error::Config);
     assert_eq!(Model::new(cfg(0, 4, 8, 1, 4), 1).unwrap_err().code(), 965);
+    // Few parameters but activations past 2^29 floats (attention's ctx^2): refused.
+    assert_eq!(cfg(257, 1 << 20, 2, 1, 1).check(), Err(Error::Config));
+    assert!(cfg(257, 1 << 13, 2, 1, 1).check().is_ok());
+    // Shapes whose counts overflow are refused, never wrapped (nor a panic in debug); on wasm32
+    // the largest shapes a file may name overflow so.
+    for huge in [cfg(usize::MAX, 2, 2, 1, 1), cfg(1 << 31, 1 << 31, 1 << 31, 1, 1)] {
+        assert_eq!((huge.check(), huge.params()), (Err(Error::Config), usize::MAX));
+    }
+    let most = 1 << 24;
+    assert_eq!(cfg(most, most, most, 256, 1).check(), Err(Error::Config));
+    // Tonight's shape fits.
+    assert!(cfg(512, 1024, 128, 4, 4).check().is_ok());
     let c = cfg(10, 4, 8, 3, 2);
     assert_eq!(c.params(), 14 * 8 + 3 * (12 * 64 + 13 * 8) + 16);
     let (a, b) = (Model::new(c, 1).unwrap(), Model::new(c, 1).unwrap());

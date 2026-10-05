@@ -7,6 +7,9 @@ use crate::Error;
 pub const EOS: u32 = 256;
 /// The first merged token.
 const FIRST: u32 = 257;
+/// The most bytes one token may stand for: merges of merges double, so a file's few merges
+/// could otherwise ask for gigabytes.
+pub const PIECE: usize = 256;
 
 /// The bytes, [`EOS`] and the merges, in the order they were learned.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -22,12 +25,16 @@ impl Tokenizer {
         Tokenizer { merges: Vec::new(), pieces }
     }
 
-    /// The tokenizer of `merges`, each of two tokens made before it.
+    /// The tokenizer of `merges`, each of two tokens made before it, together at most
+    /// [`PIECE`] bytes.
     pub fn from_merges(merges: Vec<(u32, u32)>) -> Result<Tokenizer, Error> {
         let mut tok = Tokenizer::bytes();
         for (i, &(a, b)) in merges.iter().enumerate() {
             let made = FIRST as usize + i;
             if a as usize >= made || b as usize >= made || a == EOS || b == EOS {
+                return Err(Error::Merge(i));
+            }
+            if tok.piece(a).len() + tok.piece(b).len() > PIECE {
                 return Err(Error::Merge(i));
             }
             let piece = [tok.piece(a), tok.piece(b)].concat();
@@ -38,14 +45,16 @@ impl Tokenizer {
     }
 
     /// Learns merges from `texts` until there are `vocab` tokens, or no pair comes twice: each
-    /// time the commonest pair of neighbors (the smaller pair on a tie) becomes a token. Merges
-    /// never cross from one text into the next.
+    /// time the commonest pair of neighbors (the smaller pair on a tie) whose bytes fit
+    /// [`PIECE`] becomes a token. Merges never cross from one text into the next.
     pub fn train(texts: &[&str], vocab: usize) -> Tokenizer {
         let mut seqs: Vec<Vec<u32>> =
             texts.iter().map(|t| t.bytes().map(u32::from).collect()).collect();
         let mut merges = Vec::new();
         let most = vocab.max(FIRST as usize);
         let mut counts = vec![0u32; most * most];
+        // Each token's bytes: 1 for a byte, 0 for the end token (never in a text).
+        let mut lens: Vec<usize> = (0..FIRST).map(|t| usize::from(t != EOS)).collect();
         for id in FIRST as usize..most {
             counts[..id * most].fill(0);
             for s in &seqs {
@@ -55,7 +64,7 @@ impl Tokenizer {
             }
             let (mut best, mut at) = (1, None);
             for (i, &n) in counts[..id * most].iter().enumerate() {
-                if n > best {
+                if n > best && lens[i / most] + lens[i % most] <= PIECE {
                     (best, at) = (n, Some(i));
                 }
             }
@@ -64,6 +73,7 @@ impl Tokenizer {
             for s in &mut seqs {
                 merge(s, pair, id as u32);
             }
+            lens.push(lens[i / most] + lens[i % most]);
             merges.push(pair);
         }
         Tokenizer::from_merges(merges).unwrap_or_else(|_| Tokenizer::bytes())

@@ -76,20 +76,35 @@ impl Ngram {
     /// A token to follow `ctx`: drawn from what followed its longest context seen, each count
     /// raised to 1 / `temp`.
     pub fn sample(&self, ctx: &[u32], temp: f64, rng: &mut Rng) -> u32 {
+        self.sample_where(ctx, temp, rng, &|_| true).unwrap_or(tiny::EOS)
+    }
+
+    /// [`Ngram::sample`] among the tokens `allow` lets through: from the longest context seen
+    /// that was followed by one of them; none if no context was.
+    pub fn sample_where(
+        &self,
+        ctx: &[u32],
+        temp: f64,
+        rng: &mut Rng,
+        allow: &dyn Fn(u32) -> bool,
+    ) -> Option<u32> {
         for k in (0..self.n.min(ctx.len() + 1)).rev() {
             let Some(next) = self.counts[k].get(&key(&ctx[ctx.len() - k..])) else { continue };
-            let weights: Vec<f64> =
-                next.by.iter().map(|b| f64::from(b.1).powf(1.0 / temp)).collect();
+            let by: Vec<&(u32, u32)> = next.by.iter().filter(|b| allow(b.0)).collect();
+            if by.is_empty() {
+                continue;
+            }
+            let weights: Vec<f64> = by.iter().map(|b| f64::from(b.1).powf(1.0 / temp)).collect();
             let mut u = rng.unit() * weights.iter().sum::<f64>();
-            for (w, b) in weights.iter().zip(&next.by) {
+            for (w, b) in weights.iter().zip(&by) {
                 if u < *w {
-                    return b.0;
+                    return Some(b.0);
                 }
                 u -= w;
             }
-            return next.by.last().map_or(tiny::EOS, |b| b.0);
+            return by.last().map(|b| b.0);
         }
-        tiny::EOS
+        None
     }
 
     /// Up to `max` tokens after `prompt`, stopping after [`tiny::EOS`] (kept).

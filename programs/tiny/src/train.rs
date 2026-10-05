@@ -85,12 +85,17 @@ impl Trainer {
     }
 
     /// One step on `batch`: each sequence's tokens predict the next (so each holds one more
-    /// than it trains on, at most `ctx + 1`), the loss averaged over every position, the
-    /// gradient clipped to a global norm of `clip` (none at 0), then AdamW with `lr`.
+    /// than it trains on, at most `ctx + 1`; one of fewer than 2 trains nothing), the loss
+    /// averaged over every position, the gradient clipped to a global norm of `clip` (none at
+    /// 0), then AdamW with `lr`. A batch with no position to train changes nothing. Panics as
+    /// [`Model::forward`] does.
     pub fn step(&mut self, batch: &[Vec<u32>], lr: f32, clip: f32) -> Stats {
         let ctx = self.model.cfg.ctx;
         let all: usize = batch.iter().map(|s| positions(s, ctx)).sum();
-        let scale = 1.0 / all.max(1) as f32;
+        if all == 0 {
+            return Stats { loss: 0.0, norm: 0.0 };
+        }
+        let scale = 1.0 / all as f32;
         while self.grads.len() < batch.len() {
             self.grads.push(vec![0.0; self.model.params.len()]);
         }
@@ -141,7 +146,8 @@ impl Trainer {
         let model = &self.model;
         let one = |acts: &mut Acts, seq: &Vec<u32>, grad: Option<&mut Vec<f32>>| {
             let n = positions(seq, model.cfg.ctx);
-            let (x, y) = (&seq[..n], &seq[1..=n]);
+            // No position: a loss of 0 over none, and no gradient.
+            let (x, y) = (&seq[..n], seq.get(1..=n).unwrap_or(&[]));
             match (scale, grad) {
                 (Some(scale), Some(g)) => {
                     g.fill(0.0);

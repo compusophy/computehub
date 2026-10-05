@@ -64,14 +64,19 @@ impl<'m> Session<'m> {
 
     /// Reads `token` at the next position; the next token's logits. On a full context, the
     /// logits of the last position read, unchanged.
+    ///
+    /// # Panics
+    ///
+    /// If `token` is not below `vocab`, as [`Model::forward`] does.
     pub fn feed(&mut self, token: u32) -> &[f32] {
         let m = self.model;
         let Config { vocab, ctx, dim: c, layers, heads } = m.cfg;
+        assert!((token as usize) < vocab, "tiny: a token id past the vocab");
         if self.len == ctx {
             return &self.logits;
         }
         let (pos, p, hs) = (self.len, &m.params, c / heads);
-        let tok = (token as usize).min(vocab - 1);
+        let tok = token as usize;
         let (e, q) = (&p[m.cfg.wte()][tok * c..][..c], &p[m.cfg.wpe()][pos * c..][..c]);
         for ((x, e), q) in self.x.iter_mut().zip(e).zip(q) {
             *x = e + q;
@@ -116,12 +121,16 @@ impl<'m> Session<'m> {
 }
 
 /// A token drawn from `logits`: at `temp` 0 (or below), the likeliest (the lowest id on a tie);
-/// else from the `top_k` likeliest (all, at 0), their logits over `temp`, softmaxed.
+/// else from the `top_k` likeliest (all, at 0), their logits over `temp`, softmaxed. A NaN
+/// logit, of either sign, counts as minus infinity: never drawn while another can be.
 pub fn sample(logits: &[f32], temp: f32, top_k: usize, rng: &mut Rng) -> u32 {
-    let mut ranked: Vec<(f32, u32)> = logits.iter().zip(0u32..).map(|(&l, i)| (l, i)).collect();
-    // Likeliest first; NaN last; ties by id, so the order is total and the same everywhere.
+    let real = |l: f32| if l.is_nan() { f32::NEG_INFINITY } else { l };
+    let mut ranked: Vec<(f32, u32)> =
+        logits.iter().zip(0u32..).map(|(&l, i)| (real(l), i)).collect();
+    // Likeliest first; ties by id, so the order is total and the same on every machine.
     ranked.sort_by(|a, b| b.0.total_cmp(&a.0).then(a.1.cmp(&b.1)));
-    if temp <= 0.0 || ranked.len() == 1 {
+    let none = ranked.first().is_none_or(|r| r.0 == f32::NEG_INFINITY);
+    if temp <= 0.0 || ranked.len() == 1 || none {
         return ranked.first().map_or(EOS, |r| r.1);
     }
     let k = if top_k == 0 { ranked.len() } else { top_k.min(ranked.len()) };
@@ -133,6 +142,10 @@ pub fn sample(logits: &[f32], temp: f32, top_k: usize, rng: &mut Rng) -> u32 {
             return r.1;
         }
         u -= p;
+    }
+    // Rounding left a sliver: the last token that had a chance.
+    if let Some((_, r)) = probs.iter().zip(&ranked).rev().find(|(p, _)| **p > 0.0) {
+        return r.1;
     }
     ranked[k - 1].1
 }

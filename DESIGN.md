@@ -665,16 +665,21 @@ in its home; names in it, and roots per profile, wait for R2.
   backward pass written by hand and checked against finite differences,
   AdamW on 8 threads, a KV cache, a weights file ending in its hash), and
   `lab`, a dev tool that makes the corpus (each applang program in the repo
-  that compiles, once, content-addressed: 100 found, 570 with variants that
-  rename names and reorder states; `programs/lab/data/manifest.tsv`), trains
+  that compiles, once, content-addressed: 100 found, a dozen of them real
+  apps and the rest test snippets; 570 with variants, nearly all renames, so
+  90 shapes; held out by shape; `programs/lab/data/manifest.tsv`), trains
   tiny on it and judges what it writes with applang's own checker and smoke
-  test (`results.md` there). Measured 2026-10-05, and small, as expected:
-  990k parameters trained 43 minutes on 8 threads; of 100 programs prompted
-  by 10 app headers, 3 compile and run clean, one of them new (`label 11;`);
-  an 8-gram over the same tokens, 2, none new. Before it overfits its
-  training programs (87 found, 501 with variants), tiny's held-out loss
-  beats every n-gram's (3.53 nats a token at step 180 of 600; the best
-  n-gram, 3.72). More verified data is what moves the number.
+  test (`results.md` there). Measured 2026-10-05: 990k parameters, 600 steps
+  of 8 x 1024 tokens in 37 minutes on 8 threads. Of 100 programs prompted by
+  10 app headers, none of tiny's compiles, at any temperature tried, from its
+  last weights or from those with the lowest held-out loss; it writes real
+  openings (states, an icon line), and its first error comes 38% of the way
+  through on average. An 8-gram over the same tokens compiles 2, both copies
+  of corpus programs (its first error: 43%). Held-out loss: tiny at best
+  3.59 nats a token (step 210; then it overfits), a 3-gram 3.53: tiny is no
+  better than counting yet. The pipeline is the result; more verified data
+  is what moves the number (each app added to the repo joins on `lab
+  corpus`).
 
 ## Open questions
 

@@ -79,10 +79,10 @@ pub fn load(bytes: &[u8]) -> Result<(Model, Tokenizer, String), Error> {
     if m.checked_add(257) != Some(vocab) {
         return Err(Error::Config);
     }
-    let mut merges = Vec::with_capacity(m);
-    for _ in 0..m {
-        merges.push((r.u32()?, r.u32()?));
-    }
+    // The merges' bytes are there before any room is made for them.
+    let raw = r.take(m.checked_mul(8).ok_or(Error::Size)?)?;
+    let word = |b: &[u8]| u32::from_le_bytes([b[0], b[1], b[2], b[3]]);
+    let merges = raw.chunks_exact(8).map(|b| (word(b), word(&b[4..]))).collect();
     let tok = Tokenizer::from_merges(merges)?;
     let len = r.u32()? as usize;
     let note = String::from_utf8_lossy(r.take(len)?).into_owned();
@@ -90,12 +90,14 @@ pub fn load(bytes: &[u8]) -> Result<(Model, Tokenizer, String), Error> {
     if count != cfg.params() as u64 {
         return Err(Error::Config);
     }
-    let raw = r.take(4 * cfg.params())?;
+    let raw = r.take(cfg.params().checked_mul(4).ok_or(Error::Size)?)?;
     if r.at != body.len() {
         return Err(Error::Size);
     }
-    let params =
-        raw.chunks_exact(4).map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]])).collect();
+    let params: Vec<f32> = raw.chunks_exact(4).map(|b| f32::from_bits(word(b))).collect();
+    if params.len() != cfg.params() {
+        return Err(Error::Size);
+    }
     Ok((Model { cfg, params }, tok, note))
 }
 

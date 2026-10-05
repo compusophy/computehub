@@ -51,7 +51,7 @@ pub(crate) const STACK: [(&str, &str); 40] = [
     ("applang-syntax", "applang's lexer and parser"), ("lang", "Diagnostics, lexer and parser kit"),
     ("fuel", "Fuel and byte budgets"), ("toolbox", "Test programs"),
     ("tiny", "A small transformer: train, sample, keep"),
-    ("lab", "Its applang corpus, training and evals"),
+    ("lab", "Its applang corpus, training and measures"),
 ];
 /// The mark's side; the width of the stack's name column, and the least width with the roles
 /// beside the names (else under them).

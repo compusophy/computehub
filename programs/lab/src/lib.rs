@@ -30,6 +30,16 @@ pub fn root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..").join("..")
 }
 
+/// What a weights file's note says when it was trained on the found programs alone, without
+/// their variants (`lab train --found 1`).
+pub const FOUND_ONLY: &str = " on the found programs alone";
+
+/// The corpus trained on: `c`, or with `found_only` its found programs alone.
+pub fn trained(c: &corpus::Corpus, found_only: bool) -> corpus::Corpus {
+    let programs = c.programs.iter().filter(|p| !found_only || p.of.is_none()).cloned().collect();
+    corpus::Corpus { programs }
+}
+
 /// What is trained on: the training programs in an order drawn from `seed`, each after an end
 /// token, and one end token last.
 pub fn stream(c: &corpus::Corpus, tok: &Tokenizer, seed: u64) -> Vec<u32> {
@@ -47,12 +57,12 @@ pub fn stream(c: &corpus::Corpus, tok: &Tokenizer, seed: u64) -> Vec<u32> {
     out
 }
 
-/// What the held-out loss is measured on: each held-out program between end tokens, cut into
-/// windows of `ctx + 1` tokens (each overlapping the last by one, so every token is predicted
-/// once).
+/// What the held-out loss is measured on: each held-out program found (its variants, renamed
+/// copies, would count it again) between end tokens, cut into windows of `ctx + 1` tokens
+/// (each overlapping the last by one, so every token is predicted once).
 pub fn held(c: &corpus::Corpus, tok: &Tokenizer, ctx: usize) -> Vec<Vec<u32>> {
     let mut out = Vec::new();
-    for p in c.held() {
+    for p in c.held().filter(|p| p.of.is_none()) {
         let mut seq = vec![EOS];
         seq.extend(tok.encode(&p.text));
         seq.push(EOS);
