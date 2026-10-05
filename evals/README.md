@@ -301,6 +301,10 @@ What it says:
   the smoke test to send one again, the grade would not count it as the model's fail, though the
   coder, which cannot tell, would still send it to the model mid-make, as it did here.
 
+Since then the coder's prompt has moved to `09141db7e75a4b45` (a grid's cell is the square's
+index, never its color, shown by a palette), so no recorded request replays: the runs above are
+stale (kept as they were, never graded again) until live runs at the new prompt replace them.
+
 ## Next suites (designed, not built)
 
 ### Suite 2, the Assistant's desktop tasks

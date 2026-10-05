@@ -865,10 +865,8 @@ fn feedback_goes_to_compusophy_only_on_a_yes_to_it() {
     let love = a.local(&call(r#"{"kind":"love","text":"hi"}"#), true);
     assert_eq!(love, Some(Ran::Failed("E0918: kind is idea or bug, not love".into())));
     let long = format!(r#"{{"kind":"bug","text":"{}"}}"#, "x".repeat(MAX_FEEDBACK));
-    let long = a.local(&call(&long), false);
-    assert!(
-        matches!(&long, Some(Ran::Failed(e)) if e.starts_with("E0918: the report is 8011 bytes"))
-    );
+    let Some(Ran::Failed(long)) = a.local(&call(&long), false) else { panic!() };
+    assert!(long.starts_with("E0918: the report is 8011 bytes"), "{long}");
 }
 
 #[test]
@@ -973,6 +971,8 @@ fn a_task_steps_aside_for_the_window_it_leaves_the_person_in_in_plain_words() {
     let end = "Started: steer the arrows, go.\n1 step, 2.4k tokens in, 60 out";
     assert!(asked == "ai w2 ai w2! " && said.ends_with(end), "{asked} {said}");
     assert_eq!(run("go", ("snake", GRID), click, "Started. Faster?").0, asked);
+    // Told to say it started a game, never how the game goes: it moves on before it is read.
+    assert!(SYSTEM.contains("pressed Start), never its live state (length, score, level, balls)"));
     // A window opened: it hides, but not for an answer asked for, nor one that asks; nor after a
     // press in a window it did not open.
     let files = ("files", 2);
