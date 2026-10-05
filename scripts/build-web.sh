@@ -175,14 +175,16 @@ done
 # too (same patterns; -a because the wasm and fonts are binary). A leaky
 # bundle fails the build, and scripts/deploy.sh stops on a failed build.
 # One home path belongs in the bundle: the OS's own guest home
-# (vfs::Vfs::HOME), which names no account on the build machine. It is an
-# alternative of its own so that the longest match reports it whole, and is
-# then dropped. ([g] keeps this line from matching caps.sh's own check.)
+# (vfs::Vfs::HOME), which names no account on the build machine; and one
+# path only looks like one: the home crate's sources (crates/home/), which
+# panic locations name. Each is an alternative of its own so that the
+# leftmost, longest match reports it whole, and is then dropped. ([g] and
+# [c] keep this line from matching caps.sh's own check.)
 # Each hit is shown with the 32 bytes on either side (unprintable ones as
 # '.'), so a path that leaked can be told from strings that only sit side
 # by side in a wasm's data, and found in the source.
-leaks=$(LC_ALL=C grep -r -a -o -b -E '[A-Za-z]:[/\\]+Users[/\\]|/home/[g]uest|/home/[A-Za-z]|/Users/[A-Za-z]|[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+\.[A-Za-z0-9.-]*[A-Za-z]{2,}' dist \
-  | LC_ALL=C grep -a -v -E '^[^:]*:[0-9]+:/home/[g]uest$' || true)
+leaks=$(LC_ALL=C grep -r -a -o -b -E '[A-Za-z]:[/\\]+Users[/\\]|/home/[g]uest|[c]rates/home/|/home/[A-Za-z]|/Users/[A-Za-z]|[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+\.[A-Za-z0-9.-]*[A-Za-z]{2,}' dist \
+  | LC_ALL=C grep -a -v -E '^[^:]*:[0-9]+:(/home/[g]uest|[c]rates/home/)$' || true)
 if [ -n "$leaks" ]; then
   echo "ERROR: dist/ holds a local path or email address; do not deploy it (file:byte: the bytes around it):" >&2
   printf '%s\n' "$leaks" | head -20 | while IFS=: read -r file at _; do
