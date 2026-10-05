@@ -11,6 +11,7 @@ members = [
     "crates/shell",
     "crates/platform",
     "crates/os",
+    "crates/report",
     "crates/font",
     "crates/vfs",
     "crates/text",
@@ -64,6 +65,7 @@ compusophy-logon = { path = "crates/logon", version = "0.1.0" }
 compusophy-profiles = { path = "crates/profiles", version = "0.1.0" }
 compusophy-shell = { path = "crates/shell", version = "0.1.0" }
 compusophy-platform = { path = "crates/platform", version = "0.1.0" }
+compusophy-report = { path = "crates/report", version = "0.1.0" }
 compusophy-font = { path = "crates/font", version = "0.1.0" }
 compusophy-vfs = { path = "crates/vfs", version = "0.1.0" }
 compusophy-text = { path = "crates/text", version = "0.1.0" }
