@@ -498,4 +498,9 @@ fn ai_requests_stream_back_to_the_program_that_asked() {
     assert_eq!(ask(&mut s, vec![ai(2)]).0, [stream(2)]);
     s.k.kill(2, wire::INTERRUPTED);
     assert_eq!(ask(&mut s, vec![]), (vec![Fx::Abort(2)], vec![]));
+    // One it asked in the flush it ended in is never sent.
+    let mut ctl = Ctl::default();
+    s.r.ai.ask(2, ai(3));
+    s.r.ai.pump(&mut ctl, &mut s.k);
+    assert!(ctl.effects().is_empty() && s.r.ai.0.borrow().counts[0] == 2);
 }

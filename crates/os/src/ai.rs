@@ -163,8 +163,11 @@ impl Ai {
         for (pid, r) in mem::take(&mut h.asks) {
             // A cancel ends its request; a process done aborts all of its own, unanswered.
             let cancel = match r {
+                // One whose process ended since it asked (in this flush) is never sent.
                 Request::Ai { id, body } => {
-                    h.start(ctl, k, (pid, id), body);
+                    if k.runs(pid) {
+                        h.start(ctl, k, (pid, id), body);
+                    }
                     continue;
                 }
                 Request::AiCancel { id } => Some(id),
