@@ -169,8 +169,8 @@ pub struct Task {
 /// A session: the conversation and what goes with every request.
 #[derive(Debug)]
 pub struct Agent {
-    /// The model to ask for ("": the free AI's own), whether to act without asking, whether to
-    /// learn from failures.
+    /// The model to ask for ("": the one chosen in Settings, which the desktop adds to a request
+    /// that names none), whether to act without asking, whether to learn from failures.
     pub model: String,
     pub auto: bool,
     pub learn: bool,

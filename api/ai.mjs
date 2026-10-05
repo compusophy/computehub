@@ -204,6 +204,8 @@ export default async function handler(req, res) {
   if (!tools || !['auto', 'none'].includes(choice)) {
     return fail(res, 400, "tools must be functions, and tool_choice 'auto' or 'none'");
   }
+  // The desktop puts the model chosen in Settings first in every body, so a program's own, after
+  // it, wins: JSON.parse keeps a key's last value.
   const model = Object.hasOwn(MODELS, body.model) ? body.model : Object.keys(MODELS)[0];
   const asked = Math.floor(Number(body.max_tokens));
   // Thinking costs time and tokens, and GLM 5.3 thinks at length however it is asked not to

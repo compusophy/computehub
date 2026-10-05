@@ -184,7 +184,7 @@ fn a_task_reads_then_edits_with_a_yes_then_answers() {
             r#""role":"tool","tool_call_id":"call_0_read_file","content":"   1| buy milk"#
         )
     );
-    assert!(!w.sent[0].contains("\"model\""), "the free AI's own model");
+    assert!(!w.sent[0].contains("\"model\""), "the one chosen in Settings");
     for shown in
         ["\u{25cf} \x1b[m\x1b[1mread_file\x1b[m ~/notes/todo.txt", "- buy milk", "+ buy oat milk"]
     {

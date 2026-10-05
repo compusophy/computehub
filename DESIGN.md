@@ -429,13 +429,15 @@ one. Forked crates keep their Apache-2.0 license and note their origin.
   requests of the programs its shell runs (`apps::asks`; nothing else of
   their frames, and no other process's), and a request whose process ended
   (Ctrl+C, a kill) is stopped at the hub's next pump, as at a window's
-  Close, before another byte. In a Terminal the Assistant put input into
-  (`Cx::driven`, the window that may not reset the device), each AI request
-  ends at once, refused, so no AI drives the agent past the person's yes:
-  one it starts there (`agent -y`) does nothing, and one whose question it
-  answers stops at its next request. A request fits the free AI (64
-  messages, 96 KiB): old results fold to their first line, then old tasks
-  and steps go. A task makes 20 model calls at most, as the Assistant's
+  Close, before another byte. It hears no Config, so the hub puts the model
+  chosen in Settings first in every request, and a body's own (`-m`),
+  after it, wins: the endpoint's JSON.parse keeps a key's last value. In a
+  Terminal the Assistant put input into (`Cx::driven`, the window that may
+  not reset the device), each AI request ends at once, refused, so no AI
+  drives the agent past the person's yes: one it starts there (`agent -y`)
+  does nothing, and one whose question it answers stops at its next
+  request. A request fits the free AI (64 messages, 96 KiB): old results
+  fold to their first line, then old tasks and steps go. A task makes 20 model calls at most, as the Assistant's
   (E0942; `go on` goes on), so it and its lesson keep under the 30
   requests a minute the free AI takes from a client, and leave most of its
   120 an hour to Studio and the Assistant; a busy AI (429) ends the task,

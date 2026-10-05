@@ -2,7 +2,8 @@
 //! compusophy's own server function, which forwards it to the model and streams the response body
 //! back: to the program as [`Event::AiData`]s ([`CHUNK`] at most), then an [`Event::AiEnd`]. The
 //! one setting, the model (one of [`MODELS`]), lives in `localStorage` ([`MODEL`]); programs hear
-//! it as [`Event::Config`] (after their first Resize, again on each change), apps as [`AiStatus`].
+//! it as [`Event::Config`] (after their first Resize, again on each change), apps as [`AiStatus`],
+//! and a request that names no model (a Terminal's program, which hears no Config) asks for it.
 //!
 //! The hub also keeps what Activity reads ([`uiwire::stat`]): the process watching (the newest
 //! [`Request::Watch`]), and since the tab opened the requests, the failed (an HTTP status not
@@ -71,6 +72,16 @@ impl Hub {
         self.last += 1;
         self.counts[0] = self.counts[0].wrapping_add(1);
         self.live.push((self.last, pid, id, Vec::new()));
+        // The chosen model first, which a body's own "model" overrides (the endpoint's JSON.parse
+        // keeps a key's last value): a program that heard no Config, as one a Terminal's shell
+        // runs, asks for the person's choice too.
+        let body = match body.strip_prefix('{') {
+            Some(rest) => {
+                let comma = if rest.starts_with('}') { "" } else { "," };
+                ["{\"model\":\"", MODELS[self.model], "\"", comma, rest].concat()
+            }
+            None => body,
+        };
         let json = vec![("Content-Type", "application/json".into())];
         ctl.stream(self.last, URL, json, body.into());
     }

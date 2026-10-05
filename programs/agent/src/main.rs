@@ -35,7 +35,7 @@ wc, rev, hello).\n\
 /lessons  what it learned from past failures (~/.agent/lessons.md)\n  /forget   forget them\n  \
 /learn    stop learning (again: learn)\n  /exit     leave (Ctrl+D too)\n";
 const USAGE: &str = "usage: agent [-y] [-m model] [--no-learn] [--] [task...]\n  -y          write \
-and run without asking\n  -m model    the model to ask (the free AI's own by default)\n  \
+and run without asking\n  -m model    the model to ask (by default, the one chosen in Settings)\n  \
 --no-learn  keep no lessons from failures\nOptions go before the task. With a task it works on \
 it and exits; without, it asks for tasks.\n";
 
