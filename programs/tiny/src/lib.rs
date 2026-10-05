@@ -11,7 +11,8 @@
 //! - [`Session`] and [`generate`]: sampling (temperature, top-k) with a KV cache;
 //! - [`save`] and [`load`]: one weights file with its tokenizer and a note, ending in its
 //!   FNV-1a hash ([`fnv`]);
-//! - [`Ngram`]: the baseline a model must beat, counts over the same tokens.
+//! - [`Ngram`]: the baseline a model must beat, counts over the same tokens;
+//! - [`par_map`]: work spread over threads, its results in order.
 //!
 //! Seeded and ordered: the same seed, data and steps make the same weights, bit for bit, on one
 //! thread or eight (each sequence's gradient is its own, and they are summed in order).
@@ -198,4 +199,33 @@ impl Rng {
         let (u, v) = (1.0 - self.unit(), self.unit());
         (-2.0 * u.ln()).sqrt() * (std::f64::consts::TAU * v).cos()
     }
+}
+
+/// `f` of each item, on up to `threads` threads (each taking the next item left), in the
+/// items' order: the same results on any number of threads when `f` depends on its item alone.
+pub fn par_map<T: Sync, R: Send>(
+    items: &[T],
+    threads: usize,
+    f: impl Fn(&T) -> R + Sync,
+) -> Vec<R> {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let (next, f) = (&AtomicUsize::new(0), &f);
+    let mut done: Vec<(usize, R)> = std::thread::scope(|s| {
+        let work = move || {
+            let mut mine = Vec::new();
+            loop {
+                let i = next.fetch_add(1, Ordering::Relaxed);
+                let Some(item) = items.get(i) else { return mine };
+                mine.push((i, f(item)));
+            }
+        };
+        let handles: Vec<_> = (0..threads.max(1)).map(|_| s.spawn(work)).collect();
+        let join = |h: std::thread::ScopedJoinHandle<'_, Vec<(usize, R)>>| match h.join() {
+            Ok(mine) => mine,
+            Err(panic) => std::panic::resume_unwind(panic),
+        };
+        handles.into_iter().flat_map(join).collect()
+    });
+    done.sort_by_key(|d| d.0);
+    done.into_iter().map(|d| d.1).collect()
 }

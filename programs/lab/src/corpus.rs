@@ -6,10 +6,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::thread;
 
-use tiny::{Rng, fnv};
+use tiny::{Rng, fnv, par_map};
 
 use crate::{augment, collect};
 
@@ -265,32 +263,4 @@ fn variants(base: &Program, seen: &mut BTreeSet<u64>) -> Vec<Program> {
         out.push(Program { hash, text, shape, runs: false, held: false, of, from: Vec::new() });
     }
     out
-}
-
-/// `f` of each item, on up to `threads` threads (each taking the next item left), in the
-/// items' order.
-pub fn par_map<T: Sync, R: Send>(
-    items: &[T],
-    threads: usize,
-    f: impl Fn(&T) -> R + Sync,
-) -> Vec<R> {
-    let (next, f) = (&AtomicUsize::new(0), &f);
-    let mut done: Vec<(usize, R)> = thread::scope(|s| {
-        let work = move || {
-            let mut mine = Vec::new();
-            loop {
-                let i = next.fetch_add(1, Ordering::Relaxed);
-                let Some(item) = items.get(i) else { return mine };
-                mine.push((i, f(item)));
-            }
-        };
-        let handles: Vec<_> = (0..threads.max(1)).map(|_| s.spawn(work)).collect();
-        let join = |h: thread::ScopedJoinHandle<'_, Vec<(usize, R)>>| match h.join() {
-            Ok(mine) => mine,
-            Err(panic) => std::panic::resume_unwind(panic),
-        };
-        handles.into_iter().flat_map(join).collect()
-    });
-    done.sort_by_key(|d| d.0);
-    done.into_iter().map(|d| d.1).collect()
 }

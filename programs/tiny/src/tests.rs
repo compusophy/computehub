@@ -355,3 +355,13 @@ fn the_ngram_is_a_distribution_and_backs_off() {
     }
     assert_eq!(g.sample_where(&[1, 2], 1.0, &mut rng, &|t| t == 9), None);
 }
+
+#[test]
+fn par_map_keeps_the_items_order_on_any_threads() {
+    let items: Vec<u64> = (0..100).collect();
+    let squares: Vec<u64> = items.iter().map(|x| x * x).collect();
+    for threads in [0, 1, 3, 8, 200] {
+        assert_eq!(par_map(&items, threads, |&x| x * x), squares, "{threads}");
+    }
+    assert!(par_map(&[] as &[u64], 4, |&x| x).is_empty());
+}

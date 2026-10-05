@@ -5,9 +5,9 @@ use tiny::{EOS, Rng, Tokenizer};
 
 use crate::augment::{drop_line, rename, shuffle_states, vary_numbers};
 use crate::collect::{SKIP, blocks, find, literals};
-use crate::constrain::{Lex, Rule, parses};
+use crate::constrain::{Guide, Lex, Rule, parses};
 use crate::corpus::{Corpus, Program, compiles, content, hold_out, runs, shape};
-use crate::measure::{PROMPTS, judge, program, prompt, write};
+use crate::measure::{PROMPTS, first_error, judge, program, prompt, write};
 
 #[test]
 fn literals_are_read_as_rust_reads_them() {
@@ -206,6 +206,17 @@ fn the_lexer_rule_is_applangs_lexer() {
     for src in bad {
         assert!(!ok(src), "{src:?}");
     }
+    // Numbers up to 2^63, as the lexer takes them (the parser, past 2^63 - 1, only a saved
+    // state's, after `-`).
+    for (src, good) in [
+        ("label 9223372036854775807;", true),
+        ("state n = -9_223_372_036_854_775_808;\nlabel n;", true),
+        ("label 00000000000000000000001;", true),
+        ("label 9223372036854775809;", false),
+        ("label 18446744073709551619;", false),
+    ] {
+        assert_eq!((ok(src), !lex_error(src)), (good, good), "{src}");
+    }
     // Mutated programs: the rule refuses exactly what the lexer refuses, or brackets that do
     // not match.
     let bytes = b" \n\"\\/*.&|'#09az_(){}[];=-+!<>";
@@ -243,8 +254,15 @@ fn the_parser_rule_lets_every_program_through_as_it_is_written() {
     for src in ["label \"a\" label ", "state = ", "label 1;\n)", "label ;", "row { if }"] {
         assert!(refused(src), "{src:?}");
     }
-    // A name where only a name may not go is judged whole; one that may become a word, not yet.
+    // A name is judged as a name and as each word it may still become: refused where none of
+    // them may go.
     assert!(refused("label 1 abc") && !refused("label 1; la") && !refused("state n = 0;\ns"));
+    for src in
+        ["state n = 0;\nstate m s", "label 1;\nlabel x i", "state body if", "state x = 1; fa"]
+    {
+        assert!(refused(src), "{src:?}");
+    }
+    assert!(!refused("fn f(a: i") && !refused("state n = 0;\nsa") && !refused("label 1;\nrow"));
     // An operator, by each it can still be: `.` only as `..`, `-` as `-`, `-=` or `->`.
     assert!(refused("label 1 .") && !refused("label 1 -") && !refused("fn f() -"));
     let mut lex = Lex::default();
@@ -266,9 +284,10 @@ fn constrained_writers_keep_their_rules() {
                 ok.get(rng.below(ok.len().max(1))).copied()
             };
             let mut rng = Rng::new(seed);
-            let out = write(&tok, (seed as usize) % PROMPTS.len(), rule, &mut draw, &mut rng);
+            let (out, stuck) =
+                write(&tok, (seed as usize) % PROMPTS.len(), rule, &mut draw, &mut rng);
             let (text, ended) = program(&tok, (seed as usize) % PROMPTS.len(), &out);
-            assert!(ended, "{rule:?} {seed}: {text}");
+            assert!(ended && !stuck, "{rule:?} {seed}: {text}");
             assert!(!lex_error(&text) && matched(&text), "{rule:?}: {text}");
             if rule == Rule::Parser {
                 let parsed = applang::compile(&text);
@@ -276,6 +295,54 @@ fn constrained_writers_keep_their_rules() {
             }
         }
     }
+}
+
+/// A writer that draws any byte of code let through (no comment), else any ASCII byte, ending
+/// seldom, goes on as long as it likes: the parser's rule always finds it a byte, and what it
+/// wrote parses as far as it goes.
+#[test]
+fn the_parser_rule_has_no_dead_ends() {
+    let tok = Tokenizer::bytes();
+    let code = b"abcdefgiklnorstuvwy_0123456789 \n=+-*%<>!(){}[];,:.\"&|";
+    for seed in 0..3 {
+        let mut draw = |seq: &[u32], allow: &dyn Fn(u32) -> bool, rng: &mut Rng| {
+            let mut ok: Vec<u32> =
+                code.iter().map(|&b| u32::from(b)).filter(|&t| allow(t)).collect();
+            if ok.is_empty() {
+                ok = (0..128).filter(|&t| allow(t)).collect();
+            }
+            match ok.get(rng.below(ok.len().max(1))) {
+                Some(_) if allow(EOS) && seq.len() > 300 && rng.below(100) == 0 => Some(EOS),
+                Some(&t) => Some(t),
+                None => allow(EOS).then_some(EOS),
+            }
+        };
+        let p = seed as usize;
+        let (out, stuck) = write(&tok, p, Rule::Parser, &mut draw, &mut Rng::new(seed));
+        let (text, ended) = program(&tok, p, &out);
+        let mut lex = Lex::default();
+        assert!(!stuck && out.len() > 100, "{seed}: {text}");
+        assert!(lex.feed(text.as_bytes()) && parses(&text, &lex, ended), "{text}");
+    }
+    // A character cut between tokens may wait for its end; bytes that are no character may
+    // not come, nor the end token before it is whole.
+    let mut g = Guide::new(&tok, Rule::Parser, "label \"a");
+    assert!(g.parses(0xC3) && g.parses(u32::from(b'"')));
+    g.push(0xC3);
+    assert!(!g.parses(u32::from(b'"')) && !g.parses(EOS) && g.parses(0xA9));
+}
+
+#[test]
+fn a_parser_error_before_a_lexer_error_comes_first() {
+    let first = |src: &str| first_error(src, &applang::compile(src).unwrap_err());
+    // The compiler reports the string left open; the name after a name, before it, is first.
+    let src = "state t = 0;\nlabel t t;\nlabel \"open\n";
+    assert_eq!(applang::compile(src).unwrap_err().code, Some(4));
+    assert_eq!(first(src), (src.find("t;").unwrap(), 101));
+    // Alone, the lexer's error stands, and so does one that the cut text's end would make.
+    assert_eq!(first("label 1;\nlabel \"open\n"), (15, 4));
+    assert_eq!(first("label 1 + \"open\n"), (10, 4));
+    assert_eq!(first("label nope;"), (6, 302));
 }
 
 #[test]

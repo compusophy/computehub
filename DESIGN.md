@@ -122,7 +122,7 @@ frame: os → shell::draw → gfx::DrawList → platform::Renderer: one draw cal
 | `platform` | the browser boundary: canvas, WebGL2, input, textarea, fetch, storage, cursor |
 | `os` | the wasm entry: fonts, VFS, the app registry, theme storage, event glue |
 | `report` | telemetry: notes of what the page saw, feedback and error reports to compusophy's inbox (`api/feedback.mjs`), the outbox that keeps each until it is taken, a panic's beacon |
-| `tiny` | a decoder-only transformer in plain Rust, no dependencies: a byte-level BPE, forward and hand-written backward passes in f32, AdamW on threads, sampling with a KV cache, a weights file checked by its hash; seeded, the same bits on any number of threads; and the n-gram baseline it must beat |
+| `tiny` | a decoder-only transformer in plain Rust, no dependencies: a byte-level BPE, forward and hand-written backward passes in f32, AdamW on threads, sampling with a KV cache, a weights file checked by its hash; seeded, the same bits on any number of threads; the n-gram baseline it must beat; a map over threads |
 | `lab` | the model lab, a dev tool never shipped: the corpus of verified applang programs (`data/manifest.tsv`), decoding constrained by applang's lexer and parser, and the commands that train tiny and measure what it writes (`data/results.md`) |
 | `tools/serve` | dev-only static server for `dist/`, never shipped |
 | `tools/eval` | dev-only eval runner: the system's `curl` against the free AI, paced under its limits; never shipped |
@@ -760,28 +760,34 @@ Newcombe's, cost per pass and the tasks that flipped.
   AdamW on 8 threads, a KV cache, a weights file ending in its hash), and
   `lab`, a dev tool that makes the corpus (each applang program in the repo
   that compiles, once, content-addressed: 100 found, a dozen of them real
-  apps and the rest test snippets; 976 with variants: renames, and since
-  the second run 282 that are other programs, a line dropped or numbers
-  changed; 356 shapes; held out by shape; `programs/lab/data/manifest.tsv`,
-  which a test holds to the repo), trains tiny on it, stopping once the
-  held-out loss stops falling, and judges what it writes with applang's own
-  checker and smoke test (`results.md` there), free and with decoding
-  constrained by applang's lexer and by its parser. The evals' answer keys
-  (`programs/makes/refs`) never join it: a model is measured on them, not
-  trained on them. Measured 2026-10-05, 990k parameters, 100 programs
-  prompted by 10 app headers. First run (600 steps of 8 x 1024 tokens,
-  37 minutes on 8 threads): none of tiny's compiles, at any temperature,
-  its first error 38% of the way through; an 8-gram compiles 2, copies of
-  corpus programs. Second run (the wider corpus, stopped at step 270, its
-  lowest held-out loss at 150): still none of tiny's compiles, free or
-  constrained. Free, its first error comes 24% of the way through (the
-  lowest-loss weights: 11%); constrained by the lexer, 42% (51%), and by
-  the parser, 46% (44%), but then it seldom ends (2 to 4 of 100) and is
-  cut at 2,048 tokens. The 8-gram compiles 4, the 3-gram under the parser
-  2: all copies. Held-out loss a byte: tiny at best 1.53 nats (1.50 in the
-  first run), a 3-gram 1.49: tiny is no better than counting yet. The
-  pipeline is the result; more verified data is what moves the number
-  (each app added to the repo joins on `lab corpus`).
+  apps and the rest test snippets; 976 with variants: renames and, since
+  the second run, near-copies with a line dropped or numbers changed,
+  which add 266 of the 356 shapes; held out by shape;
+  `programs/lab/data/manifest.tsv`, which a test holds to the repo), trains
+  tiny on it, stopping once the held-out loss stops falling, and judges
+  what it writes with applang's own checker and smoke test (`results.md`
+  there), free and with decoding constrained by applang's lexer and by its
+  parser. The evals' answer keys (`programs/makes/refs`) never join it: a
+  model is measured on them, not trained on them. Measured 2026-10-05, 990k
+  parameters, 100 programs prompted by 10 app headers. First run (600
+  steps of 8 x 1024 tokens, 37 minutes on 8 threads): none of tiny's
+  compiles, at any temperature; an 8-gram compiles 2, copies of corpus
+  programs. Second run (the wider corpus; stopped at step 270, the rate
+  still 70% of its peak) and third (the cosine planned over 300 steps, all
+  run, 21 minutes): still none of tiny's compiles, free or constrained.
+  Free or under the lexer's rule its first error, nearly always the
+  parser's E0101, comes 1 to 3% of the way through (the first run's 38%,
+  and the second's first figures, took the compiler's first reported
+  error, which puts a lexer error anywhere before an earlier parser one).
+  Under the parser's rule nothing it writes has a syntax error, but it
+  ends only 1 to 4 of 100 programs; the rest run to the 2,048-token cut,
+  26 to 59 of them inside a block comment they opened and never closed.
+  The 8-gram compiles 4 under every rule, the 3-gram 2 under the parser's:
+  all copies. Held-out loss a byte: tiny at best 1.505 nats (third run;
+  1.530 in the second, 1.501 in the first), a 3-gram 1.491 (1.479 in the
+  first): tiny is no better than counting yet. The pipeline is the result;
+  more verified data is what moves the number (each app added to the repo
+  joins on `lab corpus`).
 
 ## Open questions
 

@@ -10,9 +10,10 @@
 //! - parser: the lexer's rule, and applang's own parser finds no error before the end of what
 //!   is written so far (the last token, while it may still grow, judged by what it can become);
 //!   it ends only where the program parses. A token the parser refuses is drawn again without
-//!   it, [`TRIES`] times at most; then the last one drawn stands.
+//!   it; after [`TRIES`] refusals every token is judged, and the draw is among those it allows.
 //!
-//! Neither rule looks at names or types (the checker's work) or runs anything.
+//! Neither rule looks at names or types (the checker's work) or runs anything. Where a rule
+//! lets no token through, the writer stops: a dead end, counted (`measure::write`).
 
 use applang::{Span, codes};
 use tiny::{EOS, Tokenizer};
@@ -38,7 +39,7 @@ impl Rule {
     }
 }
 
-/// Draws the parser rule makes before the last one drawn stands.
+/// Tokens the parser rule refuses one at a time, as drawn, before it judges every token.
 pub const TRIES: usize = 32;
 
 /// Where the lexer is within a token.
@@ -57,17 +58,14 @@ enum Mode {
     Str,
     /// Past a string's `\`.
     Esc,
-    /// In a number: its digits so far.
-    Num(u8),
+    /// In a number: its value so far (applang's lexer takes up to 2^63).
+    Num(u64),
     Ident,
     /// Past a `.`, `&` or `|`: only its double may follow.
     Half(u8),
     /// Past an operator that a second character may lengthen (`=`, `!`, `<`, `>`, `+`, `-`).
     Op(u8),
 }
-
-/// The most digits a number may have: every 18-digit number fits applang's 2^63.
-const DIGITS: u8 = 18;
 
 /// The lexer's state over a program written so far: its mode, the brackets open, and where the
 /// last token began.
@@ -116,8 +114,11 @@ fn step(mode: &mut Mode, open: &mut Vec<u8>, start: &mut usize, (b, pos): (u8, u
             };
         }
         Mode::Esc => return matches!(b, b'"' | b'\\' | b'n') && set(mode, Mode::Str),
-        Mode::Num(n) => match b {
-            b'0'..=b'9' if n < DIGITS => return set(mode, Mode::Num(n + 1)),
+        Mode::Num(v) => match b {
+            b'0'..=b'9' => {
+                let v = v.checked_mul(10).and_then(|v| v.checked_add(u64::from(b - b'0')));
+                return v.is_some_and(|v| v <= 1 << 63) && set(mode, Mode::Num(v.unwrap_or(0)));
+            }
             b'_' => return true,
             _ if ident(b) => return false,
             _ => *mode = Mode::Code,
@@ -137,7 +138,7 @@ fn step(mode: &mut Mode, open: &mut Vec<u8>, start: &mut usize, (b, pos): (u8, u
         b' ' | b'\t' | b'\n' | b'\r' => Mode::Code,
         b'/' => Mode::Slash,
         b'"' => Mode::Str,
-        b'0'..=b'9' => Mode::Num(1),
+        b'0'..=b'9' => Mode::Num(u64::from(b - b'0')),
         b'a'..=b'z' | b'A'..=b'Z' | b'_' => Mode::Ident,
         b'.' | b'&' | b'|' => Mode::Half(b),
         b'=' | b'!' | b'<' | b'>' | b'+' | b'-' => Mode::Op(b),
@@ -206,19 +207,21 @@ pub const WORDS: [&str; 25] = [
 
 /// Whether `text`, lexed to `lex`, may still become a program by applang's parser: no lexer or
 /// parser error before the end of what is whole. A last token that may grow is judged by what
-/// it can become: a string as any string, a name as a name unless it begins one of [`WORDS`]
-/// (then not yet), a number as a number, an operator as each it can still be, a comment not
-/// yet. With `end`, the text must parse whole.
+/// it can become: a string as any string, a name as a name and as each of [`WORDS`] it begins,
+/// a number as a number, an operator as each it can still be, a comment not yet. With `end`,
+/// the text must parse whole.
 pub fn parses(text: &str, lex: &Lex, end: bool) -> bool {
     let start = lex.start.min(text.len());
     let whole = |more: &str| ([text, more, " "].concat(), text.len() + more.len());
     let probes = match (end, lex.mode) {
         (true, _) | (_, Mode::Code | Mode::Line) => vec![(text.to_string(), text.len())],
         (_, Mode::Str | Mode::Esc) => vec![([&text[..start], "\"\""].concat(), start + 2)],
-        (_, Mode::Ident) if WORDS.iter().any(|w| w.starts_with(&text[start..])) => {
-            vec![(text[..start].to_string(), start)]
+        (_, Mode::Ident) => {
+            let words = WORDS.iter().filter(|w| w.starts_with(&text[start..]));
+            let word = |w: &&str| ([&text[..start], w, " "].concat(), start + w.len());
+            words.map(word).chain([whole("")]).collect()
         }
-        (_, Mode::Ident | Mode::Num(_)) => vec![whole("")],
+        (_, Mode::Num(_)) => vec![whole("")],
         (_, Mode::Half(c)) => vec![whole(&char::from(c).to_string())],
         (_, Mode::Op(c)) => ["", "=", if c == b'-' { ">" } else { "=" }].map(whole).to_vec(),
         (_, Mode::Slash | Mode::Block { .. }) => vec![(text[..start].to_string(), start)],
@@ -289,10 +292,12 @@ impl<'t> Guide<'t> {
         let piece = self.tok.piece(t);
         let mut bytes = self.text.clone();
         bytes.extend_from_slice(piece);
-        let Ok(text) = String::from_utf8(bytes) else {
+        let text = match String::from_utf8(bytes) {
+            Ok(text) => text,
             // A character cut between tokens: only inside a string or comment (the lexer
-            // allows no other), so nothing the parser reads changed.
-            return true;
+            // allows no other), so nothing the parser reads changed; but no program ends so,
+            // nor holds bytes that are no character.
+            Err(e) => return t != EOS && e.utf8_error().error_len().is_none(),
         };
         lex.feed(piece);
         parses(&text, &lex, t == EOS)

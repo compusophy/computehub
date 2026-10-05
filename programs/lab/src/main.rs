@@ -9,7 +9,7 @@
 //!   --patience`, and `--found 1` to train on the found programs without their variants; the
 //!   defaults are what was trained (see `programs/lab/data/results.md`).
 //! - `measure`: 100 programs from each set of weights kept and from two n-gram baselines,
-//!   judged, at each temperature, free and constrained by applang's lexer and by its parser;
+//!   judged, each free and constrained by applang's lexer and by its parser;
 //!   `programs/lab/data/results.md` (its last section, the runs before, kept), and every
 //!   program in `programs/lab/out/samples/`.
 //! - `bench`: a few training steps of the shape given, timed.
@@ -28,11 +28,11 @@ use lab::constrain::Rule;
 use lab::corpus::Corpus;
 use lab::measure::{self, PROMPTS, Sample};
 use lab::{DATA, FOUND_ONLY, OUT};
-use tiny::{Acts, Config, Model, Ngram, Rng, Tokenizer, Trainer};
+use tiny::{Config, Model, Ngram, Rng, Tokenizer, Trainer};
 
 const USAGE: &str = "usage: lab corpus | train | measure | bench [--option value]...; options: \
                      --steps --threads --seed --vocab --ctx --dim --layers --heads --batch --lr \
-                     --found";
+                     --patience --found";
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -113,7 +113,8 @@ const DIM: usize = 128;
 const LAYERS: usize = 4;
 const HEADS: usize = 4;
 const BATCH: usize = 8;
-const STEPS: usize = 600;
+/// The cosine's length, near where training stops (planned over 600, it stopped at 270).
+const STEPS: usize = 300;
 const LR: f32 = 3e-3;
 const SEED: u64 = 1729;
 /// Steps between held-out checks.
@@ -335,42 +336,24 @@ fn weights(name: &str) -> Option<Result<(Model, Tokenizer, String), String>> {
     Some(loaded.map(|(m, tok, note)| (m, tok, format!("{note}; the file {hash:016x}"))))
 }
 
-/// The mean loss of `m` over `held`, a token at a time, in nats.
-fn held_loss(m: &Model, held: &[Vec<u32>]) -> f64 {
-    let mut acts = Acts::new(&m.cfg);
-    let (mut sum, mut count) = (0f64, 0usize);
-    for w in held {
-        let n = w.len() - 1;
-        sum += f64::from(m.loss(&mut acts, &w[..n], &w[1..])) * n as f64;
-        count += n;
-    }
-    sum / count.max(1) as f64
-}
-
 fn measure(o: &Opts) -> i32 {
     let (threads, seed) = (o.threads(), o.get("seed", SEED));
-    let last = match weights(LAST) {
-        Some(Ok(w)) => w,
-        Some(Err(e)) => {
-            eprintln!("{e}");
-            return 1;
-        }
-        None => {
-            eprintln!("no weights at {OUT}/{LAST}: run `lab train` first");
-            return 1;
-        }
-    };
+    let mut tinies = Vec::new();
+    for (name, file) in [("tiny, last", LAST), ("tiny, lowest held-out loss", BEST)] {
+        let why = match weights(file) {
+            Some(Ok(w)) => {
+                tinies.push((name, w));
+                continue;
+            }
+            Some(Err(e)) => e,
+            None if file == LAST => format!("no weights at {OUT}/{LAST}: run `lab train` first"),
+            None => continue,
+        };
+        eprintln!("{why}");
+        return 1;
+    }
     let Some(c) = checked_corpus(threads) else { return 1 };
     let id = format!("corpus {:016x}", c.id());
-    let mut tinies = vec![("tiny, last", last)];
-    match weights(BEST) {
-        Some(Ok(best)) => tinies.push(("tiny, lowest held-out loss", best)),
-        Some(Err(e)) => {
-            eprintln!("{e}");
-            return 1;
-        }
-        None => {}
-    }
     if let Some((_, (_, _, note))) = tinies.iter().find(|t| !t.1.2.starts_with(&id)) {
         eprintln!("weights trained on another corpus: {note}");
         return 1;
@@ -389,7 +372,7 @@ fn measure(o: &Opts) -> i32 {
     let start = Instant::now();
     let mut writers = Vec::new();
     for (name, (m, _, note)) in &tinies {
-        let loss = held_loss(m, &held);
+        let loss = f64::from(Trainer::new(m.clone(), threads).eval(&held));
         for rule in Rule::ALL {
             let samples =
                 measure::from_model(m, &tok, &known, (seed, measure::TEMP, rule), threads);
@@ -407,10 +390,7 @@ fn measure(o: &Opts) -> i32 {
             (g, l)
         })
         .collect();
-    let Some(low) = grams.iter().enumerate().min_by(|a, b| a.1.1.total_cmp(&b.1.1)).map(|g| g.0)
-    else {
-        return 1;
-    };
+    let low = grams.iter().enumerate().min_by(|a, b| a.1.1.total_cmp(&b.1.1)).map_or(0, |g| g.0);
     for (i, why) in [(low, "the lowest held-out loss"), (grams.len() - 1, "the longest context")] {
         let (g, loss) = &grams[i];
         if writers.iter().any(|w| w.name.starts_with(&format!("{}-gram", g.n))) {
@@ -437,8 +417,8 @@ fn measure(o: &Opts) -> i32 {
     let path = lab::root().join(DATA).join("results.md");
     // The runs before this one, as their own measure wrote them: kept below it.
     let before = fs::read_to_string(&path).unwrap_or_default().replace("\r\n", "\n");
-    let earlier = before.find(EARLIER).map_or("", |at| &before[at..]);
-    let report = results(&c, (&cfg, &held), &grams, &writers) + earlier;
+    let earlier = before.find(EARLIER).map_or(String::new(), |at| ["\n", &before[at..]].concat());
+    let report = results(&c, (&cfg, &held), &grams, &writers) + &earlier;
     if let Err(e) = fs::File::create(&path).and_then(|mut f| f.write_all(report.as_bytes())) {
         eprintln!("cannot write {}: {e}", path.display());
         return 1;
@@ -461,11 +441,16 @@ fn results(
 ) -> String {
     let found = c.programs.iter().filter(|p| p.of.is_none()).count();
     let runs = c.programs.iter().filter(|p| p.runs).count();
-    let made = |how: &str| {
-        let made = c.programs.iter().filter_map(|p| p.of.as_ref());
-        made.filter(|o| o.1.split(['+', '#']).any(|k| k == how)).count()
+    let is = |p: &lab::corpus::Program, how: &str| {
+        p.of.as_ref().is_some_and(|o| o.1.split(['+', '#']).any(|k| k == how))
     };
+    let made = |how: &str| c.programs.iter().filter(|p| is(p, how)).count();
     let shapes: BTreeSet<u64> = c.programs.iter().map(|p| p.shape).collect();
+    // The shapes only the variants with a line dropped or numbers changed have.
+    let changed = |p: &&lab::corpus::Program| is(p, "drop") || is(p, "numbers");
+    let others: BTreeSet<u64> =
+        c.programs.iter().filter(|p| !changed(p)).map(|p| p.shape).collect();
+    let new = shapes.len() - others.len();
     let held: Vec<&lab::corpus::Program> = c.held().filter(|p| p.of.is_none()).collect();
     let train_bytes: usize = c.train().map(|p| p.text.len()).sum();
     let found_bytes: usize = c.train().filter(|p| p.of.is_none()).map(|p| p.text.len()).sum();
@@ -479,12 +464,13 @@ fn results(
     out += &format!(
         "**Corpus** `{:016x}` (`manifest.tsv`): {} programs, {found} found in the repo and {} \
          variants of them ({} with names renamed, {} with their states reordered, {} with a line \
-         dropped, {} with numbers changed; the last two are other programs, not copies): {} \
-         shapes in all (a shape is a program but for its names, comments and spacing); {runs} \
-         run clean. Trained on: {train_bytes} bytes, {found_bytes} of them the found programs'. \
-         Held out, never trained on: the {} found programs of a tenth of the shapes, with every \
-         program sharing a shape with them and their variants; the held-out loss is over those \
-         {} found programs, each once ({held_bytes} bytes).\n\n",
+         dropped, {} with numbers changed): {} shapes in all (a shape is a program but for its \
+         names, comments and spacing). A line dropped or numbers changed makes a near-copy that \
+         is another program: those add {new} shapes (the rest are renamed copies of one \
+         another). {runs} run clean. Trained on: {train_bytes} bytes, {found_bytes} of them the \
+         found programs'. Held out, never trained on: the {} found programs of a tenth of the \
+         shapes, with every program sharing a shape with them and their variants; the held-out \
+         loss is over those {} found programs, each once ({held_bytes} bytes).\n\n",
         c.id(),
         c.programs.len(),
         c.programs.len() - found,
@@ -537,16 +523,25 @@ fn results(
          (render, click, tick, key, tap, type) finds no fault on seeds 1 to 3 and its icon line, \
          if any, draws, as Studio checks a made app. *Novel*: no program of the corpus has its \
          shape (its tokens but comments, names numbered as they first appear): not a copy, \
-         renamed or not. *Clean*: the share of what it wrote that comes before the compiler's \
-         first error (1 when it compiles), the mean.\n\n\
+         renamed or not. *Clean*: the share of what it wrote that comes before its first error \
+         (1 when it compiles), the mean. The compiler lexes a whole program before it parses, \
+         so a lexer error hides any parser error before it: the program cut at a lexer error is \
+         compiled again, and a parser error there comes first. The checker's errors (names, \
+         types) count only where nothing before them is wrong. The first run, below, took the \
+         compiler's first reported error, a lexer error anywhere before any parser error: its \
+         clean shares overstate.\n\n\
          Each writer writes three ways. *Free*: any token. *Lexer-constrained*: only tokens that \
          keep the program lexically valid by applang's lexer (strings closed on their line, no \
          character the language lacks, no letter run into a number) with its brackets matched, \
          and the end token only where all is closed. *Parser-constrained*: that, and applang's \
-         parser finds no error before the end of what is written (a token it refuses is drawn \
-         again without it, {} times at most), and the end token only where the program parses. \
-         Neither looks at names or types, or runs anything: the checker and the smoke test judge \
-         every program the same way.\n\n",
+         parser finds no error before the end of what is written (its last token, while it may \
+         grow, judged by each thing it can still become), and the end token only where the \
+         program parses; so nothing it writes has a lexer or parser error, and one cut at the \
+         limit has its first error at its end. A token the parser refuses is drawn again \
+         without it; after {} refusals every token is judged and the draw is among those it \
+         lets through. *Dead end*: the rule lets no token through, and the writer stops there. \
+         Neither rule looks at names or types, or runs anything: the checker and the smoke test \
+         judge every program the same way.\n\n",
         PROMPTS.len(),
         measure::EACH,
         measure::TEMP,
@@ -554,9 +549,8 @@ fn results(
         measure::MAX_TOKENS,
         lab::constrain::TRIES
     );
-    const HEAD: &str = "| writer | programs | ended | compile | run clean | novel | novel, \
-                        compile | novel, run clean | clean |\n|---|---|---|---|---|---|---|---|---|\n";
-    out += HEAD;
+    out += "| writer | programs | ended | dead end | compile | run clean | novel | novel, compile \
+            | novel, run clean | clean |\n|---|---|---|---|---|---|---|---|---|---|\n";
     for w in writers {
         out += &measure::row(&w.name, &w.samples);
     }
