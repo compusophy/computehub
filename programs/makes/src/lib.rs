@@ -262,10 +262,11 @@ pub fn find(id: &str) -> Option<&'static Task> {
 /// compiles, runs clean through the smoke test on seeds 1 to 3 ([`coder::ai::fault`], as the
 /// coder checks it), has an icon line that draws, and passes the task's checker.
 ///
-/// One smoke fault is the smoke test's own, not the program's: within a tick it takes its key,
-/// tap and click from the render before any of them, so when one hides what the next was meant
-/// for, that one reaches nothing shown (`E0213`, a bad event; an app cannot cause it). That is
-/// the stage `harness`: neither a pass nor a fail, counted apart.
+/// A smoke fault coded `E0213` (a bad event: a click or tap on nothing shown) is never the
+/// program's: only what drives an app sends events. The smoke test takes each from what shows
+/// after the one before, so it sends no bad one; were it to again (a bug of its own, as when it
+/// took a tick's key, tap and click from one render), the stage is `harness`: neither a pass nor
+/// a fail, counted apart, never charged to the model.
 pub fn judge(task: &Task, src: &str) -> (bool, &'static str, String) {
     let fail = |stage, why: String| (false, stage, coder::ai::clip(&why, 300));
     if let Some(f) = coder::ai::fault(src, "", 3) {
