@@ -82,11 +82,11 @@ programs/    wasm32-wasip1 programs (dist/bin/) and their app language
   system/    About, Editor, Feedback, Files, Welcome, Settings
   activity/  the resource monitor
   terminal/  the Terminal; vt/ term/: its parser, screen model
-  sh/        the shell: line editor, commands, jobs
+  sh/ agent/ the shell: line editor, commands, jobs; its AI coder
   toolbox/   test programs, one binary
 assets/fonts/  the fonts (see Fonts below)
 api/           server functions (Vercel, Node): ai.mjs, feedback.mjs
-tools/serve/   dev-only static server for dist/ (never shipped); mocks /api/*
+tools/serve/   dev-only static server for dist/; mocks /api/*
 web/index.html the page: <canvas id="os"> + the one-line module bootstrap
 web/worker.js  the program worker's one-line bootstrap
 scripts/       caps.sh, budget.sh, build-web.sh, deploy.sh (`prod`: production)

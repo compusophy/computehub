@@ -441,6 +441,9 @@ impl App for Remote {
 
     fn frame(&mut self, pid: u32, frame: &[u8], cx: &mut Cx<'_>) -> bool {
         if self.pid != Some(pid) {
+            // A program the Terminal's shell runs may ask the AI (`apps::asks`).
+            let ask = &mut |r| self.ai.ask(pid, r);
+            self.tty.iter().for_each(|_| apps::asks(cx, pid, frame, ask));
             return false;
         }
         match Frame::decode(frame) {

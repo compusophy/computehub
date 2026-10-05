@@ -106,6 +106,7 @@ frame: os → shell::draw → gfx::DrawList → platform::Renderer: one draw cal
 | `ui` | immediate-mode widgets, the themes, the `App` trait and `Cx` |
 | `terminal`, `vt`, `term` | the Terminal: an xterm screen, a wasip1 GUI program off the boot download; its escape parser and screen model |
 | `sh` | the shell the Terminal runs: a wasip1 program on its console |
+| `agent` | the Terminal's coding agent: a wasip1 program on its console that works on the person's files with the free AI and tools, and keeps lessons from the failures it gets past |
 | `apps` | a terminal's console in the boot: its shell, and its window's keys, text and wheel as events |
 | `system` | About, Editor, Feedback, Files, Welcome and Settings, and it serves Activity: one wasip1 GUI program (`dist/bin/system.wasm`), off the boot download |
 | `activity` | Activity, the resource monitor: graphs of CPU, memory, frames and the AI over the last minute, storage, a table of what runs |
@@ -327,6 +328,28 @@ one. Forked crates keep their Apache-2.0 license and note their origin.
   desktop can do the shell asks in its own escape, `OSC 1729 ; verb ; arg`
   (`open` an app, switch the `theme`), as programs already ask a terminal
   for its title.
+- **Agent** (`agent` in a terminal): a coding agent, as on other systems'
+  command lines. Given a task (`agent make a pomodoro app`, or one a line
+  at a time; `/help` lists its commands) it asks the free AI with eight
+  tools: read, write and edit a file, list a folder, search under one, run
+  a line in the OS's own shell (the `sh` library in-process, so `cd` stays
+  and `open` opens apps; a job's stdout is caught in a file), check an
+  applang app (`coder`'s compile and smoke test) and read applang's guide.
+  Reads run freely; writes, edits and commands wait for the person's yes
+  (`[y]es [n]o [a]lways`, or `-y`). The reply streams in as it comes, and
+  each tool shows a line of what it does and one of how it went. It reaches
+  the AI as a window's program does, a `Request::Ai` written to /dev/draw
+  and answered on /dev/events: the Terminal's window passes on the AI
+  requests of the programs its shell runs (`apps::asks`; nothing else of
+  their frames, and no other process's), and a request whose process ended
+  (Ctrl+C) is stopped. A request fits the free AI (64 messages, 96 KiB):
+  old results fold to their first line, then old tasks and steps go.
+  **It learns.** A task that got past a failure (a tool's error, an app
+  that did not check, a reply cut off) asks, after, for the one lesson
+  that would have avoided it; a new one goes to `~/.agent/lessons.md` and
+  into every later system prompt, and the model merges them past 24
+  lines. Each failure overcome hardens the next run, as a beaten level does
+  a game's next.
 - **Studio** makes and edits applang apps: the `coder` loop asks the free
   AI, checks each reply and fixes it by edits, showing what moves (thinking,
   writing 48 lines, fixing line 43, testing); `studio::AppHost` runs a `.app`

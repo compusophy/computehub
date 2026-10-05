@@ -24,7 +24,7 @@ const AUTHOR: &str = "Made by compusophy. Apache-2.0.";
 const SOURCE: &str = "github.com/compusophy/computehub";
 /// Every crate and its role.
 #[rustfmt::skip]
-pub(crate) const STACK: [(&str, &str); 34] = [
+pub(crate) const STACK: [(&str, &str); 35] = [
     ("os", "The wasm entry: fonts, files, telemetry"),
     ("platform", "The browser boundary: canvas, WebGL2, input"),
     ("logon", "The welcome: the mark, the start's record, sign-in"),
@@ -43,7 +43,8 @@ pub(crate) const STACK: [(&str, &str); 34] = [
     ("studio", "Write, check and run apps"), ("coder", "The AI that writes and fixes apps"),
     ("assistant", "Ask; it does it on the desktop"),
     ("terminal", "The Terminal: an xterm screen of the shell"),
-    ("sh", "The shell the Terminal runs"), ("term", "Terminal screen model"),
+    ("sh", "The shell the Terminal runs"), ("agent", "The Terminal's coding agent"),
+    ("term", "Terminal screen model"),
     ("vt", "Terminal escape-sequence parser"), ("applang", "The tier 0 app language"),
     ("applang-syntax", "applang's lexer and parser"), ("lang", "Diagnostics, lexer and parser kit"),
     ("fuel", "Fuel and byte budgets"), ("toolbox", "Test programs"),

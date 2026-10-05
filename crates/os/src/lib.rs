@@ -63,9 +63,10 @@ pub const ALL: &str = "compusophy.";
 /// `"off"` to still the grain and the folders' apps. Other keys are dropped.
 pub const PREFS: [&str; 7] =
     [ui::AI_MODEL, "dock", "seen", "reports", "home.order", ui::GRAIN, "folders"];
-/// The applets of `bin/toolbox.wasm`, each a `/bin` marker file (as are the GUI programs:
-/// [`remote::STUDIO`] for `bin/studio.wasm`, and those of [`remote::SYSTEM`] for one
-/// `bin/system.wasm`).
+/// The `/bin` markers' programs ([`kernel::install`]), each named as its wasm: the shell, the
+/// coding agent, the Terminal, Studio and the Assistant; then the applets, which share
+/// `bin/toolbox.wasm` (as the windows of [`remote::SYSTEM`] share `bin/system.wasm`).
+const BIN: [&str; 5] = ["sh", "agent", "terminal", "studio", "assistant"];
 const APPLETS: [&str; 9] =
     ["hello", "rev", "wc", "spin", "nap", "fstest", "keys", "bench", "selftest"];
 
@@ -124,15 +125,9 @@ impl Desktop {
         let text = TextSystem::new(SANS.to_vec())?;
         let mut vfs = Vfs::new();
         let _ = vfs.mkdir_all("/bin"); // Not mkdir: Vfs::new ships mkdir_all already.
-        for name in APPLETS {
-            let _ = vfs.write(&["/bin/", name].concat(), b"#!wasm bin/toolbox.wasm\n");
-        }
-        let _ = vfs.write(apps::SHELL, b"#!wasm bin/sh.wasm\n");
-        let _ = vfs.write(remote::TERMINAL, b"#!wasm bin/terminal.wasm\n");
-        let _ = vfs.write(remote::STUDIO, b"#!wasm bin/studio.wasm\n");
-        let _ = vfs.write(remote::ASSISTANT, b"#!wasm bin/assistant.wasm\n");
-        for (name, ..) in remote::SYSTEM {
-            let _ = vfs.write(&["/bin/", name].concat(), b"#!wasm bin/system.wasm\n");
+        let bin = BIN.iter().map(|&p| (p, p)).chain(APPLETS.iter().map(|&a| (a, "toolbox")));
+        for (name, wasm) in bin.chain(remote::SYSTEM.iter().map(|s| (s.0, "system"))) {
+            let _ = kernel::install(&mut vfs, name, wasm);
         }
         Ok(Desktop { parts: Some((text, vfs)), ..Desktop::default() })
     }

@@ -33,6 +33,7 @@ members = [
     "programs/system",
     "programs/activity",
     "programs/sh",
+    "programs/agent",
     "programs/vt",
     "programs/term",
     "programs/terminal",
@@ -83,6 +84,7 @@ compusophy-studio = { path = "programs/studio", version = "0.1.0" }
 compusophy-assistant = { path = "programs/assistant", version = "0.1.0" }
 compusophy-system = { path = "programs/system", version = "0.1.0" }
 compusophy-activity = { path = "programs/activity", version = "0.1.0" }
+compusophy-sh = { path = "programs/sh", version = "0.1.0" }
 
 # The browser boundary. Only `platform`, `os` and `cpu` may use these
 # (scripts/caps.sh).
