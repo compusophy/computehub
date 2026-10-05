@@ -9,7 +9,10 @@
 //! person comes back to it: it renders, each button it shows is clicked once and [`AGAIN`]
 //! ticks pass. It stops at the first fault, or after [`BUDGET`] steps in all, and says what it
 //! saw. Canvases that showed, none of whose shapes ever reached inside one, are a fault at the
-//! end (`OFF_CANVAS`): a picture drawn in the window's pixels, not the canvas's units.
+//! end (`OFF_CANVAS`): a picture drawn in the window's pixels, not the canvas's units. A text
+//! whose point is on its canvas and that is wider than it is a fault of the render that drew it
+//! (`TEXT_TOO_WIDE`): the desktop keeps such a text inside its canvas, but for one that cannot
+//! fit (one whose point is off the canvas it leaves where it is).
 
 use applang_syntax::ast::Widget;
 
@@ -63,7 +66,7 @@ pub fn smoke_from(program: Program, seed: u64, saved: &str) -> Smoke {
     if !saved.is_empty() {
         app.take_back(saved);
     }
-    let mut t = Tester { app: Some(app), ..Tester::default() };
+    let mut t = Tester { app: Some(app), at: canvas, ..Tester::default() };
     t.rng = seed | 1;
     let Some(first) = t.render("the first render") else { return t.out };
     if first.is_empty() {
@@ -124,7 +127,7 @@ pub fn smoke_from(program: Program, seed: u64, saved: &str) -> Smoke {
     if !saved.is_empty() && !t.reopen(&saved) {
         return t.out;
     }
-    if let (Some((w, h)), false, Some(at)) = (t.canvas, t.inside, canvas) {
+    if let (Some((w, h)), false, Some(at)) = (t.canvas, t.inside, t.at) {
         let msg = format!(
             "nothing it drew reached inside its canvas of {w} x {h} units: draw at x from 0 to {} \
              and y from 0 to {}, in the canvas's own units, not the window's pixels",
@@ -145,8 +148,8 @@ pub fn smoke_from(program: Program, seed: u64, saved: &str) -> Smoke {
 }
 
 /// A smoke test under way: the app, what it showed last, the events so far, its own xorshift
-/// for picks, the report, the first canvas shown (its size) and whether a shape ever reached
-/// inside a canvas.
+/// for picks, the report, the first canvas shown (its size), whether a shape ever reached
+/// inside a canvas, and where the program's first canvas is.
 #[derive(Default)]
 struct Tester {
     app: Option<App>,
@@ -156,6 +159,7 @@ struct Tester {
     out: Smoke,
     canvas: Option<(u16, u16)>,
     inside: bool,
+    at: Option<Span>,
 }
 
 impl Tester {
@@ -224,18 +228,27 @@ impl Tester {
         self.out.fault = Some(Fault { diag, during, before });
     }
 
-    /// Renders after `what`: what it shows, or `None` on a fault.
+    /// Renders after `what`: what it shows, or `None` on a fault (a text wider than its canvas
+    /// is one: [`wide`]).
     fn render(&mut self, what: &str) -> Option<Vec<Node>> {
         let r = self.app().render();
         self.spend(what);
+        let mut wider = None;
+        walk(r.as_deref().unwrap_or_default(), &mut |n| {
+            if let Node::Canvas { w, h, draws, .. } = n {
+                self.canvas.get_or_insert((*w, *h));
+                self.inside |= draws.iter().any(|d| reaches(d, *w, *h));
+                if wider.is_none() {
+                    wider = draws.iter().find_map(|d| wide(d, (*w, *h)));
+                }
+            }
+        });
+        let r = match (r, wider, self.at) {
+            (Ok(_), Some(msg), Some(at)) => Err(Diag::at_code(codes::TEXT_TOO_WIDE, msg, at)),
+            (r, ..) => r,
+        };
         match r {
             Ok(nodes) => {
-                walk(&nodes, &mut |n| {
-                    if let Node::Canvas { w, h, draws, .. } = n {
-                        self.canvas.get_or_insert((*w, *h));
-                        self.inside |= draws.iter().any(|d| reaches(d, *w, *h));
-                    }
-                });
                 self.last.clone_from(&nodes);
                 Some(nodes)
             }
@@ -319,6 +332,24 @@ fn reaches(d: &Draw, w: u16, h: u16) -> bool {
         _ => return false,
     };
     x0 < i64::from(w) && x1 > 0 && y0 < i64::from(h) && y1 > 0 && x0 < x1 && y0 < y1
+}
+
+/// What is wrong with `d` if it is a text the desktop keeps inside its canvas `w` x `h` units
+/// (its point on it, the far edges too) that is wider than the canvas: inset a quarter of its
+/// size each side, each character reckoned 2/5 of its size (the boot font's are about half; only
+/// narrow ones, i and 1, less), so one said to be nearly always is.
+fn wide(d: &Draw, (w, h): (u16, u16)) -> Option<String> {
+    let (chars, size) = (d.text.chars().count() as i64, i64::from(d.at[2]));
+    let on = |at: i16, end: u16| (0..=i64::from(end)).contains(&i64::from(at));
+    let need = ((4 * chars + 5) * size + 9) / 10;
+    (d.shape == Shape::Text && on(d.at[0], w) && on(d.at[1], h) && need > i64::from(w)).then(|| {
+        format!(
+            "the text \"{}\" needs about {need} units across ({chars} characters at size {size}, \
+             each about 2/5 of it, and a quarter of it either side), more than its canvas's {w}: \
+             draw it smaller, or shorter",
+            d.text
+        )
+    })
 }
 
 /// Where the first canvas of `ws` is, if it has one.

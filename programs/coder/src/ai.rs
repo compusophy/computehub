@@ -25,8 +25,8 @@ pub const HONEST: &str = "Begin the program with a // comment of one or two shor
                           make the closest app it can, and end that comment with \"Without:\" and \
                           what it leaves out. ";
 /// Then, before its examples ([`applang::SHOTS`], each with one): its icon, the line the desktop
-/// draws its tile from (`icons::made`: six words on a 24 x 24 grid; the OS sets the weight, ink
-/// and plate).
+/// draws its tile from (`icons::made`: six words on a 24 x 24 grid, and its hard limits; the OS
+/// sets the weight, ink and plate).
 pub const ICON: &str = "Under that comment, its icon on one line: // icon: then shapes on a 24 x 24 \
                         grid (x right, y down, whole numbers 2 to 22): line x y x y .. (a stroke \
                         through 2 to 12 points), loop x y .. (closed), fill x y .. (solid), ring \
@@ -34,8 +34,9 @@ pub const ICON: &str = "Under that comment, its icon on one line: // icon: then 
                         shows at 19 px: draw the one thing the app is, large and centered, in at \
                         most 6 shapes, no part under 4 across; never a whole board or screen, \
                         whose parts would be specks (tic-tac-toe is an X and an O: line 2 7 10 \
-                        15 line 10 7 2 15 ring 17 11 4). A change keeps it unless the app becomes \
-                        another. For example, for ";
+                        15 line 10 7 2 15 ring 17 11 4). It draws whole or not at all: past 16 \
+                        shapes, 64 numbers or 320 bytes, or off the grid, the tile shows a sigil. \
+                        A change keeps it unless the app becomes another. For example, for ";
 /// What a make asks for after a reply that ran out of room before its program ended.
 pub const SHORTER: &str = "Your reply ran out of room before the program ended. Write the same \
                            app, shorter: under 100 lines, extras left out (named after \
@@ -180,27 +181,53 @@ pub fn state_path(path: &str) -> String {
 }
 
 /// What is wrong with a program: its diagnostic, the problem as a person reads it ([`problem`]),
-/// whether it compiles at all, and the account a model fixing it gets.
+/// whether it compiles at all, whether it runs clean (all that is wrong is its icon), and the
+/// account a model fixing it gets.
 #[derive(Clone, Debug)]
 pub struct Fault {
     pub diag: applang::Diag,
     pub said: String,
     pub compiles: bool,
+    pub runs: bool,
     pub account: String,
 }
 
+/// The rule an icon's code (E0931 to E0937) says was broken; its limits are `icons::made`'s.
+pub(crate) const ICON_RULE: &str = "the icon is one line under the first comment, // icon: and \
+                                    then shapes on the 24 x 24 grid, each its word and whole \
+                                    numbers 2 to 22: line x y x y .. (2 to 12 points), loop and \
+                                    fill x y .. (3 to 12), ring x y r, dot x y r, arc x y r from \
+                                    to; 6 shapes is plenty, 16 shapes, 64 numbers and 320 bytes \
+                                    the most. One that does not read whole draws nothing: the tile \
+                                    shows a sigil instead.";
+/// What each icon code says, from E0931; the shape's word or the token, if any, before it.
+pub(crate) const ICON_WHY: [&str; 7] = [
+    "the icon line is over 320 bytes",
+    " is not a shape (line, loop, fill, ring, dot, arc) nor a whole number",
+    " is a number before any shape, or of more than 3 digits",
+    " has too few or too many numbers (a line's in x y pairs)",
+    " leaves the 24 x 24 grid, or its radius or an angle is out of range",
+    " is past 16 shapes or 64 numbers: draw the one thing the app is, in 6 shapes at most",
+    "the icon has no shape, or its line is never read: it begins // icon: just so (lowercase, \
+     one space), among the comments above the code",
+];
+
 /// What is wrong with `src`, if anything: that it does not compile, faults when it runs
 /// ([`applang::smoke`] with `random` seeded 1 to `seeds`: rendered, clicked, ticked, keyed,
-/// tapped and typed into; a seed that spends over 5,000,000 steps is the last), or faults as it
-/// will really start, from `saved` (what its saved states' file holds; seed 1). The account says
-/// the problem with its line and a caret under it, the rule its code says was broken, what was
-/// being done when it came and what came before (and that it started from the states it keeps),
-/// and that every occurrence wants fixing.
+/// tapped and typed into; a seed that spends over 5,000,000 steps is the last), faults as it
+/// will really start, from `saved` (what its saved states' file holds; seed 1), or has an icon
+/// line the desktop cannot draw (`icons::made`). The account says the problem with its line and a
+/// caret under it, the rule its code says was broken, what was being done when it came and what
+/// came before (and that it started from the states it keeps), and that every occurrence wants
+/// fixing.
 pub fn fault(src: &str, saved: &str, seeds: u8) -> Option<Fault> {
     let (what, d, when) = match applang::compile(src) {
         Err(d) => ("did not compile", d, String::new()),
         Ok(_) => {
-            let (f, kept) = smoked(src, saved, seeds)?;
+            let Some((f, kept)) = smoked(src, saved, seeds) else {
+                let what = "has an icon the desktop cannot draw";
+                return Some(account(src, what, icon(src)?, ""));
+            };
             let (what, from, rule) = match kept {
                 true => (
                     "faults when it runs from its saved states",
@@ -221,10 +248,17 @@ pub fn fault(src: &str, saved: &str, seeds: u8) -> Option<Fault> {
             (what, f.diag, when)
         }
     };
+    Some(account(src, what, d, &when))
+}
+
+/// `d`, what is wrong with `src` (`what` it does: did not compile, ...), as a [`Fault`] whose
+/// account says `when` it came (none: it did not compile, or its icon is all that is wrong).
+fn account(src: &str, what: &str, d: applang::Diag, when: &str) -> Fault {
     // "line 3, col 5", then the line and its carets.
     let snip = d.span.and_then(|s| lang::diag::render_snippet(src, s)).unwrap_or_default();
     let (at, line) = snip.split_once('\n').unwrap_or(("", ""));
     let code = d.code.unwrap_or_default();
+    let icon = (931..=937).contains(&code);
     let mut account = String::from("Your program ");
     account += what;
     account += ": ";
@@ -238,12 +272,62 @@ pub fn fault(src: &str, saved: &str, seeds: u8) -> Option<Fault> {
     account.push('\n');
     put_clip(&mut account, line, 4096);
     account += "\nRule: ";
-    account += applang::rule(code);
-    put_clip(&mut account, &when, 1024);
+    account += if icon { ICON_RULE } else { applang::rule(code) };
+    put_clip(&mut account, when, 1024);
     account += "\nThe same mistake may be on other lines too: fix every occurrence.";
-    // Only a program that did not compile has no account of when.
-    let compiles = !when.is_empty();
-    Some(Fault { said: problem(&d, src), diag: d, compiles, account })
+    let (compiles, runs) = (icon || !when.is_empty(), icon);
+    Fault { said: problem(&d, src), diag: d, compiles, runs, account }
+}
+
+/// What is wrong with the icon line of `src` (which runs clean) as the desktop reads it
+/// (`icons::made`), coded E0931 to E0937 at the token it is about: one that does not read whole,
+/// or one never read, under the code or not marked just so (`//icon:`, `// Icon:`: E0937, as one
+/// with no shape); none if it draws, or if there is no icon line at all (the tile is the sigil,
+/// as the person sees it).
+fn icon(src: &str) -> Option<applang::Diag> {
+    let (start, end, code) = match icons::made::header(src.as_bytes()) {
+        Some(text) => {
+            let e = icons::Made::parse(text).err()?;
+            let at = text.as_ptr() as usize - src.as_ptr() as usize + usize::from(e.at);
+            let rest = src.get(at..).unwrap_or("");
+            (at, at + rest.find([' ', '\t', '\r', '\n', ',', ';']).unwrap_or(rest.len()), e.code())
+        }
+        None => {
+            let mut next = 0;
+            let (under, mark) = src.split_inclusive('\n').find_map(|line| {
+                let text = line.trim_ascii_start();
+                let at = next + line.len() - text.len();
+                next += line.len();
+                let rest = text.strip_prefix("//")?.trim_ascii_start();
+                let mark = text.len() - rest.len() + 5;
+                rest.get(..5).filter(|m| m.eq_ignore_ascii_case("icon:")).map(|_| (at, mark))
+            })?;
+            (under, under + mark, 937)
+        }
+    };
+    let why = ICON_WHY[usize::from(code - 931)];
+    let tok = src.get(start..end).unwrap_or("");
+    let message = if why.starts_with(' ') { ["`", tok, "`", why].concat() } else { why.into() };
+    Some(applang::Diag::at_code(code, message, applang::Span::new(start, end)))
+}
+
+/// `src`, whose icon line (the line of byte `at`) will not draw, with that of `base` (whose icon
+/// draws, or is none) instead: where its own was read, else under its first line. None if that
+/// will not draw either. A change keeps its icon, so one that runs lands with the icon it had.
+pub fn keep_icon(src: &str, at: usize, base: &str) -> Option<String> {
+    let line = |s: &str, at: usize| {
+        let a = s.get(..at).and_then(|s| s.rfind('\n')).map_or(0, |i| i + 1);
+        (a, s.get(at..).and_then(|r| r.find('\n')).map_or(s.len(), |i| at + i + 1))
+    };
+    let (a, b) = line(src, at);
+    let mut out = [src.get(..a)?, src.get(b..)?].concat();
+    if let Some(text) = icons::made::header(base.as_bytes()) {
+        let (c, d) = line(base, text.as_ptr() as usize - base.as_ptr() as usize);
+        let read = icons::made::header(src.as_bytes()).is_some();
+        let to = if read { a } else { out.find('\n').map_or(0, |i| i + 1) };
+        out.insert_str(to, &[base.get(c..d)?.trim_end(), "\n"].concat());
+    }
+    icon(&out).is_none().then_some(out)
 }
 
 /// The first fault a smoke test finds in `src` (which compiles) on seeds 1 to `seeds`, else

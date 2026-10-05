@@ -1,4 +1,5 @@
-// Blocks: tetris on a canvas. Arrows, or taps at its sides, middle and bottom: move, turn, drop.
+// Blocks: tetris on a canvas. Arrows, or a tap or drag on it steers (its bottom pushes down);
+// Turn and Drop below it.
 // icon: fill 3 13 9 13 9 19 3 19 fill 9 13 15 13 15 19 9 19 fill 9 7 15 7 15 13 9 13
 state cells = [-1; 200];  // the landed squares, 10 x 20: -1 empty, else a color
 state ptype = 0;
@@ -88,6 +89,17 @@ fn start() {
 }
 
 fn move(dx: int) { if speed > 0 && fits(ptype, prot, px + dx, py) { px += dx; } }
+// A tap, and each unit a drag crosses: the piece a column toward it, or a row down at the
+// bottom, so a drag steers it along and never acts twice by mistake.
+fn aim(column: int, bottom: bool) {
+  if bottom {
+    if speed > 0 && fits(ptype, prot, px, py + 1) { py += 1; }
+  } else if column < px {
+    move(-1);
+  } else if column > px + 1 {
+    move(1);
+  }
+}
 fn turn() { if speed > 0 && fits(ptype, (prot + 1) % 4, px, py) { prot = (prot + 1) % 4; } }
 fn drop() {
   if speed > 0 {
@@ -113,7 +125,9 @@ on key "space" { drop(); }
 
 label "Blocks";
 label "Best " + best;
-canvas 80, 160, scene() {
-  if y >= 128 { drop(); } else if x < 27 { move(-1); } else if x >= 53 { move(1); } else { turn(); }
+canvas 80, 160, scene() { aim(x / 8, y >= 128); }
+row {
+  button "Turn" { turn(); }
+  button "Drop" { drop(); }
+  if speed == 0 { button "Start" { start(); } }
 }
-if speed == 0 { button "Start" { start(); } }

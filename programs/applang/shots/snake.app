@@ -21,13 +21,15 @@ fn body(x: int, y: int) -> bool {
   return false;
 }
 
-// The board, 20 x 15 squares of 8 units, made anew from what the game remembers.
+// The board, 20 x 15 squares of 8 units, made anew from what the game remembers; over it, its
+// name until it starts, then Game over.
 fn scene() {
   let cells = [-1; 300];
   for i in 0..len(xs) { cells[at(xs[i], ys[i])] = 2; }
   if len(xs) > 0 { cells[at(fx, fy)] = 1; }
   pixels(cells, 0, 0, 20, 8);
-  if speed == 0 { text("Snake", 80, 60, 16, 11); }
+  if speed == 0 && len(xs) == 0 { text("Snake", 80, 60, 16, 11); }
+  if speed == 0 && len(xs) > 0 { text("Game over", 80, 60, 16, 11); }
 }
 
 // Food on a free square: the first one from a random place on.
@@ -106,7 +108,4 @@ on key "down" { turn(0, 1); }
 label "Snake";
 label "Length " + len(xs) + "   Best " + best;
 canvas 160, 120, scene() { toward(x / 8, y / 8); }
-if speed == 0 {
-  if len(xs) > 0 { label "Game over"; }
-  button "Start" { start(); }
-}
+if speed == 0 { button "Start" { start(); } }

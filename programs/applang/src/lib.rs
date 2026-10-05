@@ -485,14 +485,19 @@ braces of if, row, col and for):
 CANVAS (a picture W units wide and H tall, 1 to 1,024, scaled to fit the window; x runs right
 and y down from 0, 0 at the top left):
   canvas 160, 120, scene();           -- scene() draws it anew whenever the app shows
-  canvas 160, 120, scene() { STMTS }  -- a tap or drag on it runs STMTS; x, y = where, in its
-                                         units (so no state or loop variable is called x or y)
+  canvas 160, 120, scene() { STMTS }  -- a tap on it runs STMTS, a drag again for each unit it
+                                         crosses (about every 4 px); x, y = where, in its units
+                                         (so no state or loop variable is called x or y): let it
+                                         steer, aim or paint; turn, drop or fire on a button
 DRAWING (only in the function a canvas calls and the functions it calls, which change nothing
 but their lets; later shapes cover earlier ones; the thing first, then where, then how big, the
 color last):
   fn scene() { rect(0, 0, 160, 8, 4); circle(bx, by, 3, 3); text(score, 80, 4, 6, 9); }
   rect(x, y, w, h, color);   circle(x, y, r, color);   ring(x, y, r, width, color);
-  line(x1, y1, x2, y2, width, color);   text(VALUE, x, y, size, color);  -- one line, centered
+  line(x1, y1, x2, y2, width, color);   text(VALUE, x, y, size, color);  -- one line, size
+                                     units tall, centered on x, y (a character about size / 2
+                                     wide), kept on the canvas for x 0 to W, y 0 to H: at x 2
+                                     it starts at the left edge, at x W it ends at the right
   sprite([\"..3..\", \".333.\", \"33333\"], x, y, side);  -- each char a square side units wide:
                                                        0-9 that color, any other shows through
   pixels(board, x, y, 10, side);  -- a list of ints as squares side units wide, 10 a row (1 to
@@ -582,6 +587,10 @@ pub fn rule(code: u16) -> &'static str {
         codes::OFF_CANVAS => {
             "draw inside the canvas: x from 0 to its width - 1 and y from 0 to its height - 1, \
              in its own units, not the window's pixels."
+        }
+        codes::TEXT_TOO_WIDE => {
+            "a text is about size / 2 units a character wide: keep each narrower than its \
+             canvas, smaller or shorter (two texts on two lines, if it must say more)."
         }
         codes::DUP_STATE => {
             "declare each state, function and parameter once; built-ins keep their names (beside \

@@ -1,12 +1,12 @@
 //! The coding agent: makes an applang app with the free AI. The harness drives; the model only
 //! writes. A [`Make`] asks for a program (or for one changed), checks what comes back (compiles,
-//! then [`applang::smoke`] on seeds 1 to 3, then a run from the states its app keeps), and
-//! sends each problem back as a fresh request asking for SEARCH/REPLACE edits ([`edits`]), with
-//! the program numbered and the problem's coded account. The same problem twice gets one
-//! rewrite; edits that do not apply get one more try, then the rewrite. It keeps the best
-//! program so far (compiles, then runs clean, then newer), so a change never makes an app worse,
-//! and stops by budget ([`Knobs`]: requests, output tokens, dollars, milliseconds; a request
-//! holds its worst case against them before it is sent).
+//! then [`applang::smoke`] on seeds 1 to 3, then a run from the states its app keeps, then its
+//! icon line as the desktop reads it), and sends each problem back as a fresh request asking for
+//! SEARCH/REPLACE edits ([`edits`]), with the program numbered and the problem's coded account.
+//! The same problem twice gets one rewrite; edits that do not apply get one more try, then the
+//! rewrite. It keeps the best program so far (compiles, runs clean, draws its icon, then newer),
+//! so a change never makes an app worse, and stops by budget ([`Knobs`]: requests, output
+//! tokens, dollars, milliseconds; a request holds its worst case against them before it is sent).
 //!
 //! It is sans-IO: requests go out as [`Out::Ask`] bodies, the response bytes and its end come in
 //! ([`Make::data`], [`Make::end`]), and time is an input (`now_ms`), so a make is a pure
@@ -125,7 +125,8 @@ pub enum Turn {
 pub enum Outcome {
     /// Its program runs clean: installed.
     Ready,
-    /// A new app's best program compiles but faults: installed, its fault showing.
+    /// A new app's best program compiles but faults, or a best program runs clean but its icon
+    /// does not draw: installed, its problem showing.
     Faulting,
     /// Nothing beat what there was: nothing installed.
     Broken,
@@ -189,6 +190,9 @@ impl Done {
         let lead = match self.outcome {
             Outcome::Ready => {
                 return ["ready \u{b7} ", &num(self.receipt.ms / 1000), " s"].concat();
+            }
+            Outcome::Faulting if (931..=937).contains(&self.code) => {
+                "runs, but its icon won't draw"
             }
             Outcome::Faulting => "runs, but faults",
             Outcome::Broken if self.change => "couldn't change it",

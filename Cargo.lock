@@ -28,8 +28,10 @@ version = "0.1.0"
 dependencies = [
  "compusophy-applang-syntax",
  "compusophy-fuel",
+ "compusophy-gfx",
  "compusophy-icons",
  "compusophy-lang",
+ "compusophy-uiview",
  "compusophy-uiwire",
 ]
 
@@ -88,6 +90,7 @@ name = "compusophy-coder"
 version = "0.1.0"
 dependencies = [
  "compusophy-applang",
+ "compusophy-icons",
  "compusophy-lang",
 ]
 

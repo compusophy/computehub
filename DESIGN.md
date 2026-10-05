@@ -110,10 +110,10 @@ frame: os → shell::draw → gfx::DrawList → platform::Renderer: one draw cal
 | `system` | About, Editor, Feedback, Files, Welcome and Settings, and it serves Activity: one wasip1 GUI program (`dist/bin/system.wasm`), off the boot download |
 | `activity` | Activity, the resource monitor: graphs of CPU, memory, frames and the AI over the last minute, storage, a table of what runs |
 | `studio` | the applang editor, and `AppHost`, which runs `.app` files |
-| `coder` | the coding agent Studio runs: write, check (compile, smoke on 3 seeds), fix by SEARCH/REPLACE edits, keep the best so far, stop by budget; sans-IO, replayable |
+| `coder` | the coding agent Studio runs: write, check (compile, smoke on 3 seeds, the icon line as the desktop reads it), fix by SEARCH/REPLACE edits, keep the best so far, stop by budget; sans-IO, replayable |
 | `assistant`, `chats`, `files` | the Assistant, the overlay AI that uses the desktop: a wasip1 GUI program off the boot download; its chats: each one's transcript and memory, their file, their row on its card; its file tools, the person's files by paths from the home, clipped and coded |
 | `uiwire`, `uiview` | the remote UI protocol GUI programs speak; the desktop's half, which draws their trees |
-| `canvas` | a program's `Canvas` as the desktop draws it (its shapes and pixels in the theme, on device pixels) and lists it for the AI |
+| `canvas` | a program's `Canvas` as the desktop draws it (its shapes and pixels in the theme, on device pixels, its texts on it kept inside it) and lists it for the AI |
 | `host` | the wm plus one app per window, the home screen's apps, windows held by the pointer, the keyboard's squeeze; motion, frame geometry |
 | `home` | the top bar, the home grid in the person's order (icons carried, the selection box), the bottom row (the person's dock at the left, the Assistant at the right), menus, touch |
 | `shell` | the desktop around `host`: chrome, keys, the overlay; wires the home screen to the pointer |
@@ -402,7 +402,16 @@ one. Forked crates keep their Apache-2.0 license and note their origin.
   menu while it runs, opens another. On a phone the status has its own
   line, over its buttons. `studio::AppHost` runs a `.app`
   in its own window. Its prompt asks every app for its icon line (one card,
-  and one in each example), which a change keeps.
+  and one in each example, with the reader's limits: 16 shapes, 64 numbers,
+  320 bytes), which a change keeps. The coder reads that line as the
+  desktop does (`icons::made`): one that would not draw, or one never read
+  (under the code, or marked `//icon:` or `// Icon:`), is a problem it
+  fixes by edits as it does a fault (E0931 to E0937, at the word), after
+  the program runs clean; a best program whose icon still will not draw is
+  installed all the same, its problem showing (runs, but its icon won't
+  draw), but for a change of an app whose icon drew: that lands with the
+  icon line it had. No icon line is no problem: the tile is the sigil (the
+  recorded makes have none).
   A make that ends without an app that runs clean (but for a stop with
   nothing wrong showing, or the free AI busy or out of credit before any
   program came back), and the app's last fault in Studio's preview (kept
@@ -429,12 +438,35 @@ one. Forked crates keep their Apache-2.0 license and note their origin.
   fits where a busy one faults (E0222). The AI reads where pixels are and
   their size, and each board's squares, a row a line, as a grid's, while
   those listed stay within 1,024 in all (a board past what is left is its
-  place and size alone). A canvas's handler sees the tap's `x` and
-  `y`. Grids and canvases are boards: they take the room the window's
-  other widgets leave, and with a handler they are pads. Studio's prompt
-  asks that whatever is to be seen (a game, a board, drawing, animation, a
-  clock, a chart) be drawn on a canvas, never spelled out in labels and
-  buttons: its first example is snake on pixels.
+  place and size alone). A text centers on its point, a character about
+  half its size wide; one whose point is on the canvas (x from 0 to its
+  width, y to its height) stays inside it, a quarter of its size in (near
+  an edge it moves in, so a score at x 2 starts at the left edge and one at
+  the width ends at the right), and the smoke test faults such a text
+  wider than its canvas (E0225, each character reckoned 2/5 of its size);
+  one whose point is off the canvas stays where it is. A canvas's handler
+  sees the tap's `x` and `y`; a drag taps the units on its way, one every
+  4 px or so (64 for a sample at most, so a sample up to 256 px away leaves
+  no gap), and waits until the frames of all it sent are answered and
+  drawn, so a paint app paints each square a steady drag crosses. Where a
+  drag goes meanwhile is held (`uiview::Play::held`) for the window to tap
+  once those are drawn, so a quick stroke, or one's end, paints too; the
+  window (`os::remote`) does not tap it yet, so a stroke quicker than a
+  frame's round trip still paints only its first square. A handler runs
+  for each unit a drag crosses, so the card asks that a tap steer, aim or
+  paint, and that turning, dropping or firing be a button. Grids and
+  canvases are boards: they take the room the window's other widgets
+  leave, the most those took above the first board and around them since
+  the window's size or its boards changed (`uiview::View::around`), the
+  room left above drawn above it, so a board keeps its size and place as a
+  button or label comes and goes, after each first shows; with a handler
+  they are pads. Studio's prompt asks that whatever is to be seen (a game,
+  a board, drawing, animation, a clock, a chart) be drawn on a canvas,
+  never spelled out in labels and buttons (its first example is snake on
+  pixels); that a game show the same widgets before it as after (Start,
+  hidden while it plays) and say Game over on the canvas; and that a paint
+  app show the color it paints and its squares' edges faintly (gray) under
+  the paint.
   **Editor** writes plain text, a new note in `~/notes`;
   Files and the Terminal's `edit` open files in it (a `.app` in Studio).
   **Welcome** (a program, its mark revealed by the desktop's clock)

@@ -9,7 +9,9 @@
 //! clock at its first draw), frames asked for only meanwhile ([`View::animating`]). In a window
 //! narrower than [`NARROW`] (a phone's) chips and quiet buttons are touch targets, [`TOUCH`] tall.
 //! Grids and Canvases (which [`canvas`] draws) are boards: they take the room the other widgets
-//! leave ([`SQUARE`]), and with an id they are pads ([`Sense::Pad`]) a press or a drag taps
+//! leave ([`SQUARE`]), the most those took above the first and around them since the window or
+//! its boards changed (so a board keeps its size and place as a button comes and goes:
+//! [`View::around`]), and with an id they are pads ([`Sense::Pad`]) a press or a drag taps
 //! ([`Play::tap`]). A frame whose first node is its Pages lays the rest out beside or under
 //! them; one whose only node is a Screen is a terminal's, edge to edge ([`ui::screen`]).
 
@@ -52,7 +54,10 @@ pub use ui::icon::REVEAL_MS;
 /// How a window is scrolled: pixels down, and the content's and the view's height as last drawn;
 /// whether a view at the bottom stays there as the content grows (the Assistant's transcript);
 /// each Scroll as last drawn; the page clock when a revealed glyph first drew; each board (a Grid
-/// or a Canvas) with an id as last drawn; the page its Pages last lit.
+/// or a Canvas) with an id as last drawn; the page its Pages last lit; and the height the boards'
+/// neighbors took at most, above the first board and the rest, since the width, the height or
+/// the boards' largest height (the key beside them) last changed, which the boards leave them
+/// (the first drawn that far down).
 #[derive(Debug, Default)]
 pub struct View {
     pub scroll: f32,
@@ -62,12 +67,13 @@ pub struct View {
     pub reveal: Option<f64>,
     pub grids: Vec<Board>,
     pub page: u8,
+    pub around: ([f32; 3], [f32; 2]),
 }
 
 /// A board (a Grid or a Canvas) with an id as last drawn: its id, its place among the frame's
 /// boards (the same board in a later frame, whatever its id there), its squares' rect (a
 /// Canvas's units are its squares), its columns and squares, and whether it is fine (a Canvas's:
-/// a drag taps the unit under the pointer alone, never those it passed between samples).
+/// a drag taps a unit every [`FINE`] px or so of those it passed between samples, never each).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Board {
     pub id: u32,
@@ -91,8 +97,10 @@ impl Board {
 /// What a program asked of its window for play: a timer every `timer` ms (0: none), and plain
 /// keys; with when the last Tick went and whether it is unanswered, the Grid pressed (its place
 /// among the frame's Grids) and the square of it last tapped (the Grid's id then, the square's
-/// column and row) while the pointer is down, the frames until the last event the person (or
-/// the AI) sent is answered, and whether an answer came since the window drew.
+/// column and row) while the pointer is down, where a drag on it went while the window was busy
+/// ([`Play::held`]), the taps of the last press or drag sent and how many, the frames until the
+/// last event the person (or the AI) sent is answered, and whether an answer came since the
+/// window drew.
 #[derive(Debug, Default)]
 pub struct Play {
     pub timer: u32,
@@ -101,6 +109,8 @@ pub struct Play {
     waiting: bool,
     grid: Option<u32>,
     last: Option<(u32, u32, u32)>,
+    held: Option<(f32, f32)>,
+    burst: (u32, u32),
     owed: u8,
     moved: bool,
 }
@@ -118,9 +128,13 @@ impl Play {
 
     /// A click, submit, tap or plain key went, after a Change still unanswered if `changing`: the
     /// program reads events in order and answers each of these (and each Tick and Change) with a
-    /// frame, so its answer is the frame after those for the Tick and Change out.
+    /// frame, so its answer is the frame after those for the Tick and Change out (and, for the
+    /// taps a press or drag sends at once, after those for the taps before it).
     pub fn sent(&mut self, changing: bool) {
-        self.owed = 1 + u8::from(changing) + u8::from(self.waiting);
+        let (k, n) = self.burst;
+        self.burst.0 += u32::from(k < n);
+        let before = if k < n { u8::try_from(k).unwrap_or(u8::MAX) } else { 0 };
+        self.owed = (1 + u8::from(changing) + u8::from(self.waiting)).saturating_add(before);
     }
 
     /// A frame came: it answers the last Tick, or one of the frames owed.
@@ -170,17 +184,35 @@ impl Play {
     /// The pointer went down on hit `id` (`None`: dragged while down) at `(x, y)`: the board to
     /// tap (its id now) and its squares newly under it. A drag stays on the board pressed (found
     /// by its place in the frame, as its id may change) and taps each square on the line from
-    /// the last one, as the pointer moves past squares between samples (on a fine board, the
-    /// one under it alone); off the squares and back, it goes on from where it came back. It
-    /// waits while what was sent is unanswered, and until the answer draws (which may give the
-    /// boards other ids), so it never taps by a stale id.
+    /// the last one, as the pointer moves past squares between samples (on a fine board, a
+    /// Canvas's units, a unit every [`FINE`] px or so on the way, [`FINE_TAPS`] at most: a
+    /// sample up to their product away taps a painting's squares each); off the squares and
+    /// back, it goes on from where it came back. It waits while what was sent is unanswered
+    /// (every tap it sent), and until the answer draws (which may give the boards other ids), so
+    /// it never taps by a stale id; where the drag went meanwhile is held ([`Play::held`]).
     pub fn tap(&mut self, view: &View, id: Option<u32>, x: f32, y: f32) -> (u32, Vec<u32>) {
+        let taps = self.taps(view, id, x, y);
+        self.burst = (0, taps.1.len() as u32);
+        taps
+    }
+
+    /// Where a drag on a board last went while the window was busy, once what was sent is
+    /// answered and drawn (none if the pointer pressed or tapped since): for the window to tap
+    /// as dragged there ([`Play::tap`]) at its next frame, asking for one while this waits, so
+    /// a quick stroke's end, which no later sample would tap, is tapped too.
+    pub fn held(&self) -> Option<(f32, f32)> {
+        self.held.filter(|_| self.owed == 0 && !self.moved)
+    }
+
+    fn taps(&mut self, view: &View, id: Option<u32>, x: f32, y: f32) -> (u32, Vec<u32>) {
         let mut taps = (0, Vec::new());
         if id.is_some() {
             (self.grid, self.last) = (None, None);
         } else if self.owed > 0 || self.moved {
+            self.held = self.grid.map(|_| (x, y));
             return taps;
         }
+        self.held = None;
         let grid = self.grid;
         let b = view.grids.iter().find(|b| match (id, grid) {
             (Some(id), _) => b.id == id && b.rect.contains(x, y),
@@ -196,7 +228,8 @@ impl Play {
             let (c0, r0) = from.unwrap_or((c, r));
             // The square alone for a press or a return; none for the same square.
             let n = c.abs_diff(c0).max(r.abs_diff(r0)).max(u32::from(from.is_none()));
-            let n = if b.fine { n.min(1) } else { n };
+            let px = n as f32 * b.rect.w / f32::from(b.cols.max(1));
+            let n = if b.fine { n.min((px / FINE) as u32 + 1).min(FINE_TAPS) } else { n };
             // `i` of `n` steps from `p` to `q`, rounded.
             let step = |p: u32, q: u32, i: u32| (p * (n - i) + q * i + n / 2) / n;
             for i in 1..=n {
@@ -217,6 +250,10 @@ impl Play {
 
 /// The largest square of a Grid, in logical px: a finger's target several times over.
 pub const SQUARE: f32 = 96.0;
+/// On a fine board (a Canvas), the logical px a drag moves between the units it taps, about,
+/// and the most it taps for one sample of the pointer (farther than 256 px, they spread out).
+pub const FINE: f32 = 4.0;
+pub const FINE_TAPS: u32 = 64;
 
 /// A grid's square for `cols` across `w`: whole device px, as wide as `w` holds up to [`SQUARE`]
 /// (a device px at least), times `fit` (the share of their room the boards get), 6 px at least.
@@ -225,6 +262,11 @@ fn side(ts: &TextSystem, (w, cols): (f32, u16), fit: f32) -> f32 {
     // Not `clamp`: its panic message would link float formatting into the boot.
     let most = (w / f32::from(cols) * d).floor().min((SQUARE * d).floor()).max(1.0);
     (most * fit).floor().max((6.0 * d).ceil()).min(most) / d
+}
+
+/// Whether `n` is a board (a Grid or a Canvas) or holds one.
+fn holds_board(n: &Node) -> bool {
+    matches!(n, Node::Grid { .. } | Node::Canvas { .. }) || n.children().iter().any(holds_board)
 }
 
 /// A Scroll as last drawn: its id, how far down it is, its content's height and its rect.
@@ -291,25 +333,32 @@ pub fn draw(ui: &mut Ui<'_>, nodes: &[Node], texts: &mut Texts, view: &mut View)
     let mut lay = Lay { t, texts, sizes: Vec::new(), extents: Vec::new(), extra: 0.0, fills: 0,
         slack: Vec::new(), again: false, i: 0, e: 0, y: 0.0, touch, right: r.x + r.w, old,
         scrolls: Vec::new(), now, reveal: view.reveal, grids: Vec::new(), fit: 0.0,
-        room: (0.0, 0.0), nth: 0 };
+        room: (0.0, 0.0), top: None, shift: 0.0, nth: 0 };
     let ts = ui.text_system();
     let mut h = lay.stack(ts, nodes, w, SPACING, None);
     // Again with the boards (measured at their least: Grids of 6 px squares) sharing what the
     // rest leaves, a third of the view's height at least, each as large as it can be up to its
-    // full width: a game takes the room its labels and buttons leave.
-    let (least, most) = lay.room;
+    // full width: a game takes the room its labels and buttons leave, the most they took (above
+    // the first board, and the rest) since the window or its boards changed, so a board keeps
+    // its size and place as a button or label comes and goes, the room it left kept above.
+    let ((least, most), above) = (lay.room, lay.top.unwrap_or(0.0));
+    if view.around.0 != [w, inner, most] {
+        view.around = ([w, inner, most], [0.0; 2]);
+    }
+    let a = &mut view.around.1;
+    *a = [a[0].max(above), a[1].max(h - least - above)];
     if most > 0.0 {
-        lay.fit = ((inner - h + least).max(inner / 3.0) / most).min(1.0);
-        lay.fills = 0;
+        lay.fit = ((inner - a[0] - a[1]).max(inner / 3.0) / most).min(1.0);
+        (lay.fills, lay.shift) = (0, a[0] - above);
         lay.slack.clear();
-        h = lay.restack(ts, nodes, w);
+        h = lay.restack(ts, nodes, w) + lay.shift;
     }
     // Again with the room left shared by the Fills and Scrolls, each also taking what it is
     // short of a taller sibling in a Row.
     let fills = mem::take(&mut lay.fills);
     if fills > 0 && (h < inner || lay.slack.iter().any(|s| *s > 0.0)) {
         (lay.extra, lay.again) = ((inner - h).max(0.0) / fills as f32, true);
-        h = lay.restack(ts, nodes, w);
+        h = lay.restack(ts, nodes, w) + lay.shift;
     }
     let end = view.follow && view.scroll >= view.heights.0 - view.heights.1;
     view.heights = (h + 2.0 * PAD, r.h);
@@ -352,7 +401,8 @@ fn style_of(style: Style, t: &Theme) -> TextStyle {
 /// measured in the content, whether chips and quiet buttons are touch targets, the window's
 /// right edge, the Scrolls as last drawn and as drawn now, the page clock, when the reveal
 /// began, the boards drawn, the share of its largest size each board takes (0: its least), the
-/// boards' heights as measured and at their largest, and the boards drawn or passed.
+/// boards' heights as measured and at their largest, the first board's top as first measured,
+/// the room kept above it (drawn before what holds it), and the boards drawn or passed.
 struct Lay<'t> {
     t: &'t Theme,
     texts: &'t mut Texts,
@@ -374,6 +424,8 @@ struct Lay<'t> {
     grids: Vec<Board>,
     fit: f32,
     room: (f32, f32),
+    top: Option<f32>,
+    shift: f32,
     nth: u32,
 }
 
@@ -408,9 +460,9 @@ impl Lay<'_> {
     }
 
     /// A board (a Grid or a Canvas) `w` wide, `h` tall as measured and `most` at its largest:
-    /// its size, its room noted.
+    /// its size, its room (and the first one's top) noted.
     fn board(&mut self, w: f32, h: f32, most: f32) -> (f32, f32) {
-        self.room = (self.room.0 + h, self.room.1 + most);
+        (self.room, self.top) = ((self.room.0 + h, self.room.1 + most), self.top.or(Some(self.y)));
         (w, h)
     }
 
@@ -558,9 +610,13 @@ impl Lay<'_> {
         self.extents.get(self.e - 1).copied().unwrap_or_default()
     }
 
-    /// Draws `nodes` down from `(x, y)`, `gap` apart.
+    /// Draws `nodes` down from `(x, y)`, `gap` apart (the room kept above the first board before
+    /// the node that holds it).
     fn draw_stack(&mut self, ui: &mut Ui<'_>, nodes: &[Node], (x, mut y): (f32, f32), gap: f32) {
         for n in nodes {
+            if self.shift > 0.0 && holds_board(n) {
+                y += mem::take(&mut self.shift);
+            }
             let h = self.next(false).1;
             self.draw(ui, n, x, y);
             y += h + gap;

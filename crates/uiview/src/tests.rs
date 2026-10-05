@@ -739,9 +739,18 @@ fn play_ticks_while_shown_once_answered_and_taps_new_squares() {
         assert!(q.busy() && q.tap(&view, None, 40.0, 1.0) == none);
         q.answered();
     }
-    assert!(!q.busy() && q.tap(&view, None, 63.0, 1.0) == none);
+    assert!(!q.busy() && q.tap(&view, None, 63.0, 1.0) == none && q.held().is_none());
     q.drew();
-    assert_eq!(q.tap(&view, None, 63.0, 1.0), tap(&[1, 2, 3]));
+    // Where it went is held till then, for the window to tap at its next frame.
+    assert_eq!(q.held().map(|(x, y)| q.tap(&view, None, x, y)), Some(tap(&[1, 2, 3])));
+    assert_eq!(q.held(), None);
+    // Its three taps are answered by three frames, the last after the two before it.
+    (0..3).for_each(|_| q.sent(false));
+    for _ in 0..3 {
+        assert!(q.busy());
+        q.answered();
+    }
+    assert!(!q.busy());
     // The grid pressed has another id now (a button shown above it): its taps take that.
     view.grids =
         vec![board(9, 0, RectF::new(10.0, 50.0, 64.0, 64.0)), board(7, 1, view.grids[0].rect)];
@@ -813,14 +822,44 @@ fn canvases_fit_a_phone_and_land_on_device_pixels() {
 }
 
 #[test]
+fn a_board_keeps_its_size_and_place_as_widgets_come_and_go() {
+    let (mut texts, mut view) = (Texts::default(), View::default());
+    let start = Node::Button { id: 1, variant: Variant::Normal, label: "Start".into() };
+    let board = Node::Canvas { id: 9, w: 160, h: 120, draws: Vec::new() };
+    let ready = [text(Style::Body, "Score 0"), board, start];
+    let mut rect = |nodes: &[Node], w: f32| {
+        draw_at(w, nodes, &mut texts, &mut view, None);
+        view.grids[0].rect
+    };
+    // Start hidden as it plays, and back: the board stays, the room under it empty.
+    let shown = rect(&ready, 600.0);
+    assert_eq!([rect(&ready[..2], 600.0), rect(&ready, 600.0)], [shown, shown]);
+    // Another width starts over: alone, it takes the room; Start back, it gives it, once.
+    let (alone, back) = (rect(&ready[..2], 640.0), rect(&ready, 640.0));
+    assert!(alone.h > back.h && back.h == shown.h, "{alone:?} {back:?}");
+    assert_eq!(rect(&ready[..2], 640.0), back);
+    // The score above it gone as it plays: the board stays put, the room above it empty.
+    assert_eq!(rect(&ready[1..], 640.0), back);
+}
+
+#[test]
 fn canvas_taps_points_and_its_mark_lists_its_shapes() {
-    // A press taps the unit under it (y * w + x); a drag the unit under it alone, once.
+    // A press taps the unit under it (y * w + x); a drag each unit on its way, once.
     let rect = RectF::new(0.0, 0.0, 100.0, 50.0);
     let b = Board { id: 3, nth: 0, rect, cols: 10, n: 50, fine: true };
-    let (view, mut p) = (View { grids: vec![b], ..View::default() }, Play::default());
+    let (mut view, mut p) = (View { grids: vec![b], ..View::default() }, Play::default());
     assert_eq!(p.tap(&view, Some(3), 25.0, 15.0), (3, vec![12]));
-    assert_eq!(p.tap(&view, None, 95.0, 45.0), (3, vec![49]));
+    assert_eq!(p.tap(&view, None, 95.0, 45.0), (3, vec![13, 24, 25, 36, 37, 48, 49]));
     assert_eq!(p.tap(&view, None, 96.0, 46.0), (3, vec![]));
+    // Units of a px: one every 4 px or so on the way, 64 at most for one sample (256 px).
+    view.grids[0] = Board { cols: 400, n: 400, rect: RectF::new(0.0, 0.0, 400.0, 1.0), ..b };
+    assert_eq!(p.tap(&view, Some(3), 0.5, 0.5), (3, vec![0]));
+    let way = [4, 7, 11, 15, 18, 22, 25, 29, 33, 36, 40];
+    assert_eq!(p.tap(&view, None, 40.5, 0.5), (3, way.to_vec()));
+    let far = p.tap(&view, None, 399.5, 0.5).1;
+    assert!(far.len() == 64 && far[63] == 399 && far.windows(2).all(|w| w[0] < w[1]), "{far:?}");
+    let back = p.tap(&view, None, 147.5, 0.5).1;
+    assert!(back.len() == 64 && back.windows(2).all(|w| w[0] - w[1] <= 4), "{back:?}");
     // For the AI: its size in units, then each shape, its text, numbers and color.
     let draws = vec![
         shape(Shape::Line, 9, [10, 5, 30, 5, 2], ""),
