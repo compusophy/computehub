@@ -1,22 +1,23 @@
 # CLAUDE.md — computehub / compusophyOS
 
-Read this first: the operating map. `DESIGN.md`: the vision, the architecture
-as built, what comes next.
+The operating map. `DESIGN.md`: the vision, the architecture as built,
+what comes next.
 
 ## What this is
 
 compusophyOS: a computer in one browser tab. Rust → wasm, one canvas, a
-desktop anyone can write apps for. It runs in the tab (no native helper, no
-shell tunnel; the only server code is `api/`). Floating windows as on
-Windows and Pop!_OS COSMIC; futuristic, ultra minimal, fast. AI-native (free
-AI for all); later pooled compute across tabs and devices. Author handle: compusophy.
+desktop anyone can write apps for, in applang. It runs in the tab (the only
+server code is `api/`). Floating windows as on Windows and Pop!_OS COSMIC;
+futuristic, ultra minimal, fast. AI-native: free AI for all, and our own
+model fine-tuned on applang (Opus teaches; `iq` must climb).
+Later: compute pooled across tabs, devices. Author handle: compusophy.
 
 ## Constitution (CI-enforced by `scripts/caps.sh` where possible)
 
 1. **Rust only.** No hand-written JS beyond two one-line bootstraps
    (web/index.html, web/worker.js) and `api/*.mjs`, the server functions
    (`node:` modules only): what cannot live in a tab, the free AI's
-   credentials and the feedback inbox.
+   credentials and the feedback inbox. Python: `train/` only.
 2. **Zero external dependencies.** Only `compusophy-*` workspace siblings.
    Exception: the web crates `platform`, `os` and `cpu` may take
    wasm-bindgen (pinned), js-sys, web-sys. Build-time tools never ship.
@@ -65,7 +66,7 @@ crates/      the OS (boot, kernel, worker); talks WASI and uiwire
   profiles/  the list: each profile's keys, face, name, PIN
   shell/     the desktop: window chrome, keys, overlay; wires host + home
   platform/  the browser boundary: canvas, WebGL2, input, textarea, fetch,
-             frames on demand, localStorage, workers, beacon
+             frames on demand, storage, workers
   report/    telemetry: notes, reports, outbox, panic beacon
   os/        wasm entry: fonts, VFS, registry, prefs, events, Remote
              windows, ai, /home kept
@@ -73,7 +74,7 @@ crates/      the OS (boot, kernel, worker); talks WASI and uiwire
              server (main), snap (/home), module
   wasi/      the kernel's worker half: WASI preview 1 Proc, fds, /dev
   cpu/       the program worker (cdylib; dist/cpu/): loader, WASI imports
-programs/    wasm32-wasip1 programs (dist/bin/), their app language, dev crates
+programs/    wasm32-wasip1 programs (dist/bin/), app language, dev crates
   fuel/ lang/ forks of litelite (budgets, parse kit)
   applang-syntax/ applang/ tier 0 app language: front end, runtime
   studio/    make apps by describing them; runs `.app` files
@@ -85,18 +86,19 @@ programs/    wasm32-wasip1 programs (dist/bin/), their app language, dev crates
   terminal/  the Terminal; vt/ term/: its parser, screen model
   sh/ agent/ shell: editor, commands, jobs; AI coder
   toolbox/   test programs, one binary
-  evals/ makes/  dev: evals, Suite 1 (evals/README.md)
+  evals/ makes/ iq/ teach/  dev: evals; IQ tasks; Opus the teacher
 assets/fonts/  the fonts (see Fonts below)
 api/           server functions (Vercel, Node): ai.mjs, feedback.mjs
 tools/serve/   dev-only static server for dist/; mocks /api/*
 tools/eval/    dev-only eval runner (curl, the free AI)
+train/         dev: fine-tuning on the 3090 (Python)
 web/index.html the page: <canvas id="os"> + a one-line bootstrap
 web/worker.js  the program worker's one-line bootstrap
 scripts/       caps.sh, budget.sh, build-web.sh, deploy.sh (`prod`: production)
 ```
 
-Forks: litelite 0.2.0, `4f5e056`. Packages are `compusophy-<x>`; each
-`[lib] name` is the short one code uses (`wm::Wm`).
+Forks: litelite 0.2.0, `4f5e056`. Packages are `compusophy-<x>`; code uses
+the short `[lib] name` (`wm::Wm`).
 
 Event path: DOM → `platform::Event` → `os` → `shell::Input` → `host` →
 `ui::AppEvent` → app; back out as `ui::Request` → `host::Effect` → `os` →
@@ -113,7 +115,7 @@ cargo fmt --all --check
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
 cargo +1.85 test --workspace   # the MSRV (rust-version)
 bash scripts/caps.sh
-bash scripts/build-web.sh   # dist/; wasm-bindgen CLI = Cargo.lock's, wasm32-wasip1
+bash scripts/build-web.sh   # dist/ (wasm-bindgen CLI = Cargo.lock's)
 bash scripts/budget.sh
 cargo run -p serve --release -- dist 8080   # preview; --plain: no COOP/COEP
 ```
@@ -121,10 +123,9 @@ cargo run -p serve --release -- dist 8080   # preview; --plain: no COOP/COEP
 `?debug` marks each frame (`performance.mark("frame")`); idle, only the
 grain's.
 
-Fonts, each group with its budget: **boot** (Inter Regular, in `os`),
-**deferred** (`fonts/deferred/*`, after the first frame; until then bold is
-Regular, mono cells empty), **lazy** (`fonts/symbols-*.ttf`, when a terminal
-first opens). Subsets and OFL texts: `assets/fonts/README.md`.
+Fonts: **boot** (Inter Regular, in `os`), **deferred** (`fonts/deferred/*`,
+after the first frame), **lazy** (`fonts/symbols-*.ttf`, when a terminal
+opens); subsets and OFL texts: `assets/fonts/README.md`.
 
 ## Safety (the owner runs unattended; never trigger an approval prompt)
 

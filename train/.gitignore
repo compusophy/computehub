@@ -1,0 +1,12 @@
+# Nothing heavy is ever committed: weights, checkpoints and logs live under
+# the data root (outside the repo); these catch any that stray in here.
+out/
+runs/
+logs/
+scratch/
+*.gguf
+*.safetensors
+*.pt
+*.bin
+__pycache__/
+*.pyc
