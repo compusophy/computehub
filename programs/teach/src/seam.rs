@@ -126,7 +126,8 @@ pub fn held(text: &str) -> Vec<String> {
 
 /// The benchmark's verifier ([`iq`]): a task stands when [`iq::verify`] keeps it (its reference
 /// passes, a null app fails its check, most of the reference's mutants die); a program earns
-/// [`iq::grade`] of its task, found by id among `tasks` (a task not there grades `harness`).
+/// [`iq::grade`] of its task, found by id among `tasks` (a task not there grades `harness`), and
+/// teaches only when its icon line draws too (stage `icon`).
 pub struct Iq {
     pub tasks: Vec<iq::Task>,
 }
@@ -148,6 +149,15 @@ impl Judge for Iq {
             return Grade { pass: false, stage: "harness".into(), code: 0, why };
         };
         let g = iq::grade(t, program);
+        // What it teaches must also draw its icon, as Studio installs a make; iq grades apps without.
+        if let Some(f) = coder::ai::fault(program, "", 3).filter(|_| g.pass()) {
+            return Grade {
+                pass: false,
+                stage: "icon".into(),
+                code: f.diag.code.unwrap_or(0),
+                why: f.said,
+            };
+        }
         let stage = if g.pass() { "ok" } else { g.stage.name() };
         Grade { pass: g.pass(), stage: stage.into(), code: g.code, why: g.message }
     }

@@ -687,6 +687,9 @@ fn the_iq_judge_grades_by_the_suites_checks() {
     let bad = judge.grade(&t.id, &t.ask, "label \"hi\";");
     assert!(!bad.pass && bad.stage == "check", "{bad:?}");
     assert_eq!(judge.grade("no-such-task", "", &t.reference).stage, "harness");
+    let bad_icon = t.reference.replace("// icon: ring 12 12 9 ", "// icon: ring 12 12 9 2 ");
+    let g = judge.grade(&t.id, &t.ask, &bad_icon);
+    assert!(!g.pass && g.stage == "icon", "an icon that does not draw never teaches: {g:?}");
 }
 
 #[test]
