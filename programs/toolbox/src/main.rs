@@ -22,8 +22,21 @@ fn main() -> ExitCode {
     let argv: Vec<String> = std::env::args().collect();
     let (name, args) = applet(&argv);
     let (mut out, mut err) = (io::stdout().lock(), io::stderr().lock());
-    let files = &mut |path: &str| std::fs::read(path);
+    let files = &mut |path: &str| here(path).and_then(std::fs::read);
     ExitCode::from(run(name, args, &mut io::stdin().lock(), files, &mut out, &mut err))
+}
+
+/// The path to give `std::fs` for the file an applet names: a relative one from the job's
+/// directory, `./` first. wasi-libc opens a path from the preopen whose name is its longest
+/// prefix, and the job's directory is `.` (to it, the empty name) beside `/tmp`, `/home` and
+/// the other top-level directories, so `tmp/x` would be /tmp's `x`; only `.` matches `./tmp/x`.
+/// An empty path names no file (wasi-libc would open the job's directory).
+fn here(path: &str) -> io::Result<String> {
+    match path {
+        "" => Err(io::ErrorKind::NotFound.into()),
+        _ if path.starts_with('/') => Ok(path.into()),
+        _ => Ok(["./", path].concat()),
+    }
 }
 
 /// The applet `argv` names and its arguments, its own name first.
@@ -184,13 +197,23 @@ mod tests {
         assert_eq!(err, "wc: nope: no such file or directory\nwc: d: is a directory\n");
         let empty = "wc: : no such file or directory\n";
         assert_eq!(wc("wc "), (1, String::new(), empty.into()));
-        // An unknown option is a misuse: status 2, nothing read.
+        // An unknown option is a misuse: status 2, nothing read; a long one is said whole.
         assert_eq!(wc("wc -lx a"), (2, String::new(), "wc: unknown option -x\n".into()));
+        let long = "wc: unknown option --lines\n";
+        assert_eq!(wc("wc --lines a"), (2, String::new(), long.into()));
         assert_eq!(piped(&args("rev a /b/c"), ""), ok("owt eno\neerht\nx é\n"));
         assert_eq!(piped(&args("rev nope"), "").2, "rev: nope: no such file or directory\n");
         assert_eq!(
             piped(&args("rev -l a"), ""),
             (2, String::new(), "rev: unknown option -l\n".into())
         );
+    }
+
+    #[test]
+    fn relative_paths_are_read_from_the_jobs_directory() {
+        // `./` first, so wasi-libc opens `tmp/x` from the job's directory (`.`), not /tmp.
+        let paths = ["tmp/x", "a", "../b", "/tmp/x"].map(|p| here(p).unwrap());
+        assert_eq!(paths, ["./tmp/x", "./a", "./../b", "/tmp/x"]);
+        assert_eq!(here("").unwrap_err().kind(), io::ErrorKind::NotFound);
     }
 }

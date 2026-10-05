@@ -64,6 +64,8 @@ pub trait Sys {
 type Cmd = fn(&mut Shell, &[&str], u32, &mut Io<'_>, &mut dyn Sys);
 /// Any number of operands.
 const ANY: usize = usize::MAX;
+/// `rm`'s synopsis: it checks its operands itself.
+const RM: &str = "rm [-rf] <path>...";
 
 /// Every command: name, flag letters, fewest and most operands (flags not counted), synopsis
 /// (for `help` and usage errors), what it does (for `help`; empty is left out), what it runs.
@@ -89,9 +91,13 @@ const COMMANDS: [(&str, &str, usize, usize, &str, &str, Cmd); 20] = [
         |s, a, f, io, sys| s.each(a, io, sys, Op::Mkdir(f))),
     ("touch", "", 1, ANY, "touch <file>...", "make empty files",
         |s, a, _, io, sys| s.each(a, io, sys, Op::Touch)),
-    ("rm", "rRf", 1, ANY, "rm [-rf] <path>...",
+    ("rm", "rRf", 0, ANY, RM,
         "remove files; -r removes directories, -f is quiet about missing ones",
-        |s, a, f, io, sys| s.each(a, io, sys, Op::Rm(f))),
+        |s, a, f, io, sys| match a {
+            // -f with nothing to remove is no misuse (POSIX).
+            [] if f & 4 == 0 => io.usage(RM),
+            _ => s.each(a, io, sys, Op::Rm(f)),
+        }),
     // mv never asks, so -f (do not ask) is taken and changes nothing.
     ("mv", "f", 2, ANY, "mv <from>... <to>",
         "move or rename; several move into the directory <to>", |s, a, _, io, sys| {
@@ -134,10 +140,11 @@ const COMMANDS: [(&str, &str, usize, usize, &str, &str, Cmd); 20] = [
             let parts: Vec<&str> = (0..4).filter(|i| f & (2 << i) != 0).map(|i| UNAME[i]).collect();
             io.line(&parts, " ");
         }),
-    ("exit", "", 0, 1, "exit [status]", "close this terminal", |s, a, _, io, _| {
+    ("exit", "", 0, 1, "exit [status]",
+        "end the shell; its terminal closes, or shows a status other than 0", |s, a, _, io, _| {
         match a.first().map(|n| (n, n.parse::<u8>())) {
             Some((n, Err(_))) => io.err(&["exit: ", n, ": not a status (0 to 255)"]),
-            Some((_, Ok(n))) => (s.status, s.quit) = (i32::from(n), true),
+            Some((_, Ok(n))) => (s.status, s.exited, s.quit) = (i32::from(n), Some(n), true),
             None => s.quit = true,
         }
     }),
@@ -337,6 +344,9 @@ pub struct Shell {
     /// The last command line's status: its job's, a command's (1 when it reported an error, 2
     /// for a misuse), 127 for a program not found, 126 for a file that is none; `exit n`'s.
     pub status: i32,
+    /// The status `exit n` gave, which the program ends with on its console too (else 0 there,
+    /// as at Ctrl+D, so its Terminal closes).
+    pub exited: Option<u8>,
     /// The working directory, absolute.
     pub cwd: String,
     line: Vec<char>,
@@ -361,8 +371,8 @@ impl Default for Shell {
         let (out, line, history, draft, mark) = Default::default();
         let (cols, rows, cwd) = (80, 24, Vfs::HOME.into());
         let (quit, status, pos, browse, caret, ran) = (false, 0, 0, None, (0, 0), false);
-        Shell { out, cols, rows, quit, status, cwd, line, pos, history, browse, draft, caret,
-            mark, ran }
+        Shell { out, cols, rows, quit, status, exited: None, cwd, line, pos, history, browse,
+            draft, caret, mark, ran }
     }
 }
 
@@ -374,14 +384,17 @@ struct Io<'a> {
     file: Option<String>,
     /// The command's status: 0, or 1 once it reported an error (2 for a misuse).
     failed: u8,
-    /// The lines `cat -n` numbered so far.
+    /// The lines `cat -n` numbered so far, and whether the files' text it printed ends
+    /// mid-line (errors between them, on the screen, change neither).
     lines: u64,
+    mid: bool,
 }
 
 impl<'a> Io<'a> {
     /// The output of `cmd`: to the screen, or (`to_file`) gathered for a file or a pipe.
     fn new(cmd: &'a str, to_file: bool) -> Io<'a> {
-        Io { cmd, screen: String::new(), file: to_file.then(String::new), failed: 0, lines: 0 }
+        let (screen, file) = (String::new(), to_file.then(String::new));
+        Io { cmd, screen, file, failed: 0, lines: 0, mid: false }
     }
 
     /// Writes to stdout.
@@ -403,6 +416,12 @@ impl<'a> Io<'a> {
         push_all(&mut self.screen, parts);
         self.screen.push('\n');
         self.failed = self.failed.max(1);
+    }
+
+    /// Says how to use the command (`synopsis`): a misuse, status 2.
+    fn usage(&mut self, synopsis: &str) {
+        self.err(&["usage: ", synopsis]);
+        self.failed = 2;
     }
 
     /// Asks the Terminal to `verb` `arg` (never with a control in `arg`, which would end the
@@ -646,12 +665,14 @@ impl Shell {
             let (name, ok, min, max, synopsis, _, run) = COMMANDS[i];
             let args: Vec<&str> = stages[0].iter().skip(1).map(String::as_str).collect();
             io.cmd = name;
-            if let Some((f, operands)) = flags(&args, ok, &mut io) {
+            // echo takes its words as they come, `--` too (POSIX); the rest, flags first.
+            let parsed =
+                if name == "echo" { Some((0, &args[..])) } else { flags(&args, ok, &mut io) };
+            if let Some((f, operands)) = parsed {
                 if (min..=max).contains(&operands.len()) {
                     run(self, operands, f, &mut io, sys);
                 } else {
-                    io.err(&["usage: ", synopsis]);
-                    io.failed = 2;
+                    io.usage(synopsis);
                 }
             }
             io.cmd = "sh";
@@ -779,15 +800,14 @@ impl Shell {
                 if number {
                     // `%6d\t` before each line, counting on from the files before; a file that
                     // ends mid-line goes on with the next one's first.
-                    let shown = io.file.as_ref().unwrap_or(&io.screen);
-                    let mut fresh = io.lines == 0 || shown.ends_with('\n');
                     let mut lines = String::new();
                     for line in text.split_inclusive('\n') {
-                        if std::mem::replace(&mut fresh, true) {
+                        if !io.mid {
                             io.lines += 1;
                             push_int(&mut lines, io.lines, 6);
                             lines.push('\t');
                         }
+                        io.mid = !line.ends_with('\n');
                         lines.push_str(line);
                     }
                     text = lines;
@@ -898,25 +918,27 @@ fn entries(list: &[Entry], f: u32, io: &mut Io<'_>) {
     }
 }
 
-/// `n` bytes as `ls -l` shows them: in full, or (`human`) from 1024 in K, M, G or T, rounded
-/// up, with a tenth below 10 (1.5K, 12M).
+/// `n` bytes as `ls -l` shows them: in full, or (`human`) from 1024 in K, M, G, T, P or E,
+/// rounded up, in the first unit it then takes fewer than 1024 of (1048575 is 1.0M), with a
+/// tenth below 10 (1.5K, 12M).
 fn size(n: u64, human: bool) -> String {
     let mut s = String::new();
-    let unit = (1..5u32).take_while(|&u| human && n >= 1 << (10 * u)).last().unwrap_or(0);
-    if unit == 0 {
+    if !human || n < 1024 {
         push_int(&mut s, n, 0);
         return s;
     }
-    let scale = 1u64 << (10 * unit);
-    let tenths = n.saturating_mul(10).div_ceil(scale);
+    let (n, scale) = (u128::from(n), |u: u32| 1u128 << (10 * u));
+    // Below 1024 P, or else in E (16E at most).
+    let unit = (1..6).find(|&u| n.div_ceil(scale(u)) < 1024).unwrap_or(6);
+    let tenths = (n * 10).div_ceil(scale(unit));
     if tenths < 100 {
-        push_int(&mut s, tenths / 10, 0);
+        push_int(&mut s, tenths as u64 / 10, 0);
         s.push('.');
-        push_int(&mut s, tenths % 10, 0);
+        push_int(&mut s, tenths as u64 % 10, 0);
     } else {
-        push_int(&mut s, n.div_ceil(scale), 0);
+        push_int(&mut s, n.div_ceil(scale(unit)) as u64, 0);
     }
-    s.push(char::from(b"KMGT"[unit as usize - 1]));
+    s.push(char::from(b"KMGTPE"[unit as usize - 1]));
     s
 }
 
@@ -954,20 +976,24 @@ fn refused(errno: u16) -> (&'static str, i32) {
 }
 
 /// Splits leading `-xyz` flags (chars of `ok`, as bits) from the operands, which `--` may
-/// start; `None`, after reporting it (a misuse), for an unknown flag.
+/// start (taken off even where no flag is, as POSIX has it); `None`, after reporting it (a
+/// misuse), for an unknown flag.
 fn flags<'a, 'b>(args: &'a [&'b str], ok: &str, io: &mut Io<'_>) -> Option<(u32, &'a [&'b str])> {
     let mut set = 0;
     for (n, arg) in args.iter().enumerate() {
-        if ok.is_empty() || arg.len() < 2 || !arg.starts_with('-') {
-            return Some((set, &args[n..]));
-        }
         if *arg == "--" {
             return Some((set, &args[n + 1..]));
         }
+        if ok.is_empty() || arg.len() < 2 || !arg.starts_with('-') {
+            return Some((set, &args[n..]));
+        }
         for c in arg.chars().skip(1) {
             let Some(i) = ok.bytes().position(|o| char::from(o) == c) else {
+                // A long option (`--all`) is said whole.
+                let short: String = ['-', c].into_iter().collect();
+                let bad = if arg.starts_with("--") { *arg } else { short.as_str() };
                 let cmd = io.cmd;
-                io.err(&[cmd, ": unknown option -", c.encode_utf8(&mut [0; 4])]);
+                io.err(&[cmd, ": unknown option ", bad]);
                 io.failed = 2;
                 return None;
             };

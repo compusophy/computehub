@@ -3,7 +3,8 @@
 //! It starts in its job's working directory. `sh -c line` runs the line, `sh file` each line of
 //! the file, and with no console (`sh < script`, a pipe) each line of its input is a command;
 //! then nothing is edited, and the exit status is the last line's (or `exit n`'s). On its
-//! console the status is 0 at `exit`, Ctrl+D on an empty line or the end of its input.
+//! console it is `exit n`'s, else 0 (at `exit`, Ctrl+D on an empty line or the end of its
+//! input), so its Terminal closes unless `exit` gives another.
 
 #![forbid(unsafe_code)]
 
@@ -172,5 +173,5 @@ fn main() -> ExitCode {
         sh.feed(&buf[..n], &mut os);
         show(&std::mem::take(&mut sh.out), true);
     }
-    ExitCode::SUCCESS
+    ExitCode::from(sh.exited.unwrap_or(0))
 }

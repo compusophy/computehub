@@ -297,6 +297,21 @@ $ uname -rm
 0.2 wasm32
 $ uname -n x
 usage: uname [-asnrm]
+$ touch -- -x
+$ ls -- -x
+-x
+$ rm -- -x
+$ cd -- /apps
+$ pwd
+/apps
+$ cd
+$ echo -- a
+-- a
+$ rm
+usage: rm [-rf] <path>...
+$ rm -f
+$ ls --all
+ls: unknown option --all
 $ echo a # b
 a
 $ # nothing
@@ -315,10 +330,27 @@ $ hi ~/x '~' ~y # z
     w.fs.write("/tmp/a", b"one\ntwo").and(w.fs.write("/tmp/b", b"three\n\nfour\n")).unwrap();
     sh.out.clear();
     sh.run("cat -n /tmp/a /tmp/b", &mut w);
-    assert_eq!(sh.out, "     1\tone\n     2\ttwothree\n     3\t\n     4\tfour\n");
-    // ls -lh: from 1024 bytes in K, M, G, T, rounded up, a tenth below 10.
-    let sizes = [0, 1023, 1024, 1025, 2336, 10_239, 10_240, 1 << 20, 15 << 30, 1 << 50];
-    let human = ["0", "1023", "1.0K", "1.1K", "2.3K", "10K", "10K", "1.0M", "15G", "1024T"];
+    let numbered = "     1\tone\n     2\ttwothree\n     3\t\n     4\tfour\n";
+    assert_eq!(sh.out, numbered);
+    // An error between the files changes no number, on screen or to a file.
+    let error = "cat: nope: no such file or directory\n";
+    sh.out.clear();
+    sh.run("cat -n /tmp/a nope /tmp/b", &mut w);
+    assert_eq!(
+        sh.out,
+        ["     1\tone\n     2\ttwo", error, "three\n     3\t\n     4\tfour\n"].concat()
+    );
+    sh.out.clear();
+    sh.run("cat -n /tmp/a nope /tmp/b > /tmp/n", &mut w);
+    assert_eq!((sh.out.as_str(), w.fs.read("/tmp/n")), (error, Ok(numbered.as_bytes())));
+    // ls -lh: from 1024 bytes in K, M, G, T, P, E, rounded up, in the first unit that then
+    // takes fewer than 1024, a tenth below 10.
+    #[rustfmt::skip]
+    let sizes = [0, 1023, 1024, 1025, 2336, 10_239, 10_240, 1_047_552, 1_048_575, 1 << 20,
+        15 << 30, 1 << 50, u64::MAX];
+    #[rustfmt::skip]
+    let human = ["0", "1023", "1.0K", "1.1K", "2.3K", "10K", "10K", "1023K", "1.0M", "1.0M",
+        "15G", "1.0P", "16E"];
     assert_eq!(sizes.map(|n| size(n, true)), human);
     assert_eq!(size(2336, false), "2336");
 }
@@ -329,8 +361,9 @@ fn a_line_ends_with_a_status_and_sh_runs_scripts() {
     #[rustfmt::skip]
     let lines = [
         ("ls nope", 1), ("ls", 0), ("rm -z x", 2), ("mv x", 2), ("echo a |", 2), ("ls | ls", 2),
-        ("frob", 127), ("./notes.txt", 126), ("", 126), ("# a comment", 126), ("hi", 0),
-        ("hi > /nope/x", 1), ("echo a > /nope/x", 1), ("exit x", 1),
+        ("rm", 2), ("rm -f", 0), ("frob", 127), ("./notes.txt", 126), ("", 126),
+        ("# a comment", 126), ("hi", 0), ("hi > /nope/x", 1), ("echo a > /nope/x", 1),
+        ("exit x", 1),
     ];
     for (line, status) in lines {
         sh.run(line, &mut w);
@@ -339,12 +372,13 @@ fn a_line_ends_with_a_status_and_sh_runs_scripts() {
     w.status = Ok(3);
     sh.run("echo a | hi", &mut w);
     assert_eq!(sh.status, 3);
+    // A plain exit keeps the status, which the console does not end with; `exit n`'s it does.
     sh.run("exit", &mut w);
-    assert_eq!((sh.status, sh.quit), (3, true));
+    assert_eq!((sh.status, sh.quit, sh.exited), (3, true, None));
     let mut sh = Shell::default();
     sh.run("exit 300", &mut w);
     sh.run("exit 4", &mut w);
-    assert_eq!((sh.status, sh.quit), (4, true));
+    assert_eq!((sh.status, sh.quit, sh.exited), (4, true, Some(4)));
     // `sh -c line`, `sh file` (from the working directory), or nothing: the console, or the
     // script on its input; else what to say and the status to end with.
     let script = "#!/bin/sh\n# makes out, then ends\necho one > out\nexit 5\necho two > out\n";

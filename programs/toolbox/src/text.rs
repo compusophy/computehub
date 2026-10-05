@@ -6,7 +6,8 @@
 use std::io::{self, ErrorKind, Read, Write};
 
 /// Reads the file at a path: `std::fs::read` (on compusophyOS WASI's view of the desktop's
-/// files, relative paths from the job's directory), a table in tests.
+/// files; relative paths from the job's directory, made sure of in `main`'s `here`), a table
+/// in tests.
 pub type Files<'a> = &'a mut dyn FnMut(&str) -> io::Result<Vec<u8>>;
 
 /// `wc`'s counts in the order it prints them, and their flags.
@@ -36,8 +37,10 @@ pub fn filter(
             match COUNTS.chars().position(|f| f == c) {
                 Some(bit) if name == "wc" => pick |= 1 << bit,
                 _ => {
-                    // A failed write to stderr leaves nothing to report it on.
-                    let _ = writeln!(err, "{name}: unknown option -{c}");
+                    // A long option (`--lines`) is said whole. A failed write to stderr leaves
+                    // nothing to report it on.
+                    let bad = if w.starts_with("--") { w.clone() } else { format!("-{c}") };
+                    let _ = writeln!(err, "{name}: unknown option {bad}");
                     return 2;
                 }
             }
