@@ -15,6 +15,8 @@
 //! At most 8 threads (of the machine's 16), whatever `--threads` asks. An option not known, or
 //! a value that does not read as its kind, is refused.
 
+#![forbid(unsafe_code)]
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::Write as _;
