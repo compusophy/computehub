@@ -1,0 +1,15 @@
+[package]
+name = "eval"
+description = "Development-only eval runner: runs compusophyOS's eval suites (programs/evals) against the free AI through the system's curl, paced under its limits, records every exchange for offline replay, and compares runs. Never shipped."
+publish = false
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+compusophy-evals.workspace = true
+compusophy-makes.workspace = true
+compusophy-uiwire.workspace = true

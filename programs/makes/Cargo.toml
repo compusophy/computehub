@@ -1,0 +1,17 @@
+[package]
+name = "compusophy-makes"
+description = "compusophyOS evals' Suite 1, Studio makes: app descriptions from a counter to tetris, each with a deterministic functional checker that drives the app made headlessly (taps, keys, ticks) and reads what it shows; and the probe that drives them. Pure."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[lib]
+name = "makes"
+
+[dependencies]
+compusophy-applang.workspace = true
+compusophy-coder.workspace = true
+compusophy-icons.workspace = true

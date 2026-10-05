@@ -118,6 +118,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "compusophy-evals"
+version = "0.1.0"
+dependencies = [
+ "compusophy-coder",
+ "compusophy-makes",
+ "compusophy-uiwire",
+]
+
+[[package]]
 name = "compusophy-files"
 version = "0.1.0"
 dependencies = [
@@ -184,6 +193,15 @@ dependencies = [
  "compusophy-host",
  "compusophy-profiles",
  "compusophy-ui",
+]
+
+[[package]]
+name = "compusophy-makes"
+version = "0.1.0"
+dependencies = [
+ "compusophy-applang",
+ "compusophy-coder",
+ "compusophy-icons",
 ]
 
 [[package]]
@@ -346,6 +364,15 @@ dependencies = [
 [[package]]
 name = "compusophy-wm"
 version = "0.1.0"
+
+[[package]]
+name = "eval"
+version = "0.1.0"
+dependencies = [
+ "compusophy-evals",
+ "compusophy-makes",
+ "compusophy-uiwire",
+]
 
 [[package]]
 name = "futures-core"

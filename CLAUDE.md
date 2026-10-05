@@ -54,9 +54,8 @@ crates/      the OS (boot, kernel, worker); talks WASI and uiwire
   font/      TrueType reader + glyph rasterizer
   gfx/       instanced-quad draw list, glyph atlas, the WebGL2 shaders
   text/      TextSystem: font slots, fallbacks, glyphs on the atlas
-  icons/     the mark, glyphs and made icons as vector outlines (`ui::icon`)
-  ui/        immediate-mode widgets, themes, the App trait, Cx, the Code
-             editor (re-exports text)
+  icons/     the mark, glyphs and made icons as vector outlines
+  ui/        immediate-mode widgets, themes, App, Cx, the Code editor
   apps/      a terminal's console: its shell, its keys
   uiwire/    remote UI protocol: programs send widget trees, get events
   uiview/    draws them with ui; edited text; canvas/: Canvases
@@ -69,7 +68,7 @@ crates/      the OS (boot, kernel, worker); talks WASI and uiwire
              frames on demand, localStorage, workers, beacon
   report/    telemetry: notes, reports, outbox, panic beacon
   os/        wasm entry: fonts, VFS, registry, prefs, events, Remote
-             (program windows), ai, /home kept
+             windows, ai, /home kept
   kernel/    wire protocol, process table, consoles, jobs, file
              server (main), snap (/home), module
   wasi/      the kernel's worker half: WASI preview 1 Proc, fds, /dev
@@ -85,10 +84,12 @@ programs/    wasm32-wasip1 programs (dist/bin/) and their app language
   terminal/  the Terminal; vt/ term/: its parser, screen model
   sh/ agent/ shell: editor, commands, jobs; AI coder
   toolbox/   test programs, one binary
+  evals/ makes/  the evals, Suite 1 (evals/README.md)
 assets/fonts/  the fonts (see Fonts below)
 api/           server functions (Vercel, Node): ai.mjs, feedback.mjs
 tools/serve/   dev-only static server for dist/; mocks /api/*
-web/index.html the page: <canvas id="os"> + the one-line module bootstrap
+tools/eval/    dev-only eval runner (curl, the free AI)
+web/index.html the page: <canvas id="os"> + a one-line bootstrap
 web/worker.js  the program worker's one-line bootstrap
 scripts/       caps.sh, budget.sh, build-web.sh, deploy.sh (`prod`: production)
 ```
@@ -109,15 +110,15 @@ cargo check --workspace --target wasm32-unknown-unknown
 cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all --check
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
-cargo +1.85 test --workspace   # the MSRV: rust-version in Cargo.toml
+cargo +1.85 test --workspace   # the MSRV (rust-version)
 bash scripts/caps.sh
 bash scripts/build-web.sh   # dist/; wasm-bindgen CLI = Cargo.lock's, wasm32-wasip1
 bash scripts/budget.sh
 cargo run -p serve --release -- dist 8080   # preview; --plain: no COOP/COEP
 ```
 
-`?debug` in the URL marks each frame (`performance.mark("frame")`); idle
-adds none but the grain's.
+`?debug` marks each frame (`performance.mark`); idle adds none but the
+grain's.
 
 Fonts, each group with its budget: **boot** (Inter Regular, in `os`),
 **deferred** (`fonts/deferred/*`, after the first frame; until then bold is

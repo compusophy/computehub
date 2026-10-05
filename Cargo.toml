@@ -42,7 +42,10 @@ members = [
     "programs/term",
     "programs/terminal",
     "programs/toolbox",
+    "programs/makes",
+    "programs/evals",
     "tools/serve",
+    "tools/eval",
 ]
 
 # Every crate inherits these. The version lives here, once.
@@ -93,6 +96,8 @@ compusophy-files = { path = "programs/files", version = "0.1.0" }
 compusophy-system = { path = "programs/system", version = "0.1.0" }
 compusophy-activity = { path = "programs/activity", version = "0.1.0" }
 compusophy-sh = { path = "programs/sh", version = "0.1.0" }
+compusophy-evals = { path = "programs/evals", version = "0.1.0" }
+compusophy-makes = { path = "programs/makes", version = "0.1.0" }
 
 # The browser boundary. Only `platform`, `os` and `cpu` may use these
 # (scripts/caps.sh).
