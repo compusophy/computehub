@@ -1,0 +1,21 @@
+[package]
+name = "compusophy-teach"
+description = "compusophyOS's teacher, a dev tool that never ships: Claude Opus 5.5 writes applang tasks (an ask, a checker, a reference) and solves them with the coder's own prompts, byte for byte; a verifier keeps what passes, each line with its provenance; every reply priced in a ledger under a budget; verified solutions exported for fine-tuning, held-out families never; and the models being taught asked as Studio asks."
+publish = false
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[lib]
+name = "teach"
+
+[[bin]]
+name = "teach"
+path = "src/main.rs"
+
+[dependencies]
+compusophy-applang.workspace = true
+compusophy-coder.workspace = true

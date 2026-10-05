@@ -19,7 +19,7 @@ pub mod ai;
 pub mod edits;
 pub mod json;
 mod make;
-mod prompt;
+pub mod prompt;
 pub mod receipt;
 #[cfg(test)]
 mod tests;

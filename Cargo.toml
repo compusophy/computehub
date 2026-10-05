@@ -46,6 +46,7 @@ members = [
     "programs/evals",
     "programs/tiny",
     "programs/lab",
+    "programs/teach",
     "tools/serve",
     "tools/eval",
 ]
@@ -101,6 +102,7 @@ compusophy-sh = { path = "programs/sh", version = "0.1.0" }
 compusophy-evals = { path = "programs/evals", version = "0.1.0" }
 compusophy-makes = { path = "programs/makes", version = "0.1.0" }
 compusophy-tiny = { path = "programs/tiny", version = "0.1.0" }
+compusophy-teach = { path = "programs/teach", version = "0.1.0" }
 
 # The browser boundary. Only `platform`, `os` and `cpu` may use these
 # (scripts/caps.sh).
