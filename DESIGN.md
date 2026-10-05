@@ -416,8 +416,9 @@ one. Forked crates keep their Apache-2.0 license and note their origin.
   one that may remove, move or overwrite (`rm`, `mv`, a `>` that does not
   append), or runs a program but /bin's `wc`, `rev` and `hello` by name
   (judged by what runs: `sh` or `agent` by any path or `#!wasm` alias, a
-  program named by a pattern), asks each time, always or not. No file
-  tool, nor its shell, reads or writes a device (but /dev/null). The reply
+  program named by a pattern), asks each time, always or not, as does a
+  write that replaces a file (always covers new files, appends and edits).
+  No file tool, nor its shell, reads or writes a device (but /dev/null). The reply
   streams in as it comes, and each tool shows a line of what it does and
   one of how it went; what the
   model wrote shows with its controls in caret notation (`^[`), so none of

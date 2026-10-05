@@ -29,7 +29,8 @@ Type a task, or /help. Ctrl+C stops it.\n";
 const PROMPT: &str = "\n\x1b[1;35m\u{203a}\x1b[m ";
 const HELP: &str = "Type a task in plain words, such as: make a pomodoro timer app.\n\
 It reads freely; it asks before it writes a file or runs a command, and each time before\n\
-one that may remove, move or overwrite (rm, mv, >, any program but wc, rev, hello).\n\
+it replaces a file or runs what may remove, move or overwrite (rm, mv, >, a program but\n\
+wc, rev, hello).\n\
   /clear    start a fresh conversation\n  /yes      write and run without asking (again: ask)\n  \
 /lessons  what it learned from past failures (~/.agent/lessons.md)\n  /forget   forget them\n  \
 /learn    stop learning (again: learn)\n  /exit     leave (Ctrl+D too)\n";

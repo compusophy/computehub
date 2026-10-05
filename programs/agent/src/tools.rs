@@ -3,8 +3,8 @@
 //! check an applang app, and hand over applang's guide. Each shows the person a line of what it
 //! does (`● name what`) and one of how it went (`⎿ ...`); writes and edits show what changes
 //! first. Writes, edits and commands wait for the person's yes; but for a line that only reads
-//! ([`reads`]), which runs unasked, and one that may remove, move or overwrite ([`risky`]),
-//! which asks each time. No file tool reads or writes a device (/dev).
+//! ([`reads`]), which runs unasked, and a write over a file or a line that may remove, move or
+//! overwrite ([`risky`]), which ask each time. No file tool reads or writes a device (/dev).
 
 use coder::ai::{put_clip, put_num, shown};
 use coder::json::Json;
@@ -235,13 +235,20 @@ fn write(a: &mut Agent, v: &Json, w: &mut impl World) -> Result<String, String> 
     let (path, content, append) =
         (a.path(&need(v, "path")?)?, need(v, "content")?, flag(v, "append"));
     let (lines, name) = (count(content.lines().count(), "line", "lines"), shown(&path));
-    let what = [if append { "append to " } else { "write " }, &name, " (", &lines, ")"];
-    doing(w, "write_file", &what[1..].concat());
+    doing(w, "write_file", &[&name, " (", &lines, ")"].concat());
     no_device(&path)?;
     show(w, &content, "+ ", GREEN);
-    if !a.allowed(WRITE, &what.concat(), w) {
+    // Replacing a file is overwriting it, as `>` does: asked each time, always or not.
+    let replaces = !append && w.kind(&path) == Some(false);
+    let verb = match (append, replaces) {
+        (true, _) => "append to ",
+        (_, true) => "replace ",
+        _ => "write ",
+    };
+    let what = [verb, &name, " (", &lines, ")"].concat();
+    if !a.allowed(if replaces { RISK } else { WRITE }, &what, w) {
         how(w, "declined");
-        return declined(&what.concat());
+        return declined(&what);
     }
     let _ = w.mkdir(parent(&path), true);
     w.write(&path, content.as_bytes(), append)

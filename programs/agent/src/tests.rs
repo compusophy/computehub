@@ -204,18 +204,22 @@ fn a_no_changes_nothing_and_always_asks_once_a_session() {
     let (a, b, c) = (write("/tmp/a"), write("/tmp/b"), write("/tmp/c"));
     let replies =
         [call("write_file", &a), says("ok"), call("write_file", &b), call("write_file", &c)];
-    let mut w = fake(&[&replies[..], &[says("ok")]].concat());
+    // Then b again: replaced (asked each time, and declined), appended to (always).
+    let more = r#"{"path":"/tmp/b","content":"z\n","append":true}"#;
+    let again =
+        calls(&[("write_file", r#"{"path":"/tmp/b","content":"y\n"}"#), ("write_file", more)]);
+    let mut w = fake(&[&replies[..], &[again, says("ok")]].concat());
     w.answers = vec![Answer::No, Answer::Always];
     let mut a = Agent::new("/tmp", &mut w);
     assert!(a.task("write a", &mut w));
     assert!(!w.fs.exists("/tmp/a"));
     assert!(result(&a, 0).starts_with("The user declined: write /tmp/a (1 line)."));
     assert!(a.task("write b and c", &mut w));
-    assert!(w.fs.exists("/tmp/b") && w.fs.exists("/tmp/c"));
+    assert!(w.fs.exists("/tmp/c") && file(&w, "/tmp/b") == "x\nz\n");
     assert_eq!(
         w.asked,
-        ["write /tmp/a (1 line)", "write /tmp/b (1 line)"],
-        "always: c goes unasked"
+        ["write /tmp/a (1 line)", "write /tmp/b (1 line)", "replace /tmp/b (1 line) (each time)"],
+        "always: c goes unasked, and so an append; a replacement never"
     );
     // -y asks nothing at all.
     let mut w = fake(&[call("write_file", &write("/tmp/d")), says("ok")]);

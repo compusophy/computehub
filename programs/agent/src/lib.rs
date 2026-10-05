@@ -51,8 +51,9 @@ pub const MAX_STEPS: u32 = 20;
 pub const MAX_RESULT: usize = 12 << 10;
 pub const MAX_NOTES: usize = 4 << 10;
 
-/// What the person is asked to let it do: write (or edit) a file, run a command, and run one
-/// that may remove, move or overwrite ([`tools`]), which always never covers: each asks.
+/// What the person is asked to let it do: write (or edit) a file, run a command, and replace a
+/// file or run a command that may remove, move or overwrite ([`tools`]), which always never
+/// covers: each asks.
 pub const WRITE: usize = 0;
 pub const RUN: usize = 1;
 pub const RISK: usize = 2;
