@@ -164,7 +164,7 @@ pub struct Receipt {
 /// held of one, for the code view; nothing when applang can make nothing close) and its
 /// problem's bytes in it, the code and line of the problem to show (0: none; a code of the make's
 /// own, E0906 to E0910 or E0919, when there was no program), what the program's first comment
-/// says, whether it changed a program, and the receipt.
+/// says, whether it changed a program, why the make itself ended, and the receipt.
 #[derive(Clone, Debug)]
 pub struct Done {
     pub outcome: Outcome,
@@ -176,6 +176,9 @@ pub struct Done {
     pub why: String,
     pub plan: String,
     pub change: bool,
+    /// The make's own code for why it ended (E0901 to E0910, E0919), kept when `code` is the
+    /// problem of the program shown instead; 0 when it ran clean, can't, or was stopped.
+    pub ended: u16,
     pub receipt: Receipt,
 }
 
@@ -210,9 +213,11 @@ impl Done {
 }
 
 /// The ids Studio's own widgets use, so that another program (the overlay) can find them: Stop,
-/// and the prompt Input, whose id is in `PROMPT..PROMPT_END`.
+/// Send to compusophy (which sends off the device), and the prompt Input, whose id is in
+/// `PROMPT..PROMPT_END`.
 pub mod ids {
     pub const STOP: u32 = 2;
+    pub const SEND: u32 = 4;
     pub const PROMPT: u32 = 1 << 24;
     pub const PROMPT_END: u32 = 2 << 24;
 }

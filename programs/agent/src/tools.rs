@@ -31,6 +31,12 @@ const READS: [&str; 10] =
 pub fn run(a: &mut Agent, c: &Call, w: &mut impl World) -> (String, bool) {
     let v = Json::parse(&c.args).filter(|v| matches!(v, Json::Obj(_)));
     let done = match (c.name.as_str(), v) {
+        (name, _) if c.cut => Err([
+            name,
+            ": the arguments were cut off (8 KB at most); do less at \
+            once: a long file in parts (write_file, then write_file with append)",
+        ]
+        .concat()),
         // A tool of no arguments may get none at all.
         ("applang_guide", _) => {
             doing(w, "applang_guide", "");

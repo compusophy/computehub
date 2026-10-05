@@ -9,8 +9,8 @@
 use gfx::RectF;
 use ui::{RADIUS_SM, Sense, Ui, WidgetId};
 
-use crate::canvas::ink;
 use crate::{TILE, cap_base};
+use canvas::ink;
 
 /// A Meter's height, and a table head's.
 pub(crate) const METER_H: f32 = 6.0;

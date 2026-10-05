@@ -6,19 +6,21 @@ use crate::ai::{HONEST, ICON, SHORTER, put_numbered};
 /// Who the model writes for.
 const INTRO: &str = "You write apps for Studio, the app maker of compusophyOS, a desktop that runs \
                      in a browser tab. Apps are written in applang:\n\n";
-/// How apps are made, after applang's card.
-const RULES: &str = "\n\nA game remembers its world in states and lists of its own (what has \
-                     landed, where things are), and draws itself anew from them: on a canvas \
-                     when things move freely or it is a picture (a ball and paddles, hands, X \
-                     and O), on a grid when it is a board of squares (tetris, snake, a painting \
-                     of squares); it moves with every, is steered with on key and with taps and \
-                     drags on its canvas or buttons too (a phone has no arrow keys), and shows \
-                     Start until it runs. Saved states come back as \
-                     they were kept, also after a change: a saved list keeps its old length (one \
-                     a change adds starts as declared), so check a list's length before indexing \
-                     it. Write small functions instead of repeating code; keep programs under 200 \
-                     lines. Decide quickly what applang can make, then write it: your reply has \
-                     room for the program, not for long deliberation.\n\n";
+/// How apps are made, after applang's card: what is seen is drawn on a canvas.
+const RULES: &str = "\n\nWhat is to be seen (a game, a board, drawing, animation, a clock, a \
+                     chart) is drawn on a canvas, never spelled out in labels, buttons or a grid \
+                     of words. A game remembers its world in states and lists of its own (what \
+                     has landed, where things are) and draws itself anew from them: pixels for \
+                     a board of squares (tetris, snake, a painting, life), the other shapes for \
+                     what moves freely or is a picture (a ball and paddles, hands, X and O); it \
+                     moves with every, is steered with on key and with taps and drags on its \
+                     canvas (a phone has no arrow keys), and shows Start until it runs. Saved \
+                     states come back as they were kept, also after a change: a saved list keeps \
+                     its old length (one a change adds starts as declared), so check a list's \
+                     length before indexing it. Write small functions instead of repeating code; \
+                     keep programs under 200 lines. Decide quickly what applang can make, then \
+                     write it: your reply has room for the program, not for long \
+                     deliberation.\n\n";
 /// What a reply holds.
 const REPLIES: &str = "A new app: the complete program in one fenced block whose info string is \
                        app, and nothing else; after its first comment, a label naming the app.\n\

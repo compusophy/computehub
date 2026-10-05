@@ -32,6 +32,10 @@ use uiwire::{Event, Frame, Node, Style};
 pub use vfs::Entry;
 pub use welcome::Welcome;
 
+/// Feedback's Send, which sends its report off the device (as Ctrl+Enter does): the press the
+/// Assistant asks the person's yes for.
+pub const FEEDBACK_SEND: u32 = feedback::GO;
+
 /// A window's app: events in, frames out.
 pub trait View {
     /// Handles one event; whether the window changed (every Change does: the desktop sends the

@@ -340,6 +340,8 @@ fn the_system_prompt_is_stable_and_whole() {
     }
     assert!(s.contains("<<<<<<< SEARCH\nlines copied exactly") && !s.contains(DEFAULT_MODEL));
     assert!(!s.contains(HOME) && s.starts_with("You write apps for Studio"));
+    // What is seen is drawn on a canvas; the first example draws its board as pixels.
+    assert!(s.contains("chart) is drawn on a canvas, never") && shots[0].contains("pixels(cells"));
     // FNV-1a 64: a change to the prompt is a decision (and an eval), never a drift.
     let fnv = s
         .bytes()
@@ -354,7 +356,7 @@ fn the_system_prompt_is_stable_and_whole() {
 }
 
 /// The system prompt's hash (see the test above).
-const FNV: u64 = 0x8b2d_8925_97c7_62ad;
+const FNV: u64 = 0x7da4_da1b_b3a3_f5c3;
 
 #[test]
 fn a_clean_write_is_one_request() {
@@ -671,8 +673,9 @@ fn every_end_shows_its_fault_or_a_code_of_the_makes_own() {
     for replies in ends {
         let (_, _, d) = run(task("x", ""), Knobs::default(), replies);
         let shown = fault(&d.draft, "", 3).and_then(|f| f.diag.code).filter(|_| d.mark.is_some());
-        let own = matches!(d.code, 0 | 901..=910 | 919);
-        assert!(own || shown == Some(d.code), "{replies:?}: {} {}", d.code, d.said());
+        let own = matches!(d.code, 0 | 901..=910 | 919) && d.ended == d.code;
+        let ended = matches!((d.outcome, d.ended), (Outcome::Stopped, 0) | (_, 906..=910 | 919));
+        assert!(own || shown == Some(d.code) && ended, "{replies:?}: {} {}", d.code, d.said());
     }
 }
 

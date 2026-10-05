@@ -315,6 +315,7 @@ fn reaches(d: &Draw, w: u16, h: u16) -> bool {
             (x - cols * a / 2, y - a / 2, x + cols * a / 2 + 1, y + a / 2 + 1)
         }
         Shape::Sprite if d.ink() > 1 => (x, y, x + cols * a, y + rows * a),
+        Shape::Pixels if d.ink() > 1 => (x, y, x + a * b, y + d.text.len() as i64 / a.max(1) * b),
         _ => return false,
     };
     x0 < i64::from(w) && x1 > 0 && y0 < i64::from(h) && y1 > 0 && x0 < x1 && y0 < y1

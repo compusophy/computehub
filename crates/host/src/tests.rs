@@ -821,13 +821,21 @@ fn acts_wait_for_busy_windows_and_their_time() {
     let last = heard(&log, me).pop().unwrap();
     assert_eq!((last.0, last.1, last.2.wins.len()), (6, acted::OK, 2));
     h.acts(7, Act::Wait { ms: 3000 });
-    // The person takes over: a working overlay hears it once; its program's end ends it all.
+    // The person stops it: the overlay hears it each time, working or not (a task waiting on
+    // the person, or not yet said to work, stops too); its program's end ends it all.
     h.halt(&mut Response::default());
     h.halt(&mut Response::default());
     let halts = log.borrow().iter().filter(|e| e.1 == E::Agent(Event::Halt)).count();
-    assert_eq!((halts, h.agent.working), (1, false));
+    assert_eq!((halts, h.agent.working), (2, false));
     h.acts(8, Act::Wait { ms: 0 });
     assert_eq!(codes(&log).last(), Some(&(8, acted::OK)));
+    // The person closing the busy window an act waits on wedges nothing: the act settles once
+    // heard, and the next one on that window fails as gone.
+    BUSY.with(|b| b.set(2));
+    let _ = (h.acts(9, Act::Click { win: 2, id: 1 }), h.apply(Cmd::Close(WinId(2))));
+    h.kernel_in(KernelIn::Wake, &mut Response::default());
+    h.acts(10, Act::Click { win: 2, id: 1 });
+    assert_eq!(codes(&log)[6..], [(9, acted::OK), (10, acted::GONE)]);
     h.say(0, "close");
     assert!(h.win(OVERLAY).is_none() && h.open_overlay() && *made.borrow() == me + 1);
     // Running, it stays; once what it ran failed, the next summon starts it again.

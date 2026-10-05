@@ -421,6 +421,19 @@ fn a_reply_cut_off_mid_call_runs_nothing_and_is_told_to_write_less() {
 }
 
 #[test]
+fn a_call_past_8_kb_runs_nothing_and_says_why() {
+    let big = ["{\"path\":\"/tmp/big\",\"content\":", &quote(&"y".repeat(9000)), "}"].concat();
+    let mut w = fake(&[call("write_file", &big), says("ok")]);
+    let mut a = Agent::new(Vfs::HOME, &mut w);
+    (a.auto, a.learn) = (true, false);
+    assert!(a.task("write big", &mut w));
+    assert!(!w.fs.exists("/tmp/big"));
+    assert!(
+        result(&a, 0).starts_with("Error: write_file: the arguments were cut off (8 KB at most)")
+    );
+}
+
+#[test]
 fn an_ai_failure_ends_the_task_and_odd_calls_are_made_safe() {
     let mut w = fake(&[]);
     w.replies = vec![(429, "{\"error\":{\"message\":\"rate limited\"}}".into())];
@@ -452,6 +465,7 @@ fn requests_fold_then_drop_to_fit_the_free_ai() {
         id: ["c", &n.to_string()].concat(),
         name: "read_file".into(),
         args: "{}".into(),
+        cut: false,
     };
     // An old task of big results, then this one of many steps.
     a.history.push(Msg::User("old".into()));

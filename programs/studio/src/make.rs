@@ -39,7 +39,7 @@ impl Studio {
         };
         let task = Task { ask, base, model: self.model().into(), kept };
         let (m, out) = Make::start(task, Knobs::default(), now());
-        self.make = Some(Making { id: 0, m });
+        (self.make, self.report) = (Some(Making { id: 0, m }), None);
         // On a phone the keyboard goes, so the whole window shows the make.
         if self.narrow() {
             self.requests.push(Request::Focus { id: 0 });
@@ -110,10 +110,12 @@ impl Studio {
     }
 
     /// The make's end: what it keeps installed (saved, run, in the corpus when clean), its draft
-    /// in the code view when a new app has nothing that compiles, its line in makes.jsonl.
+    /// in the code view when a new app has nothing that compiles, its line in makes.jsonl, and
+    /// its report for compusophy when it failed.
     fn done(&mut self, mut done: Done, disk: &mut dyn Disk) {
         let Some(mk) = self.make.take() else { return };
         let (task, ready) = (mk.m.task(), done.outcome == Outcome::Ready);
+        self.report = crate::report::made(task, &done);
         let mut said = done.said();
         let bad = !ready && done.outcome != Outcome::Stopped;
         let mut style = if bad { Style::Error } else { Style::Small };

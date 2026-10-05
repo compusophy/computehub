@@ -105,11 +105,7 @@ pub(crate) fn on_input(s: &Rc<Shared>, e: &DomEvent) {
     if ie.is_composing() {
         return;
     }
-    let text = if inserts_text(&ie.input_type()) {
-        ie.data().filter(|d| !d.is_empty()).unwrap_or_else(|| s.sink.value())
-    } else {
-        String::new()
-    };
+    let text = inserted(&ie.input_type(), ie.data(), || s.sink.value());
     s.sink.set_value("");
     if !text.is_empty() {
         dispatch(s, Event::Text(text));
@@ -125,10 +121,30 @@ pub(crate) fn on_composition_end(s: &Rc<Shared>, e: &DomEvent) {
     }
 }
 
-/// Whether an `input_type` carries text: `insert*` but not the composition
-/// types, which browsers order inconsistently with `compositionend`.
-pub(crate) fn inserts_text(input_type: &str) -> bool {
-    input_type.starts_with("insert") && !has(input_type, "Composition")
+/// The text an `input` event of `input_type` inserted: its `data`, else what
+/// the `sink` holds (a paste). Text of many lines typed in at once comes as
+/// an event a line, each break one with no data, and the first event finds
+/// the sink holding all of it: so a typed break with the sink empty, or
+/// holding text that starts with a break, is one break. None but from
+/// `insert*` types, nor from the composition ones, which browsers order
+/// inconsistently with `compositionend`.
+pub(crate) fn inserted(
+    input_type: &str,
+    data: Option<String>,
+    sink: impl FnOnce() -> String,
+) -> String {
+    if !input_type.starts_with("insert") || has(input_type, "Composition") {
+        return String::new();
+    }
+    let typed = matches!(input_type, "insertText" | "insertLineBreak" | "insertParagraph");
+    match (data.filter(|d| !d.is_empty()), typed) {
+        (Some(d), _) => d,
+        (None, false) => sink(),
+        (None, true) => match sink() {
+            held if held.is_empty() || held.starts_with(['\n', '\r']) => "\n".into(),
+            held => held,
+        },
+    }
 }
 
 fn fetch(s: &Rc<Shared>, id: u32, url: &str) {

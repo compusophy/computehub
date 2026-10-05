@@ -1,5 +1,6 @@
 //! The bottom row (see `home::dock`): the dock's tiles (favorites, then the other running apps)
-//! and the Assistant's in the corner, kept tiles carried along the dock, and their tooltips.
+//! and the Assistant's in the corner, kept tiles carried along the dock, and their tooltips (and
+//! the top bar's buttons').
 
 use gfx::{DrawList, RectF};
 use home::dock::{Look, Spot};
@@ -12,8 +13,10 @@ use wm::WinId;
 use crate::Shell;
 use crate::desktop::Target;
 
-const TIP_GAP: f32 = 10.0;
+/// A tooltip's height, its gap above a tile and below the top bar.
 const TIP_H: f32 = 24.0;
+const TIP_GAP: f32 = 10.0;
+const TIP_BELOW: f32 = 6.0;
 /// How long a working Assistant's dot takes to beat once.
 const BEAT_MS: f64 = 1200.0;
 
@@ -94,8 +97,8 @@ impl Shell {
         look.draw_carried(list, &mut self.host.text, theme);
     }
 
-    /// The hovered tile's name above it (the Assistant's while the overlay hides), fading in
-    /// with the lift, kept on the screen.
+    /// The hovered tile's name above it (the Assistant's while the overlay hides), or the top
+    /// bar's button's below it, fading in with the lift, kept on the screen.
     pub(crate) fn draw_tooltip(&mut self, list: &mut DrawList, theme: &Theme, now: f64) {
         let (t, a, label) = match self.hover {
             Some(Target::Dock(i)) if i < self.tiles.len() => {
@@ -106,15 +109,21 @@ impl Shell {
             Some(Target::Assistant) if !self.overlay.open => {
                 (self.dock.strip.assistant, self.motion.ai.value(now), app_label(ASSISTANT))
             }
+            Some(Target::Bar(b)) => {
+                let r = home::bar::buttons(self.size.0).into_iter().find(|r| r.1 == b);
+                (r.map_or(RectF::default(), |r| r.0), self.motion.bar.value(now), b.label().into())
+            }
             _ => return,
         };
+        let below = matches!(self.hover, Some(Target::Bar(_)));
+        let y = if below { t.y + t.h + TIP_BELOW } else { t.y - TIP_GAP - TIP_H };
         let (text, sw) = (&mut self.host.text, self.size.0);
         let line = px(text, 1.0);
         let style = TextStyle::new(FontId::Sans, 12.0, faded(theme.text, a));
         let tw = text.measure(&label, style);
         let w = (tw + 20.0).round();
         let x = (t.x + (t.w - w) / 2.0).round().min(sw - w - 4.0).max(4.0);
-        let pill = RectF::new(x, t.y - TIP_GAP - TIP_H, w, TIP_H);
+        let pill = RectF::new(x, y, w, TIP_H);
         list.shadow_offset(pill, 8.0, 12.0, 4.0, faded(theme.shadow, a / 2.0));
         list.fill(pill, 8.0, faded(theme.surface, a));
         list.border(pill, 8.0, line, faded(theme.border, a));

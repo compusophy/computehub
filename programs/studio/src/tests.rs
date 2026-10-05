@@ -1,7 +1,7 @@
 use super::*;
-use crate::edit::{CODE, MAKE, PROMPT, STOP, TOGGLE, spans};
+use crate::edit::{CODE, MAKE, PROMPT, SEND, STOP, TOGGLE, spans};
 use crate::run::{EDIT, TOO_BIG};
-use coder::ai::{CORPUS, HOME, MAX_BODY};
+use coder::ai::{CORPUS, DEFAULT_MODEL, HOME, MAX_BODY};
 use coder::json::{Json, quote};
 use coder::receipt::MAKES;
 use std::collections::BTreeMap;
@@ -193,6 +193,14 @@ fn status(f: &Frame) -> &str {
         other => panic!("{other:?}"),
     }
 }
+/// The feedback a frame sends: its kind, text, and whether with the desktop's context.
+fn told(f: &Frame) -> Vec<(&str, &str, bool)> {
+    let sent = f.requests.iter().filter_map(|r| match r {
+        Request::Feedback { kind, text, context } => Some((kind.as_str(), text.as_str(), *context)),
+        _ => None,
+    });
+    sent.collect()
+}
 fn classes<'t>(text: &'t str, spans: &[uiwire::Span]) -> Vec<(&'t str, Class)> {
     let at = |s: &uiwire::Span| &text[s.start as usize..(s.start + s.len) as usize];
     spans.iter().map(|s| (at(s), s.class)).collect()
@@ -334,7 +342,8 @@ fn a_change_edits_the_open_app_and_never_makes_it_worse() {
     // The AI failing, and Stop, leave the working program as it was.
     let id = ai(&w.last(&[change(input(&f).0, 1, "break it"), click(MAKE)])).0;
     let f = w.last(&[Event::AiEnd { id, status: 429, error: String::new() }]);
-    assert_eq!(status(&f), "AI busy \u{b7} try in a minute");
+    // Busy before anything came back: nothing to tell compusophy.
+    assert!(status(&f) == "AI busy \u{b7} try in a minute" && !has(&f, "Send to"));
     assert!(has(&f, "x2") && has(&f, "Make") && input(&f).1 == "break it");
     let id = ai(&w.last(&[click(MAKE)])).0;
     let f = w.last(&[content(id, b"```app\n"), click(STOP)]);
@@ -368,11 +377,13 @@ fn a_new_app_that_never_compiles_leaves_its_draft_marked() {
     let mut w = Win::new(&[], Mem::new());
     let f = w.last(&[WIDE]);
     let (_, mut id, _) = w.make(&f, "count");
+    let broken = ["// Count up.\n", BROKEN].concat();
     for _ in 0..2 {
-        id = ai(w.answer(id, &app(BROKEN)).last().unwrap()).0;
+        id = ai(w.answer(id, &app(&broken)).last().unwrap()).0;
     }
-    let f = w.answer(id, &app(BROKEN)).pop().unwrap();
-    assert_eq!((status(&f), f.title.as_str()), ("couldn't \u{b7} E0302 line 2", "Studio"));
+    let f = w.answer(id, &app(&broken)).pop().unwrap();
+    assert_eq!((status(&f), f.title.as_str()), ("couldn't \u{b7} E0302 line 3", "Studio"));
+    assert!(has(&f, "Count up."), "the make's plan over it");
     assert!(
         !w.disk.keys().any(|p| p.ends_with(".app"))
             && w.disk[MAKES].contains("\"outcome\":\"broken\"")
@@ -380,9 +391,117 @@ fn a_new_app_that_never_compiles_leaves_its_draft_marked() {
     // `</>` shows it, its problem marked; fixed there, `</>` saves and runs it under its name.
     let f = w.last(&[click(TOGGLE)]);
     let (cid, _, src, spans) = code(&f);
-    assert!(src == BROKEN && classes(src, spans).contains(&("nope", Class::Error)));
-    let f = w.last(&[change(cid, 2, "state n = 0;\nlabel \"Tally\";\nlabel n;\n"), click(TOGGLE)]);
-    assert!(status(&f).starts_with("saved ~/apps/tally.app") && has(&f, "Tally"));
+    assert!(src == broken && classes(src, spans).contains(&("nope", Class::Error)));
+    // What its first comment says shows over it, the make's plan gone.
+    let tally = "// Tally: one number.\nstate n = 0;\nlabel \"Tally\";\nlabel n;\n";
+    let f = w.last(&[change(cid, 2, tally), click(TOGGLE)]);
+    assert!(status(&f).starts_with("saved ~/apps/tally.app") && has(&f, "Tally: one number."));
+    assert!(!has(&f, "Count up."));
+}
+
+#[test]
+fn a_failed_make_offers_to_tell_compusophy_once() {
+    let mut w = Win::new(&[], Mem::new());
+    let f = w.last(&[WIDE]);
+    let (_, id, _) = w.make(&f, "tic tac toe");
+    // A program past 8 KB that never compiles: the report carries its start.
+    let long = [BROKEN, "// ", &"pad ".repeat(2500), "\n"].concat();
+    let mut frames = w.answer(id, &app(&long));
+    for _ in 0..2 {
+        let id = ai(frames.last().unwrap()).0;
+        frames.extend(w.answer(id, &app(&long)));
+    }
+    frames.extend(w.frames(&[click(TOGGLE), click(TOGGLE)]));
+    let f = frames.last().unwrap();
+    assert_eq!(status(f), "couldn't \u{b7} E0302 line 2");
+    // Nothing goes without the tap.
+    assert!(has(f, "Send to compusophy") && frames.iter().all(|f| told(f).is_empty()));
+    let f = w.last(&[click(SEND)]);
+    let [("bug", text, false)] = told(&f)[..] else { panic!("{:?}", f.requests) };
+    let head = format!(
+        "Studio make failed: tic tac toe\n\nAsked: tic tac toe\nA new app, by {DEFAULT_MODEL}\n\
+         Ended: couldn't \u{b7} E0302 line 2\nProblem: E0302 2:7 "
+    );
+    assert!(text.starts_with(&head), "{text}");
+    assert!(text.contains("\nStopped by: E0919\n\nRequests:\n1. write: "));
+    assert!(text.contains(", left E0302\n2. fix: ") && text.contains("\n3. rewrite: "));
+    let src = "\n\nThe program it ended with (3 lines):\n```app\nstate n = 0;\nlabel nope;\n// pad";
+    assert!(text.contains(", estimated") && text.contains(src) && text.ends_with("\u{2026}\n```"));
+    assert!(text.len() < 10 * 1024 && has(&f, "Sent") && !has(&f, "Send to compusophy"));
+    // Never twice; a make that runs clean offers nothing.
+    assert!(w.send(&[click(SEND)]).is_none());
+    let f = w.last(&[click(MAKE)]);
+    assert!(!has(&f, "Sent") && !has(&f, "Send to compusophy"));
+    let f = w.answer(ai(&f).0, &app(COUNTER)).pop().unwrap();
+    assert!(status(&f).starts_with("ready") && !has(&f, "Sent") && !has(&f, "Send to"));
+    // When applang can make nothing close, it is an idea, with the model's why.
+    let mut w = Win::new(&[], Mem::new());
+    let f = w.last(&[WIDE]);
+    let (_, id, _) = w.make(&f, "a web browser");
+    w.answer(id, "```app\n// applang has no network.\n```\n");
+    let f = w.last(&[click(SEND)]);
+    let [("idea", text, false)] = told(&f)[..] else { panic!("{:?}", f.requests) };
+    assert!(text.contains("\nEnded: can't make that\nProblem: applang has no network.\n"));
+    assert!(text.ends_with("\n\nNo program came back."), "{text}");
+    // The AI failing once a program came back: what it left, and the program, go too.
+    let mut w = Win::new(&[], Mem::new());
+    let f = w.last(&[WIDE]);
+    let (_, id, _) = w.make(&f, "tic tac toe");
+    let fix = ai(w.answer(id, &app(BROKEN)).last().unwrap()).0;
+    let f = w.last(&[Event::AiEnd { id: fix, status: 429, error: String::new() }]);
+    assert!(status(&f) == "AI busy \u{b7} try in a minute" && has(&f, "Send to compusophy"));
+    let f = w.last(&[click(SEND)]);
+    let [("bug", text, false)] = told(&f)[..] else { panic!("{:?}", f.requests) };
+    assert!(text.contains("\nProblem: E0903 the free AI is busy") && text.contains("\n2. fix: "));
+    assert!(
+        text.contains(", left E0302\n") && text.ends_with("```app\nstate n = 0;\nlabel nope;\n```")
+    );
+}
+
+#[test]
+fn an_app_that_faults_in_studio_offers_its_fault_once() {
+    let src = "state n = 0;\nlabel \"n = \" + n;\nbutton \"inc\" { n = n + 1; }\n\
+               button \"spin\" { repeat 1000000 { n = n + 1; } }\nbutton \"zero\" { n = n / 0; }\n\
+               every 100 { n = n + 0; }\n";
+    let mut w = Win::new(&["edit", "/apps/spin.app"], with(&[("/apps/spin.app", src)]));
+    assert!(!has(&w.last(&[WIDE]), "Send to compusophy"));
+    let f = w.last(&[click(APP + 1)]);
+    assert!(has(&f, "E0206 4:") && has(&f, "Send to compusophy") && told(&f).is_empty());
+    // The next tick takes it from the app, not from Studio: it stays, once, until it goes.
+    let f = w.last(&[Event::Tick { ms: 100 }]);
+    let shown = words(&f).iter().filter(|w| w.starts_with("E0206 4:")).count();
+    assert!(shown == 1 && has(&f, "Send to compusophy"));
+    // Not with the code, where the app and its fault are not.
+    assert!(!has(&w.last(&[click(TOGGLE)]), "Send to"));
+    assert!(has(&w.last(&[click(TOGGLE)]), "Send to compusophy"));
+    let f = w.last(&[click(SEND)]);
+    let [("bug", text, false)] = told(&f)[..] else { panic!("{:?}", f.requests) };
+    assert!(text.starts_with("Studio app faulted: spin.app\n\nFault: E0206 4:"), "{text}");
+    assert!(text.ends_with(&format!("\n\nThe program (6 lines):\n```app\n{src}```")));
+    assert!(has(&f, "Sent") && w.send(&[click(SEND)]).is_none());
+    // Another fault is offered anew; one that went never goes again, whatever came between.
+    let f = w.last(&[click(APP + 2)]);
+    assert!(has(&f, "E0203 5:") && !has(&f, "E0206") && has(&f, "Send to compusophy"));
+    assert!(has(&w.last(&[click(APP + 1)]), "Sent"));
+    // A failed make's report comes first; once it went, the app's faults are offered again.
+    let (_, mut id, _) = w.make(&f, "break it");
+    for _ in 0..2 {
+        id = ai(w.answer(id, &app(BROKEN)).last().unwrap()).0;
+    }
+    let f = w.answer(id, &app(BROKEN)).pop().unwrap();
+    assert!(status(&f).starts_with("couldn't change it") && has(&f, "Send to compusophy"));
+    let f = w.last(&[click(SEND)]);
+    assert!(told(&f)[0].1.starts_with("Studio make failed: break it") && has(&f, "Sent"));
+    assert!(has(&w.last(&[click(APP + 2)]), "Send to compusophy"));
+    // A program of the person's own: its faults are its own, and its notes are not faults.
+    let id = code(&w.last(&[click(TOGGLE)])).0;
+    let f = w.last(&[change(id, 2, &src.replace("\"inc\"", "\"add\"")), click(TOGGLE)]);
+    assert!(status(&f).starts_with("saved") && !has(&f, "Send to") && !has(&f, "Sent"));
+    assert!(has(&w.last(&[click(APP + 1)]), "Send to compusophy"));
+    let (path, state) = ("/apps/kept.app", [HOME, "/.appdata/kept.state"].concat());
+    let disk = with(&[(path, "saved state n = 0;\nlabel n;\n"), (&state, "n = \"x\";\n")]);
+    let f = Win::new(&["edit", path], disk).last(&[WIDE]);
+    assert!(has(&f, "dropped the saved `n`") && !has(&f, "Send to"));
 }
 
 /// A program that compiles but faults as it first renders (E0203 at line 4).
@@ -462,7 +581,12 @@ fn narrow_windows_show_the_make_with_the_keyboard_away() {
 #[test]
 fn code_edits_check_save_and_mark_problems() {
     let mut w = Win::new(&["edit", "/apps/x.app"], with(&[("/apps/x.app", COUNTER)]));
-    w.send(&[WIDE]);
+    // An opened file's leading comment is its caption; a file with none has none.
+    let (first, style) = (|f: Frame| f.nodes.into_iter().next(), uiwire::Style::Small);
+    let text = "A counter: two buttons change one number.".into();
+    assert_eq!(first(w.last(&[WIDE])), Some(Node::Text { id: 0, style, text }));
+    let mut g = Win::new(&["edit", "/apps/g.app"], with(&[("/apps/g.app", GREETER)]));
+    assert!(!matches!(first(g.last(&[WIDE])), Some(Node::Text { style: s, .. }) if s == style));
     let f = w.last(&[click(TOGGLE)]);
     let (id, version, text, spans) = code(&f);
     assert_eq!((id, version, text), (CODE + 1, 1, COUNTER));
@@ -555,11 +679,9 @@ fn studio_ids_stay_below_the_apps_and_the_overlay_finds_them() {
     unique.sort();
     unique.dedup();
     assert_eq!(unique.len(), ids.len(), "{ids:?}");
-    assert!([MAKE, STOP, TOGGLE, PROMPT, CODE].iter().all(|id| *id < APP));
-    assert_eq!(
-        (STOP, PROMPT, CODE),
-        (coder::ids::STOP, coder::ids::PROMPT, coder::ids::PROMPT_END)
-    );
+    assert!([MAKE, STOP, TOGGLE, SEND, PROMPT, CODE].iter().all(|id| *id < APP));
+    use coder::ids;
+    assert_eq!((STOP, SEND, PROMPT, CODE), (ids::STOP, ids::SEND, ids::PROMPT, ids::PROMPT_END));
     const { assert!(PROMPT + 0xFF_FFFF < CODE && CODE + 0xFF_FFFF < APP && APP < INPUT) };
     let f = w.last(&[click(TOGGLE)]);
     assert!((CODE..APP).contains(&code(&f).0));
@@ -683,6 +805,59 @@ fn a_canvas_draws_in_its_window_and_a_tap_says_where() {
     // A tap is the unit y * 100 + x: the app hears x and y, and draws anew.
     let f = w.last(&[Event::Tap { id: APP, cell: 7 * 100 + 42 }]);
     assert!(has(&f, "42,7") && canvas(&f).3 == shapes("1"), "{f:?}");
+}
+
+#[test]
+fn every_shape_and_every_game_reaches_the_window() {
+    let canvases = |f: &Frame| -> Vec<(u32, u16, u16, Vec<uiwire::Draw>)> {
+        let canvas = |n: &Node| match n {
+            Node::Canvas { id, w, h, draws } => Some((*id, *w, *h, draws.clone())),
+            _ => None,
+        };
+        all(&f.nodes).into_iter().filter_map(canvas).collect()
+    };
+    // Each shape the language draws goes out as its own, pixels' cells a char each.
+    let src = "fn scene() { rect(0, 0, 4, 4, 1); circle(8, 8, 2, 2); ring(8, 8, 3, 1, 3);
+        line(0, 0, 9, 9, 1, 4); text(\"a\", 5, 5, 3, 9); sprite([\"1.1\"], 0, 10, 1);
+        pixels([0, -1, 11, 2], 10, 10, 2, 1); } canvas 20, 20, scene();";
+    let path = "/apps/shapes.app";
+    let f = Win::new(&["run", path], with(&[(path, src)])).last(&[WIDE]);
+    let shown = canvases(&f).remove(0).3;
+    use uiwire::Shape::{Circle, Line, Pixels, Rect, Ring, Sprite, Text};
+    let shapes: Vec<_> = shown.iter().map(|d| d.shape).collect();
+    assert_eq!(shapes, [Rect, Circle, Ring, Line, Text, Sprite, Pixels]);
+    assert_eq!((shown[6].at, shown[6].text.as_str()), ([10, 10, 2, 1, 0], "0.b2"));
+    // The examples (snake's board is pixels) and applang's games start, take a tap and tick
+    // with no fault, every frame decoding.
+    let games = [
+        include_str!("../../applang/tests/paint.app"),
+        include_str!("../../applang/tests/blocks.app"),
+        include_str!("../../applang/tests/tictactoe.app"),
+        include_str!("../../applang/tests/breakout.app"),
+    ];
+    let mut seen = Vec::new();
+    for (i, src) in applang::SHOTS.map(|s| s.1).into_iter().chain(games).enumerate() {
+        let path = format!("/apps/game{i}.app");
+        let mut w = Win::new(&["run", &path], with(&[(&path, src)]));
+        let f = w.last(&[WIDE]);
+        let mut evs: Vec<_> = all(&f.nodes)
+            .into_iter()
+            .filter_map(|n| if let Node::Button { id, .. } = n { Some(click(*id)) } else { None })
+            .collect();
+        for (id, w, h, _) in canvases(&f).into_iter().filter(|c| c.0 != 0) {
+            evs.push(Event::Tap { id, cell: u32::from(h / 2) * u32::from(w) + u32::from(w / 3) });
+        }
+        evs.extend(vec![Event::Tick { ms: 200 }; 12]);
+        for f in w.frames(&evs) {
+            let fault = |n: &&Node| matches!(n, Node::Text { style: Style::Error, .. });
+            assert!(!all(&f.nodes).iter().any(fault), "game {i}: {f:?}");
+            seen.extend(canvases(&f).into_iter().flat_map(|c| c.3).map(|d| d.shape));
+        }
+    }
+    // (Catch's stars, sprites, fall by its random; tic-tac-toe's rings wait for O.)
+    for shape in [Rect, Circle, Line, Text, Pixels] {
+        assert!(seen.contains(&shape), "{shape:?}");
+    }
 }
 
 #[test]

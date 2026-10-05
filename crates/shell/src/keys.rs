@@ -45,20 +45,21 @@ impl Shell {
         }
         // Escape closes the open folder.
         if key == Key::Escape && self.grid.open.take().is_some() {
-            (out.consumed, out.redraw) = (true, true);
-            return;
-        }
-        // The overlay with the keys: Escape hides it, or stops its task.
-        let overlay = self.key_target() == Some(host::OVERLAY);
-        if overlay && key == Key::Escape {
-            match self.host.agent.working {
-                true => self.host.halt(out),
-                false => self.overlay = Default::default(),
-            }
             out.consumed = true;
             return;
         }
-        self.takeover(!overlay, out);
+        // The overlay with the keys: Escape stops its task (no other key does), and while none
+        // works it hides too; the task stops then as well, one waiting on the person's answer,
+        // or one asked an instant ago that has not said it works yet.
+        let overlay = self.key_target() == Some(host::OVERLAY);
+        if overlay && key == Key::Escape {
+            if !self.host.agent.working {
+                self.overlay = Default::default();
+            }
+            self.host.halt(out);
+            out.consumed = true;
+            return;
+        }
         if !overlay && self.home_key(key, m, out) || chord && self.binding(key, m.shift, out) {
             out.consumed = true;
             return;
@@ -84,6 +85,10 @@ impl Shell {
             }
             (Key::Enter, false) => {
                 self.host.open("terminal", None, out);
+                None
+            }
+            (Key::Char('d'), false) => {
+                self.show_desktop();
                 None
             }
             (Key::Char('q'), false) => focused.map(Cmd::Close),

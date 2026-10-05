@@ -82,6 +82,9 @@ pub mod codes {
     /// Canvases showed, but nothing they drew in a whole smoke test reached inside one (the
     /// smoke test's; at the program's first canvas).
     pub const OFF_CANVAS: u16 = 223;
+    /// Pixels it cannot draw: a row past 1 to 64 cells, more than 64 rows or a part of one, a
+    /// cell past -1 to 11, or more cells in one render than its canvases hold.
+    pub const BAD_PIXELS: u16 = 224;
     /// A name declared twice (a state, function or parameter).
     pub const DUP_STATE: u16 = 301;
     /// A name that is no declared state or visible local.
@@ -103,8 +106,8 @@ pub mod codes {
 }
 
 /// Parses and statically checks `src`: the verify step. Running the [`Program`] can then only
-/// fault on arithmetic, indexes, list and string bounds, grids, canvases' draws, `random`'s bound
-/// or fuel.
+/// fault on arithmetic, indexes, list and string bounds, grids, canvases' draws (pixels too),
+/// `random`'s bound or fuel.
 pub fn compile(src: &str) -> Result<Program, Diag> {
     let mut program = parse::parse(src)?;
     check::check(&mut program)?;

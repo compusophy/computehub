@@ -58,8 +58,8 @@ crates/      the OS (boot, kernel, worker); talks WASI and uiwire
   ui/        immediate-mode widgets, themes, the App trait, Cx, the Code
              editor (re-exports text)
   apps/      a terminal's console: its shell, its keys
-  uiwire/    remote UI protocol: GUI programs send widget trees, get events
-  uiview/    draws them with ui; edited text
+  uiwire/    remote UI protocol: programs send widget trees, get events
+  uiview/    draws them with ui; edited text; canvas/: Canvases
   host/      wm + one app per window; agent; grabs, squeeze; motion, frames
   home/      top bar, home grid, dock + Assistant row, menus, touch
   logon/     the welcome: mark, real boot record, sign-in, PIN
@@ -77,12 +77,12 @@ programs/    wasm32-wasip1 programs (dist/bin/) and their app language
   fuel/ lang/                 forks of litelite (budgets, parse kit)
   applang-syntax/ applang/    tier 0 app language: front end, runtime
   studio/    make apps by describing them; runs `.app` files
-  coder/     Studio's coding agent: write, test, fix by edits, keep the best
-  assistant/ the Assistant: the overlay AI using the desktop
+  coder/     Studio's agent: write, test, fix, keep the best
+  assistant/ the AI using the desktop; chats/ files/: its chats, file tools
   system/    About, Editor, Feedback, Files, Welcome, Settings
   activity/  the resource monitor
   terminal/  the Terminal; vt/ term/: its parser, screen model
-  sh/ agent/ the shell: line editor, commands, jobs; its AI coder
+  sh/ agent/ shell: editor, commands, jobs; AI coder
   toolbox/   test programs, one binary
 assets/fonts/  the fonts (see Fonts below)
 api/           server functions (Vercel, Node): ai.mjs, feedback.mjs

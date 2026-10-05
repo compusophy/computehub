@@ -236,7 +236,7 @@ impl Agent {
             (t.usage.0, t.usage.1) = (t.usage.0 + i, t.usage.1 + o);
             (self.usage.0, self.usage.1) = (self.usage.0 + i, self.usage.1 + o);
             let calls: Vec<Call> = reply.calls.into_iter().map(|c| self.checked(c)).collect();
-            let whole = |c: &Call| Json::parse(&c.args).is_some();
+            let whole = |c: &Call| !c.cut && Json::parse(&c.args).is_some();
             if reply.finish == "length" && (calls.is_empty() || !calls.iter().all(whole)) {
                 if calls.is_empty() {
                     // An answer cut short is still the answer.

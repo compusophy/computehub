@@ -316,14 +316,14 @@ impl Grid {
     }
 
     /// The open folder over a screen of `size` (`hover`: the app under the pointer, and whether
-    /// held), if one is open.
+    /// held; and the top bar's button), if one is open.
     pub fn draw_open(
         &self,
         list: &mut DrawList,
         text: &mut TextSystem,
         theme: &Theme,
         size: (f32, f32),
-        hover: Option<(usize, bool)>,
+        hover: (Option<(usize, bool)>, crate::bar::Hover),
     ) {
         if let Some(k) = self.open {
             folders::draw(list, text, theme, (size, k, &self.inside[k]), hover);
