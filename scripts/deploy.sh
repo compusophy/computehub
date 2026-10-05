@@ -7,6 +7,15 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+# A checkout not linked to the computehub project (a worktree has its own
+# .vercel/) would make `vercel deploy --yes` create a stray project named after
+# the folder and deploy there: refuse, and say how to link it.
+if ! grep -Eq '"projectName": *"computehub"' .vercel/project.json 2>/dev/null; then
+  echo "refusing to deploy: .vercel/project.json does not link the computehub project;" >&2
+  echo "copy the main checkout's .vercel/project.json here first" >&2
+  exit 1
+fi
+
 bash scripts/build-web.sh
 bash scripts/budget.sh
 
