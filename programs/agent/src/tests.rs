@@ -398,14 +398,16 @@ fn lessons_past_their_bounds_are_merged_when_the_merge_is_sound() {
         says("- A brand new lesson about reading files."),
         says(merged),
     ]);
+    // The person's own lines around the lessons stay where they are.
+    let (head, note) = ("# My lessons (keep this)\n", "A note of mine.\n");
     w.fs.mkdir_all(&[Vfs::HOME, "/.agent"].concat()).unwrap();
-    w.fs.write(&learn::path(), many.as_bytes()).unwrap();
+    w.fs.write(&learn::path(), [head, &many, note].concat().as_bytes()).unwrap();
     let mut a = Agent::new(Vfs::HOME, &mut w);
     assert!(a.task("read nowhere", &mut w));
-    assert_eq!(file(&w, &learn::path()), merged);
+    assert_eq!(file(&w, &learn::path()), [head, merged, note].concat());
     assert_eq!(a.lessons, merged);
     assert!(w.shown.contains("merged the lessons into 2 lines"));
-    // A merge that is not lessons keeps them as they were.
+    // A merge that is not lessons keeps them as they were, the new one added at the end.
     let mut w = fake(&[
         call("read_file", r#"{"path":"/nowhere"}"#),
         says("ok"),
@@ -413,10 +415,39 @@ fn lessons_past_their_bounds_are_merged_when_the_merge_is_sound() {
         says("Sure! Here they are."),
     ]);
     w.fs.mkdir_all(&[Vfs::HOME, "/.agent"].concat()).unwrap();
-    w.fs.write(&learn::path(), many.as_bytes()).unwrap();
+    w.fs.write(&learn::path(), many.trim_end().as_bytes()).unwrap();
     let mut a = Agent::new(Vfs::HOME, &mut w);
     a.task("read nowhere", &mut w);
-    assert!(file(&w, &learn::path()).starts_with(&many) && a.lessons.lines().count() == 31);
+    let added = [&many, "- Another new lesson about paths.\n"].concat();
+    assert!(file(&w, &learn::path()) == added && a.lessons.lines().count() == 31);
+}
+
+#[test]
+fn the_lessons_file_keeps_the_persons_lines_and_stops_growing_when_full() {
+    let failing = || {
+        let read = call("read_file", r#"{"path":"/nowhere"}"#);
+        fake(&[read, says("ok"), says("- Check that a file exists before reading it.")])
+    };
+    let mut w = failing();
+    let mine = "# My lessons\nSome notes I wrote for myself.\n- Quote paths with spaces.\n";
+    w.fs.mkdir_all(&[Vfs::HOME, "/.agent"].concat()).unwrap();
+    w.fs.write(&learn::path(), mine.as_bytes()).unwrap();
+    let mut a = Agent::new(Vfs::HOME, &mut w);
+    assert!(a.task("read nowhere", &mut w));
+    let learned = [mine, "- Check that a file exists before reading it.\n"].concat();
+    assert_eq!(file(&w, &learn::path()), learned);
+    // /forget takes the lessons out, and nothing else.
+    learn::forget(&mut w);
+    assert_eq!(file(&w, &learn::path()), "# My lessons\nSome notes I wrote for myself.\n");
+    // Past its bound the file takes no lesson, and says so.
+    let mut w = failing();
+    let full = "note\n".repeat(learn::MAX_FILE / 5 + 1);
+    w.fs.mkdir_all(&[Vfs::HOME, "/.agent"].concat()).unwrap();
+    w.fs.write(&learn::path(), full.as_bytes()).unwrap();
+    let mut a = Agent::new(Vfs::HOME, &mut w);
+    assert!(a.task("read nowhere", &mut w));
+    assert_eq!(file(&w, &learn::path()), full);
+    assert!(w.shown.contains("not kept, ~/.agent/lessons.md is full") && a.lessons.is_empty());
 }
 
 #[test]

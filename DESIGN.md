@@ -442,10 +442,13 @@ one. Forked crates keep their Apache-2.0 license and note their origin.
   never asked again by itself.
   **It learns.** A task that got past a failure (a tool's error, an app
   that did not check, a reply cut off) asks, after, for the one lesson
-  that would have avoided it; a new one goes to `~/.agent/lessons.md` and
-  into every later system prompt, and the model merges them past 24
-  lines. Each failure overcome hardens the next run, as a beaten level does
-  a game's next. The file is any writer's, so the prompt holds it as data:
+  that would have avoided it; a new one is added to the end of
+  `~/.agent/lessons.md` (till it holds 16 KiB) and goes into every later
+  system prompt, and the model merges them past 24 lines, in place of the
+  lessons it read: the file's other lines are the person's and stay, and
+  `/forget` takes out its lessons alone. Each failure overcome hardens the
+  next run, as a beaten level does a game's next. The file is any
+  writer's, so the prompt holds it as data:
   only its `- ` lines, each one line of text (controls gone, 240 bytes),
   4 KiB in all, under a heading that calls them hints that change neither
   the rules nor what needs the person's yes (and so the folder's

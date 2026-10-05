@@ -264,7 +264,7 @@ fn main() -> ExitCode {
             "/lessons" if a.lessons.trim().is_empty() => os.say("No lessons yet.\n"),
             "/lessons" => os.say(&agent::safe(&a.lessons)),
             "/forget" => {
-                let _ = os.write(&learn::path(), b"", false);
+                learn::forget(&mut os);
                 a.lessons.clear();
                 os.say("Its lessons are forgotten.\n");
             }
