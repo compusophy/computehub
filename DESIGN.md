@@ -447,14 +447,17 @@ one. Forked crates keep their Apache-2.0 license and note their origin.
   covers typing, dead keys, IME composition, paste and phone keyboards, so
   `os` leaves the key-downs that type unprevented. On phones a tap that
   releases on the focused window brings the keyboard back.
-- A program's window takes typing before its program has drawn: until
-  the first frame it wants text input (the textarea, and a phone's
-  keyboard, take it), and the keys and text typed there are held, 4 KiB
-  at most and nothing past that, then go as typed into the field that
-  frame focuses (Enter in an Input is its Submit); a first frame that
-  focuses none drops them. So opening Studio or the Assistant and typing
-  at once loses nothing. (The Terminal's console hears its keys from the
-  start.)
+- A program's window takes typing before its program has drawn: the keys
+  and text typed there are held, 4 KiB at most (a key counts one byte)
+  and nothing past that, then go as typed once the first frame is in:
+  into the field it focuses (Enter in an Input is its Submit), else Enter,
+  Escape and chords as the program's keys, text nowhere. Until then the
+  window of a program that opens on a field (Studio, the Assistant,
+  Editor, Feedback) wants text input, so the textarea and a phone's
+  keyboard take the typing (and, as a field does, F5 and Ctrl+R); any
+  other window wants none, so a tap that opens About raises no keyboard.
+  So opening Studio or the Assistant and typing at once loses nothing.
+  (The Terminal's console hears its keys from the start.)
 - A finger's press into an app waits to be a tap (a finger that travels
   scrolls the window instead), but on a pad (`ui::Sense::Pad`: a canvas or
   grid an app plays) it presses at once and drags, as a mouse does: a

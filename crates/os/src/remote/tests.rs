@@ -25,7 +25,7 @@ impl Sys {
         let mut k = Kernel::new();
         k.set_isolated(true);
         let argv = ["studio", "edit", "/apps/counter.app"].map(String::from).into();
-        let r = Remote::new(STUDIO, argv, &Ai::default());
+        let r = Remote { types: true, ..Remote::new(STUDIO, argv, &Ai::default()) };
         let mut s = Sys { r, k, fs, asked: Vec::new() };
         if start {
             s.ev(AppEvent::Resized { w: 600.0, h: 400.0 });
@@ -120,6 +120,11 @@ fn names_open_studio_and_the_first_size_starts_it() {
     assert_eq!(got, [want(0, true), want(1, true), want(2, false), want(4, false)]);
     assert_eq!(sys("activity"), want(5, true));
     assert!(SYSTEM[2].2.glyph == Glyph::Folder && open("system").is_none());
+    // Until their first frames, the windows of programs that open on a field take typing.
+    let typing = |n: &str| open(n).is_some_and(|a| a.wants_text_input());
+    let fields = ["studio", "studio:a.app", "assistant", "editor:~/b", "feedback", "terminal"];
+    let none = ["about", "files:~/a", "welcome", "activity", "settings", "/tmp/x.app"];
+    assert!(fields.iter().all(|n| typing(n)) && none.iter().all(|n| !typing(n)));
     // Before a frame: a still note, the title its own; no process yet; it takes typing.
     let mut s = Sys::new(false);
     assert!(s.r.wants_text_input() && s.k.procs().is_empty());
@@ -313,22 +318,44 @@ fn asks_wait_for_the_start_and_frames_move_the_keyboard() {
 
 #[test]
 fn typing_before_the_first_frame_goes_into_the_field_it_focuses() {
+    // As the page sends it: each character a key, then its text (an Enter's too, an echo).
+    let typed = |s: &str| {
+        let keys = s.chars().map(|c| [key(Key::Char(c), ""), text(&c.to_string())]);
+        keys.collect::<Vec<_>>().concat()
+    };
+    let enter = [key(Key::Enter, ""), text("\n")];
     // Held while the program starts, chords too; its first frame's Input takes them as typed,
     // Enter its Submit; the next frame, nothing.
     let mut s = Sys::new(true);
-    let typed = [text("sn"), key(Key::Backspace, ""), text("nake"), key(Key::Enter, "c")];
-    let mut typed = typed.into_iter().chain([key(Key::Enter, "")]);
-    assert!(typed.all(|ev| !s.ev(ev)) && s.r.wants_text_input() && s.events().is_empty());
+    let ctrl_enter = key(Key::Enter, "c");
+    let held = [typed("sn"), vec![key(Key::Backspace, "")], typed("nake"), vec![ctrl_enter]];
+    let mut held = [&held.concat()[..], &enter].concat().into_iter();
+    assert!(held.all(|ev| !s.ev(ev)) && s.r.wants_text_input() && s.events().is_empty());
     assert!(s.show(vec![input(5, "")], vec![Request::Focus { id: 5 }]));
     let run = Event::Key { id: 5, key: uiwire::Key::Enter, mods: mods::CTRL, ch: '\0' };
     let submit = Event::Submit { id: 5 };
-    assert_eq!(s.events(), [change(5, 1, "sn"), change(5, 3, "snake"), run, submit]);
+    assert_eq!(s.events(), [change(5, 1, "s"), change(5, 7, "snake"), run, submit]);
     s.show(vec![input(5, "")], vec![Request::Focus { id: 5 }]);
     assert!(s.events().is_empty() && s.r.texts.inputs[0].1 == "snake");
-    // A first frame that focuses no field drops it, and the window takes typing no more.
+    // Into an Area, Enter is a new line.
     let mut s = Sys::new(true);
-    s.ev(text("lost"));
-    assert!(s.show(vec![input(5, "")], vec![]) && !s.r.wants_text_input());
+    let area = || vec![Node::Area { id: 8, value: "".into(), placeholder: "".into() }];
+    [typed("hi"), enter.to_vec(), typed("x")].concat().into_iter().for_each(|ev| _ = s.ev(ev));
+    s.show(area(), vec![Request::Focus { id: 8 }]);
+    s.show(area(), vec![]);
+    assert_eq!(s.events(), [change(8, 1, "h"), change(8, 4, "hi\nx")]);
+    // Later frames give nothing again: one between an Enter and its echo leaves one new line.
+    let [down, echo] = enter.clone();
+    assert!(s.ev(down) && s.show(area(), vec![]) && !s.ev(echo));
+    assert_eq!(s.r.texts.areas[0].1.text, "hi\nx\n");
+    // A first frame that focuses no field: Enter and the keys it asked for go as keys, text
+    // nowhere, and the window takes typing no more.
+    let mut s = Sys::new(true);
+    [text("lost"), key(Key::Left, ""), key(Key::Enter, "")].into_iter().for_each(|ev| _ = s.ev(ev));
+    let keys = vec![Request::Keys { on: true }];
+    assert!(s.show(vec![input(5, "")], keys) && !s.r.wants_text_input());
+    let k = |key| Event::Key { id: 0, key, mods: 0, ch: '\0' };
+    assert_eq!(s.events(), [k(uiwire::Key::Left), k(uiwire::Key::Enter)]);
     s.show(vec![input(5, "")], vec![Request::Focus { id: 5 }]);
     assert!(s.events().is_empty() && s.r.texts.inputs[0].1.is_empty());
     // At most HELD bytes, and nothing after them: no Enter sends half a paste.

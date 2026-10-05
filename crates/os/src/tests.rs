@@ -165,6 +165,13 @@ fn typed_keys_are_left_to_the_textarea_and_key_ups_prevent_only_modifiers() {
     assert!(["KeyA/a", "KeyQ/@/cag", "KeyV/v/c"].iter().all(|e| !prevented(&mut desk, e)));
     let shortcuts = ["Tab/Tab", "Enter/Enter", "KeyC/c/c", "/c/c", "KeyV/k/c"];
     shortcuts.iter().for_each(|e| assert!(prevented(&mut desk, e), "{e}"));
+    // A window opened then wants text input before its first frame only if its program opens
+    // on a field: About's keeps a phone's keyboard down and F5 for the page; Studio's raises it.
+    let open =
+        |d: &mut Desktop, name: &str| screen(d, vec![uiwire::Request::Open { name: name.into() }]);
+    assert!(open(&mut desk, "about").contains(&Fx::TextInput(false)));
+    assert!(!prevented(&mut desk, "F5/F5"));
+    assert!(open(&mut desk, "studio").contains(&Fx::TextInput(true)));
 }
 
 #[test]

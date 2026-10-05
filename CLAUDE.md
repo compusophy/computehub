@@ -49,8 +49,8 @@ AI for all); later pooled compute across tabs and devices. Author handle: compus
 
 ```
 crates/      the OS (boot, kernel, worker); talks WASI and uiwire
-  wm/        floating window manager: stacking, snapping, focus; deterministic
-  vfs/       in-memory filesystem, deterministic (/apps, /home, /tmp)
+  wm/        floating window manager: stacking, snapping, focus
+  vfs/       in-memory filesystem (/apps, /home, /tmp)
   font/      TrueType reader + glyph rasterizer
   gfx/       instanced-quad draw list, glyph atlas, the WebGL2 shaders
   text/      TextSystem: font slots, fallbacks, glyphs on the atlas
@@ -67,10 +67,11 @@ crates/      the OS (boot, kernel, worker); talks WASI and uiwire
   shell/     the desktop: window chrome, keys, overlay; wires host + home
   platform/  the browser boundary: canvas, WebGL2, input, textarea, fetch,
              frames on demand, localStorage, workers, beacon
+  report/    telemetry: notes, reports, outbox, panic beacon
   os/        wasm entry: fonts, VFS, registry, prefs, events, Remote
-             (program windows), ai, /home kept; report/: telemetry
-  kernel/    deterministic: wire protocol, process table, consoles,
-             jobs, file server (main), snap (/home), module
+             (program windows), ai, /home kept
+  kernel/    wire protocol, process table, consoles, jobs, file
+             server (main), snap (/home), module
   wasi/      the kernel's worker half: WASI preview 1 Proc, fds, /dev
   cpu/       the program worker (cdylib; dist/cpu/): loader, WASI imports
 programs/    wasm32-wasip1 programs (dist/bin/) and their app language
