@@ -235,28 +235,58 @@ fn clicks_keys_and_requests_go_through() {
 
 #[test]
 fn a_quick_drag_across_a_busy_board_paints_every_unit_it_crossed() {
-    // A canvas pad, ten units across: a press taps its unit, and the stroke goes on while that
-    // tap is out, quicker than a frame's round trip; no later sample comes.
+    // A canvas pad on a timer, ten units across: a press taps its unit, and the stroke goes on
+    // while that tap is out, quicker than a frame's round trip; no later sample comes.
     let mut s = Sys::new(true);
-    let canvas = || vec![Node::Canvas { id: 9, w: 10, h: 10, draws: Vec::new() }];
-    s.show(canvas(), vec![]);
+    let canvas = |above: &str| {
+        let label = Node::Text { id: 0, style: uiwire::Style::Title, text: above.into() };
+        let pad = Node::Canvas { id: 9, w: 10, h: 10, draws: Vec::new() };
+        if above.is_empty() { vec![pad] } else { vec![label, pad] }
+    };
+    s.show(canvas(""), vec![Request::Timer { ms: 100 }]);
     s.draw();
-    let b = s.r.view.grids[0];
-    let x = |unit: f32| b.rect.x + b.rect.w / 10.0 * (unit + 0.5);
-    let y = b.rect.y + 1.0;
-    s.ev(AppEvent::PointerDown { x: x(0.0), y, id: Some(WidgetId(9)) });
-    assert_eq!([3.0, 6.0, 9.0].map(|u| s.ev(AppEvent::Drag { x: x(u), y })), [false; 3]);
+    s.ev(AppEvent::Tick { now_ms: 0.0 });
+    let x = |s: &Sys, unit: f32| {
+        let b = s.r.view.grids[0].rect;
+        (b.x + b.w / 10.0 * (unit + 0.5), b.y + 1.0)
+    };
+    let stroke = |s: &mut Sys, units: &[f32]| {
+        let (x0, y) = x(s, 0.0);
+        s.ev(AppEvent::PointerDown { x: x0, y, id: Some(WidgetId(9)) });
+        units.iter().for_each(|&u| assert!(!s.ev(AppEvent::Drag { x: x(s, u).0, y })));
+    };
+    stroke(&mut s, &[3.0, 6.0, 9.0]);
     assert_eq!(s.events(), [Event::Tap { id: 9, cell: 0 }]);
-    // Answered, the held end waits for that answer to draw, then asks a frame and is tapped by
-    // it: each unit on the way, once; then nothing is held.
-    assert!(s.show(canvas(), vec![]) && s.r.frame_in(0.0).is_none());
+    // Answered with a label that moves the board down, the held end waits for that answer to
+    // draw, then asks a frame and is tapped by it, where it was on the board, after the Tick
+    // then due: each unit on the way, once, busy till all ten frames are in.
+    assert!(s.show(canvas("Painted"), vec![]) && !s.r.play.held());
     s.draw();
-    assert_eq!(s.r.frame_in(0.0), Some(0));
-    s.ev(AppEvent::Tick { now_ms: 16.0 });
-    assert_eq!(s.events(), (1..10).map(|cell| Event::Tap { id: 9, cell }).collect::<Vec<_>>());
-    assert!(s.r.busy() && s.r.frame_in(0.0).is_none());
-    s.ev(AppEvent::Tick { now_ms: 32.0 });
-    assert!(s.events().is_empty());
+    assert!(s.r.play.held() && s.r.frame_in(0.0) == Some(0));
+    s.ev(AppEvent::Tick { now_ms: 100.0 });
+    let taps = |cells: std::ops::Range<u32>| cells.map(|cell| Event::Tap { id: 9, cell });
+    let ticked = [Event::Tick { ms: 100 }].into_iter().chain(taps(1..10)).collect::<Vec<_>>();
+    assert!(s.events() == ticked && !s.r.play.held());
+    let answer = |s: &mut Sys, n: usize| (0..n).all(|_| s.r.busy() && s.show(canvas("P"), vec![]));
+    assert!(answer(&mut s, 10) && !s.r.busy());
+    // A Tick that goes while a tap is out is answered after it: a drag then waits for both.
+    stroke(&mut s, &[]);
+    s.ev(AppEvent::Tick { now_ms: 200.0 });
+    assert!(s.events() == [Event::Tap { id: 9, cell: 0 }, Event::Tick { ms: 100 }]);
+    assert!(answer(&mut s, 1) && !s.r.busy());
+    s.draw();
+    s.ev(AppEvent::Drag { x: x(&s, 3.0).0, y: x(&s, 3.0).1 });
+    assert!(s.events() == taps(1..4).collect::<Vec<_>>() && answer(&mut s, 4) && !s.r.busy());
+    // Anything else sent after a stroke (Escape here) drops its held end: out of order.
+    s.draw();
+    stroke(&mut s, &[9.0]);
+    s.ev(key(Key::Escape, ""));
+    assert!(answer(&mut s, 1) && !s.r.busy());
+    s.draw();
+    assert!(!s.r.play.held() && s.r.frame_in(250.0) == Some(50));
+    s.ev(AppEvent::Tick { now_ms: 250.0 });
+    let esc = Event::Key { id: 0, key: uiwire::Key::Escape, mods: 0, ch: '\0' };
+    assert_eq!(s.events(), [Event::Tap { id: 9, cell: 0 }, esc]);
 }
 
 #[test]

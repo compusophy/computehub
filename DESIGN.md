@@ -448,14 +448,18 @@ one. Forked crates keep their Apache-2.0 license and note their origin.
   the width ends at the right), and the smoke test faults such a text
   wider than its canvas (E0225, each character reckoned 2/5 of its size);
   one whose point is off the canvas stays where it is. A canvas's handler
-  sees the tap's `x` and `y`; a drag taps the units on its way, one every
-  4 px or so (64 for a sample at most, so a sample up to 256 px away leaves
-  no gap), and waits until the frames of all it sent are answered and
-  drawn, so a paint app paints each square a steady drag crosses. Where a
-  drag goes meanwhile is held (`uiview::Play::held`), and once those are
-  drawn the window (`os::remote`) asks a frame and taps it then, so a
-  stroke quicker than a frame's round trip, or a stroke's end, paints each
-  unit it crossed too. A handler runs
+  sees the tap's `x` and `y`; a drag taps the units on its way as a drawn
+  line has them (one a column or a row: a diagonal skips a unit whose
+  corner it clips), one every 4 px or so (64 for a sample at most, so a
+  sample up to 256 px away leaves no gap), and waits until the frames of
+  all it sent (and of the Ticks before them) are answered and drawn, so a
+  paint app paints a line with no gap where a steady drag goes. Where a
+  drag goes meanwhile is held (`uiview::Play::held`, as a share of the
+  board, which may move), and once those are drawn the window
+  (`os::remote`) asks a frame and taps it then, after any Tick due, so a
+  stroke quicker than a frame's round trip, or a stroke's end, is painted
+  too, unless anything else went to the program first (a key, a click,
+  another press): it reads what the person did in order. A handler runs
   for each unit a drag crosses, so the card asks that a tap steer, aim or
   paint, and that turning, dropping or firing be a button. Grids and
   canvases are boards: they take the room the window's other widgets

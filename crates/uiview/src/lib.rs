@@ -95,18 +95,20 @@ impl Board {
 }
 
 /// What a program asked of its window for play: a timer every `timer` ms (0: none), and plain
-/// keys; with when the last Tick went and whether it is unanswered, the Grid pressed (its place
-/// among the frame's Grids) and the square of it last tapped (the Grid's id then, the square's
-/// column and row) while the pointer is down, where a drag on it went while the window was busy
-/// ([`Play::held`]), the taps of the last press or drag sent and how many, the frames until the
-/// last event the person (or the AI) sent is answered, and whether an answer came since the
-/// window drew.
+/// keys; with when the last Tick went, whether it is unanswered and whether it went after what
+/// is owed (so its frame comes after theirs), the Grid pressed (its place among the frame's
+/// Grids) and the square of it last tapped (the Grid's id then, the square's column and row)
+/// while the pointer is down, where a drag on it went while the window was busy (as a share of
+/// the board's width and height as then drawn: [`Play::held`]), the taps of the last press or
+/// drag sent and how many, the frames until the last event the person (or the AI) sent is
+/// answered, and whether an answer came since the window drew.
 #[derive(Debug, Default)]
 pub struct Play {
     pub timer: u32,
     pub keys: bool,
     at: Option<f64>,
     waiting: bool,
+    late: bool,
     grid: Option<u32>,
     last: Option<(u32, u32, u32)>,
     held: Option<(f32, f32)>,
@@ -135,12 +137,17 @@ impl Play {
         self.burst.0 += u32::from(k < n);
         let before = if k < n { u8::try_from(k).unwrap_or(u8::MAX) } else { 0 };
         self.owed = (1 + u8::from(changing) + u8::from(self.waiting)).saturating_add(before);
+        self.late = false;
     }
 
-    /// A frame came: it answers the last Tick, or one of the frames owed.
+    /// A frame came: it answers the last Tick, or one of the frames owed (all of them first, for
+    /// a Tick that went after them).
     pub fn answered(&mut self) {
         self.moved |= self.owed > 0;
-        (self.waiting, self.owed) = (false, self.owed.saturating_sub(1));
+        if !self.late || self.owed == 0 {
+            (self.waiting, self.late) = (false, false);
+        }
+        self.owed = self.owed.saturating_sub(1);
     }
 
     /// Whether what was sent is still unanswered: the window is busy.
@@ -176,7 +183,7 @@ impl Play {
         }
         let at = *self.at.get_or_insert(now);
         (now - at >= self.wait()).then(|| {
-            (self.at, self.waiting) = (Some(now), true);
+            (self.at, self.waiting, self.late) = (Some(now), true, self.owed > 0);
             Event::Tick { ms: (now - at) as u32 }
         })
     }
@@ -184,9 +191,10 @@ impl Play {
     /// The pointer went down on hit `id` (`None`: dragged while down) at `(x, y)`: the board to
     /// tap (its id now) and its squares newly under it. A drag stays on the board pressed (found
     /// by its place in the frame, as its id may change) and taps each square on the line from
-    /// the last one, as the pointer moves past squares between samples (on a fine board, a
-    /// Canvas's units, a unit every [`FINE`] px or so on the way, [`FINE_TAPS`] at most: a
-    /// sample up to their product away taps a painting's squares each); off the squares and
+    /// the last one (a square a column or a row, as a drawn line has them: a diagonal skips one
+    /// whose corner it clips), as the pointer moves past squares between samples (on a fine
+    /// board, a Canvas's units, a unit every [`FINE`] px or so on the way, [`FINE_TAPS`] at most:
+    /// a sample up to their product away taps a painting's squares each); off the squares and
     /// back, it goes on from where it came back. It waits while what was sent is unanswered
     /// (every tap it sent), and until the answer draws (which may give the boards other ids), so
     /// it never taps by a stale id; where the drag went meanwhile is held ([`Play::held`]).
@@ -196,12 +204,33 @@ impl Play {
         taps
     }
 
-    /// Where a drag on a board last went while the window was busy, once what was sent is
-    /// answered and drawn (none if the pointer pressed or tapped since): for the window to tap
-    /// as dragged there ([`Play::tap`]) at its next frame, asking for one while this waits, so
-    /// a quick stroke's end, which no later sample would tap, is tapped too.
-    pub fn held(&self) -> Option<(f32, f32)> {
-        self.held.filter(|_| self.owed == 0 && !self.moved)
+    /// Whether a drag on a board went somewhere while the window was busy that waits to be
+    /// tapped, now that what was sent is answered and drawn (none if the pointer pressed or
+    /// tapped since, or anything else went: [`Play::forget`]): the window asks for a frame while
+    /// one waits, and taps it then ([`Play::replay`]), so a quick stroke's end, which no later
+    /// sample would tap, is tapped too.
+    pub fn held(&self) -> bool {
+        self.held.is_some() && self.owed == 0 && !self.moved
+    }
+
+    /// Taps where the drag went while the window was busy ([`Play::held`]; none if nothing waits)
+    /// as [`Play::tap`] does: at the same place on the board as drawn now as on the board then,
+    /// should it have moved or changed its size since.
+    pub fn replay(&mut self, view: &View) -> (u32, Vec<u32>) {
+        let held = if self.held() { self.held.take() } else { None };
+        match (held, view.grids.iter().find(|b| Some(b.nth) == self.grid)) {
+            (Some((u, v)), Some(b)) => {
+                let r = b.rect;
+                self.tap(view, None, r.x + u * r.w, r.y + v * r.h)
+            }
+            _ => (0, Vec::new()),
+        }
+    }
+
+    /// Something other than a drag's taps went to the program: where a drag went meanwhile is
+    /// not tapped after it, as the program reads what the person did in order.
+    pub fn forget(&mut self) {
+        self.held = None;
     }
 
     fn taps(&mut self, view: &View, id: Option<u32>, x: f32, y: f32) -> (u32, Vec<u32>) {
@@ -209,7 +238,9 @@ impl Play {
         if id.is_some() {
             (self.grid, self.last) = (None, None);
         } else if self.owed > 0 || self.moved {
-            self.held = self.grid.map(|_| (x, y));
+            // As a share of the board as the person sees it, which may move by the next frame.
+            let share = |b: &Board| ((x - b.rect.x) / b.rect.w, (y - b.rect.y) / b.rect.h);
+            self.held = view.grids.iter().find(|b| Some(b.nth) == self.grid).map(share);
             return taps;
         }
         self.held = None;

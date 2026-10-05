@@ -840,14 +840,14 @@ fn paint_driven_by_a_drag_paints_every_square_it_crosses() {
     send(&mut p, &mut play, t);
     for sx in [10.0, 20.0, 31.0] {
         let (x, y) = at(sx, 25.0);
-        assert!(play.tap(&view, None, x, y).1.is_empty() && play.held().is_none());
+        assert!(play.tap(&view, None, x, y).1.is_empty() && !play.held());
     }
     answer(&mut play);
-    let (x, y) = play.held().unwrap();
-    let t = play.tap(&view, None, x, y);
+    assert!(play.held());
+    let t = play.replay(&view);
     send(&mut p, &mut play, t);
     answer(&mut play);
-    assert!(play.held().is_none());
+    assert!(!play.held());
     let row: Vec<usize> = painted(&p).into_iter().filter(|i| i / 32 == 25).collect();
     assert_eq!(row, (25 * 32 + 1..=25 * 32 + 31).collect::<Vec<_>>());
     // It shows the pen's color as a swatch, and its squares' edges faintly (gray) under the paint.

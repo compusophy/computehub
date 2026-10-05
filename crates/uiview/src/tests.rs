@@ -739,11 +739,11 @@ fn play_ticks_while_shown_once_answered_and_taps_new_squares() {
         assert!(q.busy() && q.tap(&view, None, 40.0, 1.0) == none);
         q.answered();
     }
-    assert!(!q.busy() && q.tap(&view, None, 63.0, 1.0) == none && q.held().is_none());
+    assert!(!q.busy() && q.tap(&view, None, 63.0, 1.0) == none && !q.held());
     q.drew();
     // Where it went is held till then, for the window to tap at its next frame.
-    assert_eq!(q.held().map(|(x, y)| q.tap(&view, None, x, y)), Some(tap(&[1, 2, 3])));
-    assert_eq!(q.held(), None);
+    assert!(q.held() && q.replay(&view) == tap(&[1, 2, 3]));
+    assert!(!q.held() && q.replay(&view) == none);
     // Its three taps are answered by three frames, the last after the two before it.
     (0..3).for_each(|_| q.sent(false));
     for _ in 0..3 {

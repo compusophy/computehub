@@ -22,13 +22,14 @@
 //! (a tap the overlay makes goes to the program as it is); the window is busy while its program
 //! starts, and from a click, submit, tap or plain key it was sent until it draws that: the program
 //! answers each Tick and Change with a frame too, in the order it reads them, so the frames of
-//! those out before it count first. A program that asked for a timer ([`Request::Timer`]) gets an
-//! [`Event::Tick`] with the ms passed each time one is due and the last was answered (or a second
-//! went by), and a frame then while the window shows (by the page's timer, none between); one that
-//! asked for keys ([`Request::Keys`]) gets plain keys while none of its text fields has the
-//! keyboard. A press on a Grid's square is an [`Event::Tap`], and so is each square the mouse then
-//! drags across, once the last tap is drawn ([`uiview::Play::tap`]), where it went meanwhile at the
-//! next frame ([`uiview::Play::held`]); the press's Click is none.
+//! those out before it count first (a Tick sent after it is answered after it). A program that
+//! asked for a timer ([`Request::Timer`]) gets an [`Event::Tick`] with the ms passed each time one
+//! is due and the last was answered (or a second went by), and a frame then while the window
+//! shows (by the page's timer, none between); one that asked for keys ([`Request::Keys`]) gets
+//! plain keys while none of its text fields has the keyboard. A press on a Grid's square is an
+//! [`Event::Tap`], and so is each square the mouse then drags across, once the last tap is drawn
+//! ([`uiview::Play::tap`]), where it went meanwhile at the next frame (after its Tick), unless
+//! anything else went first ([`uiview::Play::held`]); the press's Click is none.
 
 use std::mem;
 
@@ -225,6 +226,10 @@ impl Remote {
         if matches!(ev, Event::Click { .. } | Event::Submit { .. } | Event::Tap { .. }) {
             self.play.sent(self.waiting);
         }
+        // After anything but a Tick, where a drag went meanwhile is not tapped: out of order.
+        if !matches!(ev, Event::Tick { .. }) {
+            self.play.forget();
+        }
         let Some(pid) = self.pid else { return };
         cx.kernel.post_event(pid, &ev.encode());
         let now = ([!cx.ai.reports_off, cx.grain, !cx.ai.unkept], logon::profiles::face());
@@ -394,7 +399,7 @@ impl App for Remote {
 
     fn frame_in(&self, now_ms: f64) -> Option<u32> {
         // A drag's held point waits for the next frame's Tick to tap it.
-        if self.view.animating(now_ms) || self.play.held().is_some() {
+        if self.view.animating(now_ms) || self.play.held() {
             return Some(0);
         }
         self.pid.and(self.play.due_in(now_ms))
@@ -454,15 +459,13 @@ impl App for Remote {
                 false
             }
             AppEvent::Tick { now_ms } => {
-                // Where a drag went while the window was busy, now that it drew the answer:
-                // tapped as dragged there (the point has the content's corner in it already).
-                if let Some((x, y)) = self.play.held() {
-                    let (id, cells) = self.play.tap(&self.view, None, x, y);
-                    cells.into_iter().for_each(|cell| self.post(Event::Tap { id, cell }, cx));
-                }
                 if let Some(tick) = self.play.tick(now_ms, self.drawn) {
                     self.send(tick, cx);
                 }
+                // Where a drag went while the window was busy, now that it drew the answer, on
+                // the board as drawn now: tapped after the Tick, so their frames count after its.
+                let (id, cells) = self.play.replay(&self.view);
+                cells.into_iter().for_each(|cell| self.post(Event::Tap { id, cell }, cx));
                 false
             }
             // The Terminal's own keys, text and wheel are its program's.
