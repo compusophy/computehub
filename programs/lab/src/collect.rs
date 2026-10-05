@@ -18,10 +18,13 @@ pub struct Found {
 /// The directories searched, from the repo's root.
 pub const ROOTS: [&str; 3] = ["crates", "programs", "tools"];
 /// Never searched: build output; this lab and tiny, whose own tests hold programs; and the
-/// evals, whose reference apps are Suite 1's answer keys: a model is measured on them, never
-/// trained on them.
-pub const SKIP: [&str; 6] =
-    ["target", "dist", "programs/lab", "programs/tiny", "programs/makes", "programs/evals"];
+/// evals (Suite 1's answer keys; the IQ suite's, kept in `evals/`, and its tests' programs): a
+/// model is measured on them, never trained on them.
+#[rustfmt::skip]
+pub const SKIP: [&str; 7] = [
+    "target", "dist", "programs/lab", "programs/tiny", "programs/makes", "programs/evals",
+    "programs/iq",
+];
 
 /// Every candidate under `root`'s [`ROOTS`], in path order.
 pub fn find(root: &Path) -> Vec<Found> {

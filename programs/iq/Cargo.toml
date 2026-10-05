@@ -1,0 +1,23 @@
+[package]
+name = "compusophy-iq"
+description = "compusophyOS's app-making IQ benchmark, Suite 2 of its evals: tiered tasks whose checkers are data (a small script that drives a made app headlessly and says what must show), held out by family; the grade (compile, smoke, check) that is also a reward; and the verifier that keeps only tasks whose reference passes, whose check fails a null app and kills most mutants of the reference. Pure; its dev binary `iq` verifies, grades and scores."
+publish = false
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[lib]
+name = "iq"
+
+[[bin]]
+name = "iq"
+path = "src/main.rs"
+
+[dependencies]
+compusophy-applang.workspace = true
+compusophy-applang-syntax.workspace = true
+compusophy-coder.workspace = true
+compusophy-makes.workspace = true

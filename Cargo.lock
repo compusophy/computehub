@@ -174,6 +174,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "compusophy-iq"
+version = "0.1.0"
+dependencies = [
+ "compusophy-applang",
+ "compusophy-applang-syntax",
+ "compusophy-coder",
+ "compusophy-makes",
+]
+
+[[package]]
 name = "compusophy-kernel"
 version = "0.1.0"
 dependencies = [

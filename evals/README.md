@@ -11,6 +11,8 @@ prompt, the harness or the language shows as a measured gain or loss, not an imp
 | `evals/suites/studio.jsonl` | the suite as it is: its hash, then each task's id, size and ask (a test keeps it current) |
 | `evals/results/studio.jsonl` | every run's records, a line per task and trial, appended |
 | `evals/replays/studio/<run>.jsonl` | every AI exchange of a run, so it replays offline |
+| `programs/iq` | Suite 2, iq: the checker language, the grade (a reward too), the verifier that keeps or refuses a task, the `iq` dev binary |
+| `evals/suites/iq.jsonl` | Suite 2's tasks, a line each, with their checks, references and provenance (a test verifies every one) |
 
 ## Running
 
@@ -168,7 +170,7 @@ megabytes for one baseline): it keeps what this coder reads, exactly, and drops 
 text (its length is kept), the chunks' times and what came after the program. So it is exact
 for the coder as it reads streams now, and a `--loose` replay of a harness that reads
 differently (its time limits, its runaway guard, its thinking) is an approximation, never
-written to the records. Suite 3's agent, which calls tools, will need its exchanges kept whole.
+written to the records. Suite 4's agent, which calls tools, will need its exchanges kept whole.
 
 `evals` has a test (`recorded_runs_replay_to_their_records`) that replays every recorded run,
 and checks that every run with records has its exchanges kept:
@@ -305,9 +307,77 @@ Since then the coder's prompt has moved to `09141db7e75a4b45` (a grid's cell is 
 index, never its color, shown by a palette), so no recorded request replays: the runs above are
 stale (kept as they were, never graded again) until live runs at the new prompt replace them.
 
+## Suite 2, iq (`iq`)
+
+How well a model makes apps, measured as it rises: the benchmark a small model fine-tuned on
+applang is measured on, and the grade it is trained on. Tasks rise in tiers (1 a counter; 2 a
+small tool; 3 a simple game or a richer tool; 4 a full classic game with its rules; 5 levels,
+opponents or physics; 6 several combined), and their checkers are data, so a teacher model can
+write them and a verifier can keep or refuse them mechanically.
+
+- **Tasks** (`evals/suites/iq.jsonl`, a JSON object a line): `id`, `tier`, `family` (the idea
+  its variants share), `ask` (what a person types, plus the behavior the check relies on),
+  `check` (a script), `ref` (a program that passes it) and `by`, the provenance: the teacher
+  (`hand`, or a model), its prompt, the verifier's hash and the day. The split is derived, never
+  stored: a family is held out when FNV-1a 64 of its name is 0 mod 5 (`iq::held`), so what is
+  held out is an idea, never a wording.
+- **Checks** are scripts over Suite 1's probe; `iq::CARD` is the card a teacher is prompted with,
+  and a test holds it to the parser. Actions: `start`, `click`, `key`, `press`, `type`, `wait`,
+  `tap`, `tapcell`, `repeat`. Expectations: `has`, `says`, `after`, `number` (each but `after`
+  also with `not`), `color` and `squares` of a board, and `changed` or `same` since a `mark`.
+  A check runs on seeds 1, 2 and 3, each from a fresh start, and must hold on all three.
+- **Grade** (`iq::grade`): `compile`, `smoke` (the coder's smoke test, seeds 1 to 3; an icon line
+  is not graded), `check`, else `pass`; `harness` when what grades is at fault, counted apart;
+  and, scoring a reply, `reply` when it holds no app block. Each failure carries its code: applang's
+  for a compile or a smoke fault, E0721 to E0724 for a check, naming the seed and the line.
+  Deterministic and total. In a release build the seed tasks' references grade in 0 to 25 ms
+  (7 ms on average), so it can serve as an RL reward.
+- **Verify** (`iq::verify`), for every task a teacher makes: the id and family are slugs, the tier
+  1 to 6, the check reads, the ref passes, a null app (one label) fails the check, and the check
+  kills at least half, and at least 3, of the ref's counted mutants. A mutant drops a line of
+  code or adds one to a number (at most 40, spread evenly over all); it counts when it compiles,
+  runs clean, and is killed or can be told from the ref by a fixed exploration (every button,
+  key, tap and input, and time, on seeds 1 to 3, the same whatever the check). A mutant no
+  exploration tells apart, such as a starting value the app overwrites, is no slip. A refusal is
+  coded (E0741 to E0749) and names the mutants the check lets live: what a teacher needs to fix it.
+- **Seed**: 8 tasks written by hand, as `iq add` writes them (verified, then stamped). Where
+  chance would decide, the ask fixes a start a check can play: memory's first game is dealt in
+  pairs side by side, and every game of 2048 starts with a 2 in each top corner. What lives is
+  mostly presentation the asks leave free (sizes, offsets, colors not asked for), plus what a
+  check cannot see (New game's shuffle, where food falls).
+
+| task | tier | family | split | killed | equivalent | grade (release) |
+|---|---|---|---|---|---|---|
+| counter | 1 | counter | held | 6/6 | 0 | 0 ms |
+| tip | 2 | tip | train | 10/11 | 2 | 1 ms |
+| stopwatch | 2 | stopwatch | train | 13/13 | 0 | 2 ms |
+| todo | 2 | todo | train | 11/12 | 0 | 3 ms |
+| snake-wrap | 3 | snake | train | 18/23 | 8 | 10 ms |
+| memory | 3 | memory | train | 23/30 | 3 | 7 ms |
+| paint | 3 | paint | train | 16/19 | 1 | 15 ms |
+| 2048 | 4 | 2048 | train | 15/25 | 8 | 25 ms |
+
+```sh
+cargo run -p compusophy-iq --release -- verify               # every task, or why it is refused
+cargo run -p compusophy-iq --release -- verify --survivors   # and what each check lets live
+cargo run -p compusophy-iq --release -- grade 2048 my.app    # a JSON line: stage, code, message, ms
+cargo run -p compusophy-iq --release -- score answers.jsonl --each   # per tier, split and stage
+cargo run -p compusophy-iq --release -- split                # each family, held out or trained on
+cargo run -p compusophy-iq --release -- card                 # what a teacher writing checks reads
+cargo run -p compusophy-iq --release -- add --id ID --tier N --family F --ask "..." \
+  --check check.iq --ref ref.app --day 2026-10-05            # verify, stamp, append
+cargo run -p compusophy-iq --release -- verify --stamp 2026-10-05   # stamp all with this verifier
+```
+
+Answers to score are a JSON object a line, `{"task":"id","model":"m","reply":"..."}` (other
+members are let be); each program is taken from its reply as the coder takes it. The verifier's
+hash (`iq::verifier_hash`) covers iq and every crate it stands on, as `evals`' harness hash does;
+`verify` says which tasks were stamped by another. The answer keys live in `evals/`, which
+`lab`'s corpus never reads, and `lab` skips `programs/iq`, whose tests hold programs too.
+
 ## Next suites (designed, not built)
 
-### Suite 2, the Assistant's desktop tasks
+### Suite 3, the Assistant's desktop tasks
 
 The Assistant uses the desktop for the person; grade it by the state it leaves, not its words.
 
@@ -330,7 +400,7 @@ The Assistant uses the desktop for the person; grade it by the state it leaves, 
   order, VFS contents, the answer's words) and nothing forbidden happened; also steps, failed
   acts, tokens, cost and time. Deterministic: the host's clock, the wm and the VFS replay.
 
-### Suite 3, the Terminal agent's coding tasks
+### Suite 4, the Terminal agent's coding tasks
 
 The Terminal's agent has landed (`programs/agent`, `agent` in a Terminal):
 
