@@ -20,7 +20,8 @@ use sh::{Entry, Sys, Why};
 use uiwire::client::Client;
 use uiwire::{Event, Frame, Request};
 
-/// Where a job's stdout is caught while a shell command runs.
+/// Where a job's stdout is caught while a shell command runs: the first of `-1`, `-2`, ... after
+/// this that the agent could make new ([`Os::claim`]).
 const CAUGHT: &str = "/tmp/.agent-out";
 /// Why the shell's commands here read and write no device.
 const DEVICE: Why = "a device, which the agent's shell reads and writes none of";
@@ -54,6 +55,21 @@ impl Os {
     /// The path `std::fs` opens for the absolute `path`.
     fn at(&self, path: &str) -> String {
         sh::from_start(self.depth, path)
+    }
+
+    /// A file of this agent's alone to catch a job's output in, made new: the first of
+    /// [`CAUGHT`]`-1`, `-2`, ... not there already (another agent's in another Terminal, or one
+    /// a Ctrl+C left), so two agents never write or remove each other's.
+    fn claim(&self) -> Option<String> {
+        for n in 1..1000u32 {
+            let path = [CAUGHT, "-", &n.to_string()].concat();
+            match OpenOptions::new().write(true).create_new(true).open(self.at(&path)) {
+                Ok(_) => return Some(path),
+                Err(e) if e.kind() == ErrorKind::AlreadyExists => {}
+                Err(_) => return None,
+            }
+        }
+        None
     }
 }
 
@@ -126,11 +142,16 @@ impl Sys for Os {
         fs::metadata(self.at(path)).ok().map(|m| m.is_dir())
     }
 
-    /// The job goes to /dev/job in one write, its stdout caught in [`CAUGHT`] unless it goes
-    /// elsewhere already; what it wrote, and a status not 0, go to what the shell command ran.
+    /// The job goes to /dev/job in one write, its stdout caught in a file of its own
+    /// ([`Os::claim`]) unless it goes elsewhere already; what it wrote, and a status not 0, go to
+    /// what the shell command ran. With no file to catch it in, it does not run.
     fn run(&mut self, shown: &str, job: &[u8]) -> Result<i32, u16> {
         self.ran += shown;
-        let caught = agent::capture(job, CAUGHT);
+        let file = match agent::capture(job, "") {
+            Some(_) => Some(self.claim().ok_or(0u16)?),
+            None => None,
+        };
+        let caught = file.as_ref().and_then(|f| agent::capture(job, f));
         let bytes = caught.as_deref().unwrap_or(job);
         let status =
             OpenOptions::new().read(true).write(true).open("/dev/job").and_then(|mut f| {
@@ -139,9 +160,9 @@ impl Sys for Os {
                 f.read_to_string(&mut text)?;
                 Ok(text.trim().parse().unwrap_or(1))
             });
-        if caught.is_some() {
-            self.ran += &String::from_utf8_lossy(&fs::read(self.at(CAUGHT)).unwrap_or_default());
-            let _ = fs::remove_file(self.at(CAUGHT));
+        if let Some(f) = file {
+            self.ran += &String::from_utf8_lossy(&fs::read(self.at(&f)).unwrap_or_default());
+            let _ = fs::remove_file(self.at(&f));
         }
         if let Some(n) = status.as_ref().ok().filter(|&&n| n != 0) {
             self.ran += "[exit status ";

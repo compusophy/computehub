@@ -406,7 +406,8 @@ one. Forked crates keep their Apache-2.0 license and note their origin.
   at a time; `/help` lists its commands) it asks the free AI with eight
   tools: read, write and edit a file, list a folder, search under one, run
   a line in the OS's own shell (the `sh` library in-process, so `cd` stays
-  and `open` opens apps; a job's stdout is caught in a file), check an
+  and `open` opens apps; a job's stdout is caught in a file of the agent's
+  own, made new in /tmp, so two agents never share one), check an
   applang app (`coder`'s compile and smoke test) and read applang's guide.
   Reads run freely; writes, edits and commands wait for the person's yes
   (`[y]es [n]o [a]lways`, or `-y` before the task: in its words, a `-y` is
