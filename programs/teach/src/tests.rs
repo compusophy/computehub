@@ -8,7 +8,7 @@ use coder::json::{Json, quote};
 use crate::claude::{self, Msg, Replies, Req, Teacher, Usage};
 use crate::cost::{self, Ledger};
 use crate::run::{self, Run};
-use crate::seam::{By, Iq, Judge, Smoke, Task};
+use crate::seam::{By, Grade, Iq, Judge, Task};
 use crate::wire::{self, Chat};
 use crate::{Fail, codes, day, fnv, hex16, prompts};
 
@@ -700,4 +700,60 @@ fn prompts_carry_the_bytes_studio_sends() {
     let user = coder::prompt::write(&tasks[0].ask);
     assert_eq!(msg(1).and_then(Json::text), Some(user.as_str()));
     assert!(text.lines().next().unwrap().contains(",\"max_tokens\":6144,\"temperature\":0.3,"));
+}
+
+/// The stand-in verifier: a task stands when it is well formed and its reference passes
+/// `Judge::grade`; a program passes when the coder finds nothing wrong with it
+/// (`coder::ai::fault`: compiles, runs clean on seeds 1 to 3, its icon draws). Its checks are
+/// never run: it has no checker language.
+struct Smoke;
+
+impl Judge for Smoke {
+    fn id(&self) -> String {
+        hex16(fnv(b"teach::seam::Smoke 1: coder::ai::fault(program, \"\", 3)"))
+    }
+
+    fn verify_task(&self, line: &str) -> Result<String, String> {
+        let t = Task::parse(line).ok_or("not a task line")?;
+        well_formed(&t)?;
+        let g = self.grade(&t.id, &t.ask, &t.reference);
+        match g.pass {
+            true => Ok(format!(
+                "its ref runs clean ({} lines); its check is unrun",
+                t.reference.lines().count()
+            )),
+            false => Err(format!("its ref fails at {}: {}", g.stage, g.why)),
+        }
+    }
+
+    fn grade(&self, _task_id: &str, _ask: &str, program: &str) -> Grade {
+        let seeds = coder::Knobs::default().seeds;
+        let Some(f) = coder::ai::fault(program, "", seeds) else {
+            return Grade { pass: true, stage: "ok".into(), code: 0, why: String::new() };
+        };
+        let stage = match (f.compiles, f.runs) {
+            (false, _) => "compile",
+            (true, false) => "smoke",
+            (true, true) => "icon",
+        };
+        Grade { pass: false, stage: stage.into(), code: f.diag.code.unwrap_or(0), why: f.said }
+    }
+}
+
+/// Whether `t` reads as a task should: an id of 3 to 64 of `a-z0-9-` that begins with its family
+/// and `-`, a family of `a-z0-9-`, a tier from 1 to 6, and an ask, a check and a ref.
+fn well_formed(t: &Task) -> Result<(), String> {
+    let name =
+        |s: &str| s.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-');
+    let fam = [t.family.as_str(), "-"].concat();
+    let why = match () {
+        _ if t.family.is_empty() || !name(&t.family) => "a family of a-z, 0-9 and -",
+        _ if !(3..=64).contains(&t.id.len()) || !name(&t.id) => "an id of 3 to 64 of a-z, 0-9, -",
+        _ if !t.id.starts_with(&fam) || t.id.len() == fam.len() => "an id that begins family-",
+        _ if !(1..=6).contains(&t.tier) => "a tier from 1 to 6",
+        _ if t.ask.trim().is_empty() || t.check.trim().is_empty() => "an ask and a check",
+        _ if t.reference.trim().is_empty() => "a ref",
+        _ => return Ok(()),
+    };
+    Err(["a task needs ", why].concat())
 }

@@ -11,7 +11,7 @@
 //! - [`cost`]: every reply's usage priced and appended to a ledger, and a budget that stops a
 //!   run before it would pass it.
 //! - [`seam`]: what teach asks of a verifier ([`seam::Judge`]); `iq` implements it, and
-//!   [`seam::Smoke`] (compile and the coder's smoke test) stands in until it lands.
+//!   [`seam::Iq`] is its judge.
 //! - [`prompts`]: the task writer's, and the solver's and fixer's, which are the coder's own,
 //!   byte for byte, so a verified reply is training data in the format it is asked in.
 //! - [`run`]: the commands (`teach tasks | solve | export | ask | cost`, see `main.rs`).

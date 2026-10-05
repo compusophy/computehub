@@ -10,6 +10,9 @@
 //!               --out answers.jsonl [--gap MS]
 //! teach prompts --suite S --split held|train|all [--held H] --out prompts.jsonl
 //! teach cost    --ledger L
+//! teach writer  --tier T --families a,b --per 3 [--card CARD]   (a Claude Code session teaches:)
+//! teach import  --from tasks.jsonl --out evals/suites/iq.jsonl
+//! teach replies --suite S --replies R.jsonl --teacher NAME --out solutions.jsonl [--held H]
 //! ```
 //!
 //! `tasks` and `solve` also take `--model` (claude-opus-5-5), `--effort` (high), `--max-tokens`
@@ -33,7 +36,10 @@ use teach::seam::{self, Iq, Judge, Task};
 use teach::wire::{Anthropic, OpenAi};
 use teach::{Fail, TEACHER, append, codes, read};
 
-const FLAGS: [&str; 20] = [
+const FLAGS: [&str; 23] = [
+    "--from",
+    "--replies",
+    "--teacher",
     "--tier",
     "--families",
     "--per",
@@ -76,12 +82,15 @@ fn go(args: &[String]) -> Result<(), Fail> {
         Some("export") => export(&o),
         Some("ask") => ask(&o),
         Some("prompts") => prompts(&o),
+        Some("writer") => writer(&o),
+        Some("import") => import(&o),
+        Some("replies") => replies(&o),
         Some("cost") => {
             print!("{}", cost::summary(&read(o.need("--ledger")?)?));
             Ok(())
         }
         _ => Err(usage(
-            "usage: teach tasks | solve | export | ask | prompts | cost (programs/teach/src/main.rs)",
+            "usage: teach tasks|solve|export|ask|prompts|cost|writer|import|replies (src/main.rs)",
         )),
     }
 }
@@ -220,7 +229,8 @@ fn tasks(o: &Opts) -> Result<(), Fail> {
     let mut run = teach_run(o, "tasks", 64_000, &mut teacher, &judge)?;
     let w = run.tasks(&card, tier, &families, o.num("--per", 3)?, &taken);
     // Each kept line as iq writes it, so the suite reads back byte for byte.
-    let canon = |l: &String| iq::read_task(l).map(|t| iq::write_task(&t)).unwrap_or(l.clone());
+    let canon =
+        |l: &String| iq::read_task(l).map(|t| iq::write_task(&t) + "\n").unwrap_or(l.clone());
     append(out, &w.kept.iter().map(canon).collect::<String>())?;
     let mut refused = String::new();
     for (why, line) in &w.refused {
@@ -294,4 +304,70 @@ fn prompts(o: &Opts) -> Result<(), Fail> {
     let text = run::prompts(&tasks, split, &held);
     eprintln!("{} prompts", text.lines().count());
     std::fs::write(out, text).map_err(|e| Fail::new(codes::FILE, format!("{out}: {e}")))
+}
+
+/// The writer's prompt as `tasks` sends it (its system prompt, then each family's request), for a
+/// Claude Code session to follow instead of the API.
+fn writer(o: &Opts) -> Result<(), Fail> {
+    let card = o.get("--card").map_or(Ok(iq::CARD.to_string()), read)?;
+    print!("{}", teach::prompts::writer(&card));
+    for f in o.need("--families")?.split(',').map(str::trim).filter(|f| !f.is_empty()) {
+        println!(
+            "
+---
+{}",
+            teach::prompts::writer_user(o.num("--tier", 1)?, f, o.num("--per", 3)?, &[])
+        );
+    }
+    Ok(())
+}
+
+/// Task lines written elsewhere: each verified by iq, written as iq writes it, appended to
+/// `--out` unless its id is taken there; refusals to `<from>.refused.jsonl`.
+fn import(o: &Opts) -> Result<(), Fail> {
+    let (from, out) = (o.need("--from")?, o.need("--out")?);
+    let mut taken: Vec<String> =
+        read(out).unwrap_or_default().lines().filter_map(Task::parse).map(|t| t.id).collect();
+    let (judge, mut kept, mut refused) = (judge(None)?, String::new(), String::new());
+    for line in read(from)?.lines().filter(|l| !l.trim().is_empty()) {
+        let id = Task::parse(line).map(|t| t.id).unwrap_or_default();
+        let got = match taken.contains(&id) {
+            true => Err(format!("id {id} is taken")),
+            false => {
+                judge.verify_task(line).and_then(|_| iq::read_task(line).map_err(|r| r.message))
+            }
+        };
+        match got {
+            Ok(t) => (kept += &(iq::write_task(&t) + "\n"), taken.push(id)).1,
+            Err(why) => {
+                refused += &format!(
+                    "{{\"why\":{},\"line\":{}}}
+",
+                    coder::json::quote(&why),
+                    coder::json::quote(line)
+                )
+            }
+        }
+    }
+    append(out, &kept)?;
+    append(&[from.strip_suffix(".jsonl").unwrap_or(from), ".refused.jsonl"].concat(), &refused)?;
+    eprintln!("{} kept, {} refused", kept.lines().count(), refused.lines().count());
+    Ok(())
+}
+
+/// Replies written elsewhere to the solver's first turn, graded into attempt lines `export` reads.
+fn replies(o: &Opts) -> Result<(), Fail> {
+    let (path, out) = (o.need("--suite")?, o.need("--out")?);
+    let (tasks, held, judge) = (suite(path)?, held(o)?, judge(Some(path))?);
+    let day = o.get("--day").map_or_else(teach::today, String::from);
+    let by = seam::By {
+        teacher: o.need("--teacher")?.into(),
+        prompt: teach::hex16(teach::fnv(teach::prompts::solver().as_bytes())),
+        verifier: judge.id(),
+        day,
+    };
+    let (lines, passes) = run::replies(&tasks, &held, &read(o.need("--replies")?)?, &judge, &by);
+    append(out, &lines)?;
+    eprintln!("{} replies graded, {passes} passed", lines.lines().count());
+    Ok(())
 }

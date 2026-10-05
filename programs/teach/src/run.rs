@@ -2,6 +2,8 @@
 //! ([`crate::wire`]): tasks written and verified, tasks solved and graded round by round,
 //! verified solutions exported for supervised fine-tuning, and the models being taught asked.
 
+use std::collections::BTreeMap;
+
 use coder::edits::{self, Reply};
 use coder::json::{Json, put};
 
@@ -415,6 +417,51 @@ pub fn export(solutions: &str, held: &[String]) -> (String, Exported) {
 }
 
 /// Whether `t` is in `split`: `held` (the held families'), `train` (the rest's) or `all`.
+/// Attempt lines for replies made elsewhere (a Claude Code session teaching) to the solver's
+/// first turn, `{"task","reply"}` a line, read and graded as `solve` reads and grades its own;
+/// a held-out or unknown task's reply is skipped. Also the passes.
+pub fn replies(
+    tasks: &[Task],
+    held: &[String],
+    text: &str,
+    judge: &dyn Judge,
+    by: &By,
+) -> (String, usize) {
+    let (mut out, mut passes, mut seen) = (String::new(), 0, BTreeMap::new());
+    for j in text.lines().filter_map(Json::parse) {
+        let (Some(id), Some(reply)) =
+            (j.get("task").and_then(Json::text), j.get("reply").and_then(Json::text))
+        else {
+            continue;
+        };
+        let Some(t) = tasks.iter().find(|t| t.id == id && in_split("train", t, held)) else {
+            continue;
+        };
+        let mut a = Attempt {
+            round: 1,
+            user: prompts::solve(&t.ask),
+            by: by.clone(),
+            ..Attempt::default()
+        };
+        let m = Msg {
+            text: reply.into(),
+            stop: "end_turn".into(),
+            model: by.teacher.clone(),
+            ..Msg::default()
+        };
+        a.read(m, "");
+        if !a.program.is_empty() {
+            let g = judge.grade(&t.id, &t.ask, &a.program);
+            (a.pass, a.stage, a.code, a.why) = (g.pass, g.stage, g.code, g.why);
+            passes += usize::from(g.pass);
+        }
+        let sample = seen.entry(id.to_string()).or_insert(0u32);
+        out += &a.line(t, *sample);
+        *sample += 1;
+    }
+    (out, passes)
+}
+
 pub fn in_split(split: &str, t: &Task, held: &[String]) -> bool {
     match split {
         "held" => is_held(held, &t.family, &t.id),
