@@ -84,6 +84,13 @@ const MUTANTS: &[(&str, &str, &str, &str)] = &[
         "if open[i] == 0 { open[i] = 1; }",
         "check",
     ),
+    (
+        "minesweeper",
+        "if mines[i] == 0 && open[i] != 1",
+        "if i < 80 && mines[i] == 0 && open[i] != 1",
+        "check",
+    ),
+    ("minesweeper", "if won() { over = 2; }", "", "check"),
     ("memory", "up[first] = 0;\n    up[second] = 0;", "", "check"),
     ("memory", "moves += 1;", "moves += 2;", "check"),
     ("2048", "if random(10) == 0 { b[i] = 4; } else { b[i] = 2; }", "b[i] = 8;", "check"),
@@ -106,6 +113,29 @@ fn every_checker_fails_a_broken_app() {
         }
     }
     assert!(missed.is_empty(), "{missed:#?}");
+}
+
+/// A checker is fair to every game its task allows, not only the reference's: minesweeper's
+/// references with their mines drawn elsewhere (still at random, the first tap still safe), so
+/// that a sweep's flood fill wins before its last tap, pass too.
+#[test]
+fn minesweeper_passes_on_other_layouts() {
+    let t = find("minesweeper").unwrap();
+    let alt = concat!(env!("CARGO_MANIFEST_DIR"), "/refs/alt/minesweeper-grid.app");
+    let mut bad = Vec::new();
+    for (name, src) in
+        [("ref", reference("minesweeper")), ("grid", std::fs::read_to_string(alt).unwrap())]
+    {
+        assert!(src.contains("random(81)"), "{name}: no draw to shift");
+        for k in [1, 8, 19, 30, 47, 62] {
+            let shifted = src.replace("random(81)", &format!("(random(81) + {k}) % 81"));
+            let (pass, stage, why) = judge(t, &shifted);
+            if !pass {
+                bad.push(format!("{name} +{k}: {stage} {why}"));
+            }
+        }
+    }
+    assert!(bad.is_empty(), "{bad:#?}");
 }
 
 #[test]

@@ -1,4 +1,4 @@
-{"suite":"studio","hash":"fdbe6b70ef88f94f","tasks":24}
+{"suite":"studio","hash":"ca4f2f7a761e192a","tasks":24}
 {"task":"counter","size":"tiny","ask":"a counter: a label shows the count, starting at 0; a button labelled + adds one and a button labelled - takes one away"}
 {"task":"greeter","size":"tiny","ask":"a greeter: a text input for a name and a label that greets it as it is typed, saying Hello, then the name (Hello, Ada), with no button"}
 {"task":"temperature","size":"small","ask":"a Celsius to Fahrenheit converter: a text input for whole degrees Celsius and a label that shows the Fahrenheit value as it is typed, F = C * 9 / 5 + 32 in whole numbers (37 shows 98, -40 shows -40)"}

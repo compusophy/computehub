@@ -6,14 +6,15 @@
 //!   ([`coder`]) and graded by what they do when driven headlessly: each compiles, runs clean
 //!   through the smoke test on 3 seeds, draws its icon, and its checker's scripted taps, keys and
 //!   ticks find what the description promised. A suite's content hash covers its tasks and
-//!   checkers.
+//!   checkers; the harness's ([`harness_hash`]), the code between the AI and a record.
 //! - **Runs.** [`run::task`] drives one make over a [`run::Wire`] and returns its
 //!   [`record::Record`] (appended to `evals/results/<suite>.jsonl`) and its AI exchanges
 //!   ([`replay::Exchange`], kept in `evals/replays/<suite>/<run>.jsonl`). The date and commit are
 //!   passed in; nothing here reads a clock, so a run replayed from its exchanges
 //!   ([`replay::Replay`]) writes the same records byte for byte.
-//! - **Reading a gain.** [`summary`]: two runs or two models, pass rates with Wilson intervals,
-//!   their difference with Newcombe's, tokens and dollars per pass, and the tasks that flipped.
+//! - **Reading a gain.** [`summary`]: two runs or two models, pass rates with Wilson intervals
+//!   (as wide as trials of one task, which are not independent, warrant), their difference with
+//!   Newcombe's, tokens and dollars per pass, and the tasks that flipped.
 //!
 //! The live wire (the system's `curl` against the free AI, paced under its limits) is
 //! `tools/eval`, a dev tool that never ships; this library is pure, so it can later run inside the
@@ -41,4 +42,11 @@ pub fn prompt_hash() -> u64 {
 /// The hash of a make's budgets and settings.
 pub fn knobs_hash(k: &coder::Knobs) -> u64 {
     fnv(format!("{k:?}").as_bytes())
+}
+
+/// The harness's hash: of the code between the AI and a record (the coder, applang and what
+/// they stand on, and this crate), as `build.rs` reads it, so a record says which code made and
+/// graded it. The suites have hashes of their own.
+pub fn harness_hash() -> u64 {
+    u64::from_str_radix(env!("EVALS_HARNESS"), 16).unwrap_or(0)
 }

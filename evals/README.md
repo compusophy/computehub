@@ -14,8 +14,9 @@ prompt, the harness or the language shows as a measured gain or loss, not an imp
 
 ## Running
 
-From the repository root (`cargo run -p eval -- ...`; `--dir D` reads and writes `D/results`
-and `D/replays` instead of `evals/`):
+From the repository root, in a debug build as below (a checker that panics fails its app only
+where panics unwind; the release profile aborts, so the runner refuses to run there). `--dir D`
+reads and writes `D/results` and `D/replays` instead of `evals/`, made if missing:
 
 ```sh
 # A live run: each task made by the model, graded, recorded. At most --max requests in all;
@@ -26,8 +27,9 @@ cargo run -p eval -- run --model zai/glm-5.3 --first 2 --run 2026-10-05-glm-5.3
 cargo run -p eval -- run --model zai/glm-5.3 --run 2026-10-05-glm-5.3 --resume
 # Offline and free: replay a recorded run and say, task by task, whether it grades the same.
 cargo run -p eval -- replay --run 2026-10-05-glm-5.3
-# After a change to a checker (or to applang's runtime): grade the same transcripts again and
-# rewrite that run's records in place (a change to the coder's prompt or loop needs live runs).
+# After a change to a checker or to applang: grade the same transcripts again and rewrite that
+# run's records in place. Written only when exact: every request as recorded, under the prompt
+# and knobs the run was made with; else it says why not, and the change needs a live run.
 cargo run -p eval -- replay --run 2026-10-05-glm-5.3 --write
 # Compare two runs, or two models (all of each one's runs): the latest two by default.
 cargo run -p eval -- summary --a zai/glm-5.3-flash --b zai/glm-5.3
@@ -37,10 +39,13 @@ cargo run -p eval -- list > evals/suites/studio.jsonl
 
 The runner POSTs to `https://computehub-sigma.vercel.app/api/ai` as the desktop does: the
 page's own origin, a streamed chat-completions body (the coder's, unchanged), one of the models
-the endpoint allows (`zai/glm-5.3`, `zai/glm-5.3-flash`). It paces itself under the endpoint's
-limits (30 requests a minute and 120 an hour per client: it keeps to 25 and 110, 2 s apart at
-least). The endpoint also keeps a day's spend per instance, half of it for one client, so a long
-run of the larger model can meet `402` (E0902): the run stops, and `--resume` later finishes it.
+the endpoint allows (`zai/glm-5.3`, `zai/glm-5.3-flash`; it would answer any other name with
+GLM 5.3, so the runner refuses one). It paces itself under the endpoint's limits (30 requests a
+minute and 120 an hour per client: it keeps to 25 and 110, 2 s apart at least), counting this
+machine's requests of the last hour across runs (their times are kept in the system's temp
+directory, `compusophy-eval-sent`). The endpoint also keeps a day's spend per instance, half of
+it for one client, so a long run of the larger model can meet `402` (E0902): the run stops, and
+`--resume` later finishes it.
 
 ## Suite 1, Studio makes (`studio`)
 
@@ -53,6 +58,8 @@ installed, in stages; the first that fails is the record's `stage`:
 2. `make`: the make installed nothing (it never compiled, or the model said applang cannot).
 3. `compile`, `smoke`: it does not compile, or faults in the coder's smoke test on seeds 1 to 3
    (rendered, clicked, ticked, keyed, tapped, typed into, closed and opened again).
+   `harness`: the smoke test's own fault (`E0213`, an event for something no longer shown; see
+   the baseline's last note), neither a pass nor a fail: counted apart, like `ai`.
 4. `icon`: it has no icon line, or one the desktop cannot draw.
 5. `check`: its checker drives it headlessly through applang and reads what it shows.
 
@@ -89,7 +96,7 @@ description asks for no Start of its own, a Start the app shows anyway is presse
 | whack | medium | Start; in 12 waits of 800 ms the one odd square, tapped, raises Score: by one (5 times at least); 30 s on, Game over |
 | bounce | medium | the circle stays on the canvas for 10 s and turns back across and down; Faster moves it farther |
 | life | hard | taps toggle squares; a blinker steps right; lone squares die; a glider moves (1, 1) in 4 steps; Play runs, Pause stops |
-| minesweeper | hard | first taps never a mine (38 seeds); exactly 10 squares end the game; Flag marks rather than reveals; every safe square says You win |
+| minesweeper | hard | first taps never a mine (38 seeds); exactly 10 squares end the game; Flag marks rather than reveals; safe squares tapped in turn say You win, and only once none is hidden |
 | memory | hard | each card turned alone shows a face found on exactly one other; differing cards turn back; all pairs say You win and Moves: 8 |
 | 2048 | hard | two tiles of 2 or 4; every move that changes the board adds exactly 2 or 4 to the sum; 64 reached (or Game over) in 300 moves |
 | tetris | hard | Start shows a piece that falls; Left and Right move it to the edges; Rotate turns one of four pieces; Drop lands it on the bottom row; Game over within 80 drops |
@@ -98,16 +105,25 @@ Each checker is shown to be passable, fair and discerning: `refs/` holds a progr
 that passes it (`makes`' tests); `refs/alt/` nine other designs that pass too (boards on grid
 widgets, cards turned back by a timer, a count drawn on a canvas, and four the models made: a
 pick written apart from its heading, a clock with a Start, a die that tumbles, a score written
-inside a board's square); and 44 one-line breaks of the references each fail at the stage
-expected. The live runs found five checks unfair (a tumbling die read mid-tumble, a pick apart
-from its heading, an unasked Start, a score inside a square, and an unclear reason); they were
-fixed and the runs graded again from their transcripts. What the suite does not check: line clears in tetris, the direction tiles slide in
-2048, minesweeper's numbers, scores beyond whack-a-mole's, and how anything looks beyond what
-the checks read.
+inside a board's square); minesweeper's two designs pass with their mines laid six other ways;
+and 46 one-line breaks of the references each fail at the stage expected. The live runs found
+five checks unfair (a tumbling die read mid-tumble, a pick apart from its heading, an unasked
+Start, a score inside a square, and an unclear reason), and a review a sixth (minesweeper's win
+was read only from the sweep's last tap, though a flood fill usually wins sooner, so most
+correct games failed); each was fixed and the runs graded again from their transcripts. What
+the suite does not check: line clears in tetris, the direction tiles slide in 2048,
+minesweeper's numbers, scores beyond whack-a-mole's, and how anything looks beyond what the
+checks read. A checker lets at most 250,000 ticks of an app's timer pass in one wait; an app
+whose timer is too fast for a wait (a clock that ticks every 16 ms, waited 3 hours) fails with
+that reason, never read early.
 
-The suite's hash (`suite_hash` in each record) is FNV-1a 64 of its id and the source of its
-tasks, checkers and probe, line ends aside: any change to what is asked or how it is graded is a
-different suite, and comparing records across hashes compares different measurements.
+Two hashes say what graded a record. The suite's (`suite_hash`) is FNV-1a 64 of its id and the
+source of its tasks, checkers and probe, line ends aside: a change to what is asked or how the
+checkers drive and read an app is a different suite, and comparing records across suite hashes
+compares different measurements (the summary warns). The harness's (`harness`) covers the code
+between the AI and a record: every file of the crates `evals` stands on but the suites (the
+coder, applang, its syntax and runtime, the icon reader, the wire's types, `evals` itself;
+tests aside), read by `programs/evals/build.rs`. Comparing harnesses is what the evals are for.
 
 ## Records
 
@@ -115,12 +131,14 @@ A line of `evals/results/studio.jsonl` per task and trial:
 
 | field | what |
 |---|---|
+| `v` | the record's format: 2 (1 had no `harness`) |
 | `suite`, `suite_hash` | the suite and its content hash |
-| `run`, `date`, `commit`, `model` | the run's id, its date (given, never read from a clock in the library), the commit the run was made at, the model |
+| `run`, `date`, `commit`, `model` | the run's id, its date (given, never read from a clock in the library), the commit its AI was asked at (a record graded again keeps it), the model |
 | `prompt`, `knobs` | FNV-1a 64 of the coder's system prompt (as its own test pins it) and of its knobs |
+| `harness` | the harness's hash when the record was made or last graded again |
 | `task`, `size`, `trial` | which task, how big, which trial |
 | `pass`, `stage`, `reason` | the grade, the first stage that failed (or `ok`), and the checker's or the make's reason |
-| `outcome`, `tries` | how the make ended (`ready`, `faulting`, `broken`, `cant`, `failed`), its requests |
+| `outcome`, `tries` | how the make ended (`ready`, `faulting`, `broken`, `cant`, `stopped`, `failed`), its requests |
 | `in`, `out`, `usd_micros`, `est` | tokens in and out and micro-dollars, from each request's receipt (`: receipt in= out= microusd=`, the stream's last line); `est` counts requests with no receipt, whose figures are the coder's own reckoning |
 | `fallback` | requests the other model answered: the free AI answers a GLM 5.3 request with Flash when its provider is busy, and the stream may not say so, but the receipt's cost does (each model's prices bound it, and Flash's output costs a ninth) |
 | `ms` | the make's time: the AI's, as the make's clock counts it (pacing and checks take none) |
@@ -137,12 +155,26 @@ stopped it there, its program in) and its receipt. Fed back as one chunk at that
 the make exactly as the stream did (the make decides only after each chunk, from what has come and
 the time), so a run replays offline, deterministically and for free. A replay that meets a
 request it did not record (the coder changed) says so; `--loose` serves exchanges by their place
-instead, to see a changed harness run on old answers.
+instead, to see roughly how a changed harness runs on old answers.
 
-`evals` has a test that replays every recorded run and compares the records with those kept,
-byte for byte, while the harness and suite are the ones that made them (same prompt, knobs and
-suite hashes, every request the same). After a change to a checker, `replay --write` grades the
-transcripts again; after a change to the coder, the run is stale and a live run replaces it.
+A replay is a digest, not the stream (whole streams, mostly thinking, would be tens of
+megabytes for one baseline): it keeps what this coder reads, exactly, and drops the thinking's
+text (its length is kept), the chunks' times and what came after the program. So it is exact
+for the coder as it reads streams now, and a `--loose` replay of a harness that reads
+differently (its time limits, its runaway guard, its thinking) is an approximation, never
+written to the records. Suite 3's agent, which calls tools, will need its exchanges kept whole.
+
+`evals` has a test (`recorded_runs_replay_to_their_records`) that replays every recorded run,
+and checks that every run with records has its exchanges kept:
+
+- When every request is one recorded, the records are exactly what the code gives now, so they
+  must be the ones kept, field for field (the `harness` hash aside: a change to the coder or
+  applang that grades every make the same leaves them standing). When a checker, the suite or
+  the language changed a grade, the test fails until the run is graded again offline
+  (`replay --run <run> --write`), so the change shows in the records as a gain or a loss.
+- When a request is not one recorded, a run made by this very harness (its prompt, knobs and
+  harness hashes) fails the test: its recording is damaged, or the harness does not replay. A
+  run made by another harness is stale, said so, until a live run replaces it.
 
 The runner reads a stream to its end after the make has its program (Studio stops it there),
 for the receipt: so a recorded make cost a little more than Studio's would, by what the model
@@ -150,39 +182,52 @@ wrote after its program.
 
 ## How to read a gain
 
-- **Pass rate.** Passes over tasks graded (the `ai` stage aside), with a 95% Wilson interval.
-  24 tasks is a coarse ruler: at 60% the interval is about 40% to 78%, so one run tells only
-  large differences apart.
-- **Two runs, same tasks.** The summary gives the difference with its 95% Newcombe interval,
-  and, task by task (a task passes on a side when most of its trials did), the tasks that
-  flipped with McNemar's exact p. Paired by task, flips are the sharper test: 6 flips all one
-  way is p = 0.03; 5 against 1 is p = 0.22. Call it a gain when the interval of the difference
-  excludes 0, or the flips are one-sided with p < 0.05; else run more trials (`--first 2`),
-  since a model samples (writes at temperature 0.3) and one trial is one draw.
+- **Pass rate.** Passes over makes graded (the `ai` and `harness` stages aside, the summary's
+  `errors`), with a 95% Wilson interval. 24 tasks is a coarse ruler: at 60% the interval is
+  about 40% to 77%, so one run tells only large differences apart.
+- **Trials are not independent.** A task one trial fails, the next often fails too, so k trials
+  of 24 tasks are not 24k draws. The interval takes the rate's variance clustered by task and is
+  Wilson's at the number of independent draws that amounts to (`n eff`): 24k when trials vary
+  as chance would, as few as 24 when each task passes all its trials or none. GLM 5.3's 48
+  records below are worth 41. More trials narrow the interval only as far as they tell more,
+  and never past what the 24 tasks allow.
+- **Two runs, same tasks.** The summary gives the difference with its 95% Newcombe interval
+  (each side at its `n eff`; it treats the sides as independent, which on the same tasks makes
+  it the cautious one) and, task by task (a task passes on a side when most of its trials did),
+  the tasks that flipped with McNemar's exact p: the paired test, and the sharper one. 6 flips
+  all one way is p = 0.03; 5 against 1 is p = 0.22. Call it a gain when the interval of the
+  difference excludes 0, or the flips are one-sided with p < 0.05; else run more trials
+  (`--first 2`), since a model samples (writes at temperature 0.3) and one trial is one draw.
+- **Same measurement.** The summary warns when a side mixes suites, prompts, knobs or harnesses,
+  or when the sides were graded by different suites: grade the older run again first
+  (`replay --write`). Sides that differ in prompt, knobs or harness are what is being compared:
+  it names the hashes.
 - **Cost.** Tokens and dollars per pass, and seconds per make: a model or prompt that passes as
   often for less is a gain too.
-- **What changed.** A change to a checker or to applang's runtime is measured offline on the same
-  transcripts (`replay`), free and exact; a change to the prompt, the loop or the model needs
-  live runs, compared on the same suite hash.
+- **What changed.** A change to a checker or to applang is measured offline on the same
+  transcripts (`replay`), free and exact while every request replays; a change to the prompt,
+  the knobs, the coder's loop or the model needs live runs, compared on the same suite hash.
 
 ## Baseline
 
-2026-10-05: Suite 1 at hash `fdbe6b70ef88f94f`, the coder's prompt at `0d7cd8ab731dfcab`,
-Studio's knobs. GLM 5.3 ran two trials (the second at a later commit, the coder the same),
-Flash one: 124 requests and $0.74 in all. The runs were graded again from their transcripts
-after the checkers' fixes, so every record carries the suite hash above.
+2026-10-05: Suite 1 at hash `ca4f2f7a761e192a`, the coder's prompt at `0d7cd8ab731dfcab`,
+Studio's knobs, the harness at `81ab7e04340b535a`. GLM 5.3 ran two trials (the second at a later
+commit, the coder the same), Flash one: 124 requests and $0.74 in all. The runs were graded again
+from their transcripts after the checkers' fixes, so every record carries the hashes above.
 
-| run | model | commit | pass | rate (95% CI) | tiny / small / medium / hard | tokens/pass | $/pass | s/make | AI errors | other model |
+| run | model | commit | pass | rate (95% CI) | tiny / small / medium / hard | tokens/pass | $/pass | s/make | errors | other model |
 |---|---|---|---|---|---|---|---|---|---|---|
-| 2026-10-05-glm-5.3 | zai/glm-5.3 | 3ae876c | 37/48 | 77% (63%-87%) | 4/4 / 13/16 / 17/18 / 3/10 | 15109 | 0.0182 | 43 | 0 | 14/79 |
-| 2026-10-05-glm-5.3-flash | zai/glm-5.3-flash | 63f293b | 20/24 | 83% (64%-93%) | 2/2 / 8/8 / 9/9 / 1/5 | 15620 | 0.0035 | 33 | 0 | 0/45 |
+| 2026-10-05-glm-5.3 | zai/glm-5.3 | 3ae876c, 3341bf8 | 37/48 | 77% (62%-87%) | 4/4 / 13/16 / 17/18 / 3/10 | 15109 | 0.0182 | 43 | 0 | 14/79 |
+| 2026-10-05-glm-5.3-flash | zai/glm-5.3-flash | 63f293b | 20/23 | 87% (68%-95%) | 2/2 / 8/8 / 9/9 / 1/4 | 15620 | 0.0035 | 33 | 1 | 0/45 |
 
 ```text
-                                pass  rate     95% CI  tok/pass   $/pass s/make AI err
-zai/glm-5.3-flash             20/24    83%   64%-93%      15620   0.0035     33      0
-zai/glm-5.3                   37/48    77%   63%-87%      15109   0.0182     43      0
-zai/glm-5.3 - zai/glm-5.3-flash: -6 points, 95% CI -23 to +15; 0 tasks flipped, McNemar p = 1.00; 7 passed half their trials on a side
+                                pass  rate     95% CI n eff  tok/pass   $/pass s/make errors
+zai/glm-5.3-flash             20/23    87%   68%-95%     23     15620   0.0035     33      1
+zai/glm-5.3                   37/48    77%   62%-87%     41     15109   0.0182     43      0
+zai/glm-5.3 - zai/glm-5.3-flash: -10 points, 95% CI -27 to +12; 0 tasks flipped, McNemar p = 1.00; 7 passed half their trials on a side
 zai/glm-5.3: 14 of 79 requests were answered by the other model; the tasks whose every request it answered itself pass 29/36
+passed by zai/glm-5.3-flash only: none
+passed by zai/glm-5.3 only: none
 ```
 
 Each make's stage and requests (`*`: the other model answered at least one request):
@@ -211,16 +256,17 @@ Each make's stage and requests (`*`: the other model answered at least one reque
 | life | hard | check (2) | pass (3) | pass (1) |
 | minesweeper | hard | check (2) | make (3) | check (2) |
 | memory | hard | pass (4) | check (1) | check (2) |
-| 2048 | hard | smoke (4) | check (3)* | smoke (5) |
+| 2048 | hard | smoke (4) | check (3)* | harness (5) |
 | tetris | hard | pass (2) | smoke (5)* | smoke (5) |
 
 What it says:
 
-- **No measured difference between the models.** The difference is -6 points with an interval
-  from -23 to +15, and no task flipped (7 passed half their trials on one side). Flash costs a
+- **No measured difference between the models.** The difference is -10 points with an interval
+  from -27 to +12, and no task flipped (7 passed half their trials on one side). Flash costs a
   fifth as much per pass and makes an app in three quarters of the time. To tell them apart this
-  suite needs more trials, or harder tasks.
-- **The room is in the hard tasks**: 3 of 10 and 1 of 5. Tiny to medium tasks pass 53 of 57.
+  suite needs more tasks, and harder ones: more trials narrow the interval only as far as its 24
+  tasks allow.
+- **The room is in the hard tasks**: 3 of 10 and 1 of 4. Tiny to medium tasks pass 53 of 57.
 - **The fails are real bugs**, read from the transcripts: a die whose face 2 draws one pip, a
   guess game that picks its secret only on New game (shown only after a win), life's Play with
   no `every`, minesweeper that never sets its win or can mine the first tap, memory that never
@@ -229,11 +275,17 @@ What it says:
   board to length 0.
 - **GLM 5.3 is not always GLM 5.3**: the free AI answered 14 of its 79 requests with Flash (its
   provider busy), so its numbers are partly Flash's.
-- **A harness bug**: one of Flash's 2048 fails is the smoke test's own. Within a tick it picks its
-  key, tap and click from the same render, so a key that ends the game leaves the click on a
-  button no longer shown (E0213, "nothing shown has id 2"), which the coder sends to the model
-  as the program's fault, five times. Fixing it changes the coder's checks, so it is a change to
-  measure with a live run.
+- **A harness bug**: applang's smoke test, within a tick, picks its key, tap and click from the
+  render before any of them, so a key that ends a game leaves the click on a button no longer
+  shown (E0213, "nothing shown has id 2"). Flash's 2048 met it, and the coder sent it to the
+  model as the program's fault, five times; it is graded `harness`, counted apart, since the
+  smoke test never finished. It is not rare in the hard games: the tetris reference itself meets
+  it for about 1 piece order in 6 (4 of 24 shifts of its draws). So a hard game's make can be
+  spent on a fault that is not its own, and the hard tasks' rates are the harness's as well as
+  the model's until the smoke test is fixed (in `programs/applang/src/smoke.rs`: each event of a
+  tick taken from the render after the one before). That fix changes what the coder checks:
+  after it, a recorded run whose requests all still replay is graded again offline (`replay
+  --write`, which the test asks for), and one whose requests change needs a live run.
 
 ## Next suites (designed, not built)
 

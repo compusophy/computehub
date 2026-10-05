@@ -612,12 +612,15 @@ compiles, runs clean through the smoke test on 3 seeds, its icon line draws, and
 drives it headlessly (buttons by their labels, taps on board squares and canvas units, keys,
 ticks of its own timer) and reads what it shows, never its names. Each task has a reference
 program that passes, and each reference broken in one place fails. A run appends a record per
-task to `evals/results/<suite>.jsonl` (date and commit passed in, the suite's and the prompt's
-hashes, pass or fail and why, requests, tokens, the receipts' cost, the make's time) and keeps
-every AI exchange in `evals/replays/`: what the response did to the make, not its bytes, so a run
-replays offline, free and bit for bit (a test does). `tools/eval` is the live wire (`curl` to
-the free AI, under its limits) and compares runs: pass rates with Wilson intervals, their
-difference with Newcombe's, cost per pass and the tasks that flipped.
+task to `evals/results/<suite>.jsonl` (date and commit passed in, the suite's, the prompt's and
+the harness's hashes, pass or fail and why, requests, tokens, the receipts' cost, the make's
+time) and keeps every AI exchange in `evals/replays/`: what the response did to the make, not
+its bytes, so a run replays offline, free and bit for bit. A test replays every recorded run:
+its records must be what the code gives now, so a change to a checker or the language that
+moves a grade is graded again offline and shows in the records. `tools/eval` is the live wire
+(`curl` to the free AI, under its limits) and compares runs: pass rates with Wilson intervals
+as wide as the tasks warrant (trials of one task are not independent), their difference with
+Newcombe's, cost per pass and the tasks that flipped.
 
 ## What is next
 

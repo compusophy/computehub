@@ -258,9 +258,14 @@ pub fn find(id: &str) -> Option<&'static Task> {
 }
 
 /// How the program `src` fares at `task`: whether it passes, the first stage that failed (`ok`
-/// if none: `compile`, `smoke`, `icon` or `check`) and why. It passes when it compiles, runs
-/// clean through the smoke test on seeds 1 to 3 ([`coder::ai::fault`], as the coder checks it),
-/// has an icon line that draws, and passes the task's checker.
+/// if none: `compile`, `smoke` or `harness`, `icon`, `check`) and why. It passes when it
+/// compiles, runs clean through the smoke test on seeds 1 to 3 ([`coder::ai::fault`], as the
+/// coder checks it), has an icon line that draws, and passes the task's checker.
+///
+/// One smoke fault is the smoke test's own, not the program's: within a tick it takes its key,
+/// tap and click from the render before any of them, so when one hides what the next was meant
+/// for, that one reaches nothing shown (`E0213`, a bad event; an app cannot cause it). That is
+/// the stage `harness`: neither a pass nor a fail, counted apart.
 pub fn judge(task: &Task, src: &str) -> (bool, &'static str, String) {
     let fail = |stage, why: String| (false, stage, coder::ai::clip(&why, 300));
     if let Some(f) = coder::ai::fault(src, "", 3) {
@@ -268,6 +273,8 @@ pub fn judge(task: &Task, src: &str) -> (bool, &'static str, String) {
             "compile"
         } else if f.runs {
             "icon"
+        } else if f.diag.code == Some(applang::codes::BAD_EVENT) {
+            "harness"
         } else {
             "smoke"
         };
@@ -276,6 +283,8 @@ pub fn judge(task: &Task, src: &str) -> (bool, &'static str, String) {
     if icons::made::header(src.as_bytes()).is_none() {
         return fail("icon", "it has no icon line".into());
     }
+    // Checkers keep from panicking; one that does fails the app only where panics unwind (the
+    // runner refuses to run where they abort).
     let checked = std::panic::catch_unwind(|| (task.check)(src));
     match checked.unwrap_or_else(|_| Err("the checker panicked".into())) {
         Ok(()) => (true, "ok", String::new()),
@@ -284,7 +293,9 @@ pub fn judge(task: &Task, src: &str) -> (bool, &'static str, String) {
 }
 
 /// The suite's content hash, FNV-1a 64 of its id and the text of its tasks, checkers and probe
-/// (line ends aside): any change to what is asked or how it is graded is a new suite.
+/// (line ends aside): any change to what is asked or how the checkers drive and read an app is
+/// a new suite. The code beneath them (the coder's checks, applang's smoke test and runtime, the
+/// icon reader) is the harness's, which `evals` hashes apart.
 pub fn hash() -> u64 {
     let text = [ID].iter().chain(&SOURCES).flat_map(|s| s.bytes()).filter(|&b| b != b'\r');
     text.fold(0xcbf2_9ce4_8422_2325, |h, b| (h ^ u64::from(b)).wrapping_mul(0x100_0000_01b3))

@@ -166,10 +166,10 @@ fn a_receipt_says_which_model_answered() {
 
 #[test]
 fn a_summary_reads_a_gain() {
-    let (lo, hi) = summary::wilson(15, 24);
+    let (lo, hi) = summary::wilson(15.0 / 24.0, 24.0);
     // 15 of 24: 62.5%, its 95% Wilson interval 42.7% to 78.8%.
     assert!((lo - 0.4271).abs() < 0.0001 && (hi - 0.7884).abs() < 0.0001, "{lo} {hi}");
-    assert_eq!(summary::wilson(0, 0), (0.0, 1.0));
+    assert_eq!(summary::wilson(0.0, 0.0), (0.0, 1.0));
     assert!((summary::mcnemar(0, 5) - 0.0625).abs() < 1e-9 && summary::mcnemar(3, 3) == 1.0);
     let rec = |run: &str, task: &str, pass: bool, stage: &str| record::Record {
         meta: record::Meta { run: run.into(), model: run.into(), ..meta() },
@@ -202,21 +202,68 @@ fn a_summary_reads_a_gain() {
         ),
         "{table}"
     );
+    // The smoke test's own fault is not the model's: counted apart, as the AI's are.
+    let mut own = all[1].clone();
+    own.stage = "harness".into();
+    let s = summary::stats(&[&all[0], &own]);
+    assert_eq!((s.pass, s.n, s.errors), (1, 1, 1));
+    // A side that mixes suites, and sides graded by different suites, are flagged.
+    let mut other = all[4].clone();
+    other.suite_hash = 7;
+    let text = summary::compare("a", &[&all[0], &all[1]], "b", &[&all[3], &other]);
+    assert!(text.contains("warning: b mixes suite hashes"), "{text}");
+    let text = summary::compare("a", &[&all[0]], "b", &[&other]);
+    assert!(text.contains("warning: the sides were graded by different suites"), "{text}");
+}
+
+/// Trials of one task are not independent draws: twelve tasks that pass both their trials and
+/// twelve that fail both are 24 draws, not 48; tasks whose trials split as chance would are 48.
+#[test]
+fn trials_of_a_task_count_as_what_they_tell() {
+    let rec = |task: u32, pass: bool| record::Record {
+        meta: meta(),
+        task: task.to_string(),
+        pass,
+        stage: if pass { "ok" } else { "check" }.into(),
+        ..record::Record::default()
+    };
+    let eff = |rs: &[record::Record]| summary::stats(&rs.iter().collect::<Vec<_>>());
+    let same: Vec<_> = (0..24).flat_map(|t| [rec(t, t < 12), rec(t, t < 12)]).collect();
+    let s = eff(&same);
+    assert_eq!((s.pass, s.n), (24, 48));
+    assert!((s.eff - 24.0).abs() < 1e-9, "{}", s.eff);
+    let split: Vec<_> = (0..24).flat_map(|t| [rec(t, true), rec(t, false)]).collect();
+    assert!((eff(&split).eff - 48.0).abs() < 1e-9);
+    // One trial each: as many draws as tasks; all passed: as many as the tasks, whatever the trials.
+    let one: Vec<_> = (0..24).map(|t| rec(t, t % 3 > 0)).collect();
+    assert!((eff(&one).eff - 24.0).abs() < 1e-9);
+    let all: Vec<_> = (0..24).flat_map(|t| [rec(t, true), rec(t, true)]).collect();
+    assert!((eff(&all).eff - 24.0).abs() < 1e-9);
 }
 
 /// Every recorded run (`evals/replays/studio/<run>.jsonl`) replays offline to the records kept
-/// for it (`evals/results/studio.jsonl`), byte for byte, while the harness and the suite are the
-/// ones that made them: the same prompt, knobs and suite, and every request the same. Once they
-/// are not (the coder or a checker changed), its records are stale until it is graded again
-/// (`cargo run -p eval -- replay --run <run> --write`, offline), and it must at least replay
-/// the same way twice, each exchange by its place.
+/// for it (`evals/results/studio.jsonl`), and every run with records has its exchanges kept.
+///
+/// When every request a make sends now is one recorded, the records are what this code gives,
+/// exactly: they must be the ones kept, field for field (the harness's hash aside: a change to
+/// the coder or applang that grades every make the same leaves them standing). When they are
+/// not, the run is graded again offline and for free (`cargo run -p eval -- replay --run <run>
+/// --write`), so a change to a checker or to the language shows in the records as a gain or a
+/// loss. When a request is not one recorded, a run made by this very harness (its prompt, knobs
+/// and harness hashes) fails: its recording is damaged, or the harness does not replay; one
+/// made by another is stale until a live run replaces it, and must at least replay the same way
+/// twice, each exchange by its place.
 #[test]
 fn recorded_runs_replay_to_their_records() {
     let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../../evals");
     let read = |p: String| std::fs::read_to_string(p).unwrap_or_default();
     let results = record::load(&read(format!("{dir}/results/studio.jsonl")));
+    for r in &results {
+        let path = format!("{dir}/replays/studio/{}.jsonl", r.meta.run);
+        assert!(std::path::Path::new(&path).exists(), "{}: records with no replay", r.meta.run);
+    }
     let Ok(files) = std::fs::read_dir(format!("{dir}/replays/studio")) else { return };
-    let ours = (prompt_hash(), knobs_hash(&coder::Knobs::default()), makes::hash());
+    let ours = (prompt_hash(), knobs_hash(&coder::Knobs::default()), harness_hash());
     for path in files.map(|f| f.unwrap().path()) {
         let run = path.file_stem().unwrap().to_string_lossy().to_string();
         let text = std::fs::read_to_string(&path).unwrap();
@@ -225,32 +272,36 @@ fn recorded_runs_replay_to_their_records() {
         let replay = |loose: bool| {
             let mut wire = replay::Replay::load(&text);
             wire.loose = loose;
-            let lines: Vec<String> = kept
+            let now: Vec<record::Record> = kept
                 .iter()
-                .map(|r| {
-                    run::task(&r.meta, makes::find(&r.task).unwrap(), r.trial, &mut wire).0.line()
-                })
+                .map(|r| run::task(&r.meta, makes::find(&r.task).unwrap(), r.trial, &mut wire).0)
                 .collect();
-            (lines, wire.diverged)
+            (now, wire.diverged)
         };
-        let (lines, diverged) = replay(false);
-        let same = kept.iter().all(|r| (r.prompt, r.knobs, r.suite_hash) == ours);
-        if same && diverged.is_empty() {
-            for (r, line) in kept.iter().zip(&lines) {
+        let (now, diverged) = replay(false);
+        if diverged.is_empty() {
+            for (r, n) in kept.iter().zip(&now) {
                 assert_eq!(
-                    *line,
+                    record::Record { harness: r.harness, ..n.clone() }.line(),
                     r.line(),
-                    "{run}: {} trial {} replays differently",
+                    "{run}: {} trial {} grades differently now: grade it again offline \
+                     (cargo run -p eval -- replay --run {run} --write)",
                     r.task,
                     r.trial
                 );
             }
-        } else {
-            eprintln!(
-                "{run}: made by another harness or suite ({} requests differ): stale",
-                diverged.len()
-            );
-            assert_eq!(replay(true), replay(true), "{run} replays loosely the same twice");
+            continue;
         }
+        let made_here = kept.iter().all(|r| (r.prompt, r.knobs, r.harness) == ours);
+        assert!(!made_here, "{run}: made by this harness, yet {diverged:?}");
+        eprintln!("{run}: made by another harness ({} requests differ): stale", diverged.len());
+        let lines = |(rs, d): (Vec<record::Record>, Vec<String>)| {
+            (rs.iter().map(record::Record::line).collect::<Vec<_>>(), d)
+        };
+        assert_eq!(
+            lines(replay(true)),
+            lines(replay(true)),
+            "{run} replays loosely the same twice"
+        );
     }
 }

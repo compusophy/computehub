@@ -84,11 +84,11 @@ programs/    wasm32-wasip1 programs (dist/bin/) and their app language
   terminal/  the Terminal; vt/ term/: its parser, screen model
   sh/        the shell: line editor, commands, jobs
   toolbox/   test programs, one binary
-  evals/ makes/  the evals: runs, records, replays; Suite 1, apps graded
+  evals/ makes/  the evals, Suite 1 (evals/README.md)
 assets/fonts/  the fonts (see Fonts below)
 api/           server functions (Vercel, Node): ai.mjs, feedback.mjs
 tools/serve/   dev-only static server for dist/; mocks /api/*
-tools/eval/    dev-only: runs evals/ suites on the free AI (curl)
+tools/eval/    dev-only eval runner (curl, the free AI)
 web/index.html the page: <canvas id="os"> + a one-line bootstrap
 web/worker.js  the program worker's one-line bootstrap
 scripts/       caps.sh, budget.sh, build-web.sh, deploy.sh (`prod`: production)
@@ -121,9 +121,9 @@ cargo run -p serve --release -- dist 8080   # preview; --plain: no COOP/COEP
 grain's.
 
 Fonts, each group with its budget: **boot** (Inter Regular, in `os`),
-**deferred** (`fonts/deferred/*`, after the first frame), **lazy**
-(`fonts/symbols-*.ttf`, when a terminal first opens). Subsets and OFL
-texts: `assets/fonts/README.md`.
+**deferred** (`fonts/deferred/*`, after the first frame; until then bold is
+Regular, mono cells empty), **lazy** (`fonts/symbols-*.ttf`, when a terminal
+first opens). Subsets and OFL texts: `assets/fonts/README.md`.
 
 ## Safety (the owner runs unattended; never trigger an approval prompt)
 

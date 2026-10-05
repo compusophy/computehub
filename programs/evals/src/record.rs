@@ -1,6 +1,7 @@
 //! A run's records: one JSON line per task and trial, appended to `evals/results/<suite>.jsonl`.
-//! Each line stands alone: which run (its id, date, commit, model), what was run (the suite and
-//! its content hash, the coder's prompt hash and knobs hash), and how the task went (pass or
+//! Each line stands alone: which run (its id, date, the commit the AI was asked at, model), what
+//! was run (the suite and its content hash, the coder's prompt hash and knobs hash, the hash of
+//! the harness that made and graded it), and how the task went (pass or
 //! fail, the stage that failed and the checker's reason, the make's outcome, requests, tokens in
 //! and out, micro-dollars, how many requests' costs were estimated and how many another model
 //! answered, the make's milliseconds and the program's lines). Nothing in it is read from a
@@ -26,12 +27,15 @@ pub struct Record {
     pub suite_hash: u64,
     pub prompt: u64,
     pub knobs: u64,
+    /// The harness's hash ([`crate::harness_hash`]) when it was made, or last graded again.
+    pub harness: u64,
     pub task: String,
     pub size: String,
     pub trial: u32,
     pub pass: bool,
     /// `ok`, or the first stage that failed: `ai` (the AI failed: not the model's), `make` (no
-    /// program installed), `compile`, `smoke`, `icon`, `check`.
+    /// program installed), `compile`, `smoke` (or `harness`: the smoke test's own fault, not the
+    /// model's either), `icon`, `check`.
     pub stage: String,
     pub reason: String,
     pub outcome: String,
@@ -75,7 +79,7 @@ fn n(o: &mut String, key: &str, n: u64) {
 impl Record {
     /// Its JSON line, newline included.
     pub fn line(&self) -> String {
-        let mut o = String::from("{\"v\":1");
+        let mut o = String::from("{\"v\":2");
         s(&mut o, "suite", &self.suite);
         s(&mut o, "suite_hash", &hex(self.suite_hash));
         s(&mut o, "run", &self.meta.run);
@@ -84,6 +88,7 @@ impl Record {
         s(&mut o, "model", &self.meta.model);
         s(&mut o, "prompt", &hex(self.prompt));
         s(&mut o, "knobs", &hex(self.knobs));
+        s(&mut o, "harness", &hex(self.harness));
         s(&mut o, "task", &self.task);
         s(&mut o, "size", &self.size);
         n(&mut o, "trial", self.trial.into());
@@ -116,6 +121,7 @@ impl Record {
             suite_hash: unhex(&s("suite_hash")?)?,
             prompt: unhex(&s("prompt")?)?,
             knobs: unhex(&s("knobs")?)?,
+            harness: s("harness").and_then(|h| unhex(&h)).unwrap_or(0),
             task: s("task")?,
             size: s("size")?,
             trial: n("trial")? as u32,

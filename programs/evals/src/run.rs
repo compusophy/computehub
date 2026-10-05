@@ -154,7 +154,8 @@ pub fn make(
 
 /// How `done` fares: whether it passes, the first stage that failed (or `ok`) and why: `ai` when
 /// the AI failed (not the model's), `make` when it installed no program, else as
-/// [`makes::judge`] grades the program it installed.
+/// [`makes::judge`] grades the program it installed (its `harness`, the smoke test's own fault,
+/// not the model's either).
 pub fn grade(task: &Task, done: &Done) -> (bool, &'static str, String) {
     let fail = |stage, why: String| (false, stage, coder::ai::clip(&why, 300));
     if done.outcome == Outcome::Failed {
@@ -177,6 +178,7 @@ pub fn task(meta: &Meta, task: &Task, trial: u32, wire: &mut dyn Wire) -> (Recor
         suite_hash: makes::hash(),
         prompt: crate::prompt_hash(),
         knobs: crate::knobs_hash(&k),
+        harness: crate::harness_hash(),
         task: task.id.into(),
         size: task.size.into(),
         trial,

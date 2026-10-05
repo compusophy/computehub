@@ -705,18 +705,25 @@ pub(crate) fn minesweeper(src: &str) -> Result<(), String> {
                 "a tap after Flag reveals {c}, {r} instead of flagging it"
             );
         }
+        // Every safe square tapped, row by row, until it says You win (a flood fill may win
+        // before the last tap), which it may say only once none is hidden.
         let (mut p, b) = first()?;
-        let mut before = p.texts();
-        for (c, r) in squares(9, 9).filter(|s| !mines.contains(s)) {
-            before = p.texts();
+        let start = p.texts();
+        let safe: Vec<(i64, i64)> = squares(9, 9).filter(|s| !mines.contains(s)).collect();
+        let mut won = false;
+        for &(c, r) in &safe {
             p.tap_cell(b, c, r)?;
+            if holds(&fresh(&start, &p), "you win|you won|win!") {
+                if let Some((hc, hr)) = safe.iter().find(|s| p.look(b, s.0, s.1) == hidden) {
+                    return Err(format!(
+                        "it says You win while {hc}, {hr} is hidden (seed {seed})"
+                    ));
+                }
+                won = true;
+                break;
+            }
         }
-        let won = fresh(&before, &p);
-        need!(
-            holds(&won, "you win|you won|win!"),
-            "every safe square revealed shows {}",
-            shown(&p)
-        );
+        need!(won, "every safe square revealed shows {}", shown(&p));
     }
     Ok(())
 }

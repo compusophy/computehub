@@ -9,7 +9,7 @@
 use applang::{App, Diag, Draw, Event, Limits, Node, Shape};
 
 /// The most ticks one [`Probe::wait`] lets pass.
-const MAX_TICKS: u32 = 250_000;
+pub const MAX_TICKS: u32 = 250_000;
 
 /// A running app and what it showed last.
 pub struct Probe {
@@ -135,17 +135,25 @@ impl Probe {
     }
 
     /// Lets `ms` pass in ticks of its own timer (its shortest `every` now), as the desktop sends
-    /// them; time stops passing while no timer runs.
+    /// them; time stops passing while no timer runs. A timer so fast that [`MAX_TICKS`] ticks
+    /// do not let `ms` pass is an `Err`, never a reading taken early.
     pub fn wait(&mut self, ms: u64) -> Result<(), String> {
-        let (mut left, mut n) = (ms, 0);
-        while left > 0 && n < MAX_TICKS {
+        let mut left = ms;
+        for _ in 0..MAX_TICKS {
             let every = u64::from(self.app.timer());
-            if every == 0 {
-                break;
+            if left == 0 || every == 0 {
+                return self.render("waiting");
             }
             let dt = every.min(left);
             self.app.handle(&Event::Tick { ms: dt as u32 }).map_err(|d| said("a tick", &d))?;
-            (left, n) = (left - dt, n + 1);
+            left -= dt;
+        }
+        let every = self.app.timer();
+        if left > 0 && every > 0 {
+            return Err(format!(
+                "its timer (every {every}) needs more than {MAX_TICKS} ticks to let {ms} ms pass, \
+                 the most a checker lets pass"
+            ));
         }
         self.render("waiting")
     }

@@ -7,6 +7,12 @@
 //! leaves the make exactly as the stream did: the make decides only after each chunk, from what
 //! the chunks so far hold and the time, so every chunk before the last that it heard changes
 //! nothing it decides. `evals/replays/<suite>/<run>.jsonl` holds a run's, a line each, in order.
+//!
+//! So a replay is exact for the coder that reads streams as this one does, and only for it: the
+//! thinking's text is gone (its length is kept), and so are the chunks' times and what came
+//! after the program. A harness that reads either, or decides inside a stream differently (its
+//! time limits, its runaway guard), is approximated by a `loose` replay, never measured by it;
+//! an agent that calls tools will need its exchanges kept whole.
 
 use coder::ai::put_num;
 use coder::json::{Json, Usage, put};
@@ -181,9 +187,9 @@ impl Exchange {
 }
 
 /// A recorded run served again: each task's trial gets its exchanges in order, each checked
-/// against the request's hash (unless `loose`: then served by place alone, to see a changed
-/// harness run on). The first request that differs, or that has no exchange, is a divergence:
-/// it is answered as unreachable, and noted.
+/// against the request's hash (unless `loose`: then served by place alone, to see roughly how a
+/// changed harness runs on old answers). The first request that differs, or that has no
+/// exchange, is a divergence: it is answered as unreachable, and noted.
 #[derive(Debug, Default)]
 pub struct Replay {
     all: Vec<Exchange>,
