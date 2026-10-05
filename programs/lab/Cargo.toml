@@ -1,6 +1,6 @@
 [package]
 name = "compusophy-lab"
-description = "compusophyOS's model lab, a dev tool that never ships: the corpus of verified applang programs (every one in the repo that compiles but the evals' answer keys, deduplicated, content-addressed, augmented), an n-gram baseline, and the commands that train tiny on it and measure what it writes."
+description = "compusophyOS's model lab, a dev tool that never ships: the corpus of verified applang programs (every one in the repo that compiles but the evals' answer keys, deduplicated, content-addressed, augmented), decoding constrained by applang's lexer and parser, and the commands that train tiny on it and measure what it writes."
 publish = false
 version.workspace = true
 edition.workspace = true

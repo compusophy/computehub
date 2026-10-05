@@ -330,3 +330,28 @@ fn tiled_products_sum_as_the_plain_ones_do() {
         assert_eq!(out[t * oc + o], ops::dot(&inp[t * ic..][..ic], &w[o * ic..][..ic]));
     }
 }
+
+#[test]
+fn the_ngram_is_a_distribution_and_backs_off() {
+    let stream: Vec<u32> = [EOS, 1, 2, 3, 1, 2, 4, EOS, 1, 2, 3, EOS].to_vec();
+    let g = Ngram::train(&stream, 3, 260);
+    for ctx in [&[][..], &[1, 2], &[9, 9]] {
+        let sum: f64 = (0..260).map(|w| g.prob(ctx, w)).sum();
+        assert!((sum - 1.0).abs() < 1e-9, "{ctx:?}: {sum}");
+    }
+    assert!(g.prob(&[1, 2], 3) > g.prob(&[1, 2], 4) && g.prob(&[1, 2], 4) > g.prob(&[1, 2], 5));
+    // Sampling after 1 2 draws only what followed it; after an unseen context, backs off.
+    let mut rng = Rng::new(3);
+    for _ in 0..50 {
+        assert!(matches!(g.sample(&[1, 2], 1.0, &mut rng), 3 | 4));
+    }
+    let out = g.generate(&[EOS, 1], 20, 1.0, &mut rng);
+    assert_eq!(out.last(), Some(&EOS));
+    assert!(g.loss(std::slice::from_ref(&stream)) < g.loss(&[vec![5, 6, 7, 8]]));
+    // Among the tokens let through: from the longest context that had one, else none.
+    for _ in 0..20 {
+        assert_eq!(g.sample_where(&[1, 2], 1.0, &mut rng, &|t| t == 4), Some(4));
+        assert_eq!(g.sample_where(&[1, 2], 1.0, &mut rng, &|t| t == EOS), Some(EOS));
+    }
+    assert_eq!(g.sample_where(&[1, 2], 1.0, &mut rng, &|t| t == 9), None);
+}

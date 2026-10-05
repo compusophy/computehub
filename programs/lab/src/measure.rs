@@ -4,10 +4,10 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use tiny::{EOS, Model, Rng, Session, Tokenizer};
+use tiny::{EOS, Model, Ngram, Rng, Session, Tokenizer};
 
+use crate::constrain::{self, Guide, Rule};
 use crate::corpus;
-use crate::ngram::Ngram;
 
 /// The headers prompted: five like apps in the corpus of 2026-10-05, five like none of its
 /// apps.
@@ -28,12 +28,10 @@ pub const PROMPTS: [&str; 10] = [
 pub const EACH: usize = 10;
 /// The most tokens a program may take.
 pub const MAX_TOKENS: usize = 2048;
-/// How a writer samples: temperature (chosen before anything was measured; [`SWEEP`] shows
-/// others), and top-k (the transformer's).
+/// How a writer samples: temperature (chosen before anything was measured; the first run's
+/// sweep of others, in `results.md`, found none better), and top-k (the transformer's).
 pub const TEMP: f32 = 0.8;
 pub const TOP_K: usize = 40;
-/// The other temperatures the transformers are measured at.
-pub const SWEEP: [f32; 3] = [0.2, 0.5, 1.0];
 
 /// One program written, and the verdict on it.
 #[derive(Debug, Clone, Default)]
@@ -116,55 +114,105 @@ fn job(i: usize, seed: u64) -> (usize, Rng) {
     (i / EACH, Rng::new(seed ^ (0x5eed_0000 + i as u64)))
 }
 
-/// 100 programs from `model` at `temp`, judged, on `threads` threads.
+/// What draws a writer's next token: after `seq`, among the tokens `allow` lets through
+/// (none if it has none to give).
+pub(crate) type Draw<'a> = dyn FnMut(&[u32], &dyn Fn(u32) -> bool, &mut Rng) -> Option<u32> + 'a;
+
+/// The tokens a writer writes after prompt `p` under `rule`, up to [`MAX_TOKENS`] or the end
+/// token (kept): each drawn among those the rule lets through (the first healing the prompt),
+/// drawn again without one the parser refuses ([`constrain::TRIES`] times at most). With none
+/// to draw, the end token (the first: the header's own last token).
+pub(crate) fn write(
+    tok: &Tokenizer,
+    p: usize,
+    rule: Rule,
+    draw: &mut Draw<'_>,
+    rng: &mut Rng,
+) -> Vec<u32> {
+    let pr = prompt(tok, p);
+    let mut guide = Guide::new(tok, rule, &tok.decode(&pr.tokens[1..]));
+    let mut seq = pr.tokens.clone();
+    let start = seq.len();
+    while seq.len() - start < MAX_TOKENS {
+        let first = seq.len() == start;
+        let mut mask = guide.mask();
+        let mut next = None;
+        for _ in 0..constrain::TRIES {
+            let allow = |t: u32| mask[t as usize] && (!first || heals(tok, &pr, t));
+            let Some(t) = draw(&seq, &allow, rng) else { break };
+            next = Some(t);
+            if guide.parses(t) {
+                break;
+            }
+            mask[t as usize] = false;
+        }
+        let last = tok.encode(PROMPTS[p]).last().copied().unwrap_or(EOS);
+        let t = next.unwrap_or(if first { last } else { EOS });
+        guide.push(t);
+        seq.push(t);
+        if t == EOS {
+            break;
+        }
+    }
+    seq.split_off(start)
+}
+
+/// 100 programs from `model` at `temp` under `rule`, judged, on `threads` threads.
 pub fn from_model(
     m: &Model,
     tok: &Tokenizer,
     known: &BTreeSet<u64>,
-    (seed, temp): (u64, f32),
+    (seed, temp, rule): (u64, f32, Rule),
     threads: usize,
 ) -> Vec<Sample> {
     let jobs: Vec<usize> = (0..PROMPTS.len() * EACH).collect();
     corpus::par_map(&jobs, threads, |&i| {
         let (p, mut rng) = job(i, seed);
-        let pr = prompt(tok, p);
-        let mut s = Session::new(m);
-        let mut logits = Vec::new();
-        for &t in &pr.tokens {
-            logits = s.feed(t).to_vec();
-        }
-        for (t, l) in (0u32..).zip(&mut logits) {
-            if !heals(tok, &pr, t) {
-                *l = f32::NEG_INFINITY;
+        let (ctx, mut s) = (m.cfg.ctx, Session::new(m));
+        let (mut fed, mut logits) = (0, Vec::new());
+        // The model reads what it has not yet; when its context fills, it reads the last half
+        // of it again and goes on from there (as `tiny::generate` does).
+        let mut draw = |seq: &[u32], allow: &dyn Fn(u32) -> bool, rng: &mut Rng| {
+            while fed < seq.len() {
+                if s.full() {
+                    s.reset();
+                    for &t in &seq[fed - ctx / 2..fed] {
+                        s.feed(t);
+                    }
+                }
+                logits = s.feed(seq[fed]).to_vec();
+                fed += 1;
             }
-        }
-        let mut out = vec![tiny::sample(&logits, temp, TOP_K, &mut rng)];
-        let seq = [pr.tokens.as_slice(), &out].concat();
-        out.extend(tiny::generate(m, &seq, MAX_TOKENS - 1, Some(EOS), (temp, TOP_K), &mut rng));
+            let masked: Vec<f32> = (0u32..)
+                .zip(&logits)
+                .map(|(t, &l)| if allow(t) { l } else { f32::NEG_INFINITY })
+                .collect();
+            let any = (0u32..).zip(&logits).any(|(t, _)| allow(t));
+            any.then(|| tiny::sample(&masked, temp, TOP_K, rng))
+        };
+        let out = write(tok, p, rule, &mut draw, &mut rng);
         let (text, ended) = program(tok, p, &out);
         judge(p, text, ended, known)
     })
 }
 
-/// 100 programs from `g`, as [`from_model`].
+/// 100 programs from `g` under `rule`, as [`from_model`]; it draws from the longest context
+/// it has seen followed by a token let through.
 pub fn from_ngram(
     g: &Ngram,
     tok: &Tokenizer,
     known: &BTreeSet<u64>,
-    seed: u64,
+    (seed, rule): (u64, Rule),
     threads: usize,
 ) -> Vec<Sample> {
     let jobs: Vec<usize> = (0..PROMPTS.len() * EACH).collect();
     corpus::par_map(&jobs, threads, |&i| {
         let (p, mut rng) = job(i, seed);
-        let pr = prompt(tok, p);
         let temp = f64::from(TEMP);
-        // Never seen after any context: the token backed off, as the header has it.
-        let first = g.sample_where(&pr.tokens, temp, &mut rng, &|t| heals(tok, &pr, t));
-        let last = tok.encode(PROMPTS[p]).last().copied().unwrap_or(EOS);
-        let mut out = vec![first.unwrap_or(last)];
-        let seq = [pr.tokens.as_slice(), &out].concat();
-        out.extend(g.generate(&seq, MAX_TOKENS - 1, temp, &mut rng));
+        let mut draw = |seq: &[u32], allow: &dyn Fn(u32) -> bool, rng: &mut Rng| {
+            g.sample_where(&seq[seq.len().saturating_sub(g.n - 1)..], temp, rng, allow)
+        };
+        let out = write(tok, p, rule, &mut draw, &mut rng);
         let (text, ended) = program(tok, p, &out);
         judge(p, text, ended, known)
     })

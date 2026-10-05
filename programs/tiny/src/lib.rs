@@ -10,7 +10,8 @@
 //! - [`Trainer`]: AdamW with gradient clipping, the batch's sequences spread over threads;
 //! - [`Session`] and [`generate`]: sampling (temperature, top-k) with a KV cache;
 //! - [`save`] and [`load`]: one weights file with its tokenizer and a note, ending in its
-//!   FNV-1a hash ([`fnv`]).
+//!   FNV-1a hash ([`fnv`]);
+//! - [`Ngram`]: the baseline a model must beat, counts over the same tokens.
 //!
 //! Seeded and ordered: the same seed, data and steps make the same weights, bit for bit, on one
 //! thread or eight (each sequence's gradient is its own, and they are summed in order).
@@ -34,6 +35,7 @@ mod bpe;
 mod file;
 mod infer;
 mod model;
+mod ngram;
 mod ops;
 #[cfg(test)]
 mod tests;
@@ -43,6 +45,7 @@ pub use bpe::{EOS, PIECE, Tokenizer};
 pub use file::{fnv, load, save};
 pub use infer::{Session, generate, sample};
 pub use model::{Acts, Model};
+pub use ngram::Ngram;
 pub use train::{AdamW, Stats, Trainer};
 
 /// A model's shape. The MLP is 4 times `dim` wide; each head is `dim / heads` wide.

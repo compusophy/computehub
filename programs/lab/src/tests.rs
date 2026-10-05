@@ -3,11 +3,11 @@ use std::fs;
 
 use tiny::{EOS, Rng, Tokenizer};
 
-use crate::augment::{rename, shuffle_states};
+use crate::augment::{drop_line, rename, shuffle_states, vary_numbers};
 use crate::collect::{SKIP, blocks, find, literals};
+use crate::constrain::{Lex, Rule, parses};
 use crate::corpus::{Corpus, Program, compiles, content, hold_out, runs, shape};
-use crate::measure::{PROMPTS, judge, program, prompt};
-use crate::ngram::Ngram;
+use crate::measure::{PROMPTS, judge, program, prompt, write};
 
 #[test]
 fn literals_are_read_as_rust_reads_them() {
@@ -147,28 +147,135 @@ fn states_are_reordered_and_nothing_else_moves() {
 }
 
 #[test]
-fn the_ngram_is_a_distribution_and_backs_off() {
-    let stream: Vec<u32> = [EOS, 1, 2, 3, 1, 2, 4, EOS, 1, 2, 3, EOS].to_vec();
-    let g = Ngram::train(&stream, 3, 260);
-    for ctx in [&[][..], &[1, 2], &[9, 9]] {
-        let sum: f64 = (0..260).map(|w| g.prob(ctx, w)).sum();
-        assert!((sum - 1.0).abs() < 1e-9, "{ctx:?}: {sum}");
+fn a_line_dropped_and_numbers_changed_make_other_programs() {
+    let mut dropped = BTreeSet::new();
+    for seed in 0..30 {
+        let Some(out) = drop_line(COUNTER, &mut Rng::new(seed)) else { continue };
+        // One line of code fewer, its brackets closed on it; the comment stays.
+        assert_eq!(out.lines().count() + 1, COUNTER.lines().count(), "{out}");
+        assert!(out.starts_with("// A counter.\n"), "{out}");
+        dropped.insert(out);
     }
-    assert!(g.prob(&[1, 2], 3) > g.prob(&[1, 2], 4) && g.prob(&[1, 2], 4) > g.prob(&[1, 2], 5));
-    // Sampling after 1 2 draws only what followed it; after an unseen context, backs off.
-    let mut rng = Rng::new(3);
-    for _ in 0..50 {
-        assert!(matches!(g.sample(&[1, 2], 1.0, &mut rng), 3 | 4));
+    assert!(dropped.len() >= 4, "{}", dropped.len());
+    assert!(dropped.iter().any(|t| compiles(t) && shape(t) != shape(COUNTER)));
+    assert_eq!(drop_line("// only\nlabel 1;\n", &mut Rng::new(1)), None);
+    let mut varied = BTreeSet::new();
+    for seed in 0..20 {
+        let Some(out) = vary_numbers(COUNTER, &mut Rng::new(seed)) else { continue };
+        assert!(compiles(&out) && out.lines().count() == COUNTER.lines().count(), "{out}");
+        varied.insert(out);
     }
-    let out = g.generate(&[EOS, 1], 20, 1.0, &mut rng);
-    assert_eq!(out.last(), Some(&EOS));
-    assert!(g.loss(std::slice::from_ref(&stream)) < g.loss(&[vec![5, 6, 7, 8]]));
-    // Among the tokens let through: from the longest context that had one, else none.
-    for _ in 0..20 {
-        assert_eq!(g.sample_where(&[1, 2], 1.0, &mut rng, &|t| t == 4), Some(4));
-        assert_eq!(g.sample_where(&[1, 2], 1.0, &mut rng, &|t| t == EOS), Some(EOS));
+    assert!(varied.len() >= 8, "{}", varied.len());
+    assert_eq!(vary_numbers("label \"7\";\n", &mut Rng::new(1)), None, "strings stay");
+}
+
+/// Whether applang's lexer refuses `src`: the compiler's first error is a lexer code.
+fn lex_error(src: &str) -> bool {
+    applang::compile(src).is_err_and(|d| d.code.is_some_and(|c| (1..=5).contains(&c)))
+}
+
+/// Whether `src`'s brackets match, as applang's tokens have them (strings and comments aside).
+fn matched(src: &str) -> bool {
+    let mut open = Vec::new();
+    for (span, class) in applang::highlight(src) {
+        let t = &src[span.start..span.end];
+        match (class, t) {
+            (applang::Class::Punct, "(" | "[" | "{") => open.push(t),
+            (applang::Class::Punct, ")") if open.pop() != Some("(") => return false,
+            (applang::Class::Punct, "]") if open.pop() != Some("[") => return false,
+            (applang::Class::Punct, "}") if open.pop() != Some("{") => return false,
+            _ => {}
+        }
     }
-    assert_eq!(g.sample_where(&[1, 2], 1.0, &mut rng, &|t| t == 9), None);
+    open.is_empty()
+}
+
+#[test]
+fn the_lexer_rule_is_applangs_lexer() {
+    let snake = fs::read_to_string(crate::root().join("programs/applang/shots/snake.app")).unwrap();
+    let ok = |src: &str| {
+        let mut lex = Lex::default();
+        lex.feed(src.as_bytes()) && lex.can_end()
+    };
+    assert!(ok(COUNTER) && ok(&snake));
+    #[rustfmt::skip]
+    let bad = [
+        "label \"open\n;", "label \"a\\q\";", "label 3x;", "label 'a';", "a # b", "label 1 . 2;",
+        "a & b", "/* open", "row { label 1; ]", "row { label 1;", "label 1; }", "label \"é",
+    ];
+    for src in bad {
+        assert!(!ok(src), "{src:?}");
+    }
+    // Mutated programs: the rule refuses exactly what the lexer refuses, or brackets that do
+    // not match.
+    let bytes = b" \n\"\\/*.&|'#09az_(){}[];=-+!<>";
+    let mut rng = Rng::new(5);
+    for _ in 0..3000 {
+        let mut m = COUNTER.as_bytes().to_vec();
+        for _ in 0..1 + rng.below(3) {
+            let at = rng.below(m.len() + 1);
+            m.insert(at, bytes[rng.below(bytes.len())]);
+        }
+        let m = String::from_utf8(m).unwrap();
+        assert_eq!(ok(&m), !lex_error(&m) && matched(&m), "{m}");
+    }
+}
+
+#[test]
+fn the_parser_rule_lets_every_program_through_as_it_is_written() {
+    let snake = fs::read_to_string(crate::root().join("programs/applang/shots/snake.app")).unwrap();
+    for src in [COUNTER, snake.as_str()] {
+        let mut lex = Lex::default();
+        for (i, b) in src.bytes().enumerate() {
+            assert!(lex.feed(&[b]));
+            if src.is_char_boundary(i + 1) {
+                assert!(parses(&src[..=i], &lex, false), "refused at {i}: {:?}", &src[..=i]);
+            }
+        }
+        assert!(parses(src, &lex, true));
+    }
+    // What no more text can mend: an error before the end of what is whole.
+    let refused = |src: &str| {
+        let mut lex = Lex::default();
+        lex.feed(src.as_bytes());
+        !parses(src, &lex, false)
+    };
+    for src in ["label \"a\" label ", "state = ", "label 1;\n)", "label ;", "row { if }"] {
+        assert!(refused(src), "{src:?}");
+    }
+    // A name where only a name may not go is judged whole; one that may become a word, not yet.
+    assert!(refused("label 1 abc") && !refused("label 1; la") && !refused("state n = 0;\ns"));
+    // An operator, by each it can still be: `.` only as `..`, `-` as `-`, `-=` or `->`.
+    assert!(refused("label 1 .") && !refused("label 1 -") && !refused("fn f() -"));
+    let mut lex = Lex::default();
+    lex.feed(b"label 1");
+    assert!(!parses("label 1", &lex, true), "a program ends only where it parses");
+}
+
+#[test]
+fn constrained_writers_keep_their_rules() {
+    let tok = Tokenizer::bytes();
+    for rule in [Rule::Lexer, Rule::Parser] {
+        for seed in 0..4 {
+            // A writer that draws any token let through, the end token often.
+            let mut draw = |_: &[u32], allow: &dyn Fn(u32) -> bool, rng: &mut Rng| {
+                if allow(EOS) && rng.below(4) == 0 {
+                    return Some(EOS);
+                }
+                let ok: Vec<u32> = (0..tok.vocab() as u32).filter(|&t| allow(t)).collect();
+                ok.get(rng.below(ok.len().max(1))).copied()
+            };
+            let mut rng = Rng::new(seed);
+            let out = write(&tok, (seed as usize) % PROMPTS.len(), rule, &mut draw, &mut rng);
+            let (text, ended) = program(&tok, (seed as usize) % PROMPTS.len(), &out);
+            assert!(ended, "{rule:?} {seed}: {text}");
+            assert!(!lex_error(&text) && matched(&text), "{rule:?}: {text}");
+            if rule == Rule::Parser {
+                let parsed = applang::compile(&text);
+                assert!(parsed.is_ok() || parsed.is_err_and(|d| d.code >= Some(301)), "{text}");
+            }
+        }
+    }
 }
 
 #[test]
