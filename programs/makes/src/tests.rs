@@ -20,6 +20,24 @@ fn every_reference_passes_its_checker() {
     assert!(bad.is_empty(), "{bad:#?}");
 }
 
+/// Other designs the descriptions allow pass too (`refs/alt/<task>-<how>.app`): boards as grid
+/// widgets, cards that turn back on a timer, a die that tumbles, a count drawn on a canvas, a
+/// pick written apart from its heading, a Start the description never asked for.
+#[test]
+fn every_alternative_design_passes() {
+    let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/refs/alt");
+    let mut bad = Vec::new();
+    for path in std::fs::read_dir(dir).unwrap().map(|e| e.unwrap().path()) {
+        let name = path.file_stem().unwrap().to_string_lossy().to_string();
+        let t = find(name.split('-').next().unwrap()).unwrap();
+        let (pass, stage, why) = judge(t, &std::fs::read_to_string(&path).unwrap());
+        if !pass {
+            bad.push(format!("{name}: {stage} {why}"));
+        }
+    }
+    assert!(bad.is_empty(), "{bad:#?}");
+}
+
 /// Programs one mistake away from a reference, and the stage that must catch it: each checker
 /// tells a working app from a broken one.
 const MUTANTS: &[(&str, &str, &str, &str)] = &[

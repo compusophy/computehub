@@ -201,10 +201,11 @@ pub fn task(meta: &Meta, task: &Task, trial: u32, wire: &mut dyn Wire) -> (Recor
     for (i, x) in log.iter().enumerate() {
         let turn = done.receipt.turns.get(i);
         match (x.receipt, turn) {
-            (Some([i, o, u]), _) => {
+            (Some(receipt @ [i, o, u]), _) => {
                 (r.tokens_in, r.tokens_out) =
                     (r.tokens_in + u64::from(i), r.tokens_out + u64::from(o));
                 r.usd_micros += u64::from(u);
+                r.fallback += u32::from(answered(&meta.model, receipt) != meta.model);
             }
             (None, Some(t)) if x.status < 300 && x.fed.is_some() => {
                 (r.tokens_in, r.tokens_out) =
@@ -216,4 +217,26 @@ pub fn task(meta: &Meta, task: &Task, trial: u32, wire: &mut dyn Wire) -> (Recor
         }
     }
     (r, log)
+}
+
+/// The free AI's models, the first its default.
+pub const MODELS: [&str; 2] = ["zai/glm-5.3", "zai/glm-5.3-flash"];
+
+/// Which of [`MODELS`] answered a request asked of `asked`, by what its receipt says it cost
+/// (tokens in and out, micro-dollars). The free AI may answer with another (GLM 5.3 falls back to
+/// Flash when its provider is busy), and its stream may not say so; but each model's prices
+/// bound a reply's cost (all of its input cached, at 0.186 of the price, or none), within 5%
+/// and a micro-dollar, and the models' bounds never overlap (Flash's output costs a ninth).
+pub fn answered(asked: &str, [i, o, usd]: [u32; 3]) -> &str {
+    let fits = |m: &str| {
+        let (pin, pout) = coder::receipt::rates(m);
+        let (i, o, nano) = (u64::from(i), u64::from(o), u64::from(usd) * 1000);
+        let (lo, hi) = (i * pin * 186 / 1000 + o * pout, i * pin + o * pout);
+        nano + nano / 20 + 1000 >= lo && nano <= hi + hi / 20 + 1000
+    };
+    match MODELS.iter().find(|&&m| fits(m)) {
+        _ if fits(asked) => asked,
+        Some(m) => m,
+        None => asked,
+    }
 }

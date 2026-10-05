@@ -14,6 +14,10 @@ macro_rules! need {
     };
 }
 
+/// How long a checker lets an animation run (a die tumbling, a disc falling, tiles sliding)
+/// before it reads the result: time passes only while the app runs a timer.
+const SETTLE: u64 = 3000;
+
 /// What `p` shows, quoted and clipped, for a reason.
 fn shown(p: &Probe) -> String {
     clip(&format!("{:?}", p.texts()), 200)
@@ -106,6 +110,8 @@ pub(crate) fn dice(src: &str) -> Result<(), String> {
         let mut p = Probe::start(src, seed)?;
         for _ in 0..12 {
             p.click("Roll")?;
+            // A die may tumble a while before it settles.
+            p.wait(SETTLE)?;
             let draws = p.canvas().map_or(&[][..], |c| c.draws);
             let pips = draws.iter().filter(|d| d.shape == Shape::Circle).count() as i64;
             let said = p.numbers().contains(&pips);
@@ -143,7 +149,7 @@ pub(crate) fn traffic(src: &str) -> Result<(), String> {
             _ => Err(format!("the lights' colors, top to bottom, are {colors:?}")),
         }
     };
-    let mut p = Probe::start(src, 1)?;
+    let mut p = Probe::begin(src, 1)?;
     let mut t = 0;
     for (at, want) in
         [(0, 2), (500, 2), (1500, 2), (2500, 2), (3500, 1), (4500, 0), (6500, 0), (7500, 2)]
@@ -180,21 +186,42 @@ pub(crate) fn stopwatch(src: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Rock, paper, scissors: a pick is its place here.
+const PICKS: [&str; 3] = ["rock", "paper", "scissors"];
+
+/// The computer's pick: after "computer" in the text that says it; else, on a canvas, the pick
+/// written nearest that text (its own column or row); else the first pick in a later text.
+fn their_pick(p: &Probe) -> Option<usize> {
+    let first = |t: &str| {
+        let at = |(i, k): (usize, &&str)| Some((t.find(*k)?, i));
+        PICKS.iter().enumerate().filter_map(at).min().map(|x| x.1)
+    };
+    let texts: Vec<String> = p.texts().iter().map(|t| crate::probe::fold(t)).collect();
+    let at = texts.iter().position(|t| t.contains("computer"))?;
+    if let Some(i) = first(&texts[at][texts[at].find("computer")? + 8..]) {
+        return Some(i);
+    }
+    let draws = p.canvas().map_or(&[][..], |c| c.draws).iter().filter(|d| d.shape == Shape::Text);
+    let on: Vec<(i64, i64, String)> =
+        draws.map(|d| (d.at[0].into(), d.at[1].into(), crate::probe::fold(&d.text))).collect();
+    if let Some((x, y, _)) = on.iter().find(|t| t.2.contains("computer")) {
+        let near =
+            on.iter().filter_map(|t| Some(((t.0 - x).pow(2) + (t.1 - y).pow(2), first(&t.2)?)));
+        if let Some((_, i)) = near.min() {
+            return Some(i);
+        }
+    }
+    texts[at + 1..].iter().find_map(|t| first(t))
+}
+
 pub(crate) fn rps(src: &str) -> Result<(), String> {
-    const PICKS: [&str; 3] = ["rock", "paper", "scissors"];
     let mut theirs = Vec::new();
     for seed in 1..=3 {
         let mut p = Probe::start(src, seed)?;
         for i in 0..10 {
             let mine = PICKS[i % 3];
             p.click(mine)?;
-            // Their pick: the first after "computer" in a text that says it.
-            let pick = p.texts().iter().find_map(|t| {
-                let t = crate::probe::fold(t);
-                let rest = &t[t.find("computer")? + 8..];
-                PICKS.iter().filter_map(|k| Some((rest.find(k)?, *k))).min()
-            });
-            let Some((_, pick)) = pick else {
+            let Some(pick) = their_pick(&p).map(|i| PICKS[i]) else {
                 return Err(format!("{mine} shows no Computer: pick, but {}", shown(&p)));
             };
             let words: Vec<String> = p.texts().iter().map(|t| crate::probe::fold(t)).collect();
@@ -249,6 +276,11 @@ pub(crate) fn guess(src: &str) -> Result<(), String> {
                 (false, true, false) => lo = g + 1,
                 _ => return Err(format!("guessing {g} shows {}", shown(&p))),
             }
+            need!(
+                lo <= hi,
+                "its answers leave no number from 1 to 100 (seed {seed}): {}",
+                shown(&p)
+            );
         }
         need!(found.is_some(), "8 halving guesses never hear Correct (seed {seed})");
         secrets.push(found);
@@ -344,6 +376,7 @@ pub(crate) fn connect4(src: &str) -> Result<(), String> {
     let b = board(&p, 7, 6)?;
     let (top, low) = (p.look(b, 3, 0), p.look(b, 3, 5));
     p.tap_cell(b, 3, 0)?;
+    p.wait(SETTLE)?;
     need!(
         p.look(b, 3, 5) != low && p.look(b, 3, 0) == top,
         "a tap atop column 3 drops no disc to its bottom"
@@ -356,6 +389,7 @@ pub(crate) fn connect4(src: &str) -> Result<(), String> {
         for &c in &moves[..n] {
             before = p.texts();
             p.tap_cell(b, c, 0)?;
+            p.wait(SETTLE)?;
         }
         let said = fresh(&before, &p);
         need!(
@@ -388,7 +422,7 @@ pub(crate) fn pomodoro(src: &str) -> Result<(), String> {
 }
 
 pub(crate) fn clock(src: &str) -> Result<(), String> {
-    let mut p = Probe::start(src, 1)?;
+    let mut p = Probe::begin(src, 1)?;
     // The hands: lines from the face's center (the largest ring or circle), as where they point.
     let hands = |p: &Probe| -> Vec<(i64, i64)> {
         let Some(c) = p.canvas() else { return Vec::new() };
@@ -536,7 +570,7 @@ pub(crate) fn whack(src: &str) -> Result<(), String> {
 }
 
 pub(crate) fn bounce(src: &str) -> Result<(), String> {
-    let mut p = Probe::start(src, 1)?;
+    let mut p = Probe::begin(src, 1)?;
     let ball = |p: &Probe| -> Option<(i64, i64, i64, i64, i64)> {
         let c = p.canvas()?;
         let d = c.draws.iter().find(|d| d.shape == Shape::Circle)?;
@@ -758,6 +792,7 @@ pub(crate) fn game2048(src: &str) -> Result<(), String> {
         for (label, key) in [("Down", "down"), ("Left", "left"), ("Right", "right"), ("Up", "up")] {
             let before = tiles(&p);
             p.press(label, key)?;
+            p.wait(SETTLE)?;
             let after = tiles(&p);
             if after == before {
                 continue;

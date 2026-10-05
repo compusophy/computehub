@@ -264,14 +264,23 @@ fn main() {
                 fresh.push(now);
             }
             wire.diverged.iter().for_each(|d| eprintln!("diverged: {d}"));
+            // Each of its task's trials graded again, where it first came (a resumed one's
+            // earlier lines go); every other line as it was.
             if args.contains(&"--write".to_string()) {
-                let mut out = String::new();
+                let (mut out, mut done) = (String::new(), Vec::new());
                 for line in text.lines() {
-                    let r = Record::parse(line).filter(|r| r.meta.run == run);
-                    let new = r.and_then(|r| {
-                        fresh.iter().find(|n| (&n.task, n.trial) == (&r.task, r.trial))
-                    });
-                    out += &new.map_or_else(|| [line, "\n"].concat(), Record::line);
+                    let Some(r) = Record::parse(line).filter(|r| r.meta.run == run) else {
+                        out += &[line, "\n"].concat();
+                        continue;
+                    };
+                    let at = (r.task, r.trial);
+                    if !done.contains(&at) {
+                        out += &fresh
+                            .iter()
+                            .find(|n| (&n.task, n.trial) == (&at.0, at.1))
+                            .map_or_else(String::new, Record::line);
+                        done.push(at);
+                    }
                 }
                 std::fs::write(&results, out).expect("the results file");
             }

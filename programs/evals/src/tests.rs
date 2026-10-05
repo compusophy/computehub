@@ -154,6 +154,17 @@ fn an_exchange_feeds_the_make_what_its_stream_did() {
 }
 
 #[test]
+fn a_receipt_says_which_model_answered() {
+    // Live receipts of GLM 5.3 requests: one it answered (none of its input cached), one Flash
+    // answered for it, and Flash's own.
+    let (glm, flash) = run::MODELS.into();
+    assert_eq!(run::answered(glm, [4741, 734, 9856]), glm);
+    assert_eq!(run::answered(glm, [5201, 433, 3818]), glm);
+    assert_eq!(run::answered(glm, [4795, 1552, 1495]), flash);
+    assert_eq!(run::answered(flash, [4741, 359, 891]), flash);
+}
+
+#[test]
 fn a_summary_reads_a_gain() {
     let (lo, hi) = summary::wilson(15, 24);
     // 15 of 24: 62.5%, its 95% Wilson interval 42.7% to 78.8%.
@@ -183,7 +194,7 @@ fn a_summary_reads_a_gain() {
     let table = summary::table(&all);
     assert!(
         table.contains(
-            "| a | a | abc1234 | 1/2 | 50% (9%-91%) | 1/2 / 0/0 / 0/0 / 0/0 | 0 | 0.0030 | 0 | 1 |"
+            "| a | a | abc1234 | 1/2 | 50% (9%-91%) | 1/2 / 0/0 / 0/0 / 0/0 | 0 | 0.0030 | 0 | 1 | 0/0 |"
         ),
         "{table}"
     );

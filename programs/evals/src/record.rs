@@ -2,9 +2,9 @@
 //! Each line stands alone: which run (its id, date, commit, model), what was run (the suite and
 //! its content hash, the coder's prompt hash and knobs hash), and how the task went (pass or
 //! fail, the stage that failed and the checker's reason, the make's outcome, requests, tokens in
-//! and out, micro-dollars, how many requests' costs were estimated, the make's milliseconds and
-//! the program's lines). Nothing in it is read from a clock: a replay writes it again byte for
-//! byte.
+//! and out, micro-dollars, how many requests' costs were estimated and how many another model
+//! answered, the make's milliseconds and the program's lines). Nothing in it is read from a
+//! clock: a replay writes it again byte for byte.
 
 use coder::ai::put_num;
 use coder::json::{Json, put};
@@ -40,6 +40,8 @@ pub struct Record {
     pub tokens_out: u64,
     pub usd_micros: u64,
     pub est: u32,
+    /// Requests another model answered (the free AI's fallback), by their receipts' prices.
+    pub fallback: u32,
     pub ms: u64,
     pub lines: u32,
 }
@@ -94,6 +96,7 @@ impl Record {
         n(&mut o, "out", self.tokens_out);
         n(&mut o, "usd_micros", self.usd_micros);
         n(&mut o, "est", self.est.into());
+        n(&mut o, "fallback", self.fallback.into());
         n(&mut o, "ms", self.ms);
         n(&mut o, "lines", self.lines.into());
         o += "}\n";
@@ -125,6 +128,7 @@ impl Record {
             tokens_out: n("out")?,
             usd_micros: n("usd_micros")?,
             est: n("est")? as u32,
+            fallback: n("fallback").unwrap_or(0) as u32,
             ms: n("ms")?,
             lines: n("lines")? as u32,
         })

@@ -9,13 +9,16 @@ use crate::record::Record;
 /// The 95% normal quantile.
 const Z: f64 = 1.959_964;
 
-/// A side's numbers: records graded (the AI's failures aside), passes, AI failures, tokens in
-/// and out, micro-dollars and milliseconds, over all its records.
+/// A side's numbers: records graded (the AI's failures aside), passes, AI failures, requests
+/// and those another model answered, tokens in and out, micro-dollars and milliseconds, over all
+/// its records.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Stats {
     pub n: u32,
     pub pass: u32,
     pub errors: u32,
+    pub tries: u32,
+    pub fallback: u32,
     pub tokens: u64,
     pub usd_micros: u64,
     pub ms: u64,
@@ -29,6 +32,7 @@ pub fn stats(rs: &[&Record]) -> Stats {
             "ai" => s.errors += 1,
             _ => (s.n, s.pass) = (s.n + 1, s.pass + u32::from(r.pass)),
         }
+        (s.tries, s.fallback) = (s.tries + r.tries, s.fallback + r.fallback);
         s.tokens += r.tokens_in + r.tokens_out;
         (s.usd_micros, s.ms) = (s.usd_micros + r.usd_micros, s.ms + r.ms);
     }
@@ -154,6 +158,16 @@ pub fn compare(an: &str, a: &[&Record], bn: &str, b: &[&Record]) -> String {
         lost.len() + won.len(),
         mcnemar(lost.len() as u32, won.len() as u32)
     );
+    for (name, rs, s) in [(an, a, sa), (bn, b, sb)].into_iter().filter(|x| x.2.fallback > 0) {
+        let (f, t) = (s.fallback, s.tries);
+        let own: Vec<&Record> = rs.iter().copied().filter(|r| r.fallback == 0).collect();
+        let o2 = stats(&own);
+        o += &format!(
+            "{name}: {f} of {t} requests were answered by the other model; the tasks whose every \
+             request it answered itself pass {}/{}\n",
+            o2.pass, o2.n
+        );
+    }
     o += &format!(
         "passed by {an} only: {}\n",
         if lost.is_empty() { "none".into() } else { lost.join(", ") }
@@ -166,10 +180,11 @@ pub fn compare(an: &str, a: &[&Record], bn: &str, b: &[&Record]) -> String {
 }
 
 /// A markdown table of every run in `all`, in order: its model, date and commit, passes and rate
-/// with its interval, by size, tokens and dollars per pass, seconds per make, the AI's failures.
+/// with its interval, by size, tokens and dollars per pass, seconds per make, the AI's failures,
+/// and the requests the other model answered of all.
 pub fn table(all: &[Record]) -> String {
     let mut o = String::from(
-        "| run | model | commit | pass | rate (95% CI) | tiny / small / medium / hard | tokens/pass | $/pass | s/make | AI errors |\n|---|---|---|---|---|---|---|---|---|---|\n",
+        "| run | model | commit | pass | rate (95% CI) | tiny / small / medium / hard | tokens/pass | $/pass | s/make | AI errors | other model |\n|---|---|---|---|---|---|---|---|---|---|---|\n",
     );
     let mut runs: Vec<&str> = Vec::new();
     for r in all {
@@ -198,7 +213,7 @@ pub fn table(all: &[Record]) -> String {
             format!("{:.4}", s.usd_micros as f64 / 1e6 / f64::from(s.pass))
         };
         o += &format!(
-            "| {run} | {} | {} | {}/{} | {} ({}-{}) | {} | {} | {} | {} | {} |\n",
+            "| {run} | {} | {} | {}/{} | {} ({}-{}) | {} | {} | {} | {} | {} | {}/{} |\n",
             rs[0].meta.model,
             rs[0].meta.commit,
             s.pass,
@@ -210,7 +225,9 @@ pub fn table(all: &[Record]) -> String {
             per(s.tokens),
             usd,
             s.ms / 1000 / u64::from((s.n + s.errors).max(1)),
-            s.errors
+            s.errors,
+            s.fallback,
+            s.tries
         );
     }
     o
