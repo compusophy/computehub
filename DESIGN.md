@@ -424,9 +424,10 @@ one. Forked crates keep their Apache-2.0 license and note their origin.
   and answered on /dev/events: the Terminal's window passes on the AI
   requests of the programs its shell runs (`apps::asks`; nothing else of
   their frames, and no other process's), and a request whose process ended
-  (Ctrl+C) is stopped. A request fits the free AI (64 messages, 96 KiB):
-  old results fold to their first line, then old tasks and steps go. A
-  task makes 20 model calls at most, as the Assistant's (E0942; `go on`
+  (Ctrl+C, a kill) is stopped at the hub's next pump, as at a window's
+  Close, before another byte. A request fits the free AI (64 messages, 96
+  KiB): old results fold to their first line, then old tasks and steps go.
+  A task makes 20 model calls at most, as the Assistant's (E0942; `go on`
   goes on), so it and its lesson keep under the 30 requests a minute the
   free AI takes from a client, and leave most of its 120 an hour to Studio
   and the Assistant; a busy AI (429) ends the task, never asked again by

@@ -135,8 +135,6 @@ impl Ai {
             }
             let data = data.chunks(CHUNK).map(|d| Event::AiData { id, data: d.to_vec() });
             data.for_each(|ev| k.post_event(pid, &ev.encode()));
-            // A process that ended (Ctrl+C in a terminal) hears no more: its requests stop.
-            h.asks.extend((!k.runs(pid)).then_some((pid, Request::Close)));
         }
     }
 
@@ -144,6 +142,13 @@ impl Ai {
     /// `k`) and retells changed settings; whether they changed.
     pub fn pump(&self, ctl: &mut Ctl, k: &mut Kernel) -> bool {
         let h = &mut *self.0.borrow_mut();
+        // A process that ended (Ctrl+C in a terminal, a kill) hears no more: its requests stop
+        // as at its Close, though no window closed for it, before another byte comes.
+        for l in &h.live {
+            if !k.runs(l.1) {
+                h.asks.push((l.1, Request::Close));
+            }
+        }
         for (pid, r) in mem::take(&mut h.asks) {
             // A cancel ends its request; a process done aborts all of its own, unanswered.
             let cancel = match r {

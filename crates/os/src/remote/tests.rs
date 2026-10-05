@@ -484,4 +484,8 @@ fn ai_requests_stream_back_to_the_program_that_asked() {
     let done = platform::Event::StreamEnd { id: 1, status: 200, error: "".into() };
     [chunk(&b[..120]), chunk(&b[120..]), done].into_iter().for_each(|e| s.r.ai.heard(&mut s.k, e));
     assert_eq!(s.r.ai.0.borrow().counts, [1, 0, 0, 1200, 30, 1812]);
+    // A process that ended (Ctrl+C) stops its request at the next pump, before a byte came.
+    assert_eq!(ask(&mut s, vec![ai(2)]).0, [stream(2)]);
+    s.k.kill(2, wire::INTERRUPTED);
+    assert_eq!(ask(&mut s, vec![]), (vec![Fx::Abort(2)], vec![]));
 }

@@ -453,7 +453,8 @@ fn the_desktop_sends_feedback_and_reports_failures_and_tells_apps() {
     assert!(sent.iter().any(|s| s.1.contains(r#""kind":"error""#)), "{sent:?}");
     assert!(notes(1).starts_with("proc 5"));
     // An AI request's failure is noted (its stream is not a report's); others' ends are not.
-    desk.ai.ask(5, uiwire::Request::Ai { id: 1, body: "{}".into() });
+    // The Terminal's program asks: a process that runs (one that ended would stop it).
+    desk.ai.ask(2, uiwire::Request::Ai { id: 1, body: "{}".into() });
     let mut ctl = Ctl::default();
     desk.flush(&mut ctl, false);
     let asked = |e: &Fx| matches!(e, Fx::Stream { id: 1, url, .. } if url == ai::URL);
