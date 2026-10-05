@@ -135,3 +135,33 @@ fn the_window_keys_text_and_wheel_go_as_xterm_needs_them() {
     let every = Mods { shift: true, ctrl: true, alt: true, meta: true };
     assert_eq!(wire_mods(every), uiwire::mods::ALL);
 }
+
+#[test]
+fn a_program_the_shell_runs_asks_the_ai_and_nothing_else() {
+    let (mut s, sh) = Sim::shell(false);
+    let (stdin, stdout) = (wire::Stdin::Console, wire::Stdout::Console);
+    let stages = vec![(SHELL, vec!["agent".to_string()])];
+    let job = wire::Job { cwd: "/", stdin, stdout, stages, data: b"" }.encode();
+    s.kernel.message(&mut s.fs, sh, &Msg::Spawn { job: &job }.encode());
+    let (ai, cancel) =
+        (uiwire::Request::Ai { id: 1, body: "{}".into() }, uiwire::Request::AiCancel { id: 1 });
+    let requests = vec![uiwire::Request::Open { name: "files".into() }, ai.clone(), cancel.clone()];
+    let frame = Frame { title: "agent".into(), requests, ..Frame::default() }.encode();
+    let asked = |s: &mut Sim, pid, driven| {
+        let mut got = Vec::new();
+        s.cx(|_, cx| {
+            cx.driven = driven;
+            asks(cx, pid, &frame, &mut |r| got.push(r))
+        });
+        got
+    };
+    assert_eq!(asked(&mut s, 3, false), [ai, cancel.clone()], "its AI requests, and only those");
+    assert!(asked(&mut s, 9, false).is_empty(), "a process that does not run asks nothing");
+    // Where the Assistant typed, an Ai ends at once, refused: no AI drives the agent.
+    assert_eq!(asked(&mut s, 3, true), [cancel]);
+    s.kernel.message(&mut s.fs, 3, &[wire::EVENTS, 0, 0, 1, 0]);
+    let end = Event::AiEnd { id: 1, status: 0, error: DRIVEN.into() }.encode();
+    assert!(s.kernel.take_effects().contains(&Effect::Reply { pid: 3, errno: 0, data: end }));
+    s.kernel.set_owner(7);
+    assert!(asked(&mut s, 3, false).is_empty(), "nor does another window's");
+}

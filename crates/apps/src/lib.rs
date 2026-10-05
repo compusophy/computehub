@@ -4,7 +4,7 @@
 //! asks for ([`uiwire::Request::Tty`]), what it types ([`uiwire::Request::Input`]) going in, and
 //! what the shell writes and its end going back as events. The window's keys, text and wheel go
 //! to the Terminal as events too ([`input`]); [`wire_key`] and [`wire_mods`] say keys as the wire
-//! does.
+//! does. A program the shell starts may ask the AI ([`asks`]), as the coding agent does.
 
 #![forbid(unsafe_code)]
 
@@ -12,11 +12,35 @@ use std::mem;
 
 use ui::kernel::{Spawn, wire};
 use ui::{AppEvent, Cx, Key, Mods};
-use uiwire::Event;
+use uiwire::{Event, Frame, Request};
 use vfs::Vfs;
 
 /// The shell a terminal runs.
 pub const SHELL: &str = "/bin/sh";
+
+/// Why a program in a Terminal the Assistant typed into may not ask the AI.
+pub const DRIVEN: &str = "the Assistant typed in this Terminal, so what runs in it may not ask \
+the AI (no AI drives another past your yes): open a new Terminal";
+
+/// Hands `ask` what process `pid`, if the window's shell started it, asks of the AI in `frame`,
+/// a frame it wrote to /dev/draw: its Ai and AiCancel requests, answered on its /dev/events as
+/// any program's. It has no window, so the rest of the frame shows nothing; nor does any other
+/// process's frame, which is not even read. In a window the Assistant put input into
+/// ([`Cx::driven`]) each Ai ends at once, [`DRIVEN`]: the coding agent there neither starts nor
+/// goes on, so the Assistant cannot run it past the person's yes (`agent -y`).
+pub fn asks(cx: &mut Cx<'_>, pid: u32, frame: &[u8], ask: &mut dyn FnMut(Request)) {
+    let ai = |r: &Request| matches!(r, Request::Ai { .. } | Request::AiCancel { .. });
+    let frame = cx.kernel.owns(pid).then(|| Frame::decode(frame)).flatten();
+    for r in frame.into_iter().flat_map(|f| f.requests).filter(ai) {
+        match r {
+            Request::Ai { id, .. } if cx.driven => {
+                let end = Event::AiEnd { id, status: 0, error: DRIVEN.into() };
+                cx.kernel.post_event(pid, &end.encode());
+            }
+            r => ask(r),
+        }
+    }
+}
 
 /// A terminal's shell, while it runs, and whether it started (it starts once).
 #[derive(Debug, Default)]

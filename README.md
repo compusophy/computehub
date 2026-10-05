@@ -20,6 +20,9 @@ install, and no server runs your apps: the tab is the machine.
 - **Terminal.** A program drawing an xterm screen of `/bin/sh`: Unix-like commands (`ls -l`,
   `cat -n`, `mv`, `wc`, `rev`, ...), pipes (`a | b`), redirects (`<`, `>`, `>>`), scripts
   (`sh -c`, `sh file`), history.
+- **Agent.** Type `agent` in the Terminal: a coding agent on the free AI that reads, writes and
+  edits your files, runs the shell and checks apps, asking before it writes or runs. It learns a
+  lesson from each failure it gets past, and keeps it for next time.
 - **Studio.** Make an app by describing it. A coding agent writes it in applang, a small
   language made for this, then tests and fixes it. Games, boards, drawings, clocks and charts
   draw on a canvas: shapes, and pixels for boards of squares.
@@ -48,7 +51,9 @@ install, and no server runs your apps: the tab is the machine.
 | Path | What it holds |
 |---|---|
 | `crates/` | The OS: the desktop, window manager, widgets, text, kernel, program worker |
-| `programs/` | What runs in it: Studio, the Assistant, the system apps, Activity, `sh`, applang |
+| `programs/` | What runs in it: Studio, the Assistant, the system apps, Activity, `sh`, `agent`, applang. Dev only, never shipped: the evals' suite and harness, and `tiny`, a transformer, with its lab |
+| `evals/` | The evals' records and replays, and how to run them and read a gain |
+| `tools/` | Dev only: the static server for `dist/`, and the eval runner |
 | `api/` | The server functions (Vercel, Node) |
 | `web/` | The page: a canvas and a one-line bootstrap |
 | `scripts/` | Build, budget, caps and deploy |

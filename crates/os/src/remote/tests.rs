@@ -451,12 +451,22 @@ fn ai_requests_stream_back_to_the_program_that_asked() {
     assert_eq!((ask(&mut s, vec![]), s.r.ai.status().model), (told, ai::MODELS[1].into()));
     s.r.ai.set_model(&mut Ctl::default(), "openai/gpt-x");
     assert_eq!(ask(&mut s, vec![]).1, [config(ai::DEFAULT_MODEL)]);
-    // Two at a time, to the one endpoint with no key; the body back in pieces, then the end.
+    // Two at a time, to the one endpoint with no key, the chosen model first (a body's own, after
+    // it, wins); the body back in pieces, then the end.
     let headers = vec![("Content-Type", "application/json".to_string())];
-    let stream =
-        |id| Fx::Stream { id, url: ai::URL.into(), headers: headers.clone(), body: b"{}".into() };
+    let sent = |id, body: &str| Fx::Stream {
+        id,
+        url: ai::URL.into(),
+        headers: headers.clone(),
+        body: body.into(),
+    };
+    let stream = |id| sent(id, &[r#"{"model":""#, ai::DEFAULT_MODEL, r#""}"#].concat());
     let busy = (vec![stream(1), stream(2)], vec![end(3, 0, "busy")]);
     assert_eq!(ask(&mut s, vec![ai(1), ai(2), ai(3)]), busy);
+    let mut own = Sys::new(true);
+    let body = r#"{"model":"m","messages":[]}"#;
+    let chosen = [r#"{"model":""#, ai::DEFAULT_MODEL, r#"","model":"m","messages":[]}"#].concat();
+    assert_eq!(ask(&mut own, vec![Request::Ai { id: 1, body: body.into() }]).0, [sent(1, &chosen)]);
     let big = [vec![b'x'; CHUNK - 1], "\u{e9}".into()].concat();
     let ended = platform::Event::StreamEnd { id: 1, status: 429, error: "".into() };
     let chunk = platform::Event::Chunk { id: 1, data: big.clone() };
@@ -484,4 +494,13 @@ fn ai_requests_stream_back_to_the_program_that_asked() {
     let done = platform::Event::StreamEnd { id: 1, status: 200, error: "".into() };
     [chunk(&b[..120]), chunk(&b[120..]), done].into_iter().for_each(|e| s.r.ai.heard(&mut s.k, e));
     assert_eq!(s.r.ai.0.borrow().counts, [1, 0, 0, 1200, 30, 1812]);
+    // A process that ended (Ctrl+C) stops its request at the next pump, before a byte came.
+    assert_eq!(ask(&mut s, vec![ai(2)]).0, [stream(2)]);
+    s.k.kill(2, wire::INTERRUPTED);
+    assert_eq!(ask(&mut s, vec![]), (vec![Fx::Abort(2)], vec![]));
+    // One it asked in the flush it ended in is never sent.
+    let mut ctl = Ctl::default();
+    s.r.ai.ask(2, ai(3));
+    s.r.ai.pump(&mut ctl, &mut s.k);
+    assert!(ctl.effects().is_empty() && s.r.ai.0.borrow().counts[0] == 2);
 }

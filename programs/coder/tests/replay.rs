@@ -2,6 +2,8 @@
 //! thinking's length (not the half-megabyte SSE), fed back through the loop as it streamed. A
 //! change to checks, matching or stop rules shows here as a different turn.
 
+#![forbid(unsafe_code)]
+
 use coder::json::quote;
 use coder::{Done, Knobs, Make, Out, Outcome, Task, Turn};
 
@@ -57,18 +59,12 @@ fn tetris_a_stray_name_is_fixed_and_it_runs() {
     let (asked, done) = replay("make a tetris game", &[(3074, one), (3485, two)]);
     assert!(asked[0].starts_with("\"Make: make a tetris game\""));
     let fix = &asked[1];
-    assert!(
-        fix.contains("Your program did not compile: E0302") && fix.contains("`stack`"),
-        "{fix}"
-    );
+    let stray = fix.contains("Your program did not compile: E0302") && fix.contains("`stack`");
+    assert!(stray, "{fix}");
     assert!(fix.contains("Reply with edit blocks.") && fix.contains("  1| // Tetris: arrows move"));
     let turns: Vec<Turn> = done.receipt.turns.iter().map(|t| t.turn).collect();
-    assert_eq!(
-        (done.outcome, turns),
-        (Outcome::Ready, vec![Turn::Write, Turn::Fix]),
-        "{}",
-        done.why
-    );
+    let want = (Outcome::Ready, vec![Turn::Write, Turn::Fix]);
+    assert_eq!((done.outcome, turns), want, "{}", done.why);
     assert!(done.install && done.plan.starts_with("Tetris: arrows move and rotate"));
     // Both requests stopped at their block's end: estimated, about the 2.6k and 2.5k tokens out
     // the live replies counted (by the usage that came after).

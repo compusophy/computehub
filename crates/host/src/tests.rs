@@ -76,6 +76,7 @@ impl App for Probe {
                 ("size", _) => cx.set_size(500, 300),
                 ("seen", _) => cx.pref("seen", &cx.ai.model.clone()),
                 ("reset", _) => cx.reset(),
+                ("driven", _) => cx.pref("driven", if cx.driven { "yes" } else { "no" }),
                 ("agent", _) => ASKS.with(|a| a.take().into_iter().for_each(|r| cx.agent(r))),
                 ("pref", kv) => {
                     let (key, value) = kv.split_once('=').unwrap_or((kv, ""));
@@ -721,6 +722,9 @@ fn the_overlay_acts_as_a_person_and_hears_once_the_screen_settles() {
     // A window the overlay put input into can no longer reset the device; the others can.
     assert!(h.say(1, "reset").effects.is_empty());
     assert_eq!(h.say(2, "reset").effects, [Effect::Reset]);
+    // Nor may what runs in it ask the AI (`apps::asks`): its app hears it is driven.
+    let pref = |v: &str| vec![Effect::Pref { key: "driven".into(), value: v.into() }];
+    assert_eq!([1, 2].map(|n| h.say(n, "driven").effects), [pref("yes"), pref("no")]);
     // A window verb is its title bar control's; opening is the home screen's tile.
     h.acts(2, Act::Window { win: 2, op: WinOp::Close });
     h.acts(3, Act::Open { name: "sized".into() });

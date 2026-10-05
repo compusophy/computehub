@@ -269,7 +269,9 @@ pub struct AiStatus {
 
 /// What an app can reach while handling an event: the filesystem, the kernel (processes it spawns
 /// are owned by its window), the clock (milliseconds on the page clock), the AI settings, whether
-/// the backdrop's grain lives (the [`GRAIN`] preference), and requests to the shell.
+/// the backdrop's grain lives (the [`GRAIN`] preference), whether the Assistant has put input
+/// into its window (`driven`: then what runs in a Terminal there may not ask the AI, so no AI
+/// drives another past the person's yes), and requests to the shell.
 #[derive(Debug)]
 pub struct Cx<'a> {
     pub vfs: &'a mut vfs::Vfs,
@@ -277,13 +279,14 @@ pub struct Cx<'a> {
     pub now_ms: f64,
     pub ai: AiStatus,
     pub grain: bool,
+    pub driven: bool,
     requests: Vec<Request>,
 }
 
 impl<'a> Cx<'a> {
     pub fn new(vfs: &'a mut vfs::Vfs, kernel: &'a mut kernel::Kernel, now_ms: f64) -> Cx<'a> {
         let (ai, requests) = (AiStatus::default(), Vec::new());
-        Cx { vfs, kernel, now_ms, ai, grain: true, requests }
+        Cx { vfs, kernel, now_ms, ai, grain: true, driven: false, requests }
     }
 
     /// Sets a preference ([`Request::Pref`]); for [`AI_MODEL`] and [`REPORTS`], [`Cx::ai`]

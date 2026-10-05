@@ -11,7 +11,8 @@
 //!   tap (a grid takes only taps, of squares it has: [`ui::App::squares`]); a window verb is the
 //!   title bar's control; opening an app is the home screen's tile.
 //!   Each act flashes what it touched ([`Agent::flash`]); a window it put input into can no
-//!   longer reset the device ([`Agent::touched`]).
+//!   longer reset the device, nor what runs in it (a Terminal's) ask the AI ([`Agent::touched`],
+//!   [`ui::Cx::driven`]).
 //! - **Settling.** An act is answered by one [`Event::Acted`] once no window is
 //!   [`ui::App::busy`] or [`SETTLE_MS`] passed (a wait: once its time passed), with the scene
 //!   then; the platform's timer is armed for the deadline, and again whenever it fires before it
@@ -73,7 +74,8 @@ pub struct Agent {
     /// Whether the overlay works on a task ([`Request::Status`]).
     pub working: bool,
     /// What the last act touched (a widget, or a window's frame) and when; the windows its
-    /// input went into, whose [`ui::Request::Reset`] is dropped (only the person resets).
+    /// input went into, whose [`ui::Request::Reset`] is dropped (only the person resets) and
+    /// whose apps are told they are driven ([`ui::Cx::driven`]).
     pub flash: Option<(RectF, f64)>,
     pub touched: Vec<WinId>,
     /// An app asked for the Assistant: the shell opens the overlay. The overlay stepped aside

@@ -37,11 +37,17 @@ members = [
     "programs/system",
     "programs/activity",
     "programs/sh",
+    "programs/agent",
     "programs/vt",
     "programs/term",
     "programs/terminal",
     "programs/toolbox",
+    "programs/makes",
+    "programs/evals",
+    "programs/tiny",
+    "programs/lab",
     "tools/serve",
+    "tools/eval",
 ]
 
 # Every crate inherits these. The version lives here, once.
@@ -91,6 +97,10 @@ compusophy-chats = { path = "programs/chats", version = "0.1.0" }
 compusophy-files = { path = "programs/files", version = "0.1.0" }
 compusophy-system = { path = "programs/system", version = "0.1.0" }
 compusophy-activity = { path = "programs/activity", version = "0.1.0" }
+compusophy-sh = { path = "programs/sh", version = "0.1.0" }
+compusophy-evals = { path = "programs/evals", version = "0.1.0" }
+compusophy-makes = { path = "programs/makes", version = "0.1.0" }
+compusophy-tiny = { path = "programs/tiny", version = "0.1.0" }
 
 # The browser boundary. Only `platform`, `os` and `cpu` may use these
 # (scripts/caps.sh).
@@ -99,6 +109,15 @@ compusophy-activity = { path = "programs/activity", version = "0.1.0" }
 wasm-bindgen = "=0.2.121"
 js-sys = "0.3"
 web-sys = "0.3"
+
+# tiny's kernels are loops over floats, vectorized only at opt-level 3 (a training step of the
+# shape trained, `lab bench`, takes about half the time it does at "z"): so in every profile,
+# tests too, which train small models. It ships in no build yet.
+[profile.dev.package.compusophy-tiny]
+opt-level = 3
+
+[profile.release.package.compusophy-tiny]
+opt-level = 3
 
 # Ultra lite: every shipped byte is budgeted.
 [profile.release]
