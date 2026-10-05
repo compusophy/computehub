@@ -553,10 +553,16 @@ pub(crate) fn whack(src: &str) -> Result<(), String> {
     let mut hits = 0;
     for _ in 0..12 {
         p.wait(800)?;
-        let looks: Vec<String> = squares(3, 3).map(|(c, r)| p.look(b, c, r)).collect();
-        let odd: Vec<usize> =
-            (0..9).filter(|&i| looks.iter().filter(|l| **l == looks[i]).count() == 1).collect();
-        let [k] = odd[..] else { continue };
+        // The one square unlike the rest: by how it looks, else (a score written in a square)
+        // by the color at its middle.
+        let one = |looks: Vec<String>| {
+            let odd = (0..9).filter(|&i| looks.iter().filter(|l| **l == looks[i]).count() == 1);
+            let odd: Vec<usize> = odd.collect();
+            if let [k] = odd[..] { Some(k) } else { None }
+        };
+        let looks = squares(3, 3).map(|(c, r)| p.look(b, c, r)).collect();
+        let colors = squares(3, 3).map(|(c, r)| p.color(b, c, r).to_string()).collect();
+        let Some(k) = one(looks).or_else(|| one(colors)) else { continue };
         let before = p.after("score").unwrap_or(0);
         p.tap_cell(b, k as i64 % 3, k as i64 / 3)?;
         let now = p.after("score");
