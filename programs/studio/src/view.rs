@@ -1,9 +1,10 @@
 //! Studio's frames: one column at every width. With nothing open, only the prompt, centered.
 //! Else what the program's first comment says, the app and its last fault (or its code, or while
-//! it is made the program streaming in), a status with `</>` (and Send to compusophy after a
-//! make that failed, or by the app's fault), and the prompt with Make (Stop while making).
+//! it is made the program streaming in), a status with New app and `</>` (and Send to
+//! compusophy after a make that failed, or by the app's fault), and the prompt with Make (Stop
+//! while making).
 
-use crate::edit::{MAKE, SEND, STOP, TOGGLE, spans};
+use crate::edit::{DRAFT, MAKE, NEW, SEND, STOP, TOGGLE, spans};
 use crate::make::now;
 use crate::{Studio, file_name, text};
 use coder::ai::clip;
@@ -44,6 +45,10 @@ impl Studio {
             false => ["Studio \u{2014} ", file_name(&self.path)].concat(),
         };
         self.saw();
+        // Each frame's draft is newer than what the desktop holds of it (see `DRAFT`).
+        if self.make.is_some() {
+            self.drafts = self.drafts.wrapping_add(1);
+        }
         let blank = self.path.is_empty() && self.text.is_empty() && self.make.is_none();
         let nodes = match blank && self.status.1.is_empty() {
             // A little above the middle reads as centered.
@@ -93,16 +98,21 @@ impl Studio {
         if !caption.is_empty() {
             nodes.push(text(Style::Small, &clip(caption.lines().next().unwrap_or(""), 160)));
         }
-        let code = |id, numbers, text: &str, mark| {
+        let code = |(id, version), numbers, text: &str, mark| {
             let (spans, text) = (spans(text, mark), text.to_string());
-            fill(vec![Node::Code { id, version: self.version, line_numbers: numbers, text, spans }])
+            fill(vec![Node::Code { id, version, line_numbers: numbers, text, spans }])
         };
         match making {
             Some(m) => {
                 // The newest lines streaming in, as many as fit (a Code cannot scroll itself to
-                // its end); or the program being fixed, whole, its problem marked.
+                // its end); or the program being fixed, whole, its problem marked. A Code the
+                // desktop owns, as the code view's: kept to its room, the wheel scrolls it.
                 let (draft, streaming) = m.draft();
-                let fit = usize::from(self.height.saturating_sub(140) / 18).max(6);
+                // The rest of the column (padding, the caption, the status, the prompt, the
+                // Code's insets) takes some 140 px, 30 more where the caption wraps (a phone's);
+                // a row is 17 px, taken as 18 to spare one.
+                let rest = if self.narrow() { 170 } else { 140 };
+                let fit = usize::from(self.height.saturating_sub(rest) / 18).max(6);
                 let (mut from, mut ends) = (0, 0);
                 for (i, b) in draft.bytes().enumerate().rev() {
                     if b == b'\n' && streaming {
@@ -113,10 +123,12 @@ impl Studio {
                         }
                     }
                 }
-                let tail = &draft[from..];
-                nodes.push(code(0, !streaming, tail, m.mark().filter(|_| !streaming)));
+                let (tail, mark) = (&draft[from..], m.mark().filter(|_| !streaming));
+                nodes.push(code((DRAFT, self.drafts), !streaming, tail, mark));
             }
-            None if self.code => nodes.push(code(self.code_id(), true, &self.text, self.mark)),
+            None if self.code => {
+                nodes.push(code((self.code_id(), self.version), true, &self.text, self.mark))
+            }
             None => {
                 if let Some(live) = &self.live {
                     nodes.extend(live.nodes(1));
@@ -140,8 +152,11 @@ impl Studio {
             false => button(SEND, Variant::Chip, "Send to compusophy"),
             true => text(Style::Small, "Sent"),
         }));
-        if !self.text.is_empty() && self.make.is_none() {
-            line.push(button(TOGGLE, Variant::Quiet, "</>"));
+        if making.is_none() {
+            line.push(button(NEW, Variant::Quiet, "New app"));
+            if !self.text.is_empty() {
+                line.push(button(TOGGLE, Variant::Quiet, "</>"));
+            }
         }
         nodes.push(row(8, line));
         nodes.push(self.bar());

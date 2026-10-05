@@ -13,16 +13,21 @@ use std::io::ErrorKind;
 use uiwire::{Event, Frame, Key, Request, Style, mods};
 
 /// Studio's own widgets, all below [`crate::APP`], where the app's begin: Make, Stop, the code
-/// view's toggle, Send to compusophy, the prompt and the code. The overlay finds Stop, Send to
-/// compusophy and the prompt as [`coder::ids`].
+/// view's toggle, Send to compusophy, New app, the prompt, the code and the draft. The overlay
+/// finds Stop, Send to compusophy and the prompt as [`coder::ids`].
 pub(crate) const MAKE: u32 = 1;
 pub(crate) const STOP: u32 = coder::ids::STOP;
 pub(crate) const TOGGLE: u32 = 3;
 pub(crate) const SEND: u32 = coder::ids::SEND;
+pub(crate) const NEW: u32 = 5;
 /// The prompt Input is this plus how many times Studio set its text, and the Code this plus how
 /// many times Studio replaced the program: a fresh id takes the frame's text.
 pub(crate) const PROMPT: u32 = coder::ids::PROMPT;
 pub(crate) const CODE: u32 = coder::ids::PROMPT_END;
+/// The Code a make shows (the program streaming in, or the one it fixes): a Code, so the
+/// desktop keeps it to its room, as it does the code view; its version one more each frame, and
+/// past the person's edits of it, so what it shows is always the make's.
+pub(crate) const DRAFT: u32 = 3 << 24;
 /// The largest text Studio edits, in bytes: each frame carries all of it.
 pub const MAX_TEXT: usize = 256 * 1024;
 /// The largest prompt, in bytes.
@@ -30,9 +35,9 @@ const MAX_PROMPT: usize = 16 * 1024;
 
 /// Where apps are made: the app running live (or its code, or while it is made the program
 /// streaming in), a status, and the prompt. With no file it asks what to make; the first make
-/// names the file (`~/apps/<slug>.app`), and every make after changes it. `</>` shows the code;
-/// from the code it runs and saves it as edited (so do Ctrl+Enter and Ctrl+S), or marks its
-/// problem.
+/// names the file (`~/apps/<slug>.app`), and every make after changes it, until New app asks
+/// again. `</>` shows the code; from the code it runs and saves it as edited (so do Ctrl+Enter
+/// and Ctrl+S), or marks its problem.
 #[derive(Debug, Default)]
 pub struct Studio {
     /// The app's file; "" until the first make picks one.
@@ -61,6 +66,8 @@ pub struct Studio {
     model: String,
     pub(crate) make: Option<Making>,
     pub(crate) last_id: u32,
+    /// The version of the [`DRAFT`] Code the last frame showed.
+    pub(crate) drafts: u32,
     /// What the line under the app says, and how; the caption over it: the make's plan, else the
     /// program's leading comments ([`coder::ai::about`]).
     pub(crate) status: (Style, String),
@@ -203,6 +210,9 @@ impl Studio {
         let Event::Change { id, version, text } = ev else { return };
         if *id == self.prompt_id() {
             self.prompt = clip(text, MAX_PROMPT);
+        } else if *id == DRAFT {
+            // Typed into the draft: the next frame's version passes theirs.
+            self.drafts = self.drafts.max(*version);
         } else if *id != self.code_id() {
             if let Some(live) = &mut self.live {
                 live.event(ev, disk);
@@ -225,6 +235,27 @@ impl Studio {
             true => self.check(disk),
             false => self.code = !self.code,
         }
+    }
+
+    /// New app: Studio with nothing open, asking what to make, the prompt as typed (the app was
+    /// saved as it was made; the code as edited is checked and saved first, and stays, its
+    /// problem marked, if it cannot be).
+    fn new_app(&mut self, disk: &mut dyn Disk) {
+        if self.dirty {
+            self.check(disk);
+            if self.dirty {
+                return;
+            }
+        }
+        let old =
+            std::mem::replace(self, Studio { loaded: true, framed: true, ..Studio::default() });
+        // What the window and the desktop were told stays, and the counters go on: an id the
+        // desktop saw never comes back with other text.
+        (self.prompt, self.model, self.requests) = (old.prompt, old.model, old.requests);
+        (self.edits, self.set, self.last_id, self.drafts) =
+            (old.edits, old.set, old.last_id, old.drafts);
+        (self.width, self.height, self.asked) = (old.width, old.height, old.asked);
+        self.requests.push(Request::Focus { id: self.prompt_id() });
     }
 }
 
@@ -255,6 +286,7 @@ impl View for Studio {
             Some(&Event::Submit { id }) if id == self.prompt_id() => self.make(disk),
             Some(&Event::Click { id: STOP }) => self.stop(disk),
             Some(&Event::Click { id: TOGGLE }) if some => self.toggle(disk),
+            Some(&Event::Click { id: NEW }) if self.make.is_none() => self.new_app(disk),
             Some(&Event::Click { id: SEND }) => return self.send() || fresh,
             // Every Change gets a frame: the desktop sends the next one then.
             Some(ev @ Event::Change { .. }) => self.change(ev, disk),

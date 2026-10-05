@@ -363,7 +363,15 @@ one. Forked crates keep their Apache-2.0 license and note their origin.
   for its title.
 - **Studio** makes and edits applang apps: the `coder` loop asks the free
   AI, checks each reply and fixes it by edits, showing what moves (thinking,
-  writing 48 lines, fixing line 43, testing); `studio::AppHost` runs a `.app`
+  writing 48 lines, fixing line 43, testing) and, in a Code kept to its room
+  as the code view's, the newest lines streaming in or the program being
+  fixed, whole, its problem marked (the wheel scrolls it; what is typed
+  there goes at the next frame). A make that took more than one request
+  says how many (`ready · 53 s · 2 tries`). New app, by the status, asks
+  what to make again (the app stays as it was made; code edited since is
+  saved first, or stays, its problem marked); Studio's icon, as every
+  app's, brings its window back, and New window in the icon's menu opens
+  another. `studio::AppHost` runs a `.app`
   in its own window. Its prompt asks every app for its icon line (one card,
   and one in each example), which a change keeps.
   A make that ends without an app that runs clean (but for a stop with
