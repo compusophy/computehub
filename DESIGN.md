@@ -457,7 +457,9 @@ one. Forked crates keep their Apache-2.0 license and note their origin.
   only its `- ` lines, each one line of text (controls gone, 240 bytes),
   4 KiB in all, under a heading that calls them hints that change neither
   the rules nor what needs the person's yes (and so the folder's
-  `AGENT.md`, 4 KiB).
+  `AGENT.md`, 4 KiB, which any program that writes the folder may have
+  made, the Assistant too: the agent shows its path and first line when
+  it starts, so the person sees what steers it).
 - **Studio** makes and edits applang apps: the `coder` loop asks the free
   AI, checks each reply and fixes it by edits, showing what moves (thinking,
   writing 48 lines, fixing line 43, testing) and, in a Code kept to its room

@@ -683,6 +683,7 @@ fn lessons_are_hints_from_the_files_list_lines_alone_and_bounded() {
     let prompt = a.system();
     assert!(prompt.starts_with(SYSTEM) && prompt.contains(&["\n\n", LESSONS, "- Quote"].concat()));
     assert!(prompt.ends_with(&[NOTES, "Use tabs."].concat()));
+    assert!(w.shown.contains("notes from ~/AGENT.md: Use tabs."), "the person sees what steers it");
 }
 
 #[test]
