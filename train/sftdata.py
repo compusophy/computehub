@@ -128,14 +128,19 @@ def tokenize(records, tok, max_len):
     """Prompt: every message but the last, plus the template's generation
     prompt, which is what the server feeds the model. Answer: the rest of the
     full rendering, through the last end-of-turn token. Over-long records are
-    dropped, and their lengths returned to be counted."""
-    eos, items, over = tok.eos_token_id, [], []
+    dropped, and their lengths returned to be counted. A record whose full
+    rendering does not begin with its prompt's is dropped too, and returned
+    ({"task", "at"}) to be counted: training on it could not match inference
+    (Qwen2.5's template renders an answer that begins with a newline into one
+    token with the generation prompt's own), and one such record, a student's
+    sample, must not cost the whole run."""
+    eos, items, over, unmatched = tok.eos_token_id, [], [], []
     for r in records:
         prompt = tok.apply_chat_template(r["messages"][:-1], tokenize=True, add_generation_prompt=True)
         full = tok.apply_chat_template(r["messages"], tokenize=True)
         if full[:len(prompt)] != prompt:
-            sys.exit("error: %s: the chat template does not render the conversation as its prompt "
-                     "plus the answer, so training could not match inference" % r["_at"])
+            unmatched.append({"task": r["task"], "at": r["_at"]})
+            continue
         answer = full[len(prompt):]
         if eos not in answer:
             sys.exit("error: %s: the rendered answer has no end-of-turn token" % r["_at"])
@@ -144,7 +149,7 @@ def tokenize(records, tok, max_len):
             over.append(len(prompt) + len(answer))
             continue
         items.append({"ids": prompt + answer, "start": len(prompt), "task": r["task"], "rec": r})
-    return items, over
+    return items, over, unmatched
 
 
 def unit(task):

@@ -6,7 +6,8 @@
 #                              verified by iq; the prompts and the held-out list made again; GLM
 #                              5.3 (today's Studio) asked the held-out tasks it has not answered
 #   bash train/day.sh data     the solvers' replies (<root>/iq/replies-*.jsonl) and the suite's
-#                              references graded (iq's check, and an icon that draws), exported
+#                              references (each under the teacher that wrote its task: hand, or
+#                              the session) graded (iq's check, and an icon that draws), exported
 #                              as <root>/iq/sft.jsonl for train/night.sh
 #
 # Each stage file is imported once (a .imported marker beside it). Environment: COMPUTEHUB_DATA,
@@ -77,16 +78,35 @@ PY
 }
 
 data() {
-  "$PY" - "$SUITE" "$W/replies-ref.jsonl" <<'PY'
-import json, sys
+  # The suite's references, a file for each teacher that wrote them (the task's by.teacher: hand,
+  # or the session that wrote the task), so each record says who made it; refs.tsv lists them.
+  "$PY" - "$SUITE" "$W" <<'PY' | tee -a "$LOG" || { say "data: the references could not be written"; exit 7; }
+import json, re, sys
 nl, fence = chr(10), chr(96) * 3
-with open(sys.argv[2], "w", encoding="utf-8") as out:
-    for line in open(sys.argv[1], encoding="utf-8"):
+by = {}
+for line in open(sys.argv[1], encoding="utf-8"):
+    if line.strip():
         t = json.loads(line)
-        out.write(json.dumps({"task": t["id"], "reply": fence + "app" + nl + t["ref"].rstrip(nl) + nl + fence}) + nl)
+        teacher = (t.get("by") or {}).get("teacher") or "unknown"
+        reply = fence + "app" + nl + t["ref"].rstrip(nl) + nl + fence
+        by.setdefault(teacher, []).append(json.dumps({"task": t["id"], "reply": reply}) + nl)
+index = []
+for i, teacher in enumerate(sorted(by)):
+    path = "%s/refs-%d-%s.jsonl" % (sys.argv[2], i, re.sub(r"[^a-z0-9.]+", "-", teacher.lower()).strip("-"))
+    open(path, "w", encoding="utf-8", newline=nl).write("".join(by[teacher]))
+    index.append(path + "\t" + teacher + nl)
+    print("refs by %s: %d" % (teacher, len(by[teacher])))
+open(sys.argv[2] + "/refs.tsv", "w", encoding="utf-8", newline=nl).write("".join(index))
 PY
   : > "$D/solutions.jsonl"
+  while IFS=$'\t' read -r f teacher; do
+    "$TEACH" replies --suite "$SUITE" --replies "$f" --teacher "$teacher" --out "$W/solutions.jsonl" \
+      < /dev/null 2>&1 | sed "s|^|$(basename "$f"): |" | tee -a "$LOG"
+  done < "$D/refs.tsv"
   for f in "$D"/replies-*.jsonl; do
+    # The solvers' replies (replies-ref.jsonl is an older day's references, under one label).
+    case "$f" in */replies-ref.jsonl) continue ;; esac
+    [ -e "$f" ] || continue
     "$TEACH" replies --suite "$SUITE" --replies "$(cygpath -m "$f" 2>/dev/null || echo "$f")" \
       --teacher claude-code/claude-opus-5-5 --out "$W/solutions.jsonl" 2>&1 | sed "s|^|$(basename "$f"): |" | tee -a "$LOG"
   done
