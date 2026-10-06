@@ -5,8 +5,9 @@
 
 Each record's `messages` are rendered by the base model's own chat template,
 as the server renders them at inference; the loss falls on the last assistant
-message only. Records of held-out tasks are refused, over-long ones dropped
-and counted. Writes <root>/runs/<run>/: manifest.json (provenance), train.log,
+message only. Records of held-out tasks are refused; over-long ones, and any
+whose rendering does not begin with its prompt's, dropped and counted. Writes
+<root>/runs/<run>/: manifest.json (provenance), train.log,
 ckpt-a/ and ckpt-b/ (resume points, written in turn every --save-every steps),
 and adapter/ (LoRA) or model/ (--full). After a crash, rerun the same command:
 it resumes from the newest whole checkpoint.
@@ -212,12 +213,15 @@ def main():
     from transformers import AutoTokenizer, get_cosine_schedule_with_warmup
     tok = AutoTokenizer.from_pretrained(base["path"])
     pad = tok.pad_token_id if tok.pad_token_id is not None else tok.eos_token_id
-    items, over = data.tokenize(kept, tok, a.max_len)
+    items, over, unmatched = data.tokenize(kept, tok, a.max_len)
     train, val = data.split(items, a.val_frac, a.val_max)
-    counts.update(too_long=len(over), train=len(train), val=len(val))
+    counts.update(too_long=len(over), unmatched=len(unmatched), train=len(train), val=len(val))
     log("records: %s" % counts)
     if over:
         log("WARNING: dropped %d records over --max-len %d tokens (longest %d)" % (len(over), a.max_len, max(over)))
+    if unmatched:
+        log("WARNING: dropped %d records whose rendering does not begin with their prompt's: %s" % (
+            len(unmatched), ", ".join("%s (%s)" % (u["task"], u["at"]) for u in unmatched)))
     if not train:
         sys.exit("error: no records left to train on")
 
@@ -232,7 +236,8 @@ def main():
     if not m:
         m = {"schema": "computehub-sft/1", "run": run, "config": config, "created": common.now(),
              "repo": common.git_commit(), "script_sha256": common.sha256_file(os.path.abspath(__file__)),
-             "base": base, "data": files, "held_out": held_info, "records": counts, "held_by": held_by}
+             "base": base, "data": files, "held_out": held_info, "records": counts, "held_by": held_by,
+             "unmatched": unmatched}
         m.update(data.summary(items, train, val, over))
         m.update(hyper=hyper, env=common.environment(), attempts=[])
     attempt = {"started": common.now(), "pid": os.getpid(), "commit": common.git_commit()["commit"]}
