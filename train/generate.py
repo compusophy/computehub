@@ -171,7 +171,18 @@ def main():
     groups = {}
     for r in rows:
         groups.setdefault((float(r["temperature"]), int(r["max_tokens"])), []).append(r)
-    per = max(1, a.batch // a.k)
+    # Sequences a batch, at most what the GPU holds: the KV cache a token (layers x kv heads x
+    # head size x k and v x 2 bytes) over the longest prompt plus the room, in a third of what
+    # is free (the cache grows by copies). Past that, Windows spills into shared memory and a
+    # batch crawls: 32 untuned 3B samples drafting to their room took 43 minutes unfinished.
+    c = model.config
+    head = getattr(c, "head_dim", None) or c.hidden_size // c.num_attention_heads
+    kv = c.num_hidden_layers * getattr(c, "num_key_value_heads", c.num_attention_heads) * head * 2 * 2
+    longest = max(len(r["ids"]) for r in rows) + max(int(r["max_tokens"]) for r in rows)
+    fits = max(1, int(torch.cuda.mem_get_info()[0] / 3 // (kv * longest)))
+    if fits < a.batch:
+        log("batch %d -> %d sequences: %d KB of cache a token, %d tokens long" % (a.batch, fits, kv // 1024, longest))
+    per = max(1, min(a.batch, fits) // a.k)
     made, done, t0 = 0, 0, time.time()
     from transformers import StoppingCriteriaList
     for (temp, room), group in sorted(groups.items()):

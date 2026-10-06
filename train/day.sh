@@ -29,6 +29,8 @@ IQ="$REPO/target/release/iq"
 
 import() {
   for f in "$D"/stage/*.jsonl; do
+    # A task file not imported yet; never the refusals teach import writes beside one.
+    case "$f" in *.refused.jsonl) continue ;; esac
     [ -e "$f" ] && [ ! -e "$f.imported" ] || continue
     say "import: $(basename "$f")"
     "$TEACH" import --from "$(cygpath -m "$f" 2>/dev/null || echo "$f")" --out "$SUITE" 2>&1 | tee -a "$LOG" \
@@ -50,7 +52,9 @@ import json, os, sys
 held = {json.loads(l)["task"] for l in open(sys.argv[2], encoding="utf-8") if l.strip()}
 done = set()
 if os.path.exists(sys.argv[3]):
-    done = {json.loads(l)["task"] for l in open(sys.argv[3], encoding="utf-8") if l.strip()}
+    # A request that failed (an "error", no reply) is not an answer: ask it again.
+    rows = [json.loads(l) for l in open(sys.argv[3], encoding="utf-8") if l.strip()]
+    done = {r["task"] for r in rows if r.get("reply") and not r.get("error")}
 todo = [l for l in open(sys.argv[1], encoding="utf-8") if l.strip() and json.loads(l)["id"] in held - done]
 open(sys.argv[4], "w", encoding="utf-8").write("".join(todo))
 print("GLM: %d held-out tasks to answer" % len(todo))
@@ -59,7 +63,15 @@ PY
     say "GLM 5.3 on the new held-out tasks (free endpoint, paced)"
     "$TEACH" ask --url https://computehub-sigma.vercel.app/api/ai --model zai/glm-5.3 --suite "$W/glm-todo.jsonl" \
       --split all --out "$W/glm-new.jsonl" --gap "${GLM_GAP:-33000}" 2>&1 | tail -2 | tee -a "$LOG"
-    cat "$D/glm-new.jsonl" >> "$D/answers-glm.jsonl"
+    # Only real answers join the baseline; a failed request is asked again by the next import.
+    "$PY" - "$W/glm-new.jsonl" "$W/answers-glm.jsonl" <<'PY'
+import json, sys
+new = [l for l in open(sys.argv[1], encoding="utf-8") if l.strip()]
+ok = [l for l in new if json.loads(l).get("reply") and not json.loads(l).get("error")]
+old = [l for l in open(sys.argv[2], encoding="utf-8") if l.strip() and not json.loads(l).get("error")] if __import__("os").path.exists(sys.argv[2]) else []
+open(sys.argv[2], "w", encoding="utf-8").write("".join(old + ok))
+print("GLM: %d answered, %d failed (asked again next import)" % (len(ok), len(new) - len(ok)))
+PY
   fi
   say "import done: $(wc -l < "$D/prompts-train.jsonl") train, $(wc -l < "$D/prompts-held.jsonl") held-out tasks"
 }
