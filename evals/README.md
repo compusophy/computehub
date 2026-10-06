@@ -319,8 +319,10 @@ write them and a verifier can keep or refuse them mechanically.
   its variants share), `ask` (what a person types, plus the behavior the check relies on),
   `check` (a script), `ref` (a program that passes it) and `by`, the provenance: the teacher
   (`hand`, or a model), its prompt, the verifier's hash and the day. The split is derived, never
-  stored: a family is held out when FNV-1a 64 of its name is 0 mod 5 (`iq::held`), so what is
-  held out is an idea, never a wording.
+  stored: a family is held out when FNV-1a 64 of its root (its name before the first `-`,
+  `iq::root`) is 0 mod 5 (`iq::held`), so what is held out is an idea, never a wording. It
+  hashes the root because near twins share one (`pong-ai` asks nearly `pong`'s game): they fall
+  together, and training on one never inflates the other's held-out score.
 - **Checks** are scripts over Suite 1's probe; `iq::CARD` is the card a teacher is prompted with,
   and a test holds it to the parser. Actions: `start`, `click`, `key`, `press`, `type`, `wait`,
   `tap`, `tapcell`, `repeat`. Expectations: `has`, `says`, `after`, `number` (each but `after`

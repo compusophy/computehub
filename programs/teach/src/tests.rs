@@ -385,8 +385,39 @@ fn a_task_line_keeps_the_schema_and_the_stand_in_verifies_it() {
     assert_eq!(held, ["snake", "tetris"]);
     let is = |family: &str, id: &str| crate::seam::is_held(&held, family, id);
     assert!(is("snake", "x") && is("", "snake-wrap") && is("tetris", "tetris-t"));
-    assert!(!is("snakes", "snakes-wrap") && !is("", "snake") && !is("memory", "memory-snake"));
-    assert!(!is("snake-ai", "snake-ai-chase"), "a family of its own is not held for another's");
+    assert!(!is("snakes", "snakes-wrap") && !is("", "snakes") && !is("memory", "memory-snake"));
+    assert!(is("snake-ai", "snake-ai-chase") && is("", "snake"), "a near twin is held by its root");
+}
+
+/// The held-out list teach derives from a suite is every family [`iq::held`] holds, so every
+/// family under a held root (pong-ai with pong), and `is_held` of that list agrees with
+/// `iq::held` on every task; a list naming a twin holds its root's every family too.
+#[test]
+fn derived_held_lists_hold_near_twins_with_their_root() {
+    let t =
+        |id: &str, family: &str| Task { id: id.into(), family: family.into(), ..Task::default() };
+    let tasks = [
+        t("pong-computer", "pong"),
+        t("pong-ai-spin", "pong-ai"),
+        t("pong-ai-first-to-3", "pong-ai"),
+        t("tip-basic", "tip"),
+        t("counter", "counter"),
+        t("lamp-switch-on", "lamp-switch"),
+    ];
+    assert!(iq::held("pong") && iq::held("counter") && !iq::held("tip") && !iq::held("lamp"));
+    let held = crate::seam::held_of(&tasks);
+    assert_eq!(held, ["counter", "pong", "pong-ai"]);
+    for task in &tasks {
+        let is = crate::seam::is_held(&held, &task.family, &task.id);
+        assert_eq!(is, iq::held(&task.family), "{}", task.id);
+        assert_eq!(run::in_split("held", task, &held), is);
+        assert_eq!(run::in_split("train", task, &held), !is);
+    }
+    // A list older than the twin, or naming only the twin, still holds the whole root.
+    for list in [vec!["pong".to_string()], vec!["pong-ai".to_string()]] {
+        assert!(tasks[..3].iter().all(|t| crate::seam::is_held(&list, &t.family, &t.id)));
+        assert!(!crate::seam::is_held(&list, "tip", "tip-basic"));
+    }
 }
 
 /// A teacher that answers each request with `answer`, keeping each request; its batches answer

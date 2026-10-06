@@ -21,8 +21,8 @@
 //!   Every refusal is coded.
 //! - The suite is `evals/suites/iq.jsonl`, a task a line ([`suite`]), each with its provenance
 //!   (who made it, from what prompt, under which verifier ([`verifier_hash`]), on what day).
-//!   Families are held out, never wordings: [`held`] derives the split from a family's name, so
-//!   it is never stored and never drifts.
+//!   Families are held out, never wordings: [`held`] derives the split from a family's
+//!   [`root`], so it is never stored and never drifts, and near twins fall on one side.
 //!
 //! Codes, banded: E0701 to E0709 a check that does not read; E0721 to E0724 a program its check
 //! fails; E0741 to E0749 a task refused; E0761 to E0766 a file that does not read ([`codes`]).
@@ -343,10 +343,18 @@ pub fn fnv(bytes: &[u8]) -> u64 {
         .fold(0xcbf2_9ce4_8422_2325, |h, &b| (h ^ u64::from(b)).wrapping_mul(0x100_0000_01b3))
 }
 
+/// A family's root: its name before the first `-` (`pong-ai`'s is `pong`), or all of it.
+pub fn root(family: &str) -> &str {
+    family.split_once('-').map_or(family, |(root, _)| root)
+}
+
 /// Whether the family `family` is held out: never trained on, only measured. FNV-1a 64 of its
-/// name, mod 5, is 0: about a fifth of the families, the same on every machine and every day.
+/// [`root`], mod 5, is 0: about a fifth of the roots, the same on every machine and every day.
+/// By the root, not the name, because near twins share one (`pong-ai` asks nearly `pong`'s
+/// game), and training on a twin of a held family would inflate its held score: a held root
+/// holds every family under it.
 pub fn held(family: &str) -> bool {
-    fnv(family.as_bytes()) % 5 == 0
+    fnv(root(family).as_bytes()) % 5 == 0
 }
 
 /// The verifier's hash, 16 hex digits: of this crate's code and that of every crate it stands
