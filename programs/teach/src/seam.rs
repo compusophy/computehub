@@ -7,7 +7,7 @@
 //! `{"id":"snake-wrap","tier":3,"family":"snake","ask":"...","check":"...","ref":"...",
 //! "by":{"teacher":"claude-opus-5-5","prompt":"<16 hex>","verifier":"<16 hex>","day":"YYYY-MM-DD"}}`.
 //! Held-out families are the verifier's to choose; teach takes their list (`--held`, one family a
-//! line) and never solves one nor exports one for training.
+//! line, each holding its root's: [`is_held`]) and never solves one nor exports one for training.
 
 use coder::json::{Json, put};
 
@@ -110,18 +110,29 @@ impl Task {
     }
 }
 
-/// Whether `held` holds out the task `id` of `family`: by its family, as `iq::held` splits;
-/// only a line that lost its family is judged by its id (`family-...`), so `pong-ai-spin` of
-/// the family `pong-ai` is never held for `pong`'s sake.
+/// Whether `held` holds out the task `id` of `family`: by its root ([`iq::root`]), as
+/// `iq::held` splits, so a family listed holds every family of its root (`pong` holds
+/// `pong-ai`, its near twin, even when the list is older than `pong-ai`); a line that lost its
+/// family is judged by its id's root (ids are `family-...`).
 pub fn is_held(held: &[String], family: &str, id: &str) -> bool {
-    let by_id = |h: &str| id.strip_prefix(h).is_some_and(|rest| rest.starts_with('-'));
-    held.iter().any(|h| h == family || (family.is_empty() && by_id(h)))
+    let root = iq::root(if family.is_empty() { id } else { family });
+    held.iter().any(|h| iq::root(h) == root)
 }
 
 /// The families in a held-out list: one a line, blank lines and `#` comments aside.
 pub fn held(text: &str) -> Vec<String> {
     let lines = text.lines().map(str::trim);
     lines.filter(|l| !l.is_empty() && !l.starts_with('#')).map(String::from).collect()
+}
+
+/// The held-out families of `tasks`: those [`iq::held`] holds out (so every family under a held
+/// root), sorted, once each: what `--held` defaults to and `held.txt` lists.
+pub fn held_of(tasks: &[Task]) -> Vec<String> {
+    let mut held: Vec<String> =
+        tasks.iter().map(|t| t.family.clone()).filter(|f| iq::held(f)).collect();
+    held.sort();
+    held.dedup();
+    held
 }
 
 /// The benchmark's verifier ([`iq`]): a task stands when [`iq::verify`] keeps it (its reference

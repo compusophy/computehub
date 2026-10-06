@@ -15,6 +15,19 @@ def read_lines(path):
         return [s for s in (ln.split("#", 1)[0].strip() for ln in f) if s]
 
 
+# Roots held as one, as iq::JOINED (a test there holds this line to it): the level editors are
+# held with the platformers, since level-editor-platform plays platformer-coins' game.
+JOINED = {"level": "platformer"}
+
+
+def root(family):
+    """A family's root, its name before the first '-' unless JOINED holds that with another,
+    as iq::root: a family held holds every family of its root (pong holds pong-ai, its near
+    twin), as iq::held splits them."""
+    r = family.split("-", 1)[0]
+    return JOINED.get(r, r)
+
+
 def held_out(a):
     """The held-out task ids and families, the task -> family map, and their provenance."""
     if not (a.held or a.held_tasks or a.no_held):
@@ -34,7 +47,8 @@ def held_out(a):
         if not family_of:
             sys.exit("error: --held names families, but no suite (--tasks) maps tasks to them; use --held-tasks")
         families = set(read_lines(a.held))
-        tasks |= {t for t, fam in family_of.items() if fam in families}
+        roots = {root(f) for f in families}
+        tasks |= {t for t, fam in family_of.items() if root(fam) in roots}
         info["held"] = {"file": os.path.abspath(a.held), "sha256": common.sha256_file(a.held),
                         "families": sorted(families),
                         "not_in_suite": sorted(families - set(family_of.values()))}
@@ -94,9 +108,10 @@ def load_records(paths):
 def select(records, families, tasks, family_of):
     """Refuse held-out records and drop exact duplicates; count both."""
     counts, held_by, kept, seen = {"read": len(records), "held": 0, "duplicate": 0}, {}, [], set()
+    roots = {root(f) for f in families}
     for r in records:
         fam = r.get("family") or family_of.get(r["task"])
-        if r["task"] in tasks or (fam is not None and fam in families):
+        if r["task"] in tasks or (fam is not None and root(fam) in roots):
             counts["held"] += 1
             held_by[fam or r["task"]] = held_by.get(fam or r["task"], 0) + 1
             continue
@@ -113,14 +128,19 @@ def tokenize(records, tok, max_len):
     """Prompt: every message but the last, plus the template's generation
     prompt, which is what the server feeds the model. Answer: the rest of the
     full rendering, through the last end-of-turn token. Over-long records are
-    dropped, and their lengths returned to be counted."""
-    eos, items, over = tok.eos_token_id, [], []
+    dropped, and their lengths returned to be counted. A record whose full
+    rendering does not begin with its prompt's is dropped too, and returned
+    ({"task", "at"}) to be counted: training on it could not match inference
+    (Qwen2.5's template renders an answer that begins with a newline into one
+    token with the generation prompt's own), and one such record, a student's
+    sample, must not cost the whole run."""
+    eos, items, over, unmatched = tok.eos_token_id, [], [], []
     for r in records:
         prompt = tok.apply_chat_template(r["messages"][:-1], tokenize=True, add_generation_prompt=True)
         full = tok.apply_chat_template(r["messages"], tokenize=True)
         if full[:len(prompt)] != prompt:
-            sys.exit("error: %s: the chat template does not render the conversation as its prompt "
-                     "plus the answer, so training could not match inference" % r["_at"])
+            unmatched.append({"task": r["task"], "at": r["_at"]})
+            continue
         answer = full[len(prompt):]
         if eos not in answer:
             sys.exit("error: %s: the rendered answer has no end-of-turn token" % r["_at"])
@@ -129,7 +149,7 @@ def tokenize(records, tok, max_len):
             over.append(len(prompt) + len(answer))
             continue
         items.append({"ids": prompt + answer, "start": len(prompt), "task": r["task"], "rec": r})
-    return items, over
+    return items, over, unmatched
 
 
 def unit(task):

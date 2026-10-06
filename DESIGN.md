@@ -716,7 +716,11 @@ reinforcement learning, not only a filter.
   small language over the makes probe (`iq::CARD`). `grade` is compile, smoke, check on seeds
   1 to 3. `verify` keeps a task only when its reference passes, a null app fails, and its check
   kills most of the reference's mutants (a survivor counts only when a fixed exploration tells
-  it apart). Families are held out by hash (`iq::held`), never trained on.
+  it apart). Families are held out by hash (`iq::held`), never trained on. The hash is of a
+  family's root (its name before the first `-`), so twins named under one root, such as `pong`
+  and `pong-ai`, are held out together. Twins under different roots split unless
+  `iq::JOINED` joins the roots (`level` with `platformer`); teachers name a variant under its
+  idea's root so the rule can catch it.
 - **`teach`**: Claude Opus 5.5 as the teacher, over the Messages and Batches APIs (curl; the key
   on curl's stdin only). It writes tasks (verified by `iq` before they join the suite) and
   solves them in the bytes Studio sends (`coder::prompt`), so what it teaches is what the model
@@ -809,10 +813,10 @@ reinforcement learning, not only a filter.
   backward pass written by hand and checked against finite differences,
   AdamW on 8 threads, a KV cache, a weights file ending in its hash), and
   `lab`, a dev tool that makes the corpus (each applang program in the repo
-  that compiles, once, content-addressed: 101 found, a dozen of them real
-  apps and the rest test snippets; 988 with variants: renames and, since
+  that compiles, once, content-addressed: 102 found, a dozen of them real
+  apps and the rest test snippets; 1,000 with variants: renames and, since
   the second run, near-copies with a line dropped or numbers changed,
-  which add 267 of the 358 shapes; held out by shape;
+  which add 268 of the 360 shapes; held out by shape;
   `programs/lab/data/manifest.tsv`, which a test holds to the repo), trains
   tiny on it, stopping once the held-out loss stops falling, and judges
   what it writes with applang's own checker and smoke test (`results.md`
@@ -821,9 +825,10 @@ reinforcement learning, not only a filter.
   model is measured on them, not trained on them. Measured 2026-10-05, each
   run on the corpus as it was then, the one `results.md` names (the first
   570 programs, the second and third 976, 100 found: a test of the smoke
-  test has added a program and its 11 variants since, in training, the
-  same 130 held out; `lab train` and `measure` build the corpus from the
-  repo, so they reproduce the third run at 1328b09), 990k parameters, 100
+  test and one of a paused `every` have each added a program and its 11
+  variants since, in training, the same 130 held out; `lab train` and
+  `measure` build the corpus from the repo, so they reproduce the third
+  run at 1328b09), 990k parameters, 100
   programs prompted by 10 app headers. First run (600 steps of 8 x 1024
   tokens, 37 minutes on 8 threads): none of tiny's compiles, at any
   temperature; an 8-gram compiles 2, copies of corpus programs. Second
