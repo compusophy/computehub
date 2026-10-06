@@ -413,9 +413,26 @@ fn pong_and_pong_ai_land_on_the_same_side() {
     assert!(fnv(b"pong") % 5 == 0 && fnv(b"pong-ai") % 5 != 0);
 }
 
+/// Twins under different roots fall together only when [`JOINED`] joins their roots:
+/// `level-editor-platform` plays `platformer-coins`' game, so the level editors are held with
+/// the platformers, and `train/sftdata.py` joins the same roots.
+#[test]
+fn joined_roots_fall_together_here_and_in_sftdata() {
+    let roots = (root("level-editor"), root("level"), root("levels"), root("platformer-x"));
+    assert_eq!(roots, ("platformer", "platformer", "levels", "platformer"));
+    assert!(held("platformer") && held("level-editor") && held("level-editor-boxes"));
+    // Its own root alone would have trained on level-editor-platform.
+    assert!(fnv(b"level") % 5 != 0);
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../", "train/sftdata.py");
+    let py = std::fs::read_to_string(path).unwrap();
+    let pairs: Vec<String> = JOINED.iter().map(|(r, w)| format!("\"{r}\": \"{w}\"")).collect();
+    let want = format!("JOINED = {{{}}}", pairs.join(", "));
+    assert!(py.contains(&want), "train/sftdata.py lacks {want}");
+}
+
 /// The committed suite's split, as `iq split` prints it: of its first 100 tasks (54 families),
-/// 14 families and 27 tasks held, pong-ai with pong and tower-climb with tower-defense; 40
-/// families and 73 tasks trained on.
+/// 15 families and 29 tasks held, pong-ai with pong, tower-climb with tower-defense and
+/// level-editor with platformer; 39 families and 71 tasks trained on.
 #[test]
 fn the_committed_suite_splits_by_root() {
     let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../", "evals/suites/iq.jsonl");
@@ -425,10 +442,10 @@ fn the_committed_suite_splits_by_root() {
     let held_tasks: Vec<&Task> = first.iter().filter(|t| held(&t.family)).collect();
     let families: std::collections::BTreeSet<&str> =
         held_tasks.iter().map(|t| t.family.as_str()).collect();
-    let want = "char-count countdown counter flashcards loan minesweeper platformer pong pong-ai \
-                rhythm simon space-invaders tower-climb tower-defense";
+    let want = "char-count countdown counter flashcards level-editor loan minesweeper platformer \
+                pong pong-ai rhythm simon space-invaders tower-climb tower-defense";
     assert_eq!(families.into_iter().collect::<Vec<_>>().join(" "), want);
-    assert_eq!((held_tasks.len(), first.len() - held_tasks.len()), (27, 73));
+    assert_eq!((held_tasks.len(), first.len() - held_tasks.len()), (29, 71));
 }
 
 #[test]

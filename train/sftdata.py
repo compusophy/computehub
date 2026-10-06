@@ -15,10 +15,17 @@ def read_lines(path):
         return [s for s in (ln.split("#", 1)[0].strip() for ln in f) if s]
 
 
+# Roots held as one, as iq::JOINED (a test there holds this line to it): the level editors are
+# held with the platformers, since level-editor-platform plays platformer-coins' game.
+JOINED = {"level": "platformer"}
+
+
 def root(family):
-    """A family's root, its name before the first '-', as iq::root: a family held holds every
-    family of its root (pong holds pong-ai, its near twin), as iq::held splits them."""
-    return family.split("-", 1)[0]
+    """A family's root, its name before the first '-' unless JOINED holds that with another,
+    as iq::root: a family held holds every family of its root (pong holds pong-ai, its near
+    twin), as iq::held splits them."""
+    r = family.split("-", 1)[0]
+    return JOINED.get(r, r)
 
 
 def held_out(a):

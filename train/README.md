@@ -93,8 +93,9 @@ One of these is required:
 - `--held FILE`: one task family per line (`#` comments). Families come from the suite,
   `--tasks` (default `evals/suites/iq.jsonl`): JSON lines with `id` and `family`; lines
   without an `id` (a header) are skipped. Every task of a held family is held, and of every
-  family of its root (its name before the first `-`: `pong` holds `pong-ai`), as `iq::held`
-  splits them.
+  family of its root (its name before the first `-`: `pong` holds `pong-ai`; or the root
+  `JOINED` holds it with, as `iq::JOINED` does: `level-editor` falls with `platformer`), as
+  `iq::held` splits them.
 - `--held-tasks FILE|a,b,c`: task ids, for when there is no suite.
 - `--no-held`: smoke tests only; the manifest says so.
 

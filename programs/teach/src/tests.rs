@@ -390,8 +390,9 @@ fn a_task_line_keeps_the_schema_and_the_stand_in_verifies_it() {
 }
 
 /// The held-out list teach derives from a suite is every family [`iq::held`] holds, so every
-/// family under a held root (pong-ai with pong), and `is_held` of that list agrees with
-/// `iq::held` on every task; a list naming a twin holds its root's every family too.
+/// family under a held root (pong-ai with pong, level-editor with platformer), and `is_held` of
+/// that list agrees with `iq::held` on every task; a list naming a twin holds its root's every
+/// family too.
 #[test]
 fn derived_held_lists_hold_near_twins_with_their_root() {
     let t =
@@ -403,10 +404,15 @@ fn derived_held_lists_hold_near_twins_with_their_root() {
         t("tip-basic", "tip"),
         t("counter", "counter"),
         t("lamp-switch-on", "lamp-switch"),
+        t("level-editor-platform", "level-editor"),
     ];
     assert!(iq::held("pong") && iq::held("counter") && !iq::held("tip") && !iq::held("lamp"));
     let held = crate::seam::held_of(&tasks);
-    assert_eq!(held, ["counter", "pong", "pong-ai"]);
+    assert_eq!(held, ["counter", "level-editor", "pong", "pong-ai"]);
+    // Joined roots ([`iq::JOINED`]): a list naming only `platformer` holds the level editors.
+    let platformer = ["platformer".to_string()];
+    assert!(crate::seam::is_held(&platformer, "level-editor", "level-editor-platform"));
+    assert!(crate::seam::is_held(&platformer, "", "level-editor-boxes"));
     for task in &tasks {
         let is = crate::seam::is_held(&held, &task.family, &task.id);
         assert_eq!(is, iq::held(&task.family), "{}", task.id);

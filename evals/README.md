@@ -321,8 +321,14 @@ write them and a verifier can keep or refuse them mechanically.
   (`hand`, or a model), its prompt, the verifier's hash and the day. The split is derived, never
   stored: a family is held out when FNV-1a 64 of its root (its name before the first `-`,
   `iq::root`) is 0 mod 5 (`iq::held`), so what is held out is an idea, never a wording. It
-  hashes the root because near twins share one (`pong-ai` asks nearly `pong`'s game): they fall
-  together, and training on one never inflates the other's held-out score.
+  hashes the root so twins named under one root fall together (`pong-ai` asks nearly `pong`'s
+  game), and training on one cannot inflate the other's held-out score. A twin named under
+  another root is not caught by the rule: `iq::JOINED` holds such roots as one (`level` with
+  `platformer`, since `level-editor-platform` plays `platformer-coins`' game), and the rest
+  split, so what is trained on can still lift a held score (held `counter` beside `tally-door`'s
+  In and Out buttons and `lamp-switch-dimmer`'s Brighter and Dimmer; held `countdown` beside
+  `pomodoro`). So a teacher naming a variant of an idea the suite has (`teach writer
+  --families`) names it under that idea's root: `pong-ai`, never `ai-pong`.
 - **Checks** are scripts over Suite 1's probe; `iq::CARD` is the card a teacher is prompted with,
   and a test holds it to the parser. Actions: `start`, `click`, `key`, `press`, `type`, `wait`,
   `tap`, `tapcell`, `repeat`. Expectations: `has`, `says`, `after`, `number` (each but `after`

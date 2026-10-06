@@ -19,12 +19,14 @@
 //! (64000 for tasks, 32000 for solve) and `--day` (today, UTC). They append to `--out`; refused
 //! tasks go to `<out>.refused.jsonl`, and a batch's id waits in `<out>.batch` while it runs.
 //! Tasks are verified by [`iq::verify`] and written as `iq` writes them, so `--out` may be the
-//! suite itself. `export`, `ask` and `prompts` write `--out` afresh. `--card` is the checker
-//! language's card (default [`iq::CARD`]). `--held` lists the held-out families, one a line,
-//! each holding every family of its root ([`iq::root`]); without it they are the suite's
-//! families [`iq::held`] holds out. `prompts` writes, a line a task, the messages `ask` would
-//! send and the room and temperature it asks at, for a local model to answer in batches. The
-//! API key is `ANTHROPIC_API_KEY`, read from the environment only and never printed.
+//! suite itself. `--families` names ideas: a variant of an idea the suite has is named under
+//! that idea's root (`pong-ai`, never `ai-pong`), so [`iq::held`] holds it out with its twin.
+//! `export`, `ask` and `prompts` write `--out` afresh. `--card` is the checker language's card
+//! (default [`iq::CARD`]). `--held` lists the held-out families, one a line, each holding every
+//! family of its root ([`iq::root`]); without it they are the suite's families [`iq::held`]
+//! holds out. `prompts` writes, a line a task, the messages `ask` would send and the room and
+//! temperature it asks at, for a local model to answer in batches. The API key is
+//! `ANTHROPIC_API_KEY`, read from the environment only and never printed.
 
 #![forbid(unsafe_code)]
 
