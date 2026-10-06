@@ -18,12 +18,14 @@
 #      rerun trains on the same bytes;
 #   4. report.py: every model's held-out pass rate tonight beside the nights before
 #      (<root>/iq/report-<night>.md, iq-history.jsonl); a file short of its answers is partial.
-# The 3B round (LoRA and its answers) starts only before Q3_BY o'clock, and only when it can end
-# by 07:45: its LoRA at about 380 tokens a second over the records (about 6,000 tokens each)
-# Q3_EPOCHS times, and 40 minutes to answer.
+# The 3B round (LoRA and its answers) runs before the self-taught round, so the bigger model's
+# fine-tune is never crowded out by it; it starts only before Q3_BY o'clock, and only when it can
+# end by 07:45: its LoRA at about 380 tokens a second over the records (about 6,000 tokens each)
+# Q3_EPOCHS times, and 40 minutes to answer. The self-taught round then starts only before
+# SELF_BY o'clock.
 # The GPU is compusophy's from 08:00 to 22:00: it refuses to start then, and from 07:45 no new
 # step starts; --force lifts both, and the start-by hours with them.
-# Environment: COMPUTEHUB_DATA, PYTHON, MIN_FREE_GB (50), SELF_BY (4), Q3_BY (3), Q3_EPOCHS (2).
+# Environment: COMPUTEHUB_DATA, PYTHON, MIN_FREE_GB (50), Q3_BY (3), SELF_BY (5), Q3_EPOCHS (2).
 # To pause: touch <root>/iq/PAUSE (no new step starts), then stop the running step's python.
 set -uo pipefail
 
@@ -146,10 +148,23 @@ sft "$N-q05" "$SMALL" --data "$W/sft.jsonl" --full
 morning
 gen "answers-$N-q05.jsonl" prompts-held.jsonl "$KR" 64 --run "$N-q05" --name q05
 
+if [ "$BIG" = 0 ]; then
+  say "3B round skipped (--no-3b)"
+elif late "${Q3_BY:-3}"; then
+  say "3B round skipped: past ${Q3_BY:-3}:00"
+elif need=$(q3_minutes); ! ends_by_morning "$need"; then
+  say "3B round skipped: it needs about $need minutes, which run past 07:45"
+else
+  morning
+  sft "$N-q3" "$LARGE" --data "$W/sft.jsonl" --epochs "${Q3_EPOCHS:-2}"
+  morning
+  gen "answers-$N-q3.jsonl" prompts-held.jsonl "$KR" 32 --run "$N-q3" --name q3
+fi
+
 if [ "$SELF" = 0 ]; then
   say "self-taught round skipped (--no-self)"
-elif late "${SELF_BY:-4}"; then
-  say "self-taught round skipped: past ${SELF_BY:-4}:00"
+elif late "${SELF_BY:-5}"; then
+  say "self-taught round skipped: past ${SELF_BY:-5}:00"
 elif ! finished "$N-q05"; then
   say "self-taught round skipped: $N-q05 did not finish"
 else
@@ -191,19 +206,6 @@ PY
     morning
     gen "answers-$N-q05-self.jsonl" prompts-held.jsonl "$KR" 64 --run "$N-q05-self" --name q05-self
   fi
-fi
-
-if [ "$BIG" = 0 ]; then
-  say "3B round skipped (--no-3b)"
-elif late "${Q3_BY:-3}"; then
-  say "3B round skipped: past ${Q3_BY:-3}:00"
-elif need=$(q3_minutes); ! ends_by_morning "$need"; then
-  say "3B round skipped: it needs about $need minutes, which run past 07:45"
-else
-  morning
-  sft "$N-q3" "$LARGE" --data "$W/sft.jsonl" --epochs "${Q3_EPOCHS:-2}"
-  morning
-  gen "answers-$N-q3.jsonl" prompts-held.jsonl "$KR" 32 --run "$N-q3" --name q3
 fi
 
 finish "done"
