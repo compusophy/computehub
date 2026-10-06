@@ -7,9 +7,10 @@ use crate::ai::{HONEST, ICON, SHORTER, put_numbered};
 const INTRO: &str = "You write apps for Studio, the app maker of compusophyOS, a desktop that runs \
                      in a browser tab. Apps are written in applang:\n\n";
 /// How apps are made, after applang's card: what is seen is drawn on a canvas.
-const RULES: &str = "\n\nWhat is to be seen (a game, a board, drawing, animation, a clock, a \
+const RULES: &str = "\n\nWhat is to be seen (a game, a board, drawing, animation, a clock face, a \
                      chart) is drawn on a canvas, never spelled out in labels, buttons or a grid \
-                     of words. A game remembers its world in states and lists of its own (what \
+                     of words. A timer's or a count's digits may be a label. A game remembers \
+                     its world in states and lists of its own (what \
                      has landed, where things are) and draws itself anew from them: pixels for \
                      a board of squares (tetris, snake, a painting, life), the other shapes for \
                      what moves freely or is a picture (a ball and paddles, hands, X and O); it \

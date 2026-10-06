@@ -369,6 +369,20 @@ fn ticks_roll_back_whole_and_smoke_runs_slow_timers_and_reopens() {
     assert!(smoke(compile(&fixed).unwrap(), 1).fault.is_none());
 }
 
+/// An `every` paused partway (its interval 0) runs again from the start of its interval, as
+/// when a tick passes it paused: no tick comes while no timer runs, so none would reset it.
+#[test]
+fn a_paused_every_resumes_at_the_start_of_its_interval() {
+    let mut a = app("state speed = 0; state n = 0; every speed { n += 1; }
+         button \"Go\" { speed = 1000; } button \"Pause\" { speed = 0; } label n;");
+    let tick = |a: &mut App, ms| (a.handle(&Event::Tick { ms }).unwrap(), vals(a)[1].clone());
+    assert_eq!((click(&mut a, 0), tick(&mut a, 700)), (None, (false, Value::Int(0))));
+    // Paused 700 ms in and resumed, with no tick between: 300 ms more is not yet its beat.
+    assert_eq!((click(&mut a, 1), a.timer(), click(&mut a, 0)), (None, 0, None));
+    assert_eq!(tick(&mut a, 300), (false, Value::Int(0)));
+    assert_eq!(tick(&mut a, 700), (true, Value::Int(1)));
+}
+
 #[test]
 fn the_snake_shot_steers_by_its_states_and_rests_when_still() {
     let snake = |seed| {
@@ -456,15 +470,19 @@ fn every_card_example_compiles_and_smokes_clean() {
         "pixels(board, x, y, 10, side);",
         "let b = [-1; 200]; b[at(x, y)] = 2;",
         "sin(d)  cos(d)",
+        "state word = [\"c\", \"a\", \"t\"];",
+        "for i in 0..len(abc) { button abc[i] { guess(abc[i]); } }",
     ];
     let src = r#"
         state n = 0;   state name = "";   state on = false;
         state board = [0; 200];   state words = ["a", "b"];   state todos = [""; 0];
         saved state best = 0;
         state speed = 500; state score = 0; state xs = [0; 0]; state bx = 80; state by = 60;
+        state word = ["c", "a", "t"]; state abc = ["a", "c"];
         fn at(x: int, y: int) -> int { return y * 10 + x; }
         fn reset() { score = 0; }
         fn mark(on: bool) -> string { if on { return "x"; } return ""; }
+        fn guess(l: string) { if l == word[0] { n += 1; } }
         fn scene() { rect(0, 0, 160, 8, 4); circle(bx, by, 3, 3); text(score, 80, 4, 6, 9); }
         fn squares(x: int, y: int, side: int) { let b = [-1; 200]; b[at(x, y)] = 2;
           pixels(b, x, y, 10, side); pixels(board, x, y, 10, side); }
@@ -481,6 +499,7 @@ fn every_card_example_compiles_and_smokes_clean() {
         row { col { label min(1, 2) + max(1, 2) + abs(-3) + parse(name, 0) + len(name); } }
         if n > 3 { label 1; } else if n > 1 { label 2; } else { label 3; }
         for i in 0..len(todos) { label todos[i]; button "x" { remove(todos, i); } }
+        for i in 0..len(abc) { button abc[i] { guess(abc[i]); } }
         grid 10, board;
         grid 10, board { board[cell] = (board[cell] + 1) % 9; }
         grid 2, [0, 0], words { on = !on; }

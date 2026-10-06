@@ -30,13 +30,14 @@ pub const HONEST: &str = "Begin the program with a // comment of one or two shor
 pub const ICON: &str = "Under that comment, its icon on one line: // icon: then shapes on a 24 x 24 \
                         grid (x right, y down, whole numbers 2 to 22): line x y x y .. (a stroke \
                         through 2 to 12 points), loop x y .. (closed), fill x y .. (solid), ring \
-                        x y r, dot x y r, arc x y r from to (degrees clockwise from the top). It \
-                        shows at 19 px: draw the one thing the app is, large and centered, in at \
-                        most 6 shapes, no part under 4 across; never a whole board or screen, \
-                        whose parts would be specks (tic-tac-toe is an X and an O: line 2 7 10 \
-                        15 line 10 7 2 15 ring 17 11 4). It draws whole or not at all: past 16 \
-                        shapes, 64 numbers or 320 bytes, or off the grid, the tile shows a sigil. \
-                        A change keeps it unless the app becomes another. For example, for ";
+                        x y r, dot x y r, arc x y r from to (degrees clockwise from the top): bare \
+                        numbers, no width, color or parentheses, unlike a canvas's ring(x, y, r, \
+                        width, color). It shows at 19 px: draw the one thing the app is, large and \
+                        centered, in at most 6 shapes, no part under 4 across; never a whole board \
+                        or screen, whose parts would be specks (tic-tac-toe is an X and an O: line \
+                        2 7 10 15 line 10 7 2 15 ring 17 11 4). It draws whole or not at all: past \
+                        16 shapes, 64 numbers or 320 bytes, or off the grid, the tile shows a \
+                        sigil. A change keeps it unless the app becomes another. For example, for ";
 /// What a make asks for after a reply that ran out of room before its program ended.
 pub const SHORTER: &str = "Your reply ran out of room before the program ended. Write the same \
                            app, shorter: under 100 lines, extras left out (named after \
@@ -205,7 +206,8 @@ pub(crate) const ICON_WHY: [&str; 7] = [
     "the icon line is over 320 bytes",
     " is not a shape (line, loop, fill, ring, dot, arc) nor a whole number",
     " is a number before any shape, or of more than 3 digits",
-    " has too few or too many numbers (a line's in x y pairs)",
+    " has too few or too many numbers (ring and dot take x y r, arc x y r from to, a line x y \
+     pairs)",
     " leaves the 24 x 24 grid, or its radius or an angle is out of range",
     " is past 16 shapes or 64 numbers: draw the one thing the app is, in 6 shapes at most",
     "the icon has no shape, or its line is never read: it begins // icon: just so (lowercase, \
