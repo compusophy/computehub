@@ -304,8 +304,13 @@ What it says:
   coder, which cannot tell, would still send it to the model mid-make, as it did here.
 
 Since then the coder's prompt has moved to `09141db7e75a4b45` (a grid's cell is the square's
-index, never its color, shown by a palette), so no recorded request replays: the runs above are
-stale (kept as they were, never graded again) until live runs at the new prompt replace them.
+index, never its color, shown by a palette), and then to `3205d5e4cd614820` (the card names the
+words no name may take, says a state starts as a literal, that a function with a result may
+change state too, that a string is read whole and that a canvas cannot tell a tap from a drag;
+an icon's ring takes bare numbers; a timer's digits may be a label), so no recorded request
+replays: the runs above are stale (kept as they were, never graded again) until live runs at the
+new prompt replace them. applang's runtime changed with it (an `every` paused partway starts its
+interval afresh), so the harness's hash moved too.
 
 ## Suite 2, iq (`iq`)
 

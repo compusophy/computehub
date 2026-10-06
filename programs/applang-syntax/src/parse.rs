@@ -214,7 +214,7 @@ pub struct StateDecl {
     pub name: String, pub name_span: Span, pub init: Lit, pub saved: bool, pub fixed: bool,
 }
 
-/// A function: no result type is a procedure (it may change state); `pure` once checked says
+/// A function, with a result type or not (either may change state); `pure` once checked says
 /// it changes nothing, so a render may call it.
 #[derive(Debug)]
 pub struct FnDecl {
@@ -429,7 +429,8 @@ fn state_decl(src: &str, t: &mut Toks<'_>) -> PResult<StateDecl> {
     let (name, name_span) = ident(src, t, "a state name")?;
     expect(src, t, TokKind::Assign, "`=`")?;
     let init = literal(src, t, true)?;
-    expect(src, t, TokKind::Semi, "`;`")?;
+    let semi = "`;` (a state starts as a literal; work the rest out in a handler)";
+    expect(src, t, TokKind::Semi, semi)?;
     Ok(StateDecl { name, name_span, init, saved, fixed: false })
 }
 

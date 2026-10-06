@@ -213,8 +213,9 @@ impl App {
     }
 
     /// Handles one event atomically: on `Err` the state is exactly as it was, and so is how far
-    /// each `every` is into its interval (a faulted tick's time comes again with the next).
-    /// Whether a handler ran (a tick with no `every` due, a key no `on key` names: none).
+    /// each `every` is into its interval (a faulted tick's time comes again with the next); on
+    /// `Ok` each `every` the new state pauses starts its interval afresh. Whether a handler ran
+    /// (a tick with no `every` due, a key no `on key` names: none).
     pub fn handle(&mut self, event: &Event) -> Result<bool, Diag> {
         let lim = self.limits;
         let (mut next, mut acc) = (self.state.clone(), self.acc.clone());
@@ -228,7 +229,21 @@ impl App {
             return Err(Diag::new_code(codes::STATE_TOO_BIG, msg));
         }
         (self.state, self.acc) = (next, acc);
+        self.rest();
         Ok(ran)
+    }
+
+    /// Starts each `every` the state now pauses (its interval 0 or less) at the start of its
+    /// interval, as a tick does: no tick comes while no timer runs, so one paused partway would
+    /// resume partway. An interval that faults is left as it is (its tick shows the fault).
+    fn rest(&mut self) {
+        let lim = self.limits;
+        let mut run = Run::new(&self.program, &mut self.state, &lim, lim.render_fuel);
+        for (e, acc) in self.program.everys().iter().zip(&mut self.acc) {
+            if matches!(run.expr(&e.interval), Ok(Value::Int(n)) if n <= 0) {
+                *acc = 0;
+            }
+        }
     }
 
     /// The current state, in declaration order.
@@ -454,16 +469,22 @@ pub const REFERENCE: &str = "\
 applang: a small TOTAL language for apps and games. Every handler halts; a fault rolls its
 event back and the app shows the error. A program is its states first, then functions,
 handlers and widgets in any order. Comments: // and /* */.
+Never name anything state, label, button, input, row, col, let, if, else, repeat, for, in,
+fn, return, true or false (call a row r and a column c); a function never takes a built-in's
+name (len, max, clear, ...; beside a canvas rect, line, text, ... too).
 STATE (first; the initial value fixes the type: int (64-bit, checked), bool, string, or a
 list of one of them):
   state n = 0;   state name = \"\";   state on = false;
   state board = [0; 200];   state words = [\"a\", \"b\"];   state todos = [\"\"; 0];
   saved state best = 0;     -- kept when the app is closed and opened again
+  A state starts as a literal, never an expression, call or other state ([0; 200], not
+  [0; 10 * 20]); nothing runs as the app opens: shuffle, deal or build in Start's handler.
 FUNCTIONS (a function calls only functions defined ABOVE it: no recursion; handlers and
 widgets call any; parameters and results are int, bool or string; a function with a result
 ends in return):
   fn at(x: int, y: int) -> int { return y * 10 + x; }
-  fn reset() { score = 0; }   -- no result: it may change state
+  fn reset() { score = 0; }   -- any function may change state (or call random), with a result
+                                 or not; widgets, every's N and drawing call only those that do not
 HANDLERS (top level):
   every 500 { STMTS }   every speed { STMTS }   -- each N ms while it shows; N <= 0 pauses:
                                                    make N 0 while nothing moves (before Start,
@@ -486,9 +507,12 @@ CANVAS (a picture W units wide and H tall, 1 to 1,024, scaled to fit the window;
 and y down from 0, 0 at the top left):
   canvas 160, 120, scene();           -- scene() draws it anew whenever the app shows
   canvas 160, 120, scene() { STMTS }  -- a tap on it runs STMTS, a drag again for each unit it
-                                         crosses (about every 4 px); x, y = where, in its units
-                                         (so no state or loop variable is called x or y): let it
-                                         steer, aim or paint; turn, drop or fire on a button
+                                         crosses (about every 4 px), and nothing tells the two
+                                         apart: a shaky tap may run it twice. x, y = where, in its
+                                         units (so no state or loop variable is called x or y):
+                                         let it steer, aim, paint or fill an empty square, which
+                                         bear repeating, never toggle; turn, drop or fire on a
+                                         button (a grid's tap runs once a square: it may toggle)
 DRAWING (only in the function a canvas calls and the functions it calls, which change nothing
 but their lets; later shapes cover earlier ones; the thing first, then where, then how big, the
 color last):
@@ -507,10 +531,10 @@ color last):
                                      made from other states: let b = [-1; 200]; b[at(x, y)] = 2;
   colors: 0 the canvas, 1 red 2 green 3 yellow 4 blue 5 purple 6 cyan 7 silver 8 gray
           9 ink 10 dim ink 11 accent
-  Draw what is seen on a canvas: games, boards, drawing, animation, clocks, charts. Pixels suit
-  boards of squares and painting; the other shapes things that move freely, marks, hands and
-  pictures. every 33 is about 30 steps a second. A phone has no keys: let a tap or a drag on
-  the canvas steer (follow x).
+  Draw what is seen on a canvas: games, boards, drawing, animation, clock faces, charts.
+  Pixels suit boards of squares and painting; the other shapes things that move freely, marks,
+  hands and pictures. every 33 is about 30 steps a second. A phone has no keys: let a tap or a
+  drag on the canvas steer (follow x).
 STATEMENTS (each ends with ; or its { } block; let works in any block):
   let x = EXPR;   x = EXPR;   x += EXPR;   xs[i] = EXPR;   f(a, b);   return EXPR;   return;
   if EXPR { } else if EXPR { } else { }   for i in A..B { }   repeat N { }
@@ -520,6 +544,9 @@ EXPRESSIONS: 42  true  \"text\" (escapes \\\" \\\\ \\n)  names  xs[i]  f(a, b)  
   + with a string on either side joins text: \"score \" + n
   len(xs)  len(s)  min(a, b)  max(a, b)  abs(a)  random(n) (0 to n-1)  parse(s, d) (int, else d)
   sin(d)  cos(d)  (1000 times the sine and cosine of d degrees: sin(90) is 1000, cos(90) is 0)
+  A string is read whole (len(s) counts its letters; ==, + and parse): no s[i], no slicing.
+  Keep a word read letter by letter as a list (state word = [\"c\", \"a\", \"t\"];) and take
+  letters from buttons: for i in 0..len(abc) { button abc[i] { guess(abc[i]); } }
   No ?: operator: write a function, fn mark(on: bool) -> string { if on { return \"x\"; } return \"\"; }
 FAULTS: overflow, divide by zero, an index outside its list, a list past 4,096 items, a grid
 square past 8, a canvas color past 11, a negative size, a shape's number past 32,767 either
@@ -543,7 +570,8 @@ pub fn rule(code: u16) -> &'static str {
         codes::UNEXPECTED_TOKEN => {
             "every widget, let, assignment, call and return ends with ;, also inside the braces \
              of if, row, col and for (if on { label \"a\"; } else { label \"b\"; }). States come \
-             first; there is no while, ?:, ++, *= or class."
+             first; there is no while, ?:, ++, *= or class. state, label, button, input, row, \
+             col, let, if, else, repeat, for, in, fn, return, true and false name nothing."
         }
         codes::TOO_DEEP => "nest less: split long expressions and deep if chains into functions.",
         codes::DIV_BY_ZERO => "guard every / and % so the divisor is never 0.",
@@ -593,9 +621,9 @@ pub fn rule(code: u16) -> &'static str {
              canvas, smaller or shorter (two texts on two lines, if it must say more)."
         }
         codes::DUP_STATE => {
-            "declare each state, function and parameter once; built-ins keep their names (beside \
-             a canvas, rect, circle, ring, line, text, sprite, sin and cos too), and a canvas's \
-             handler names the tap x and y."
+            "declare each state, function and parameter once; no function takes a built-in's \
+             name (beside a canvas, rect, circle, ring, line, text, sprite, sin and cos too), \
+             and a canvas's handler names the tap x and y."
         }
         codes::UNKNOWN_NAME => {
             "use only declared states, the lets of enclosing blocks, parameters, loop variables, \
