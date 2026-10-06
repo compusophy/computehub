@@ -74,8 +74,36 @@ quiet() { grep -v "Warning\|warn(\|attn_output\|FutureWarning" | tee -a "$LOG" |
 TEACH="$REPO/target/release/teach"
 IQ=$(cygpath -m "$REPO/target/release/iq.exe" 2>/dev/null || echo "$REPO/target/release/iq")
 
+# The scorer: llama-server's CUDA build when it is there (continuous batching over 16 slots, the
+# coder's system prompt cached once, each stream closed where Studio stops reading, so no batch
+# waits on its longest sample: generate.py's 3B took 5 minutes a task), else generate.py's
+# batches. SCORER=hf forces generate.py. A failed server attempt falls back to generate.py, which
+# answers again what the server made (another engine, another "gen").
+LLAMA_CUDA="${LLAMA_CPP_DIR:-C:/llama-cpp}/build-cuda/bin/llama-server.exe"
+if [ "${SCORER:-}" != hf ] && [ -f "$LLAMA_CUDA" ]; then SERVER=1; else SERVER=0; fi
 gen() {  # gen OUT PROMPTS K BATCH (--base ID | --run NAME) [--name ROLE]
   local out=$1 prompts=$2 k=$3 batch=$4; shift 4
+  if [ "$SERVER" = 1 ]; then
+    local spec=() name="" args=("$@")
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --base) spec=(--base-only --base "$2"); name=${name:-$2}; shift 2 ;;
+        --run) spec=(--run "$2"); name=${name:-run:$2}; shift 2 ;;
+        --name) name=$2; shift 2 ;;
+        *) shift ;;
+      esac
+    done
+    set -- "${args[@]}"
+    say "score: $(basename "$out") (${spec[*]}, k $k) on llama-server"
+    if (cd "$REPO" && "$PY" train/export.py "${spec[@]}" --quant q8_0 \
+          && "$PY" train/serve.py "${spec[@]}" --quant q8_0 --parallel 16 --ctx 12288 \
+          && "$PY" train/ask.py --prompts "$W/$prompts" --out "$W/$out" --name "$name" --k "$k" --jobs 16) 2>&1 | quiet; then
+      (cd "$REPO" && "$PY" train/serve.py --stop) 2>&1 | quiet
+      return
+    fi
+    (cd "$REPO" && "$PY" train/serve.py --stop) 2>&1 | quiet
+    say "llama-server failed for $(basename "$out"): generate.py answers it"
+  fi
   say "generate: $(basename "$out") ($*, k $k)"
   (cd "$REPO" && "$PY" train/generate.py --prompts "$W/$prompts" --out "$W/$out" --k "$k" --batch "$batch" "$@") 2>&1 | quiet
 }
