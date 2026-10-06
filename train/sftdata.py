@@ -15,6 +15,19 @@ def read_lines(path):
         return [s for s in (ln.split("#", 1)[0].strip() for ln in f) if s]
 
 
+# Roots held as one, as iq::JOINED (a test there holds this line to it): the level editors are
+# held with the platformers, since level-editor-platform plays platformer-coins' game.
+JOINED = {"level": "platformer"}
+
+
+def root(family):
+    """A family's root, its name before the first '-' unless JOINED holds that with another,
+    as iq::root: a family held holds every family of its root (pong holds pong-ai, its near
+    twin), as iq::held splits them."""
+    r = family.split("-", 1)[0]
+    return JOINED.get(r, r)
+
+
 def held_out(a):
     """The held-out task ids and families, the task -> family map, and their provenance."""
     if not (a.held or a.held_tasks or a.no_held):
@@ -34,7 +47,8 @@ def held_out(a):
         if not family_of:
             sys.exit("error: --held names families, but no suite (--tasks) maps tasks to them; use --held-tasks")
         families = set(read_lines(a.held))
-        tasks |= {t for t, fam in family_of.items() if fam in families}
+        roots = {root(f) for f in families}
+        tasks |= {t for t, fam in family_of.items() if root(fam) in roots}
         info["held"] = {"file": os.path.abspath(a.held), "sha256": common.sha256_file(a.held),
                         "families": sorted(families),
                         "not_in_suite": sorted(families - set(family_of.values()))}
@@ -94,9 +108,10 @@ def load_records(paths):
 def select(records, families, tasks, family_of):
     """Refuse held-out records and drop exact duplicates; count both."""
     counts, held_by, kept, seen = {"read": len(records), "held": 0, "duplicate": 0}, {}, [], set()
+    roots = {root(f) for f in families}
     for r in records:
         fam = r.get("family") or family_of.get(r["task"])
-        if r["task"] in tasks or (fam is not None and fam in families):
+        if r["task"] in tasks or (fam is not None and root(fam) in roots):
             counts["held"] += 1
             held_by[fam or r["task"]] = held_by.get(fam or r["task"], 0) + 1
             continue

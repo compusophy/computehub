@@ -390,11 +390,62 @@ fn the_split_is_derived_from_the_family() {
     let families = ["counter", "tip", "stopwatch", "todo", "snake", "memory", "paint", "2048"];
     let out: Vec<bool> = families.iter().map(|f| held(f)).collect();
     assert_eq!(out, [true, false, false, false, false, false, false, false]);
-    // About a fifth of all families.
-    let n = (0..1000).filter(|i| held(&format!("family-{i}"))).count();
+    // About a fifth of all roots.
+    let n = (0..1000).filter(|i| held(&format!("family{i}-x"))).count();
     assert!((150..250).contains(&n), "{n}");
     let v = verifier_hash();
     assert!(v.len() == 16 && v.bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase()));
+}
+
+/// Near twins fall on one side: a family is judged by its root, the name before its first `-`.
+#[test]
+fn pong_and_pong_ai_land_on_the_same_side() {
+    assert_eq!((root("pong-ai"), root("pong"), root("tic-tac-toe")), ("pong", "pong", "tic"));
+    assert_eq!((root(""), root("-x"), root("pong-")), ("", "", "pong"));
+    assert!(held("pong") && held("pong-ai") && held("pong-ai-2"), "pong's root is held");
+    assert_eq!(held("pong"), fnv(b"pong") % 5 == 0);
+    for (a, b) in
+        [("checkers", "checkers-ai"), ("tower-climb", "tower-defense"), ("lamp-switch", "lamp")]
+    {
+        assert_eq!(held(a), held(b), "{a} and {b}");
+    }
+    // The name alone would have split them: pong held, pong-ai trained on.
+    assert!(fnv(b"pong") % 5 == 0 && fnv(b"pong-ai") % 5 != 0);
+}
+
+/// Twins under different roots fall together only when [`JOINED`] joins their roots:
+/// `level-editor-platform` plays `platformer-coins`' game, so the level editors are held with
+/// the platformers, and `train/sftdata.py` joins the same roots.
+#[test]
+fn joined_roots_fall_together_here_and_in_sftdata() {
+    let roots = (root("level-editor"), root("level"), root("levels"), root("platformer-x"));
+    assert_eq!(roots, ("platformer", "platformer", "levels", "platformer"));
+    assert!(held("platformer") && held("level-editor") && held("level-editor-boxes"));
+    // Its own root alone would have trained on level-editor-platform.
+    assert!(fnv(b"level") % 5 != 0);
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../", "train/sftdata.py");
+    let py = std::fs::read_to_string(path).unwrap();
+    let pairs: Vec<String> = JOINED.iter().map(|(r, w)| format!("\"{r}\": \"{w}\"")).collect();
+    let want = format!("JOINED = {{{}}}", pairs.join(", "));
+    assert!(py.contains(&want), "train/sftdata.py lacks {want}");
+}
+
+/// The committed suite's split, as `iq split` prints it: of its first 100 tasks (54 families),
+/// 15 families and 29 tasks held, pong-ai with pong, tower-climb with tower-defense and
+/// level-editor with platformer; 39 families and 71 tasks trained on.
+#[test]
+fn the_committed_suite_splits_by_root() {
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../", "evals/suites/iq.jsonl");
+    let tasks =
+        read_suite(&std::fs::read_to_string(path).unwrap()).unwrap_or_else(|e| panic!("{e}"));
+    let first = tasks.get(..100).expect("the suite holds 100 tasks or more");
+    let held_tasks: Vec<&Task> = first.iter().filter(|t| held(&t.family)).collect();
+    let families: std::collections::BTreeSet<&str> =
+        held_tasks.iter().map(|t| t.family.as_str()).collect();
+    let want = "char-count countdown counter flashcards level-editor loan minesweeper platformer \
+                pong pong-ai rhythm simon space-invaders tower-climb tower-defense";
+    assert_eq!(families.into_iter().collect::<Vec<_>>().join(" "), want);
+    assert_eq!((held_tasks.len(), first.len() - held_tasks.len()), (29, 71));
 }
 
 #[test]

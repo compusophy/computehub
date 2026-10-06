@@ -19,12 +19,14 @@
 //! (64000 for tasks, 32000 for solve) and `--day` (today, UTC). They append to `--out`; refused
 //! tasks go to `<out>.refused.jsonl`, and a batch's id waits in `<out>.batch` while it runs.
 //! Tasks are verified by [`iq::verify`] and written as `iq` writes them, so `--out` may be the
-//! suite itself. `export`, `ask` and `prompts` write `--out` afresh. `--card` is the checker
-//! language's card (default [`iq::CARD`]). `--held` lists the held-out families, one a line;
-//! without it they are the suite's families [`iq::held`] holds out. `prompts` writes, a line a
-//! task, the messages `ask` would send and the room and temperature it asks at, for a local
-//! model to answer in batches. The API key is `ANTHROPIC_API_KEY`, read from the environment
-//! only and never printed.
+//! suite itself. `--families` names ideas: a variant of an idea the suite has is named under
+//! that idea's root (`pong-ai`, never `ai-pong`), so [`iq::held`] holds it out with its twin.
+//! `export`, `ask` and `prompts` write `--out` afresh. `--card` is the checker language's card
+//! (default [`iq::CARD`]). `--held` lists the held-out families, one a line, each holding every
+//! family of its root ([`iq::root`]); without it they are the suite's families [`iq::held`]
+//! holds out. `prompts` writes, a line a task, the messages `ask` would send and the room and
+//! temperature it asks at, for a local model to answer in batches. The API key is
+//! `ANTHROPIC_API_KEY`, read from the environment only and never printed.
 
 #![forbid(unsafe_code)]
 
@@ -141,17 +143,13 @@ fn suite(path: &str) -> Result<Vec<Task>, Fail> {
     lines.map(task).collect()
 }
 
-/// The held-out families: `--held`'s list, else those of `--suite`'s families [`iq::held`] holds.
+/// The held-out families: `--held`'s list, else those of `--suite`'s [`seam::held_of`] finds.
 fn held(o: &Opts) -> Result<Vec<String>, Fail> {
     if let Some(h) = o.get("--held") {
         return Ok(seam::held(&read(h)?));
     }
     let tasks = suite(o.get("--suite").ok_or_else(|| usage("--held or --suite is needed"))?)?;
-    let mut held: Vec<String> =
-        tasks.into_iter().map(|t| t.family).filter(|f| iq::held(f)).collect();
-    held.sort();
-    held.dedup();
-    Ok(held)
+    Ok(seam::held_of(&tasks))
 }
 
 /// The judge of the suite at `path`, which grades by its tasks' checks (none read: it only

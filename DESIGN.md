@@ -716,7 +716,11 @@ reinforcement learning, not only a filter.
   small language over the makes probe (`iq::CARD`). `grade` is compile, smoke, check on seeds
   1 to 3. `verify` keeps a task only when its reference passes, a null app fails, and its check
   kills most of the reference's mutants (a survivor counts only when a fixed exploration tells
-  it apart). Families are held out by hash (`iq::held`), never trained on.
+  it apart). Families are held out by hash (`iq::held`), never trained on. The hash is of a
+  family's root (its name before the first `-`), so twins named under one root, such as `pong`
+  and `pong-ai`, are held out together. Twins under different roots split unless
+  `iq::JOINED` joins the roots (`level` with `platformer`); teachers name a variant under its
+  idea's root so the rule can catch it.
 - **`teach`**: Claude Opus 5.5 as the teacher, over the Messages and Batches APIs (curl; the key
   on curl's stdin only). It writes tasks (verified by `iq` before they join the suite) and
   solves them in the bytes Studio sends (`coder::prompt`), so what it teaches is what the model
