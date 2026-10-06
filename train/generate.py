@@ -71,7 +71,10 @@ def load(a, root, log):
             model = PeftModel.from_pretrained(model, adapter).merge_and_unload()
         else:
             sys.exit("error: run %s has neither model/ nor adapter/" % a.run)
-    tok = AutoTokenizer.from_pretrained(path)
+    # The base model's tokenizer, as sft.py trained with: a fine-tune's saved copy can load with a
+    # different pre-tokenizer (transformers warns of an "incorrect regex pattern"), which would
+    # hand the model token ids it never saw in training.
+    tok = AutoTokenizer.from_pretrained(path if a.base else m["base"]["path"])
     tok.padding_side = "left"
     if tok.pad_token_id is None:
         tok.pad_token = tok.eos_token

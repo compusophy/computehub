@@ -37,7 +37,10 @@ a llama.cpp checkout (`--llama`, `$LLAMA_CPP_DIR`, else `C:\llama-cpp`) with
 | `sftdata.py` | what sft.py trains on: reads and checks records, refuses held-out tasks, renders prompts, splits off the eval slice, plans batches, counts tokens |
 | `export.py` | merges the adapter into its base, saves it as a Hugging Face model, converts it to GGUF, quantizes it (`q8_0` default, `q4_k_m`, `f16`, `bf16`); `--base-only` converts an untouched base |
 | `serve.py` | starts `llama-server` on 127.0.0.1:8081 (ctx 8192 a slot, every layer on the GPU), waits for `/health`, checks the chat template, prints the URL; `--stop`, `--status` |
-| `night.sh` | the night: train, export, serve, score, stop, one line in `runs.jsonl` |
+| `day.sh` | the day's data, around the teacher (Claude Code sessions): `import` the teachers' tasks into the suite (verified), the prompts and held-out list again, GLM on new held-out tasks; `data` the solvers' replies and the references graded and exported as `sft.jsonl` |
+| `night.sh` | the night: baselines (once ever), fine-tunes from base (0.5B full, 3B LoRA), a self-taught round, all scored on the held-out tasks; `report.py` at the end |
+| `generate.py` | answers `teach prompts` on the GPU in batches, by the model's own chat template; stops each sample where Studio stops reading; resumes |
+| `report.py` | each answers file scored by `iq score`: `iq-history.jsonl` (a line a model a night) and `report-<night>.md`, tonight beside the nights before |
 | `common.py` | the data root, atomic writes, hashes, provenance, the base model from the cache |
 | `smoke.py` | a tiny smoke set from `programs/makes/refs/*.app`, under SMOKE placeholder prompts |
 
@@ -47,7 +50,8 @@ python train/export.py --run NAME [--quant q8_0]
 python train/export.py --base-only --base Qwen/Qwen2.5-Coder-0.5B-Instruct
 python train/serve.py --run NAME          # or --base-only, or --gguf FILE [--tokenizer DIR]
 python train/serve.py --stop
-train/night.sh --data D.jsonl --held H.txt [--base ID]   # from 22:00 to 08:00, or --force
+bash train/day.sh import && bash train/day.sh data   # by day, after the teachers and solvers
+bash train/night.sh [--no-self] [--no-3b]            # from 22:00 to 08:00, or --force
 ```
 
 Bases in the cache now: `Qwen/Qwen2.5-Coder-0.5B-Instruct` (the default),
@@ -128,19 +132,26 @@ intermediates are overwritten in place.
 
 ## The night run
 
-`night.sh` refuses to start from 08:00 to 22:00 local (the owner games on this GPU by day)
-unless `--force`, with under 50 GB free under the data root, or while another night run is
-alive. Then: `$DATA_CMD` if set, train, export (q8_0), serve, `$SCORE_CMD` if set, stop the
-server (also on any failure), and append one line to `<root>/runs.jsonl` with the status (`ok`
-or `failed:<stage>`), losses, hours, GGUF, commit and score. Its whole output goes to
-`<root>/logs/night-<run>.log`. The run is named `night-<evening's date>-<base>`, so a rerun
-after a crash the same night resumes it; finished stages are skipped.
+`night.sh` reads `<root>/iq/`: `sft.jsonl`, `solutions.jsonl`, `prompts-held.jsonl`,
+`prompts-train.jsonl` and `held.txt`, all made by day (`day.sh`). It refuses to start from
+08:00 to 22:00 local (the owner games on this GPU by day) unless `--force`, or with under 50 GB
+free. Then, each step skipped when its output exists:
 
-`SCORE_CMD` runs with `IQ_URL` (`http://127.0.0.1:8081/v1`, OpenAI-compatible), `IQ_MODEL`,
-`RUN`, `RUN_DIR` and `COMPUTEHUB_DATA` set; its output is kept in `RUN_DIR/score.txt`, and its
-last line, if JSON, becomes the `score` of the night's line. `iq` will provide it
-(`teach ask` + `iq score`). Pass sampling settings (temperature) in the requests: the server's
-defaults are not greedy.
+1. Baselines, answered once ever: the untuned Qwen2.5-Coder 0.5B and 3B on the held-out tasks
+   (`answers-base-q05.jsonl`, `answers-base-q3.jsonl`, k 2; new held-out tasks are answered as
+   they come, since `generate.py` skips what is answered).
+2. Tonight's fine-tunes, each from its base: 0.5B in full, 3B by LoRA, each scored on the
+   held-out tasks (k 4).
+3. A self-taught round: tonight's 0.5B answers the train tasks 8 times; its answers that pass
+   (iq's check, and an icon that draws) join the teacher's, at most 2 a task, and a 0.5B is
+   trained on both from its base and scored. Skipped with `--no-self`, or when it is past
+   `SELF_BY` (4) o'clock.
+4. `report.py`: `iq-history.jsonl` and `report-<night>.md`.
+
+From 07:45 no new step starts and the report is written from what tonight has; the rest
+resumes the next night. The night is named `n<evening's date>`, so a rerun after a freeze
+resumes it (`sft.py` from its checkpoint, `generate.py` from its last batch). Its log is
+`<root>/iq/night-<night>.log`.
 
 ## The smoke test
 
