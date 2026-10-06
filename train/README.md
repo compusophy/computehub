@@ -42,6 +42,7 @@ a llama.cpp checkout (`--llama`, `$LLAMA_CPP_DIR`, else `C:\llama-cpp`) with
 | `generate.py` | answers `teach prompts` on the GPU in batches, by the model's own chat template, with Studio's sampler (the temperature alone) recorded in each answer; stops each sample where Studio stops reading; resumes |
 | `blocks.py` | what Studio's coder reads of a reply (`coder::ai::blocks`, `edits::program`), to the character: where `generate.py` stops a sample; `test_blocks.py` tests it (with `IQ=` an iq binary, against iq's own grades) |
 | `ask.py` | answers `teach prompts` through a llama-server (its CUDA build in `C:\llama-cpp\build-cuda`), 16 at a time, each stream closed where Studio stops reading; night.sh prefers it to generate.py when that build exists (`SCORER=hf` forces generate.py) |
+| `build-llama-cuda.bat` | builds llama-server with CUDA for the 3090 (sm_86) into `C:\llama-cpp\build-cuda`: NMake, since CUDA 11.7 put no build extensions into Visual Studio 2022, with `-allow-unsupported-compiler` and `_ALLOW_COMPILER_AND_STL_VERSION_MISMATCH` (MSVC 19.42 is newer than CUDA 11.7 knows); about 70 minutes on one core |
 | `report.py` | each answers file scored by `iq score`: `iq-history.jsonl` (a line a role a night, with the held-out tasks it was scored on) and `report-<night>.md`, tonight beside the nights before, on the tasks they share |
 | `common.py` | the data root, atomic writes, hashes, provenance, the base model from the cache |
 | `smoke.py` | a tiny smoke set from `programs/makes/refs/*.app`, under SMOKE placeholder prompts |

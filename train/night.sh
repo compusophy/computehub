@@ -20,8 +20,8 @@
 #      (<root>/iq/report-<night>.md, iq-history.jsonl); a file short of its answers is partial.
 # The 3B round (LoRA and its answers) runs before the self-taught round, so the bigger model's
 # fine-tune is never crowded out by it; it starts only before Q3_BY o'clock, and only when it can
-# end by 07:45: its LoRA at about 380 tokens a second over the records (about 6,000 tokens each)
-# Q3_EPOCHS times, and 40 minutes to answer. The self-taught round then starts only before
+# end by 07:45: its LoRA at about 900 tokens a second (night 1 measured 901) over the records (about 6,000 tokens each)
+# Q3_EPOCHS times, and 15 minutes to answer through llama-server (40 with generate.py). The self-taught round then starts only before
 # SELF_BY o'clock.
 # The GPU is compusophy's from 08:00 to 22:00: it refuses to start then, and from 07:45 no new
 # step starts; --force lifts both, and the start-by hours with them.
@@ -162,7 +162,7 @@ ends_by_morning() {  # ends_by_morning MINUTES: a step begun now and lasting MIN
 q3_minutes() {  # the 3B round's minutes: its LoRA unless done, and its answers
   local records
   records=$(wc -l < "$D/sft.jsonl")
-  if finished "$N-q3"; then echo 40; else echo $((records * 6000 * ${Q3_EPOCHS:-2} / 380 / 60 + 40)); fi
+  if finished "$N-q3"; then echo 15; else echo $((records * 6000 * ${Q3_EPOCHS:-2} / 900 / 60 + 15)); fi
 }
 
 say "night $N: $(wc -l < "$D/sft.jsonl") training records, $(wc -l < "$D/prompts-held.jsonl") held-out tasks"
