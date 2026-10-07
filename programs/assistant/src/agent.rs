@@ -14,10 +14,11 @@
 //!   arguments that do not read (E0918, saying so when they were cut off), the files' E0925 to
 //!   E0928. Two in a row add a hint and bound its thinking (1,024 tokens); three in a row (a file
 //!   not there, or not what was named, is news and never counts), or the same call on the same
-//!   screen three times (E0924), end the task, as do [`MAX_STEPS`] model calls or [`MAX_ACTS`]
-//!   acts, or a request past the free AI's [`MAX_MESSAGES`] (the memory goes first) or, folded,
-//!   [`MAX_BODY`] (E0921), an AI error (E0901 to E0905, with Retry), and Stop: the pill's, or
-//!   Escape ([`Event::Halt`]).
+//!   screen three times (E0924), end the task. [`MAX_STEPS`] model calls or [`MAX_ACTS`] acts
+//!   pause it (E0921), until the person's Keep going gives it as many again (or a new prompt
+//!   ends it). A request past the free AI's [`MAX_MESSAGES`] (the memory goes first) or, folded,
+//!   [`MAX_BODY`] (E0921), an AI error (E0901 to E0905, with Retry), and Stop (the pill's, or
+//!   Escape, [`Event::Halt`]) end it.
 //! - **Guard.** What sends off the device or ends a program asks the person's yes itself, as
 //!   each act comes: a press of Feedback's Send, or Ctrl+Enter there (its report shown as its
 //!   field holds it, and whether what is open goes too), of Studio's Send to compusophy
@@ -89,6 +90,7 @@ const MAX_TURNS: usize = 16;
 const SEND: u32 = 1;
 const STOP: u32 = 2;
 const RETRY: u32 = 3;
+const MORE: u32 = 4;
 /// The prompt Input is this plus the prompts sent: a fresh id starts it empty.
 const INPUT: u32 = 100;
 /// What the model hears after an answer that is not a yes to a call's own question.
@@ -168,12 +170,15 @@ pub struct Agent {
 /// The task in hand: its prompt, the window it was opened over, the steps, the latest screen
 /// (as text, and its elements), what it waits for, its counts, the repeat it watches for,
 /// whether the person said yes to the act in hand (spent on it), the tokens in and out, and
-/// where it leaves the person ([`into`]: a window, 0 none, and whether it played a board there).
+/// where it leaves the person ([`into`]: a window, 0 none, and whether it played a board there);
+/// and the steps Keep going folded, as a recap and their count of calls.
 #[derive(Debug)]
 struct Task {
     prompt: String,
     over: u32,
     steps: Vec<Step>,
+    recap: String,
+    folded: usize,
     screen: String,
     scene: Scene,
     shown: Vec<Elem>,
@@ -188,13 +193,15 @@ struct Task {
 }
 
 /// What a task waits for: its first look, the model's reply, an act (with what it did if it
-/// went well, what it was done to, and the act), or the person's answer to the call asking them.
+/// went well, what it was done to, and the act), the person's answer to the call asking them,
+/// or, out of steps, their Keep going (a new prompt ends it instead).
 #[derive(Debug)]
 enum Wait {
     Look(u32),
     Model(u32, Calls),
     Act(u32, String, String, Act),
     User,
+    More,
 }
 
 /// A reply that called tools: its text, the calls, and each one's result and screen.
@@ -254,12 +261,13 @@ impl Agent {
             (Event::Change { .. }, _) => {}
             (Event::Submit { .. } | Event::Click { id: SEND }, _) => self.submit(),
             (Event::Click { id: STOP }, _) => self.stop("Stopped."),
+            (Event::Click { id: MORE }, Some(Wait::More)) => self.more(),
             (Event::Click { id: RETRY }, None) => {
                 if let Some(prompt) = self.retry.take() {
                     self.start(prompt);
                 }
             }
-            (Event::Ask { text }, None) if !text.trim().is_empty() => {
+            (Event::Ask { text }, None | Some(Wait::More)) if !text.trim().is_empty() => {
                 self.start(clip(text.trim(), MAX_PROMPT));
             }
             (Event::Halt, Some(_)) => self.stop("Stopped."),
@@ -298,18 +306,20 @@ impl Agent {
         }
     }
 
-    /// The prompt typed: a new task, or the answer the task waits for; never while it works.
+    /// The prompt typed: a new task (ending one out of steps), or the answer the task waits for;
+    /// never while it works.
     fn submit(&mut self) {
         let text = self.input.trim().to_string();
         let waits = self.task.as_ref().map(|t| matches!(t.wait, Wait::User));
-        if text.is_empty() || waits == Some(false) {
+        let busy = self.task.as_ref().is_some_and(|t| !matches!(t.wait, Wait::User | Wait::More));
+        if text.is_empty() || busy {
             return;
         }
         (self.input, self.sent) = (String::new(), self.sent.wrapping_add(1));
         self.requests.push(Request::Focus { id: self.input_id() });
         match waits {
-            Some(_) => self.answer_user(text),
-            None => self.start(text),
+            Some(true) => self.answer_user(text),
+            _ => self.start(text),
         }
     }
 
@@ -319,16 +329,18 @@ impl Agent {
         self.told = line.into();
     }
 
-    /// Starts a task: says it works, and looks at the screen.
+    /// Starts a task (one out of steps ends first): says it works, and looks at the screen.
     fn start(&mut self, prompt: String) {
+        self.stop("Stopped.");
         (self.retry, self.told) = (None, String::new());
         self.turns.push(Turn { prompt: prompt.clone(), lines: Vec::new() });
         self.turns.drain(..self.turns.len().saturating_sub(MAX_TURNS));
         let id = self.next_id();
         #[rustfmt::skip]
-        let task = Task { prompt, over: 0, steps: Vec::new(), screen: String::new(),
-            scene: Scene::default(), shown: Vec::new(), wait: Wait::Look(id), calls: 0, acts: 0,
-            fails: 0, repeat: (0, 0), approved: false, usage: (0, 0), into: (0, false) };
+        let task = Task { prompt, over: 0, steps: Vec::new(), recap: String::new(), folded: 0,
+            screen: String::new(), scene: Scene::default(), shown: Vec::new(), wait: Wait::Look(id),
+            calls: 0, acts: 0, fails: 0, repeat: (0, 0), approved: false, usage: (0, 0),
+            into: (0, false) };
         self.task = Some(task);
         self.requests.push(Request::Status { working: true });
         self.requests.push(Request::Act { id, act: Act::Wait { ms: 0 }.encode() });
@@ -391,14 +403,41 @@ impl Agent {
         self.run_next();
     }
 
+    /// Keep going: the task out of steps has as many again. Its steps so far fold into a recap
+    /// that goes with its prompt (what the model said, each call and its result's first line, as
+    /// older results already fold), so its requests have room again: a hand-off to itself.
+    fn more(&mut self) {
+        let Some(t) = &mut self.task else { return };
+        for s in std::mem::take(&mut t.steps) {
+            if let Some(said) = s.text.lines().map(str::trim).find(|l| !l.is_empty()) {
+                t.recap += &format!("  said: {}\n", clip(said, 300));
+            }
+            for (k, c) in s.calls.iter().enumerate() {
+                let r = s.results.get(k).map(|r| r.0.lines().next().unwrap_or(""));
+                let r = r.unwrap_or("not run: out of steps");
+                t.recap += &format!("- {} {}: {}\n", c.name, clip(&c.args, 200), clip(r, 300));
+            }
+            t.folded += s.calls.len();
+        }
+        (t.calls, t.acts) = (0, 0);
+        self.note(Style::Accent, "Keep going".into());
+        self.requests.push(Request::Status { working: true });
+        self.think();
+    }
+
     /// Asks the model the next step, unless the task is out of steps.
     fn think(&mut self) {
         let Some(t) = &self.task else { return };
         if t.calls >= MAX_STEPS || t.acts >= MAX_ACTS {
             let why = format!(
-                "E0921 out of steps for one task ({MAX_STEPS} model calls, {MAX_ACTS} actions)"
+                "E0921 out of steps for one task ({MAX_STEPS} model calls, {MAX_ACTS} actions). \
+                 Keep going gives it as many again."
             );
-            return self.end(Style::Error, why);
+            self.note(Style::Error, why);
+            if let Some(t) = &mut self.task {
+                t.wait = Wait::More;
+            }
+            return self.requests.push(Request::Status { working: false });
         }
         let body = self.body(t);
         if body.len() > MAX_BODY || own(t) > MAX_MESSAGES {
@@ -423,7 +462,8 @@ impl Agent {
             m.extend([msg("user", prompt), msg("assistant", answer)]);
         }
         let first = if t.steps.is_empty() { t.screen.as_str() } else { "(screen omitted)" };
-        m.push(msg("user", &[&t.prompt, "\n\n", first].concat()));
+        let done = if t.recap.is_empty() { "" } else { "\n\nDone so far, oldest first:\n" };
+        m.push(msg("user", &[&t.prompt, done, &t.recap, "\n\n", first].concat()));
         // Each older result that holds text (a read, a listing): where it is, and it folded.
         let mut folds = Vec::new();
         for (i, s) in t.steps.iter().enumerate() {
@@ -903,7 +943,7 @@ impl Agent {
     fn end(&mut self, style: Style, last: String) {
         let Some(t) = self.task.take() else { return };
         self.note(style, last);
-        let n = t.steps.iter().map(|s| s.calls.len()).sum::<usize>();
+        let n = t.folded + t.steps.iter().map(|s| s.calls.len()).sum::<usize>();
         let steps = if n == 1 { "1 step".into() } else { format!("{n} steps") };
         let receipt =
             format!("{steps}, {} tokens in, {} out", tokens(t.usage.0), tokens(t.usage.1));
@@ -953,8 +993,16 @@ impl Agent {
                 nodes.push(text(Style::Subheading, &t.prompt));
                 nodes.extend(t.lines.iter().map(|(style, line)| text(*style, line)));
             }
-            // A question waits: Stop ends the task; after an AI error, Retry.
+            // A question waits: Stop ends the task; out of steps, Keep going too; after an AI
+            // error, Retry.
             match (&self.task, &self.retry) {
+                (Some(t), _) if matches!(t.wait, Wait::More) => {
+                    let (more, stop) = (
+                        button(MORE, Variant::Chip, "Keep going"),
+                        button(STOP, Variant::Chip, "Stop"),
+                    );
+                    nodes.push(Node::Row { id: 0, gap: 8, children: vec![more, stop] });
+                }
                 (Some(_), _) => nodes.push(button(STOP, Variant::Chip, "Stop")),
                 (None, Some(_)) => nodes.push(button(RETRY, Variant::Chip, "Retry")),
                 _ => {}

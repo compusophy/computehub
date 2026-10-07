@@ -572,8 +572,8 @@ fn a_change_cut_off_asks_for_edits_never_the_app_cut_down() {
 #[test]
 fn budgets_failures_stops_and_runaways_end_with_the_best_so_far() {
     // Fixes back and forth until a budget is spent (requests, output tokens, dollars, time): the
-    // best so far, a new app's that compiles, is installed faulting; one whose time ran out while
-    // its reply streamed never checks that reply.
+    // best so far, a new app's that compiles, is installed faulting; a reply writing when time is
+    // up goes on (half the budget again) and is checked, but no request goes out after it.
     let (broken, faults) = (app(BROKEN), app(FAULTS));
     let six: Vec<(&str, &str)> =
         (0..6).map(|i| ([&broken, &faults][i % 2].as_str(), "stop")).collect();
@@ -581,7 +581,8 @@ fn budgets_failures_stops_and_runaways_end_with_the_best_so_far() {
     for (k, n, said) in [
         (k, 5, "runs, but faults \u{b7} E0203 line 3"),
         (Knobs { out_tokens: 6000, ..k }, 3, "runs, but faults \u{b7} E0203 line 3"),
-        (Knobs { ms: 1250, ..k }, 2, "couldn't \u{b7} E0302 line 2"),
+        (Knobs { ms: 1250, ..k }, 2, "runs, but faults \u{b7} E0203 line 3"),
+        (Knobs { ms: 1100, ..k }, 1, "out of time \u{b7} E0302 line 2"),
     ] {
         let (bodies, _, done) = run(task("x", ""), k, &six);
         assert_eq!((bodies.len(), done.said().as_str()), (n, said), "{k:?}");
@@ -607,20 +608,20 @@ fn budgets_failures_stops_and_runaways_end_with_the_best_so_far() {
     // same body (the gateway sends a body it has seen to the provider that answered it), then
     // E0909.
     let (mut m, _) = Make::start(task("x", ""), Knobs { runaway: 10, ..k }, 0);
+    let x20 = delta("reasoning", &"x".repeat(20));
     for round in 0..2 {
-        assert!(m.data(delta("reasoning", &"x".repeat(20)).as_bytes(), 5).is_none());
-        assert!(matches!(
-            m.data(delta("reasoning", &"x".repeat(20)).as_bytes(), 6),
-            Some(Out::Cancel)
-        ));
+        assert!(m.data(x20.as_bytes(), 5).is_none());
+        assert!(matches!(m.data(x20.as_bytes(), 6), Some(Out::Cancel)));
         match m.check(7).unwrap() {
             Out::Ask(body) => assert!(user(&body).starts_with("Make: x\n\nYour reply ran out")),
-            Out::Done(done) => {
-                assert_eq!((round, done.said().as_str()), (1, "couldn't \u{b7} E0909"))
-            }
+            Out::Done(d) => assert_eq!((round, d.said().as_str()), (1, "couldn't \u{b7} E0909")),
             Out::Cancel => panic!(),
         }
     }
+    // Time up while it still thinks: cut, never checked (E0920).
+    let (mut m, _) = Make::start(task("x", ""), Knobs { ms: 9, ..k }, 0);
+    assert!(matches!(m.data(delta("reasoning", "so").as_bytes(), 9), Some(Out::Cancel)));
+    assert!(matches!(m.check(10), Some(Out::Done(d)) if d.said() == "out of time \u{b7} E0920"));
     // A fix has less room, so less thinking is a runaway: here 20 tokens, half a write's 40; it is
     // asked again told so.
     let k = Knobs { runaway: 40, ..k };

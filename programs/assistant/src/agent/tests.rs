@@ -179,27 +179,19 @@ fn sse(delta: &str) -> String {
 
 /// A reply saying `text`, then calling `call` (its arguments in 5-byte pieces), then its usage.
 fn reply(text: &str, call: Option<(&str, &str)>) -> String {
-    let mut out = if text.is_empty() {
-        String::new()
-    } else {
-        sse(&format!("{{\"content\":{}}}", quote(text)))
-    };
+    let content = sse(&format!("{{\"content\":{}}}", quote(text)));
+    let mut out = if text.is_empty() { String::new() } else { content };
     if let Some((name, args)) = call {
-        let head = format!(
+        let calls = |c: String| sse(&format!("{{\"tool_calls\":[{c}]}}"));
+        out += &calls(format!(
             "{{\"index\":0,\"id\":\"call_{name}\",\"type\":\"function\",\"function\":{{\"name\":\"{name}\",\"arguments\":\"\"}}}}"
-        );
-        out += &sse(&format!("{{\"tool_calls\":[{head}]}}"));
+        ));
         for p in args.as_bytes().chunks(5).map(|p| std::str::from_utf8(p).unwrap()) {
-            out += &sse(&format!(
-                "{{\"tool_calls\":[{{\"index\":0,\"function\":{{\"arguments\":{}}}}}]}}",
-                quote(p)
-            ));
+            out += &calls(format!("{{\"index\":0,\"function\":{{\"arguments\":{}}}}}", quote(p)));
         }
     }
     let finish = if call.is_some() { "tool_calls" } else { "stop" };
-    out += &format!(
-        "data: {{\"choices\":[{{\"index\":0,\"delta\":{{}},\"finish_reason\":\"{finish}\"}}]}}\n\n"
-    );
+    out += &sse(&format!("{{}},\"finish_reason\":\"{finish}\""));
     out + "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":1200,\"completion_tokens\":30}}\n\ndata: [DONE]\n\n"
 }
 
@@ -274,9 +266,9 @@ fn ids(f: &Frame) -> (Option<u32>, Option<u32>) {
 #[rustfmt::skip]
 fn on(a: &mut Agent, scene: Scene) -> Task {
     let (screen, shown) = render(&scene, &mut a.refs, scene.focus);
-    Task { prompt: String::new(), over: scene.focus, steps: Vec::new(), screen, scene, shown,
-        wait: Wait::User, calls: 0, acts: 0, fails: 0, repeat: (0, 0), approved: false,
-        usage: (0, 0), into: (0, false) }
+    Task { prompt: String::new(), over: scene.focus, steps: Vec::new(), recap: String::new(),
+        folded: 0, screen, scene, shown, wait: Wait::User, calls: 0, acts: 0, fails: 0,
+        repeat: (0, 0), approved: false, usage: (0, 0), into: (0, false) }
 }
 
 #[test]
@@ -457,12 +449,20 @@ fn failures_go_back_coded_and_three_end_the_task() {
     assert_eq!(tools[0], "E0918: there is no tool named fly");
     assert!(tools[1].starts_with("E0918: no key named hyper+x\n"));
     assert!(shown(&mut a).contains("I couldn't finish: E0914: there is no app named nope"));
-    // Out of steps: E0921.
+    // Out of steps: E0921; Keep going folds the steps into a recap and goes on; a prompt ends it.
     let (mut d, mut a) = (desk(), Agent::default());
     ask(&mut a, "wait forever");
-    d.run(&mut a, &|b| reply("", Some(("wait", &format!("{{\"ms\":{}}}", messages(b).len())))));
+    let wait = |b: &Json| reply("", Some(("wait", &format!("{{\"ms\":{}}}", messages(b).len()))));
+    d.run(&mut a, &wait);
     let (said, n) = (shown(&mut a), d.bodies.len());
     assert!(n == MAX_STEPS as usize && said.contains("E0921 out of steps"), "{n} {said}");
+    assert!(a.event(&Event::Click { id: MORE }) && !a.event(&Event::Click { id: MORE }));
+    d.run(&mut a, &wait);
+    assert!(d.bodies.len() == 2 * MAX_STEPS as usize && shown(&mut a).contains("Keep going\n"));
+    let first = &messages(&d.bodies[MAX_STEPS as usize])[1].1;
+    assert!(first.contains("Done so far, oldest first:\n- wait {\"ms\":2}: "), "{first}");
+    ask(&mut a, "something else");
+    assert!(a.working() && a.turns[0].lines.iter().any(|l| l.1 == "Stopped."));
     // A task that would carry more messages than the free AI takes: E0921, never sent. Each
     // reply here calls 7 tools, 3 of them acts, and no two failures follow each other.
     let (mut d, mut a) = (desk(), Agent::default());

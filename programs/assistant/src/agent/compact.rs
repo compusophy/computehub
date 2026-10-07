@@ -33,7 +33,8 @@ impl Agent {
     /// Whether it works or compacts: the desktop shows the pill.
     pub(super) fn working(&self) -> bool {
         let task = self.task.as_ref();
-        self.compacting.is_some() || task.is_some_and(|t| !matches!(t.wait, super::Wait::User))
+        self.compacting.is_some()
+            || task.is_some_and(|t| !matches!(t.wait, super::Wait::User | super::Wait::More))
     }
 
     /// Whether a task is in hand or a compaction asked for: the chats stay as they are.

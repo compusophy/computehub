@@ -49,7 +49,8 @@ pub struct Knobs {
     /// Dollars in all, in micro-dollars. A request is sent only when its whole room and its
     /// input fit in what is left of both (its room shrinks to fit, to half its usual at least).
     pub usd_micros: u32,
-    /// Milliseconds in all, checked at every chunk and turn.
+    /// Milliseconds in all, checked at every chunk and turn; a reply writing when they are up
+    /// has half as many again.
     pub ms: u64,
     /// `max_tokens` of a request for a program, and of a fix.
     pub write_tokens: u32,
@@ -164,8 +165,8 @@ pub struct Receipt {
 /// A make's end: how, the program (to install, if `install`; else the last seen, or what a reply
 /// held of one, for the code view; nothing when applang can make nothing close) and its
 /// problem's bytes in it, the code and line of the problem to show (0: none; a code of the make's
-/// own, E0906 to E0910 or E0919, when there was no program), what the program's first comment
-/// says, whether it changed a program, why the make itself ended, and the receipt.
+/// own, E0906 to E0910, E0919 or E0920, when there was no program), what the program's first
+/// comment says, whether it changed a program, why the make itself ended, and the receipt.
 #[derive(Clone, Debug)]
 pub struct Done {
     pub outcome: Outcome,
@@ -177,15 +178,15 @@ pub struct Done {
     pub why: String,
     pub plan: String,
     pub change: bool,
-    /// The make's own code for why it ended (E0901 to E0910, E0919), kept when `code` is the
-    /// problem of the program shown instead; 0 when it ran clean, can't, or was stopped.
+    /// The make's own code for why it ended (E0901 to E0910, E0919, E0920), kept when `code` is
+    /// the problem of the program shown instead; 0 when it ran clean, can't, or was stopped.
     pub ended: u16,
     pub receipt: Receipt,
 }
 
 impl Done {
     /// The status a person reads: `ready · 46 s`, `runs, but faults · E0215 line 41`,
-    /// `couldn't · E0302 line 43`, `can't make that`, `AI busy · try in a minute`, ...
+    /// `couldn't · E0302 line 43`, `out of time · E0302 line 43`, `can't make that`, ...
     pub fn said(&self) -> String {
         let lead = match self.outcome {
             Outcome::Ready => {
@@ -195,6 +196,8 @@ impl Done {
                 "runs, but its icon won't draw"
             }
             Outcome::Faulting => "runs, but faults",
+            Outcome::Broken if self.ended == make::LATE => "out of time",
+            Outcome::Broken if self.ended == make::SPENT => "out of budget",
             Outcome::Broken if self.change => "couldn't change it",
             Outcome::Broken => "couldn't",
             Outcome::Cant => "can't make that",

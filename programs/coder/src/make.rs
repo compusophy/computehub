@@ -24,15 +24,16 @@ enum Early {
 }
 
 /// Why a make ended, besides a clean program or the AI's own codes (E0901 to E0905): the make's
-/// own codes, E0906 to E0910 and E0919 (never applang's, nor the desktop's acts', E0911 to
+/// own codes, E0906 to E0910, E0919 and E0920 (never applang's, nor the desktop's acts', E0911 to
 /// E0918); and two ends that show no code at all (the model said applang can make nothing close;
-/// the person stopped it), so theirs are no code's.
+/// the person stopped it), so theirs are no code's. Spent is a budget but time; Late, time.
 const NO_PROGRAM: u16 = 906;
 const NO_ROOM: u16 = 907;
-const SPENT: u16 = 908;
+pub(crate) const SPENT: u16 = 908;
 const RUNAWAY: u16 = 909;
 const TOO_BIG: u16 = 910;
 const GAVE_UP: u16 = 919;
+pub(crate) const LATE: u16 = 920;
 const CANT: u16 = u16::MAX - 1;
 const STOPPED: u16 = u16::MAX;
 
@@ -177,7 +178,12 @@ impl Make {
             {
                 Early::Runaway
             }
-            _ if now.saturating_sub(self.t0) >= self.k.ms => Early::Late,
+            // Time is up for a reply still thinking; one writing has half the budget again.
+            _ if now.saturating_sub(self.t0)
+                >= self.k.ms + if self.reply.trim().is_empty() { 0 } else { self.k.ms / 2 } =>
+            {
+                Early::Late
+            }
             _ => return None,
         };
         self.phase = Phase::Complete;
@@ -227,7 +233,7 @@ impl Make {
         let cut = self.stream.finish == "length";
         let out = match self.early {
             Early::Runaway => self.runaway(now),
-            Early::Late => self.over(now, SPENT, "out of time".into()),
+            Early::Late => self.over(now, LATE, "out of time".into()),
             Early::No => match edits::read(&self.reply, cut) {
                 Reply::Program(src) if only_comments(&src) => self.cant(now, &src),
                 Reply::Program(src) => self.take(src, false, now),
@@ -388,9 +394,11 @@ impl Make {
         let left = u64::from(k.usd_micros.saturating_sub(usd)) * 1000;
         let paid = left.saturating_sub((self.sys + msg.len()) as u64 / 3 * pin) / pout;
         let tokens = room.min(k.out_tokens.saturating_sub(out)).min(paid.min(room.into()) as u32);
-        let late = now.saturating_sub(self.t0) >= k.ms;
-        if self.log.len() >= usize::from(k.requests) || tokens * FLOOR < room || late {
-            let why = "out of budget for one make (5 requests, $0.08 or 150 s)";
+        if now.saturating_sub(self.t0) >= k.ms {
+            return self.over(now, LATE, "out of time".into());
+        }
+        if self.log.len() >= usize::from(k.requests) || tokens * FLOOR < room {
+            let why = "out of budget for one make (its requests, output tokens or dollars)";
             return self.over(now, SPENT, why.into());
         }
         let (reasoning, temp) =
