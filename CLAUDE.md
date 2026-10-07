@@ -17,7 +17,7 @@ Later: compute pooled across tabs, devices. Author handle: compusophy.
 1. **Rust only.** No hand-written JS beyond two one-line bootstraps
    (web/index.html, web/worker.js) and `api/*.mjs`, the server functions
    (`node:` modules only): what cannot live in a tab, the free AI's
-   credentials and the feedback inbox. Python: `train/` only.
+   credentials and the feedback inbox. Python: `train/` only; Claude Code JS: `.claude/`.
 2. **Zero external dependencies.** Only `compusophy-*` workspace siblings.
    Exception: the web crates `platform`, `os` and `cpu` may take
    wasm-bindgen (pinned), js-sys, web-sys. Build-time tools never ship.
@@ -94,7 +94,7 @@ tools/eval/    dev-only eval runner (curl, the free AI)
 train/         dev: fine-tuning on the 3090 (Python)
 web/index.html the page: <canvas id="os"> + a one-line bootstrap
 web/worker.js  the program worker's one-line bootstrap
-scripts/       caps.sh, budget.sh, build-web.sh, deploy.sh (`prod`: production)
+scripts/       caps.sh, budget.sh, build-web.sh, deploy.sh (`prod`)
 ```
 
 Forks: litelite 0.2.0, `4f5e056`. Packages are `compusophy-<x>`; code uses
@@ -120,7 +120,7 @@ bash scripts/budget.sh
 cargo run -p serve --release -- dist 8080   # preview; --plain: no COOP/COEP
 ```
 
-`?debug` marks each frame (`performance.mark("frame")`); idle, only the
+`?debug` marks each frame (`performance.mark`); idle, only the
 grain's.
 
 Fonts: **boot** (Inter Regular, in `os`), **deferred** (`fonts/deferred/*`,

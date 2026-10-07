@@ -38,12 +38,12 @@ a llama.cpp checkout (`--llama`, `$LLAMA_CPP_DIR`, else `C:\llama-cpp`) with
 | `export.py` | merges the adapter into its base, saves it as a Hugging Face model, converts it to GGUF, quantizes it (`q8_0` default, `q4_k_m`, `f16`, `bf16`); `--base-only` converts an untouched base |
 | `serve.py` | starts `llama-server` on 127.0.0.1:8081 (ctx 8192 a slot, every layer on the GPU), waits for `/health`, checks the chat template, prints the URL; `--stop`, `--status` |
 | `day.sh` | the day's data, around the teacher (Claude Code sessions): `import` the teachers' tasks into the suite (verified), the prompts and held-out list again, GLM on new held-out tasks; `data` the solvers' replies and the references (each under the teacher that wrote its task) graded and exported as `sft.jsonl` |
-| `night.sh` | the night: baselines (once ever), fine-tunes from base (0.5B full, 3B LoRA), a self-taught round, all scored on the held-out tasks; `report.py` at the end |
+| `night.sh` | the night: its inputs copied once, baselines (once ever), fine-tunes from base (0.5B full, 3B LoRA), a self-taught round, all scored on the held-out tasks; `report.py` at the end; `--wait` for 22:00, `--check` to see whether it can run |
 | `generate.py` | answers `teach prompts` on the GPU in batches, by the model's own chat template, with Studio's sampler (the temperature alone) recorded in each answer; stops each sample where Studio stops reading; resumes |
 | `blocks.py` | what Studio's coder reads of a reply (`coder::ai::blocks`, `edits::program`), to the character: where `generate.py` stops a sample; `test_blocks.py` tests it (with `IQ=` an iq binary, against iq's own grades) |
 | `ask.py` | answers `teach prompts` through a llama-server (its CUDA build in `C:\llama-cpp\build-cuda`), 16 at a time, each stream closed where Studio stops reading; night.sh prefers it to generate.py when that build exists (`SCORER=hf` forces generate.py) |
 | `build-llama-cuda.bat` | builds llama-server with CUDA for the 3090 (sm_86) into `C:\llama-cpp\build-cuda`: NMake, since CUDA 11.7 put no build extensions into Visual Studio 2022, with `-allow-unsupported-compiler` and `_ALLOW_COMPILER_AND_STL_VERSION_MISMATCH` (MSVC 19.42 is newer than CUDA 11.7 knows); about 70 minutes on one core |
-| `report.py` | each answers file scored by `iq score`: `iq-history.jsonl` (a line a role a night, with the held-out tasks it was scored on) and `report-<night>.md`, tonight beside the nights before, on the tasks they share |
+| `report.py` | each answers file scored by `iq score`: `iq-history.jsonl` (a line a role a night, with the held-out tasks it was scored on) and `report-<night>.md`, tonight beside the nights before, on the tasks they share, each held-out rate with its interval by family, and tonight's predictions against what happened |
 | `common.py` | the data root, atomic writes, hashes, provenance, the base model from the cache |
 | `smoke.py` | a tiny smoke set from `programs/makes/refs/*.app`, under SMOKE placeholder prompts |
 
@@ -54,7 +54,8 @@ python train/export.py --base-only --base Qwen/Qwen2.5-Coder-0.5B-Instruct
 python train/serve.py --run NAME          # or --base-only, or --gguf FILE [--tokenizer DIR]
 python train/serve.py --stop
 bash train/day.sh import && bash train/day.sh data   # by day, after the teachers and solvers
-bash train/night.sh [--no-self] [--no-3b]            # from 22:00 to 08:00, or --force
+bash train/night.sh [--no-self] [--no-3b] [--wait]   # from 22:00 to 08:00, or --force
+bash train/night.sh --check                          # can tonight run? runs nothing
 python train/test_blocks.py                          # no GPU; IQ=target/release/iq.exe for iq's grades
 ```
 
@@ -141,27 +142,59 @@ what the first would have); other settings under the same `--run` name are refus
 are written the same way. Nothing is ever deleted: checkpoints, merged models and
 intermediates are overwritten in place.
 
+## The night loop: `/night`
+
+At bedtime compusophy types `/night` in Claude Code, the effort mode on ultracode; the
+procedure is `.claude/skills/night/SKILL.md`. Two halves run until morning:
+
+- **The GPU half**: `night.sh --wait`, detached (below).
+- **The data half**: `.claude/workflows/night.js`, a Claude Code workflow. *Predict* writes
+  tonight's held-out rates with 80% intervals before they are scored
+  (`<root>/iq/predictions-<night>.jsonl`, which `report.py` checks). *Plan* chooses new
+  families under new roots (`work/<wave>/plan.json`). For each batch (a tier's teacher), the
+  next three steps run: *Teach* writes and verifies tasks (`stage/<wave>-t<tier>-<b>.jsonl`;
+  the last task of each family is a loose ask, as people type them). *Attack*, an independent
+  agent, writes fair and wrong programs from each ask alone and fixes or drops the tasks that
+  fail them. *Solve* writes the training replies from the asks alone
+  (`replies-<wave>-t<tier>-<b>.jsonl`, train tasks only). Then *Import* runs `day.sh import`
+  and `day.sh data`, which make tomorrow night's inputs (tonight's are copies). Every phase
+  skips what a run before it finished, and no agent starts a task after 07:30 or while `PAUSE`
+  exists.
+
+At 07:48 the morning wrap-up confirms the GPU is idle, touches `PAUSE`, reads the report, tests
+and commits the grown suite, and writes `<root>/iq/morning-<night>.md`. "Pause" stops both
+halves at once (the skill says how).
+
 ## The night run
 
 `night.sh` reads `<root>/iq/`: `sft.jsonl`, `solutions.jsonl`, `prompts-held.jsonl`,
-`prompts-train.jsonl` and `held.txt`, all made by day (`day.sh`). It refuses to start from
-08:00 to 22:00 local (the owner games on this GPU by day) unless `--force`, or with under 50 GB
-free. Then, each step skipped when its output exists:
+`prompts-train.jsonl` and `held.txt`, made by `day.sh`, and the suite. It copies them once
+into `<root>/iq/night-<night>/` (their sha256s in `inputs.sha256`) and reads only the copies,
+so the night's data side may import new tasks while it runs, and a rerun resumes on the same
+bytes. It refuses to start from 08:00 to 22:00 local (the owner games on this GPU by day)
+unless `--force`; `--wait` waits for 22:00 instead (and gives up if `PAUSE` appears);
+`--check` says whether tonight can run (the hour, `PAUSE`, the inputs, the disk, the GPU, a
+night to resume) and runs nothing, at any hour. It refuses with under 50 GB free. Then, each
+step skipped when its output exists:
 
 1. Baselines, answered once ever: the untuned Qwen2.5-Coder 0.5B and 3B on the held-out tasks
    (`answers-base-q05.jsonl`, `answers-base-q3.jsonl`, k 2; new held-out tasks are answered as
    they come, since `generate.py` skips what is answered).
 2. Tonight's 0.5B, in full from its base, scored on the held-out tasks (k 4).
-3. A self-taught round: tonight's 0.5B answers the train tasks 8 times; its answers that pass
+3. The 3B by LoRA from its base, scored (k 4), before the self-taught round so it is never
+   crowded out. Skipped with `--no-3b`, when it is past `Q3_BY` (3) o'clock, or when it could
+   not end by 07:45: its LoRA at about 900 tokens a second (night 1 measured 901) over the
+   records (about 6,000 tokens each) `Q3_EPOCHS` (2) times, and 15 minutes to answer through
+   llama-server (40 through `generate.py`).
+4. A self-taught round: tonight's 0.5B answers the train tasks 8 times; its answers that pass
    (iq's check, and an icon that draws) join the teacher's, at most 2 distinct programs a task,
    and a 0.5B is trained on both from its base and scored. Skipped with `--no-self`, when it is
-   past `SELF_BY` (4) o'clock, when tonight's 0.5B did not finish, or when the student's answers
+   past `SELF_BY` (5) o'clock, when tonight's 0.5B did not finish, or when the student's answers
    are short (a rerun finishes them); not trained when none passed. Its data is made once:
    from its training's start on, a rerun trains on the same bytes.
-4. The 3B by LoRA from its base, scored (k 4). Skipped with `--no-3b`, when it is past `Q3_BY`
-   (3) o'clock, or when it could not end by 07:45: its LoRA at about 380 tokens a second over
-   the records (about 6,000 tokens each) `Q3_EPOCHS` (2) times, and 40 minutes to answer.
-5. `report.py`: `iq-history.jsonl` and `report-<night>.md`.
+5. `report.py`: `iq-history.jsonl` and `report-<night>.md`, each held-out rate with its 90%
+   interval by family (a cluster bootstrap), and, when `predictions-<night>.jsonl` holds them,
+   tonight's predictions beside what happened.
 
 `generate.py` samples as Studio asks, at the prompt's temperature alone: it passes top_p 1,
 top_k 0 and a repetition penalty of 1, which the Qwen bases' `generation_config.json` would set

@@ -17,10 +17,17 @@ with fewer than K answers to some prompt's task (1 at temperature 0, as generate
 it) is partial (its step was paused or stopped), is marked so, and does not narrow the shared
 tasks. A night already in the history is
 replaced, not doubled, so a rerun after a freeze reports once.
+
+Each held-out rate carries its 90% interval by family (a cluster bootstrap: families drawn again
+with replacement, 2,000 times, from a fixed seed), since the tasks of one family, and the samples
+of one task, are not independent (DESIGN.md, Evolution, "The gate"). With --predictions (a line a
+role: {"role", "held", "lo", "hi"}, rates as fractions, written before the night was scored), the
+report sets each prediction beside what happened: inside its interval or not, and by how much.
 """
 import argparse
 import json
 import os
+import random
 import re
 import subprocess
 import sys
@@ -123,6 +130,37 @@ def pct(f):
     return "-" if not f or not f[1] else "%d/%d (%d%%)" % (f[0], f[1], round(100 * f[0] / f[1]))
 
 
+def families(suite):
+    """Each task's family, from the suite."""
+    with open(suite, encoding="utf-8") as f:
+        return {t["id"]: t["family"] for t in (json.loads(l) for l in f if l.strip())}
+
+
+def by_family(tasks, fam_of, reps=2000, seed=1):
+    """The 90% interval of a held-out rate, in percent, by a cluster bootstrap over families:
+    the families drawn again with replacement, each with all its tasks and samples."""
+    fams = {}
+    for t, (p, n) in tasks.items():
+        f = fams.setdefault(fam_of.get(t, t), [0, 0])
+        f[0], f[1] = f[0] + p, f[1] + n
+    groups = list(fams.values())
+    if not groups or not sum(n for _, n in groups):
+        return None
+    rng, rates = random.Random(seed), []
+    for _ in range(reps):
+        draw = [groups[rng.randrange(len(groups))] for _ in groups]
+        n = sum(g[1] for g in draw)
+        rates.append(100.0 * sum(g[0] for g in draw) / n if n else 0.0)
+    rates.sort()
+    return [round(rates[int(0.05 * reps)], 1), round(rates[int(0.95 * reps) - 1], 1)]
+
+
+def ci(r):
+    """A row's held-out rate with its interval by family."""
+    c = r.get("held_ci")
+    return pct(r["held"]) + (" [%d, %d]" % (round(c[0]), round(c[1])) if c else "")
+
+
 def shared(rows):
     """The held-out tasks every complete row that keeps its tasks was scored on, or None."""
     sets = [set(r["held_tasks"]) for r in rows if "held_tasks" in r and not r.get("partial")]
@@ -151,6 +189,7 @@ def main():
     h.add_argument("--suite", required=True)
     h.add_argument("--data", required=True)
     h.add_argument("--prompts", help="the held-out prompts: with FILE=K, a file short of K a task is partial")
+    h.add_argument("--predictions", help="what was predicted for each role before the night was scored")
     h.add_argument("answers", nargs="+", help="answers-X.jsonl, or answers-X.jsonl=K (its samples a task)")
     a = h.parse_args()
     specs = []
@@ -168,6 +207,23 @@ def main():
         held = held_ids(a.iq, a.suite)
     except Unscored as e:
         sys.exit("error: %s" % e)
+    fam_of = families(a.suite)
+    predicted, skipped = {}, []
+    if a.predictions and os.path.exists(a.predictions):
+        # An agent writes these in the night: a bad line is skipped, never the report.
+        with open(a.predictions, encoding="utf-8-sig") as f:
+            for i, line in enumerate(f, 1):
+                if not line.strip():
+                    continue
+                try:
+                    p = json.loads(line)
+                    mid, lo, hi = (float(p.get(k, p.get("held"))) for k in ("held", "lo", "hi"))
+                    if not isinstance(p.get("role"), str) or not 0 <= lo <= mid <= hi <= 1:
+                        raise ValueError("needs a role and 0 <= lo <= held <= hi <= 1")
+                    predicted[p["role"]] = dict(p, held=mid, lo=lo, hi=hi)
+                except (ValueError, TypeError, AttributeError) as e:
+                    skipped.append("prediction line %d: %s" % (i, e))
+                    print("report: prediction line %d skipped: %s" % (i, e), file=sys.stderr)
     for path, k in specs:
         try:
             r = score(a.iq, a.suite, held, path, k, prompts)
@@ -176,6 +232,9 @@ def main():
             print("report: %s not scored: %s" % (path, e), file=sys.stderr)
             continue
         r["night"], r["file"], r["role"] = a.night, os.path.basename(path), role(path, a.night)
+        r["held_ci"] = by_family(r["held_tasks"], fam_of)
+        if r["role"] in predicted:
+            r["predicted"] = predicted[r["role"]]
         rows.append(r)
     hpath = os.path.join(a.data, "iq-history.jsonl")
     old = []
@@ -191,7 +250,8 @@ def main():
     common_tasks = shared(history)
     n_common = len(common_tasks) if common_tasks else 0
     lines = ["# IQ, night %s" % a.night, "",
-             "Held: on every held-out task a row was scored on (the number that has to climb). Common: on",
+             "Held: on every held-out task a row was scored on (the number that has to climb), with its",
+             "90% interval by family (a cluster bootstrap). Common: on",
              "the %d held-out tasks every complete row of the history shares, so it compares across rows" % n_common,
              "and nights. Train: tasks the models may have learned from. Tiers: 1 a counter ... 6 an",
              "ambitious game. A partial row's step was paused or stopped: it holds fewer answers than",
@@ -201,7 +261,30 @@ def main():
     for r in rows:
         tiers = " | ".join(pct(r["tiers"].get(str(t))) for t in range(1, 7))
         lines.append("| %s | %s | %s | **%s** | %s | %s | %s |" % (
-            r["role"], r["model"], answered(r), pct(r["held"]), pct(on(r, common_tasks)), pct(r["train"]), tiers))
+            r["role"], r["model"], answered(r), ci(r), pct(on(r, common_tasks)), pct(r["train"]), tiers))
+    # A partial row holds only the first (easiest) prompts' answers: never compared.
+    guessed = [r for r in rows if r.get("predicted") and r["held"][1] and not r.get("partial")]
+    scored = {r["role"]: r for r in rows}
+    missed = ["%s: %s, not compared" % (x, "partial (%s of %s answers)" % (scored[x]["answered"], scored[x]["expected"])
+                                         if x in scored else "not scored")
+              for x in predicted if x not in {r["role"] for r in guessed}]
+    if guessed or missed or skipped:
+        lines += ["", "## Predicted before scoring", "",
+                  "Each role's held-out rate as predicted before tonight was scored, its 80% interval,",
+                  "and what happened.", ""]
+    if guessed:
+        lines += ["| role | predicted | actual | inside | off by |", "|---|---|---|---|---|"]
+        hits = 0
+        for r in guessed:
+            p, got = r["predicted"], 100.0 * r["held"][0] / r["held"][1]
+            lo, mid, hi = 100 * p["lo"], 100 * p["held"], 100 * p["hi"]
+            hits += lo <= got <= hi
+            lines.append("| %s | %d%% [%d, %d] | %d%% | %s | %+d points |" % (
+                r["role"], round(mid), round(lo), round(hi), round(got),
+                "yes" if lo <= got <= hi else "no", round(got - mid)))
+        lines += ["", "%d of %d inside their interval (80%% would be calibrated, over many nights)." % (
+            hits, len(guessed))]
+    lines += ["- " + m for m in missed + skipped]
 
     def by_night(cell):
         out = ["| role | " + " | ".join(nights) + " |", "|---|" + "---|" * len(nights)]
