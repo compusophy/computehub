@@ -262,6 +262,16 @@ def main():
         tiers = " | ".join(pct(r["tiers"].get(str(t))) for t in range(1, 7))
         lines.append("| %s | %s | %s | **%s** | %s | %s | %s |" % (
             r["role"], r["model"], answered(r), ci(r), pct(on(r, common_tasks)), pct(r["train"]), tiers))
+    # The two benchmarks that matter apart: everyday apps (tiers 1 and 2, what most people ask)
+    # and ambitious games (tiers 3 to 6, the hill to climb).
+    def band(r, tiers):
+        p = sum(r["tiers"].get(str(t), [0, 0])[0] for t in tiers)
+        n = sum(r["tiers"].get(str(t), [0, 0])[1] for t in tiers)
+        return pct([p, n])
+    lines += ["", "## Everyday apps and ambitious games", "",
+              "| role | everyday apps (tiers 1-2) | ambitious games (tiers 3-6) |", "|---|---|---|"]
+    for r in rows:
+        lines.append("| %s | %s | %s |" % (r["role"], band(r, (1, 2)), band(r, (3, 4, 5, 6))))
     # A partial row holds only the first (easiest) prompts' answers: never compared.
     guessed = [r for r in rows if r.get("predicted") and r["held"][1] and not r.get("partial")]
     scored = {r["role"]: r for r in rows}

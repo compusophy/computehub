@@ -44,6 +44,8 @@ a llama.cpp checkout (`--llama`, `$LLAMA_CPP_DIR`, else `C:\llama-cpp`) with
 | `ask.py` | answers `teach prompts` through a llama-server (its CUDA build in `C:\llama-cpp\build-cuda`), 16 at a time, each stream closed where Studio stops reading; night.sh prefers it to generate.py when that build exists (`SCORER=hf` forces generate.py) |
 | `build-llama-cuda.bat` | builds llama-server with CUDA for the 3090 (sm_86) into `C:\llama-cpp\build-cuda`: NMake, since CUDA 11.7 put no build extensions into Visual Studio 2022, with `-allow-unsupported-compiler` and `_ALLOW_COMPILER_AND_STL_VERSION_MISMATCH` (MSVC 19.42 is newer than CUDA 11.7 knows); about 70 minutes on one core |
 | `report.py` | each answers file scored by `iq score`: `iq-history.jsonl` (a line a role a night, with the held-out tasks it was scored on) and `report-<night>.md`, tonight beside the nights before, on the tasks they share, each held-out rate with its interval by family, and tonight's predictions against what happened |
+| `checkdata.py` | the check-first skill's data: each train task's check written from its ask (`checks.jsonl`, system prompt: iq's own check-language card) and the held-out asks to write checks for (`prompts-held-checks.jsonl`); `day.sh data` runs it |
+| `select.py` | chooses among a model's program samples by the checks it wrote itself: the one its own check passes, else one that compiles and runs, else the first (`answers-<night>-q3-sel.jsonl`, one a task); says how many of its checks read and are fair to the task's reference, and the best of the samples |
 | `common.py` | the data root, atomic writes, hashes, provenance, the base model from the cache |
 | `smoke.py` | a tiny smoke set from `programs/makes/refs/*.app`, under SMOKE placeholder prompts |
 

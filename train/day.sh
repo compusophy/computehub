@@ -112,6 +112,11 @@ PY
   done
   "$TEACH" export --solutions "$W/solutions.jsonl" --suite "$SUITE" --out "$W/sft.jsonl" 2>&1 | tee -a "$LOG"
   say "sft.jsonl: $(wc -l < "$D/sft.jsonl") records"
+  # The check-first skill: each train task's check from its ask, and the held-out asks to write
+  # checks for (train/checkdata.py).
+  "$PY" "$HERE/checkdata.py" --iq "$(cygpath -m "$IQ" 2>/dev/null || echo "$IQ")" --suite "$SUITE" \
+    --held-prompts "$W/prompts-held.jsonl" --train-out "$W/checks.jsonl" \
+    --held-out "$W/prompts-held-checks.jsonl" --day "$(date +%F)" 2>&1 | tee -a "$LOG"
 }
 
 case "${1:-}" in

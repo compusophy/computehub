@@ -1,33 +1,34 @@
 #!/usr/bin/env bash
-# The night run of the applang model: baselines, fine-tunes, a self-taught round, the IQ report.
+# The night run of the applang model: the 3B fine-tuned on apps and their checks, scored one
+# shot and by choosing among its samples with its own checks, the untuned 3B beside it, the report;
+# then, with --until-woken, rounds on the data the night's waves grow.
 #
-#   bash train/night.sh [--force] [--wait] [--check] [--root DIR] [--no-self] [--no-3b]
+#   bash train/night.sh [--until-woken] [--force] [--wait] [--check] [--report] [--root DIR]
+#                       [--no-3b] [--with-05] [--no-self]
 #
-# It reads, from <root>/iq/ (made by day: the teacher's tasks in evals/suites/iq.jsonl, then
-# `teach prompts`, `teach replies` and `teach export`): sft.jsonl, solutions.jsonl,
-# prompts-held.jsonl, prompts-train.jsonl, held.txt, and the suite. It copies them once into
-# <root>/iq/night-<night>/ (with their sha256s in inputs.sha256) and reads only the copies, so
-# tomorrow's data can be made while it runs (the night's workflow imports new tasks) and tonight
-# trains and scores on what it began with. Then, each step skipped when its output exists, so a
-# rerun after a freeze resumes on the same copies (sft.py from its checkpoint, the scorers from
-# their last answers):
-#   1. baselines, answered once ever (again only if the sampler's settings change): the untuned
-#      Qwen2.5-Coder 0.5B and 3B on the held-out tasks;
-#   2. tonight's fine-tunes, each from its base: 0.5B in full, 3B by LoRA, scored on the held-out tasks;
-#   3. a self-taught round (unless --no-self, or past SELF_BY o'clock): tonight's 0.5B answers the
-#      train tasks 8 times, its answers that pass (iq's check and an icon that draws) join the
-#      teacher's, at most 2 distinct programs a task, and a 0.5B is trained on both from its base
-#      and scored; not when none passed. Its data is made once: from its training's start on, a
-#      rerun trains on the same bytes;
+# It reads, from <root>/iq/ (made by day.sh: the teacher's tasks in evals/suites/iq.jsonl, then
+# `teach prompts`, `teach replies`, `teach export` and train/checkdata.py): sft.jsonl,
+# solutions.jsonl, prompts-held.jsonl, prompts-train.jsonl, held.txt, the suite, and when there,
+# checks.jsonl and prompts-held-checks.jsonl. It copies them once into <root>/iq/night-<night>/
+# (with their sha256s in inputs.sha256) and reads only the copies, so tomorrow's data can be made
+# while it runs (the night's workflow imports new tasks) and tonight trains and scores on what it
+# began with. Then, each step skipped when its output exists, so a rerun after a freeze resumes
+# on the same copies (sft.py from its checkpoint, the scorers from their last answers):
+#   1. the 3B by LoRA from its base (Q3_EPOCHS, 1) on the apps and, when there, their checks
+#      written from the asks (one run, two skills); scored on the held-out tasks one shot (q3, 4
+#      samples a task), then made to write each held-out ask's check (q3-checks), and its sample
+#      that its own check passes chosen (q3-sel, train/select.py: else one that compiles and runs);
+#   2. the untuned 3B, answered once ever (new held-out tasks as they come): what tonight adds;
+#   3. only with --with-05: the untuned and the tuned 0.5B, and a self-taught round (unless
+#      --no-self): tonight's 0.5B answers the train tasks 8 times, its answers that pass join the
+#      teacher's (at most 2 distinct programs a task), and a 0.5B is trained on both and scored;
 #   4. report.py: every model's held-out pass rate tonight, with its interval by family, beside
 #      the nights before (<root>/iq/report-<night>.md, iq-history.jsonl), and against what was
 #      predicted for it before it was scored (<root>/iq/predictions-<night>.jsonl, when written);
 #      a file short of its answers is partial.
-# The 3B round (LoRA and its answers) runs before the self-taught round, so the bigger model's
-# fine-tune is never crowded out by it; it starts only before Q3_BY o'clock, and only when it can
-# end by 07:45: its LoRA at about 900 tokens a second (night 1 measured 901) over the records (about 6,000 tokens each)
-# Q3_EPOCHS times, and 15 minutes to answer through llama-server (40 with generate.py). The self-taught round then starts only before
-# SELF_BY o'clock.
+# By hand, without --until-woken, the 3B starts only before Q3_BY o'clock and when it can end by
+# 07:45 (its LoRA at about 850 tokens a second, its answers about 22 minutes for 268), and the
+# self-taught round only before SELF_BY o'clock.
 # The GPU is compusophy's from 08:00 to 22:00: it refuses to start then, and from 07:45 no new
 # step starts; --force lifts both, and the start-by hours with them. --wait, started then, waits
 # for 22:00 instead (and gives up if <root>/iq/PAUSE appears). --check says what tonight would
@@ -42,14 +43,15 @@
 # tonight's held-out tasks as q3-r2, q3-r3, ...
 # NIGHT_DRY=1 (with a scratch --root) runs the whole flow with made-up answers and runs, no model
 # and no GPU: a by-day test of the night's control flow.
-# Environment: COMPUTEHUB_DATA, PYTHON, MIN_FREE_GB (50), Q3_BY (3), SELF_BY (5), Q3_EPOCHS (2).
+# Environment: COMPUTEHUB_DATA, PYTHON, MIN_FREE_GB (50), Q3_BY (3), SELF_BY (5), Q3_EPOCHS (1),
+# ROUND_EPOCHS (1), ROUND_MIN (200), ROUND_WAIT (300 s), NIGHT_DRY.
 # To pause: touch <root>/iq/PAUSE (no new step starts), then stop the running step's python.
 set -uo pipefail
 
 HERE=$(cd "$(dirname "$0")" && pwd)
 REPO=$(cd "$HERE/.." && pwd)
 PY=${PYTHON:-python}
-FORCE=0 SELF=1 BIG=1 WAIT=0 CHECK=0 REPORT=0 UNTIL=0
+FORCE=0 SELF=1 BIG=1 WAIT=0 CHECK=0 REPORT=0 UNTIL=0 SMALL_TOO=0
 DRY=${NIGHT_DRY:-0}
 ROOT_ARG=()
 while [ $# -gt 0 ]; do
@@ -61,6 +63,7 @@ while [ $# -gt 0 ]; do
     --until-woken) UNTIL=1; shift ;;
     --no-self) SELF=0; shift ;;
     --no-3b) BIG=0; shift ;;
+    --with-05) SMALL_TOO=1; shift ;;
     --root) ROOT_ARG=(--root "$2"); shift 2 ;;
     *) echo "night: unknown argument: $1" >&2; exit 2 ;;
   esac
@@ -158,9 +161,14 @@ if [ ! -s "$S/inputs.sha256" ]; then
   mkdir -p "$S"
   for f in $INPUTS; do cp "$D/$f" "$S/$f" || { say "could not copy $f"; exit 5; }; done
   cp "$REPO/evals/suites/iq.jsonl" "$S/iq.jsonl" || { say "could not copy the suite"; exit 5; }
+  # The check-first skill's data and prompts, when day.sh made them (train/checkdata.py).
+  for f in checks.jsonl prompts-held-checks.jsonl; do
+    [ -s "$D/$f" ] && cp "$D/$f" "$S/$f"
+  done
   # GLM's answers too: an import tonight adds its answers to new tasks this suite lacks.
   [ -s "$D/answers-glm.jsonl" ] && cp "$D/answers-glm.jsonl" "$S/answers-glm.jsonl"
-  (cd "$S" && sha256sum $INPUTS iq.jsonl > inputs.sha256.part && mv inputs.sha256.part inputs.sha256)
+  (cd "$S" && sha256sum $INPUTS iq.jsonl $(ls checks.jsonl prompts-held-checks.jsonl 2>/dev/null) \
+    > inputs.sha256.part && mv inputs.sha256.part inputs.sha256)
   say "inputs copied to night-$N/ ($(wc -l < "$S/sft.jsonl") records, $(wc -l < "$S/prompts-held.jsonl") held-out tasks)"
 fi
 SUITE="$I/iq.jsonl"
@@ -248,12 +256,18 @@ finish() {  # the report, from whatever answers tonight has, then stop
   # Each file with its samples a task, so report.py marks one its step left short as partial.
   # GLM's answers as copied with tonight's inputs (the live file may hold tasks they lack).
   [ -s "$S/answers-glm.jsonl" ] && files+=("$I/answers-glm.jsonl=1")
-  for fk in "answers-base-q05.jsonl=$KB" "answers-base-q3.jsonl=$KB" \
-            "answers-$N-q05.jsonl=$KR" "answers-$N-q05-self.jsonl=$KR" "answers-$N-q3.jsonl=$KR"; do
+  for fk in "answers-base-q05.jsonl=$KB" "answers-base-q3.jsonl=$KB"; do
     [ -s "$D/${fk%=*}" ] && files+=("$W/$fk")
   done
-  for fk in "$D/answers-$N"-q3-r*.jsonl; do  # the rounds (--until-woken)
-    [ -s "$fk" ] && files+=("$W/$(basename "$fk")=$KR")
+  # Tonight's roles, the rounds among them: K samples a task, a choice (-sel) one; the models'
+  # own checks (-checks) are not programs, so select.py's summary reports them.
+  for fk in "$D/answers-$N"-*.jsonl; do
+    [ -s "$fk" ] || continue
+    case "$fk" in
+      *-checks.jsonl) ;;
+      *-sel.jsonl) files+=("$W/$(basename "$fk")=1") ;;
+      *) files+=("$W/$(basename "$fk")=$KR") ;;
+    esac
   done
   if [ ${#files[@]} -gt 0 ]; then
     (cd "$REPO" && "$PY" train/report.py --night "$N" --iq "$IQ" --suite "$SUITE" --data "$W" \
@@ -281,43 +295,73 @@ ends_by_morning() {  # ends_by_morning MINUTES: a step begun now and lasting MIN
   [ "$hm" -ge 1080 ] && hm=$((hm - 1440))   # the evening, as minutes before midnight
   [ "$FORCE" = 1 ] || [ "$UNTIL" = 1 ] || [ $((hm + $1)) -le 465 ]
 }
-q3_minutes() {  # the 3B round's minutes: its LoRA unless done, and its answers
-  local records
+q3_minutes() {  # the 3B's minutes: its LoRA unless done (about 6,400 tokens an app record, 1,500 a
+  # check, at 850 a second), and its answers (about 22 minutes for 268, through llama-server)
+  local records checks=0 held score
   records=$(wc -l < "$S/sft.jsonl")
-  if finished "$N-q3"; then echo 15; else echo $((records * 6000 * ${Q3_EPOCHS:-2} / 900 / 60 + 15)); fi
+  [ -s "$S/checks.jsonl" ] && checks=$(wc -l < "$S/checks.jsonl")
+  held=$(wc -l < "$S/prompts-held.jsonl")
+  score=$((held * KR * 22 / 268 + 10))
+  if finished "$N-q3"; then echo "$score"; else
+    echo $(((records * 6400 + checks * 1500) * ${Q3_EPOCHS:-1} / 850 / 60 + score)); fi
 }
 
-[ "$REPORT" = 1 ] && finish "report written (--report)"
-say "night $N: $(wc -l < "$S/sft.jsonl") training records, $(wc -l < "$S/prompts-held.jsonl") held-out tasks"
-morning
-gen answers-base-q05.jsonl prompts-held.jsonl "$KB" 64 --base "$SMALL"
-morning
-[ "$BIG" = 1 ] && gen answers-base-q3.jsonl prompts-held.jsonl "$KB" 32 --base "$LARGE"
-
-morning
-sft "$N-q05" "$SMALL" --data "$I/sft.jsonl" --full
-morning
-gen "answers-$N-q05.jsonl" prompts-held.jsonl "$KR" 64 --run "$N-q05" --name q05
-
-if [ "$BIG" = 0 ]; then
-  say "3B round skipped (--no-3b)"
-elif late "${Q3_BY:-3}"; then
-  say "3B round skipped: past ${Q3_BY:-3}:00"
-elif need=$(q3_minutes); ! ends_by_morning "$need"; then
-  say "3B round skipped: it needs about $need minutes, which run past 07:45"
-else
+three_b() {  # three_b RUN ROLE SUB EPOCHS: the 3B trained on <night>/SUB's apps (and checks), scored
+  # one shot as ROLE, and chosen among its samples by its own checks as ROLE-sel
+  local run=$1 role=$2 sub=$3 epochs=$4 chk=()
+  local s="$S${sub:+/$sub}" i="$I${sub:+/$sub}"
+  [ -s "$s/checks.jsonl" ] && chk=(--data "$i/checks.jsonl")
   morning
   # Two sequences a micro-batch (16 a step, as 4 x 4): at 4, night n20261006's records (up to
   # 8,322 tokens) and the desktop's own share of the card overfilled its 24 GB, and Windows paged
   # it to system memory over PCIe (no step 5 in 90 minutes). A checkpoint every half epoch, so a
-  # morning stop keeps what it learned.
-  sft "$N-q3" "$LARGE" --data "$I/sft.jsonl" --epochs "${Q3_EPOCHS:-2}" --batch 2 --accum 8 --save-every 13
+  # stopped run keeps what it learned.
+  sft "$run" "$LARGE" --data "$i/sft.jsonl" "${chk[@]}" --epochs "$epochs" --batch 2 --accum 8 --save-every 13
+  finished "$run" || return 1
   morning
-  gen "answers-$N-q3.jsonl" prompts-held.jsonl "$KR" 32 --run "$N-q3" --name q3
+  gen "answers-$N-$role.jsonl" prompts-held.jsonl "$KR" 32 --run "$run" --name "$role"
+  if [ ${#chk[@]} -gt 0 ] && [ -s "$S/prompts-held-checks.jsonl" ]; then
+    morning
+    gen "answers-$N-$role-checks.jsonl" prompts-held-checks.jsonl 1 32 --run "$run" --name "$role-checks"
+    "$PY" "$HERE/select.py" --iq "$IQ" --suite "$SUITE" --programs "$W/answers-$N-$role.jsonl" \
+      --checks "$W/answers-$N-$role-checks.jsonl" --out "$W/answers-$N-$role-sel.jsonl" \
+      --summary "$W/select-$N-$role.json" 2>&1 | tee -a "$LOG"
+  fi
+}
+
+[ "$REPORT" = 1 ] && finish "report written (--report)"
+say "night $N: $(wc -l < "$S/sft.jsonl") training records, $(wc -l < "$S/prompts-held.jsonl") held-out tasks"
+
+# The 3B first: the model that learns (night n20261006: 6% held out, 34% of tier 1, against the
+# 0.5B's 0.4%). One run learns two skills: the apps (sft.jsonl) and their checks, written from the
+# ask alone (checks.jsonl, train/checkdata.py); then it is scored one shot (q3) and by choosing,
+# among its samples, the one its own check passes (q3-sel, train/select.py).
+if [ "$BIG" = 0 ]; then
+  say "3B skipped (--no-3b)"
+elif late "${Q3_BY:-3}"; then
+  say "3B skipped: past ${Q3_BY:-3}:00"
+elif need=$(q3_minutes); ! ends_by_morning "$need"; then
+  say "3B skipped: it needs about $need minutes, which run past 07:45"
+else
+  three_b "$N-q3" q3 "" "${Q3_EPOCHS:-1}"
+fi
+# The untuned 3B, once ever (new held-out tasks are answered as they come): what tonight's adds.
+morning
+[ "$BIG" = 1 ] && gen answers-base-q3.jsonl prompts-held.jsonl "$KB" 32 --base "$LARGE"
+
+# The 0.5B, a control, only when asked (--with-05): it learns the format, not the meaning (night
+# n20261006: 1 of 268), and its GPU hours are the 3B's.
+if [ "$SMALL_TOO" = 1 ]; then
+  morning
+  gen answers-base-q05.jsonl prompts-held.jsonl "$KB" 64 --base "$SMALL"
+  morning
+  sft "$N-q05" "$SMALL" --data "$I/sft.jsonl" --full
+  morning
+  gen "answers-$N-q05.jsonl" prompts-held.jsonl "$KR" 64 --run "$N-q05" --name q05
 fi
 
-if [ "$SELF" = 0 ]; then
-  say "self-taught round skipped (--no-self)"
+if [ "$SMALL_TOO" = 0 ] || [ "$SELF" = 0 ]; then
+  say "self-taught round skipped (it trains the 0.5B: --with-05)"
 elif late "${SELF_BY:-5}"; then
   say "self-taught round skipped: past ${SELF_BY:-5}:00"
 elif ! finished "$N-q05"; then
@@ -389,19 +433,15 @@ while [ "$UNTIL" = 1 ] && [ "$BIG" = 1 ]; do
       continue
     fi
     mv "$S/r$round/sft.jsonl.part" "$S/r$round/sft.jsonl"
-    (cd "$S/r$round" && sha256sum sft.jsonl > inputs.sha256)
+    [ -s "$D/checks.jsonl" ] && cp "$D/checks.jsonl" "$S/r$round/checks.jsonl"
+    (cd "$S/r$round" && sha256sum sft.jsonl $(ls checks.jsonl 2>/dev/null) > inputs.sha256)
     say "round $round: $(wc -l < "$S/r$round/sft.jsonl") records ($prev before)"
   fi
-  morning
-  sft "$N-q3-r$round" "$LARGE" --data "$I/r$round/sft.jsonl" --epochs "${ROUND_EPOCHS:-1}" \
-    --batch 2 --accum 8 --save-every 13
-  if ! finished "$N-q3-r$round"; then
+  if ! three_b "$N-q3-r$round" "q3-r$round" "r$round" "${ROUND_EPOCHS:-1}"; then
     fails=$((fails + 1))
     [ "$fails" -ge 2 ] && finish "round $round's training failed twice"
     continue
   fi
-  morning
-  gen "answers-$N-q3-r$round.jsonl" prompts-held.jsonl "$KR" 32 --run "$N-q3-r$round" --name "q3-r$round"
   round=$((round + 1)) fails=0
 done
 
