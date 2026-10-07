@@ -10,16 +10,18 @@
 //! cargo run -p eval -- summary [--a RUN|MODEL] [--b RUN|MODEL] [--markdown]
 //! cargo run -p eval -- list
 //! cargo run -p eval -- iq --suite S --model M --out OUT [--held H | --tasks a,b] [--url U]
-//!                         [--name N] [--jobs 1] [--ms MS]
+//!                         [--name N] [--jobs 1] [--ms MS] [--per-hour 110]
 //! ```
 //!
 //! `iq` makes the IQ suite's tasks (the families `--held` lists, or `--tasks`, else all) as
 //! Studio makes them (`coder::Make`: write, check, fix, keep the best) over `--url`: the free
 //! AI by default, paced as `run` is; another URL (a llama-server's chat completions) unpaced,
 //! `--jobs` at once, each request stopped once its program is in. Each make has `--ms` of its
-//! requests' time (Studio's by default). An answer line a task for `iq score` (the program the
-//! make installed, in an app block; no reply if it installed none, and how the make went) is
-//! appended to `--out` as it ends; tasks already there are skipped, so a run cut off resumes.
+//! requests' time (Studio's by default); `--per-hour` lowers the free AI's hourly pace, to share
+//! it with another run. An answer line a task for `iq score` (the program the make installed, in
+//! an app block; no reply if it installed none, and how the make went) is appended to `--out` as
+//! it ends; tasks already there are skipped, so a run cut off resumes, and a make the AI failed
+//! (E0901 to E0905: busy, unreachable) is not written, so a rerun makes it again.
 //!
 //! `--dir D` reads and writes `D/results` and `D/replays` instead of the repo's `evals/`. Runs
 //! and replays need a debug build (as above): a checker that panics fails its app only where
@@ -69,6 +71,7 @@ struct Curl {
     max: usize,
     url: String,
     paced: bool,
+    per_hour: usize,
 }
 
 impl Curl {
@@ -76,7 +79,8 @@ impl Curl {
         let since = now_ms().saturating_sub(HOUR);
         let kept = std::fs::read_to_string(sent_file()).unwrap_or_default();
         let sent = kept.lines().filter_map(|l| l.trim().parse().ok()).filter(|&t| t > since);
-        Curl { sent: sent.collect(), n: 0, max, url: url.into(), paced: url == URL }
+        let (url, paced) = (url.into(), url == URL);
+        Curl { sent: sent.collect(), n: 0, max, url, paced, per_hour: PER_HOUR }
     }
 
     /// Waits until a request keeps under the limits, 2 s after the last at least.
@@ -87,10 +91,10 @@ impl Curl {
             let within =
                 |ms: u64| self.sent.iter().filter(|&&t| now.saturating_sub(t) < ms).count();
             let gap = self.sent.last().is_some_and(|&t| now.saturating_sub(t) < 2000);
-            if within(60_000) < PER_MINUTE && within(HOUR) < PER_HOUR && !gap {
+            if within(60_000) < PER_MINUTE && within(HOUR) < self.per_hour && !gap {
                 return;
             }
-            if within(HOUR) >= PER_HOUR && !said {
+            if within(HOUR) >= self.per_hour && !said {
                 eprintln!("  waiting: {} requests in the last hour", within(HOUR));
                 said = true;
             }
@@ -432,6 +436,7 @@ fn iq(args: &[String]) {
     k.ms = arg(args, "--ms").and_then(|v| v.parse().ok()).unwrap_or(k.ms);
     let jobs = arg(args, "--jobs").and_then(|v| v.parse().ok()).unwrap_or(1usize);
     let jobs = if url == URL { 1 } else { jobs.max(1) };
+    let per_hour = arg(args, "--per-hour").and_then(|v| v.parse().ok()).unwrap_or(PER_HOUR);
     let text = |j: &Json, key: &str| j.get(key).and_then(Json::text).unwrap_or("").to_string();
     let had: Vec<String> =
         read(&out).lines().filter_map(Json::parse).map(|j| text(&j, "task")).collect();
@@ -462,9 +467,13 @@ fn iq(args: &[String]) {
         for _ in 0..jobs {
             s.spawn(|| {
                 let mut wire = Curl::new(usize::MAX, &url);
+                wire.per_hour = per_hour.min(PER_HOUR);
                 while let Some(t) = next.lock().ok().and_then(|mut it| it.next()) {
                     let (d, _) = evals::run::make(t, &model, 1, k, &mut wire);
                     eprintln!("{:<28} {} ({} requests)", t.id, d.said(), d.receipt.turns.len());
+                    if d.outcome == coder::Outcome::Failed {
+                        continue;
+                    }
                     let program = ["```app\n", d.draft.trim_end_matches('\n'), "\n```"].concat();
                     let turns: Vec<String> = d.receipt.turns.iter().map(|t| format!("{:?}", t.turn)).collect();
                     let line = format!(
