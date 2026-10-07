@@ -9,7 +9,7 @@ compusophy says when the night starts ("going to bed", or `/night`, the effort o
 and when it ends ("I'm up", "I woke up"). Both are theirs: never start a night unasked, and
 never end one on a clock. Between the two, neither the GPU nor the agents sit idle.
 
-- **The GPU** (`train/night.sh --wait --until-woken`, detached): baselines, tonight's fine-tunes
+- **The GPU** (`train/night.sh --until-woken`, detached, started at once): baselines, tonight's fine-tunes
   (0.5B full, 3B LoRA, a self-taught round), scored on the held-out tasks; then rounds until
   `PAUSE`: the 3B trained again on the data the waves have grown, scored on the same tasks as
   `q3-r2`, `q3-r3`, ... It copies its inputs once (`iq/night-<night>/`), so the waves may change
@@ -30,14 +30,14 @@ Run these in order; stop and tell compusophy if one fails.
 1. **Build the tools** the agents call: `cargo build -q --release -p compusophy-teach -p compusophy-iq`.
 2. **Lift the pause.** If `D/PAUSE` exists, rename it (`mv` to `PAUSE.off-<yyyymmddHHMM>`; never
    `rm` an absolute path).
-3. **Preflight:** `bash train/night.sh --check` must end "ready" (every input present, every task
-   the prompts ask in this checkout's suite, the disk over 50 GB, no python or llama process on
-   the GPU, no other night.sh). Before 22:00 it says the GPU is compusophy's: fine, step 4 waits.
-4. **Start the GPU half**, detached, waiting for 22:00 if need be, running until `PAUSE`. In
-   PowerShell (the command quoted, or Start-Process splits it):
+3. **Preflight:** `bash train/night.sh --check` (every input present, every task the prompts ask
+   in this checkout's suite, the disk over 50 GB, no python or llama process on the GPU, no other
+   night.sh). Its line about the hour is for runs by hand: compusophy's word starts this one.
+4. **Start the GPU half** now, detached, running until `PAUSE`. In PowerShell (the command quoted,
+   or Start-Process splits it):
    ```powershell
    $repo = (git rev-parse --show-toplevel)
-   $cmd = "bash '$repo/train/night.sh' --wait --until-woken >> '/c/sept30/computehub-data/iq/night.out' 2>&1"
+   $cmd = "bash '$repo/train/night.sh' --until-woken >> '/c/sept30/computehub-data/iq/night.out' 2>&1"
    Start-Process -FilePath 'C:\Program Files\Git\bin\bash.exe' -ArgumentList "-lc `"$cmd`"" -WindowStyle Hidden
    ```
    Then confirm it runs: `D/night.out` grows, and `D/night.pid` holds its pid.
@@ -50,10 +50,11 @@ Run these in order; stop and tell compusophy if one fails.
    yesterday's), `day` (today, `YYYY-MM-DD`), `wave`, `repo` (a Windows path) and `data`
    (`C:\sept30\computehub-data`). The defaults (6 tiers, 2 teachers a tier, 8 families each, 2
    tasks a family, loose asks from tier 3: about 190 tasks a wave) suit ultracode.
-7. **The heartbeat**, until compusophy is up: `CronCreate` (ToolSearch) a recurring job at
-   `7,47 * * * *` whose prompt says to follow this skill's Heartbeat section for this night.
-8. **Tell compusophy**, in a few lines: the night and wave, both halves running (or waiting for
-   22:00), and that "I'm up" ends the night and "pause" stops everything.
+7. **Watch by events, never by the clock.** A `Monitor` (ToolSearch) on night.sh's log, emitting
+   its failures and its end (`tail -F D/night-<night>.log | grep --line-buffered -E "failed|error|Traceback|refused|the GPU is idle"`),
+   re-armed when it expires; the waves report themselves when they finish. No timed job.
+8. **Tell compusophy**, in a few lines: the night and wave, both halves running, and that "I'm up"
+   ends the night and "pause" stops everything.
 
 ## While they sleep
 
@@ -62,17 +63,17 @@ When a wave's workflow finishes and `D/PAUSE` does not exist, start the next wav
 note what failed (a batch the attacker never finished, a solver that did not run) in
 `D/heartbeat-<night>.log`. Never improvise GPU work outside night.sh: the rounds are its own.
 
-## Heartbeat (the recurring job)
+## When an event comes (the monitor, a wave's end)
 
 Check night.sh (its log, whether its bash still runs, `nvidia-smi`), the running wave, and the
 disk. Fix what is broken as this skill and `train/README.md` say (resume, never GPU work by hand).
 If no wave runs and there is no `PAUSE`, start the next. Append one line of what was seen and done
-to `D/heartbeat-<night>.log`; if all is well, say so in a line and stop.
+to `D/heartbeat-<night>.log`.
 
 ## Wrap-up ("I'm up", "I woke up")
 
-1. **Stop the night.** Touch `D/PAUSE` (no new step or task starts) and delete the heartbeat job
-   (CronList, CronDelete).
+1. **Stop the night.** Touch `D/PAUSE` (no new step or task starts) and stop the monitor
+   (`TaskStop`).
 2. **The GPU is theirs now.** End only the running step, so night.sh writes its report: with
    llama-server up, `python train/serve.py --stop`; with `sft.py` or `generate.py` running, stop
    that python alone, by its command line (below; a round's training keeps its last half-epoch
@@ -110,7 +111,7 @@ Everything stops, at once, and stays stopped. In PowerShell:
    ```powershell
    Get-CimInstance Win32_Process -Filter "Name='python.exe'" | Where-Object { $_.CommandLine -match 'train[\\/](sft|generate|ask|export|serve)\.py' } | ForEach-Object { taskkill /T /F /PID $_.ProcessId }
    ```
-4. Stop the workflow (`TaskStop` on its task) and the heartbeat job.
+4. Stop the workflow and the monitor (`TaskStop` on each).
 5. A minute later, check that nothing restarted: `nvidia-smi`, and the two queries above empty.
 
 A paused night resumes when night.sh runs again before noon the next day (it names a night by its

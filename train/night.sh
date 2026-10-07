@@ -80,7 +80,9 @@ LARGE=Qwen/Qwen2.5-Coder-3B-Instruct
 KB=2 KR=4 KS=8
 
 INPUTS="sft.jsonl solutions.jsonl prompts-held.jsonl prompts-train.jsonl held.txt"
-daytime() { local h=$((10#$(date +%H))); [ "$FORCE" = 0 ] && [ "$h" -ge 8 ] && [ "$h" -lt 22 ]; }
+# By hand, the GPU is compusophy's from 08:00 to 22:00; with --until-woken their word started the
+# night, whatever the hour.
+daytime() { local h=$((10#$(date +%H))); [ "$FORCE" = 0 ] && [ "$UNTIL" = 0 ] && [ "$h" -ge 8 ] && [ "$h" -lt 22 ]; }
 # Another night.sh running or waiting: its pid in night.pid, alive. An empty night.pid is none.
 running() { [ -s "$D/night.pid" ] && kill -0 "$(cat "$D/night.pid")" 2>/dev/null; }
 if [ "$CHECK" = 1 ]; then

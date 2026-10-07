@@ -147,7 +147,7 @@ intermediates are overwritten in place.
 At bedtime compusophy types `/night` in Claude Code, the effort mode on ultracode; the
 procedure is `.claude/skills/night/SKILL.md`. Two halves run until morning:
 
-- **The GPU half**: `night.sh --wait --until-woken`, detached (below): when tonight's plan is
+- **The GPU half**: `night.sh --until-woken`, detached, started when compusophy says so (below): when tonight's plan is
   done it keeps going in rounds (the 3B trained again on the data the waves have grown, scored on
   the same held-out tasks as `q3-r2`, `q3-r3`, ...) until `PAUSE`.
 - **The data half**: `.claude/workflows/night.js`, a Claude Code workflow. *Predict* writes
