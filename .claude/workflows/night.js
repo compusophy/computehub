@@ -76,7 +76,7 @@ const PLAN = { type: 'object', properties: { file: { type: 'string' }, batches: 
 const planPrompt = `You plan tonight's wave (${WAVE}) of new benchmark families for compusophyOS's applang model: ${batches.length} teachers, ${FAMILIES} families each, for tiers ${TIERS.join(', ')} (${TEACHERS} teacher${TEACHERS > 1 ? 's' : ''} a tier). Their keys: ${batches.map(x => x.key).join(', ')}.
 ${RULES}
 If ${IQD}\\work\\${WAVE}\\plan.json exists, a run of this wave began before (a freeze, a resume): return it unchanged. Else:
-1. Read the tier ladder in \`${TEACH} writer --tier 1 --families x --per 1\` (and the other tiers' descriptions there), and every family already in use: the suite (${SUITE}, the "family" of each line) and every ${IQD}\\stage\\*.jsonl. Compute every ROOT in use (a family's name before its first '-').
+1. Read the tier ladder in \`${TEACH} writer --tier 1 --families x --per 1\` (and the other tiers' descriptions there), and every family already in use or promised: the suite (${SUITE}, the "family" of each line), every ${IQD}\\stage\\*.jsonl, and every other wave's plan, ${IQD}\\work\\*\\plan.json (a wave may be running beside this one). Compute every ROOT in use (a family's name before its first '-').
 2. Choose ${FAMILIES} families for each teacher. Each family's ROOT is new: no family in the suite or the stage files has it, and no two planned families share one. Never a twin, under a new root, of an existing family OR of another family in this plan (a "focus-timer" when "pomodoro" exists, a tier-1 and a tier-3 version of one everyday app): twins would leak across the held-out split, which goes by root. Lowercase a-z0-9 and '-', short.
 3. What to choose: the mission is personal software for everyone (DESIGN.md, Evolution, "What is selected for"): everyday apps one person or family needs (chores, budgets, logs of health, study, a small shop or club, a hobby, a household), and at the higher tiers the games and simulations people love; varied in what they exercise (lists, timers, boards, canvases, text, numbers, keys, drags). Fit each tier as the ladder says: tier 1 the simplest, tier 6 an ambitious game.
 4. Write ${IQD}\\work\\${WAVE}\\plan.json: {"wave":"${WAVE}","batches":[{"key","tier","families":[...]}...]} and return it.`
@@ -145,8 +145,9 @@ const results = await pipeline(batches,
   (taught, x) => taught && taught.kept > 0
     ? agent(attackPrompt(x), { label: `attack:${x.key}`, phase: 'Attack', schema: ATTACKED }).then(a => ({ taught, a }))
     : ({ taught, a: null }),
-  // Only an attacked batch is solved: its stage file exists only then.
-  (r, x) => r && r.taught && r.a && r.a.kept > 0
+  // Only an attacked batch is solved: its stage file exists only then. Attackers count "kept"
+  // two ways (left unchanged, or left in all), so a batch with any task kept or fixed is solved.
+  (r, x) => r && r.taught && r.a && (r.a.kept || 0) + (r.a.fixed || 0) > 0
     ? agent(solvePrompt(x), { label: `solve:${x.key}`, phase: 'Solve', schema: SOLVED }).then(s => ({ ...r, s }))
     : r,
 )

@@ -273,7 +273,11 @@ elif need=$(q3_minutes); ! ends_by_morning "$need"; then
   say "3B round skipped: it needs about $need minutes, which run past 07:45"
 else
   morning
-  sft "$N-q3" "$LARGE" --data "$I/sft.jsonl" --epochs "${Q3_EPOCHS:-2}"
+  # Two sequences a micro-batch (16 a step, as 4 x 4): at 4, night n20261006's records (up to
+  # 8,322 tokens) and the desktop's own share of the card overfilled its 24 GB, and Windows paged
+  # it to system memory over PCIe (no step 5 in 90 minutes). A checkpoint every half epoch, so a
+  # morning stop keeps what it learned.
+  sft "$N-q3" "$LARGE" --data "$I/sft.jsonl" --epochs "${Q3_EPOCHS:-2}" --batch 2 --accum 8 --save-every 13
   morning
   gen "answers-$N-q3.jsonl" prompts-held.jsonl "$KR" 32 --run "$N-q3" --name q3
 fi

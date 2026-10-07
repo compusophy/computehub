@@ -84,7 +84,9 @@ def main():
         for line in open(a.out, encoding="utf-8"):
             if line.strip():
                 x = json.loads(line)
-                if x.get("gen") == want.get(x["task"]):
+                # Only answers to these prompts, made the same way: an old line with no "gen" for
+                # a task they lack (want.get gives None too) would otherwise be kept forever.
+                if x["task"] in want and x.get("gen") == want[x["task"]]:
                     kept.append(line.rstrip("\n"))
                     have[x["task"]] = have.get(x["task"], 0) + 1
     # A task short of its k is answered again whole: its old lines go.
