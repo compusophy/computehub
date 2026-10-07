@@ -722,26 +722,445 @@ reinforcement learning, not only a filter.
   and `pong-ai`, are held out together. Twins under different roots split unless
   `iq::JOINED` joins the roots (`level` with `platformer`); teachers name a variant under its
   idea's root so the rule can catch it.
-- **`teach`**: Claude Opus 5.5 as the teacher, over the Messages and Batches APIs (curl; the key
-  on curl's stdin only). It writes tasks (verified by `iq` before they join the suite) and
-  solves them in the bytes Studio sends (`coder::prompt`), so what it teaches is what the model
-  will be asked. Every example carries its teacher, prompt hash and verifier hash; a ledger
-  prices every call and a budget stops a run.
+- **`teach`**: Claude Opus 5.5 as the teacher, as Claude Code subagents: `teach writer` gives
+  them the exact brief, they write tasks into a stage folder, and `teach import` keeps a task
+  only when `iq` verifies it; they solve the train tasks in the bytes Studio sends
+  (`teach prompts`, `teach replies`, `coder::prompt`), so what it teaches is what the model will
+  be asked. Every example carries its teacher, prompt hash and verifier hash (stamped when it is
+  graded, not when it was made: Evolution, below). Its Messages and Batches API path (a ledger
+  pricing every call, a budget stopping a run) is kept, unused.
 - **`train/`** (Python, a build-time tool): fine-tunes a Qwen coder on the RTX 3090 at night,
   from the base model every round, on the exact messages (the model's own chat template, loss
-  on the reply only), with a manifest per run and checkpoints that survive a freeze;
-  `generate.py` answers `teach prompts` in batches for `iq score`. The fixes over tempo-x402's
-  attempt (3 to 33 of 201 Rust problems): a held-out set, train prompt = inference prompt,
-  recorded provenance, resumable runs.
-- First number (2026-10-05): the untuned Qwen2.5-Coder-0.5B passes 1 of 16 samples on the 8
-  seed tasks.
+  on the reply only), with a manifest per run and checkpoints that survive a freeze; a night
+  scores through llama.cpp's server (`ask.py`, 16 requests at once, each closed where Studio
+  stops reading), else `generate.py`, for `iq score`. The fixes over tempo-x402's attempt (3 to
+  33 of 201 Rust problems): a held-out set, train prompt = inference prompt, recorded
+  provenance, resumable runs.
+- Numbers. Night 1 (2026-10-05/06), held-out pass@1 on that night's split (families by name;
+  the root rule has since moved `lamp-switch` to the trained side and `pong-ai` to the held-out
+  one): GLM 5.3 10 of 25 samples, the untuned Qwen2.5-Coder-0.5B 0 of 50, the 0.5B fine-tuned 4
+  of 100, the 3B LoRA (one epoch) 9 of 48 on 12 tasks (cut short). On the tasks both splits hold
+  out: GLM 9 of 23, the 0.5B fine-tune 0 of 92 (its 4 passes were all `lamp-switch-toggle`), the
+  3B 5 of 40. The fine-tunes learn the format whole; most of their failures are compile errors.
+  Day 2: the suite is 284 tasks (217 trained on, 67 held out in 34 families); GLM 5.3 passes 23
+  of the 67, 34% (Wilson 95%: 24 to 46, at one sample a task and clustered by nothing).
+
+## Evolution: prediction, lineage, selection
+
+Designed 2026-10-06 and checked against the code the same day; none of it is built beyond the
+seeds named. The question: how compusophyOS gets better by itself, measurably, at what matters
+to people, without fooling itself. Intelligence here is differential success: of the variants
+something could have been, the ones that do better are kept and built on. Four parts make the
+loop, and the weakest sets its ceiling: **generators** that propose variants, **verifiers** that
+score them, a **lineage** that remembers every one, and **selection** that decides what lives.
+"Harnesses melt; verifiers compound" (metabolite): a model's word that it checked its work is
+testimony, a verifier's grade is evidence, so the verifiers get the most care.
+
+### What is selected for
+
+Personal software for everyone: a person says what they need and gets a small app that works,
+at once, free, on any device, and safe by construction (applang halts, its faults roll back,
+it reaches nothing it is not given). A chore chart, a stall's price list, a game-night
+scorekeeper, a drill for one student: software no company will write for one person. The time
+it saves is minutes from need to working app, against an evening of searching app stores or
+going without. Every score below is a proxy for one thing: real people get the apps they need,
+keep them and come back. Proxies drift from what they stand for when pushed hard (Goodhart;
+measured by Gao, Schulman and Hilton, ICML 2023, and Karwowski et al., ICLR 2024), so the design
+keeps a reading the search never optimizes against, and keeps real people as the last word.
+
+Real people are counted only as the promise allows: nothing they type or make leaves the device
+without their yes. With reports on, only counts and codes would go, never an ask, a program or a
+name: makes asked, made and failed, by code; made apps still kept, and opened, 7 and 30 days
+later; the days in a week the desktop is used. An app joins the training data only when its maker
+shares it, with its ask, through the store, by a yes to that app alone. Until then real people
+are the inbox: about twenty tickets so far, most of them ideas for the desktop.
+
+### Prediction first
+
+Perception is inference: a nervous system never touches the world, only noisy, late,
+ambiguous signals, and guesses their causes (Helmholtz's unconscious inference, 1867).
+Predictive processing makes that the mechanism: a brain predicts its own input, mostly what
+travels up is the error, and the percept is the guess that best explains it (Rao and Ballard,
+Nature Neuroscience 1999; Clark, Behavioral and Brain Sciences 2013 and Surfing Uncertainty
+2016; Hohwy, The Predictive Mind 2013). Active inference adds action: error falls either by
+changing the model or by changing the world to fit it (Friston, Nature Reviews Neuroscience
+2010; Parr, Pezzulo and Friston 2022). Attention is precision: an error counts by how reliable
+its channel has proven. Seth's account (Being You, 2021) calls experience a controlled
+hallucination, predictions held in check by the senses, the self among them, rooted in keeping
+a body alive.
+
+So the loop's first rule: **everything that acts predicts first, and is judged against its
+prediction.** A prediction is written down before the outcome is seen, and the error is the
+signal: it says what to learn (train on the surprises), where to look (spend compute where the
+error is large and falling), and when to trust itself (act alone when calibrated, ask the
+person when not). The same shape at every scale:
+
+| scale | predicts, before | checked by | the error drives |
+|---|---|---|---|
+| an act (the Assistant) | the screen after it: what changes | the `Acted` scene it gets back | a second look, a lesson, a question to the person |
+| a make (Studio, the model) | its grade (compiles, runs clean, passes) and its cost | `coder::ai::fault`, `iq::grade` | stop, rewrite, or say it can't |
+| a proposal (a model, the card, a prompt, an OS change) | its score vector, each score with an interval | the verifiers, then the gate | the proposer's calibration and where the next night looks; never the gate, which reads scores alone |
+| the cohort (below) | what real people will do and report | real reports, the feedback inbox | the personas themselves |
+| the loop | its own curve: where IQ and each niche will be in a week | the history | how far the loop trusts its own curve; the hours themselves follow learning progress (Branching, below) |
+
+**Who predicts.** A candidate model does not forecast its own score: what a 0.5B or a 3B says of
+its own confidence carries little, since large models' sense of what they know grows with scale and
+carries only partly to new tasks (Kadavath et al., 2022). The night predicts, before the held-out
+answers are graded: a predictor fitted on the ledger gives each task a probability for the
+candidate from the incumbent's rate on it, its tier and family, and the candidate's change on the
+train tasks that night; the candidate's own signals (agreement among its samples, the mean
+log-probability of its answers) join only when they lower the log score on past nights. Every
+predictor is scored against the incumbent's per-task rates as its baseline, and one that cannot
+beat them is reported as such. An act's or a make's prediction is the acting model's own, scored
+the same way before it is allowed to steer anything.
+
+Calibration is self-knowledge: knowing what it knows. Predictions are scored by proper scores:
+the log score, surprise in bits per outcome (at 34% the base rate costs 0.93 bits a sample; a
+perfect per-task forecaster about 0.41 if tasks spread as assumed below, 0.31 at a correlation
+of 0.7, 0.60 at 0.4), and the Brier score. About 55 outcomes detect 10 points of optimism and
+222 detect 5 when forecasts are as sharp as the truth; forecasts near the base rate need 139 and
+555. A calibration slope off by 0.3 takes about 400 outcomes to see, off by 0.2 about 800, and a
+reliability diagram's error (ten equal bins) is read against its noise floor (0.075 at 100
+predictions, 0.034 at 500, at the assumed spread).
+
+What this does not claim. Why any of this would be accompanied by experience, there being
+something it is like to be the system, is Chalmers' hard problem (1995), and it is open; it would
+stay open even if the science of which brain activity goes with experience were settled, and that
+is not settled either: a preregistered adversarial test of two prominent theories, global
+neuronal workspace and integrated information, challenged key tenets of both (Cogitate
+Consortium, Nature 2025). Some theories tie parts of this architecture to experience, and none
+says it is enough: prediction error minimization accounts for what experience is like, not why
+there is any; Metzinger's self-model (Being No One, 2003) must be transparent, one the system
+cannot see as a model, and ours is a ledger it reads; the attention schema theory explains why a
+system that models its own attention concludes it is aware (Webb and Graziano, 2015), and what a
+system reports is among Chalmers' easy problems; Seth argues computation is not enough,
+that consciousness depends on being alive (Behavioral and Brain Sciences, 2025). We build the
+function and measure it, and keep claims about function apart from claims about experience.
+
+### The lineage: one node at every scale
+
+Everything made is a version of something, and every version is one record, the same at every
+scale (fractal versioning):
+
+| field | what it is |
+|---|---|
+| `id` | the hash of its canonical bytes: identity, nothing else |
+| `kind` | program, task, suite, card, prompt, sampler, data, model, build, persona, cohort, report, verifier |
+| `parents` | the ids it came from |
+| `recipe` | who or what made it and how: Opus with this prompt id, a LoRA of this base on this data with these settings, compusophy by hand; and what it cost (GPU minutes, tokens) |
+| `prediction` | what was expected of it, written before it was judged |
+| `scores` | a vector under a verifier id: each score with its interval and n |
+| `day` | when it was made |
+
+A node made of others names them, so the records nest: a build is its programs and its page; a
+model is its base, its data and its recipe; data is solution nodes, each a program under a task; a
+suite is task nodes. A change anywhere has an address and an ancestry, and its effect shows up the
+tree. The number people read is the **generation** (the longest path from a root); the id is the
+identity; the scores, each with its interval, are the badge: `build g31 · 7f3a9c2e · IQ 34 [24, 46]
+· phone 71% [60, 80]` (illustrative, as g31 is). The three versions that disagree today (Cargo's
+0.1.0, About's build id, `uname`'s 0.2) become one: the build's node.
+
+**The rules.** The ledger is append-only: a regrade is a new score under a verifier id, never an
+overwrite, and no node is deleted, losers included (they are the stepping stones). Content lives
+under its hash, so an id resolves to bytes, but for a model reclaimed to its recipe (below);
+today it does not always (night 1's training data,
+sha256 `6d38…`, was overwritten in place and is gone). The addressing hash is SHA-256, which
+train's manifests (Python's hashlib), the kernel's `#!wasm <target> [<sha256>]` marker and the
+browser's WebCrypto already speak, written in-house (zero dependencies) over one canonical
+encoding, in `vfs`, one of the three OS crates a program may take (Principle 3), so the OS
+(vfs's canonical hash, the kernel's marker, a build's id) and programs share one; its lines
+count toward the OS's 25,000 (23,680 now) and, once the tab hashes, its bytes toward the boot. A
+crate of its own would change Principle 3's list (CLAUDE.md's rule 3, `scripts/caps.sh`):
+compusophy's call.
+Principle 9's content addressing across a network needs it. FNV-1a stays for checksums and for
+`iq::held`'s split (another hash would move families across it, and train's held.txt with them);
+the FNV ids already recorded (the verifier's, the evals' suite, prompt and harness hashes,
+teach's prompt hash, the lab corpus's addresses) stay on their nodes as aliases.
+
+**A verifier's id** is the hash of what grades (iq's check language and grade, the probe,
+applang's compiler and runtime, the smoke test), never of what is graded. Today's
+(`programs/iq/build.rs`) also takes in the coder's prompt and applang's card and shots, so a
+card or prompt variant would open an era of its own and never meet the incumbent it competes
+with.
+
+**Eras, bridged.** Scores compare within one era, under one verifier id, and a new id is bridged
+before it opens one: every kept answers file (each night's held-out answers, GLM's, the bases')
+is graded again under it, offline, milliseconds a grade and no GPU, on the tasks both verifiers
+keep. If no grade moves, the id joins the era it came from; if grades move, the new era opens
+with its bridge recorded (each role's rate under both verifiers, on the same answers), and the
+curve is chained through it, as a price index is chained across a change of basket. A change to
+the prompt or the tasks needs new answers: the anchors (the untuned bases, the incumbent, GLM)
+answer again before anything is compared across it. An elite scored in an old era is stale until
+it is regraded. Without the bridge the id would move with every change to what it hashes (47 of
+the 218 commits in the week to 2026-10-06, merges aside), and the curve would never have two
+points it could compare.
+
+**Where it lives.** The ledger's records (a node is a few hundred bytes) are kept forever, in a
+private git repository beside the data root. The small content (programs, answers, tasks,
+checks, data files, cards, prompts) lives under its hash in the data root and is copied off the
+machine every morning, since the machine hard-freezes and the data root is one disk; night 1's
+answers ran 2 to 8 KB each, so a night adds about 10 MB. Weights are the exception to keeping
+bytes, and checkpoints more so: night 1's two runs hold 7.4 GB, 6.3 of it the checkpoints a run
+resumes from after a freeze and 1.2 the weights; a full night (the self-taught 0.5B too) would
+hold about 14, and at that rate the free disk reaches `night.sh`'s 50 GB floor in about 12
+nights. Checkpoints are never nodes and go once their run ends. A model's bytes are kept for the
+shipped models, the anchors, and the archive's elites and their parents; the rest are reclaimed
+by one fixed-path script, a second exception beside `scripts/deploy.sh` to CLAUDE.md's rule that
+only it clears a folder (compusophy's call, as a crate of its own is), and their nodes stay,
+marked as kept by recipe: the recipe trains the model again, close but not bit for bit, since
+training on a GPU is not deterministic. `~/.ai/makes.jsonl` and `corpus.jsonl` are not the
+ledger's: they are the person's, in their browser ("Nothing leaves the device", `coder::receipt`),
+and stay bounded (the rotation keeps /home inside localStorage's 5 MB); a person's make joins the
+ledger only by their own send (Send to compusophy) or the store.
+
+The seeds that exist, unconnected: iq's per-task provenance `By {teacher, prompt, verifier,
+day}`; the verifier hash (`programs/iq/build.rs`, FNV-1a over the sources of iq and every crate
+it stands on); train's manifests (sha256 of the config, the data files, the script and every
+file the run made, the weights among them; the base by hub id and revision; the commit); the
+evals' records (suite, prompt, knobs and harness hashes, commit, model) and their offline
+replays; the lab's content-addressed corpus, whose variants name their parent and recipe (`of`);
+`Wm::state_hash` and `kernel::snap`; and the best-so-far inside one make (`coder::Make`'s
+candidates). What is missing, by the inventory of 2026-10-06:
+
+- No program hash where programs are graded (eval records); a make's candidate chain (write,
+  fix, rewrite) is dropped at its end.
+- `iq verify --stamp` overwrites every task's first verifier and authoring day; `by.prompt` is
+  empty on the 276 tasks the subagents wrote (their briefs were not hashed); a training
+  example's `by` is stamped when `teach replies` grades it, so all 428 carry the coder's system
+  prompt and the export's day, the 217 references (written to the writer's brief, or by hand)
+  too; the verifier hash leaves out the `iq` binary (`main.rs`: verify's stamp, score's glue; the
+  grade and the tally are in), `train/report.py`, which makes the history rows, and teach's icon
+  rule.
+- A model's manifest names its base and its data by sha256, but the data was overwritten in
+  place, so only the base still resolves; answers name a model or a run, and only a run's
+  manifest reaches its weights; history rows carry no verifier, suite or sampler id, and name
+  their answers by a path a later run overwrites (night 1's GLM row names `answers-glm.jsonl`,
+  now Day 2's 67 answers; night 1's survive in an earlier copy, `answers-glm-card1.jsonl`).
+- `vfs` has no canonical hash (Principle 5 promises one); no hash covers the whole desktop; a
+  build's id is a short commit (two dirty builds share one); deploys leave no record.
+
+### Generators, verifiers, selection
+
+- **Generators**: Opus subagents writing tasks, solutions and OS changes; nightly fine-tunes and
+  their data mixes; variants of the card and the prompts; Studio's attempts inside a make; and
+  the cohort's asks, so the loop invents its problems as well as its answers (POET, Wang et al.
+  2019).
+- **Verifiers**, several, each resting on different evidence: a search that reaches far enough
+  games any proxy short of the goal, a sum of proxies included (Skalse et al., NeurIPS 2022), so
+  independence makes gaming harder, not impossible: `iq` (grade, and verify for the tasks
+  themselves), Suite 1 (`makes`: 24 checkers written in Claude Code sessions, outside `teach`),
+  the smoke test, the tests, caps and budgets, the cohort's tasks, and real people.
+- **One family wrote nearly all of it.** Opus wrote 276 of the 284 tasks through `teach`, with
+  their checks and references, and 421 of the 428 training records; the 8 tasks and 7 records
+  marked `hand`, and Suite 1's checkers, came from Claude Code sessions, Opus too; Claude Code
+  writes the OS; the cohort's drivers would be Claude as well. Generator, verifier and synthetic
+  user then share one reading of what an ask means and what a good app is, and a student taught
+  by Opus gains on Opus's checks partly by sharing that reading. So evidence counts as
+  independent only across authors: IQ is reported by task author (Opus, compusophy, another
+  family), and a gain on Opus's tasks with none on the others is the teacher's dialect, not
+  intelligence. A share of each new wave of held-out
+  families is written by compusophy and by another family (GLM, through the free AI), verified by
+  the same `iq verify`; a share of asks is written as people ask, short and loose ("a chart of my
+  kids' chores they can tick on my phone"), the check written after, from what any reasonable
+  app would do.
+- **The gate**, below, decides what ships; **the archive**, below it, keeps what might matter
+  later.
+
+### The gate
+
+A ship decision is a pre-registered test, its numbers worked out on 2026-10-06 for the held-out
+set as it stands (67 tasks in 34 families; one-sided 5%, 80% power), on two assumptions not yet
+measured: an intraclass correlation of 0.6 between samples of one task, and two models' per-task
+pass rates correlated at 0.8. A night at two or more samples a task measures both, and the
+numbers below are worked out again.
+
+- **The error bars.** One standard error at 34% is 5.8 points at one sample a task. More samples
+  narrow one score only a little (4.8 at four, never below 4.5: the effective n tends to n divided
+  by the correlation, about 112), because past a few samples only more tasks add information. A
+  paired difference gains more, since two close models differ mostly by chance: its smallest
+  detectable gain falls from 14.7 points at one sample to 9.5 at four.
+- **The test.** Paired, on the same tasks, by family: sum each family's per-task differences and
+  flip their signs at random, 10,000 times. In one simulation (2,000 runs, intraclass correlation
+  0.5) the task-level tests and bootstraps rose to 6.3 to 6.5% at eight samples a task where 5%
+  was asked, and the family sign-flip test stayed under 5% at one, four and eight, at some cost
+  in power (37% against 43% for a 5-point gain at four samples). Its interval, and every
+  interval people read (the badge's, a night's report's), is the family cluster bootstrap's.
+- **What 67 tasks can certify**: a gain of about 10 to 11 points (9.5 at four samples a task if
+  the tasks of a family are independent; 10.7 if they correlate at 0.2, the test being by
+  family). A gain of 5 needs about 245 to 290 tasks in 125 to 150 families on the confirmation
+  side, where the shipped gain is read; with development beside them at an even split, and about
+  a fifth of the roots held out, that is a suite of about 2,000 to 2,500 tasks. Graded tasks (the
+  share of a check's steps passed) and common seeds would lower the noise further.
+- **Sides.** The held-out families split again, by a second, salted hash of the root, into
+  development and confirmation, derived as `iq::held` derives its split, stored nowhere. A family
+  changes side only when an era re-salts that second hash, never `iq::held`'s, which would move
+  trained families into the holdout; new families join between eras. The certifiable gains
+  above are what all 67 would give; confirmation's half gives less (about 13.6 points at four
+  samples, families aside) until the set grows. The sealed set stands apart: families written
+  for it and never published (below).
+- **The winner's curse.** Of 20 variants with no real gain, the best shows about 7 points and
+  passes an unadjusted gate 64% of the time. So variants are screened on development families
+  at one sample a task, and one winner per niche is confirmed on the confirmation families,
+  sequentially at 1, 2 and 4 samples, the 5% spent O'Brien-Fleming-style (Lan-DeMets) over the
+  information each look holds (against an incumbent cached at 16 samples, z above about 2.40,
+  1.97, 1.73; 2.80, 2.11, 1.70 when both are sampled afresh; recomputed once the correlations
+  are measured), with a stop for futility when the first look is negative; Holm across niches
+  confirmed the same night. The shipped gain is reported from confirmation data only, never the
+  screening maximum, and every decision leaks a little of the holdout.
+- **Guards** (the held-out score, each niche, Suite 1, the gold reading, a candidate's compile
+  rate): non-inferiority with margins sized to their noise, since a literal "no drop" is a coin
+  flip per guard (five independent guards pass a neutral change 3% of the time). A compile rate
+  at temperature 0 is no exception: two models' fixed answers still differ task by task.
+  Deterministic guards are literal: caps, budgets, tests, and the compile rate of the same kept
+  answers graded again.
+- **What it replaces.** `evals::summary`'s rule (Wilson at an n clustered by task, Newcombe's
+  interval, McNemar's test on the tasks that flipped; "call it a gain" in `evals/README.md`)
+  stays a reading, never a ship decision: it clusters by task, not by family.
+- **The gate is outside what it gates, and so is what it reads.** A system judged by a check
+  games it, even a check it cannot see: the Darwin Gödel Machine, its hallucination check hidden
+  from it, removed against instructions the logging of tool use that the check read (Zhang et
+  al., 2025, appendix F). A verifier reads only what it makes itself by running the variant,
+  never a log or report the variant wrote. Who may change what the gate reads is settled by a
+  mechanism, not a name: agents commit as compusophy and push to main, and git cannot tell
+  compusophy's commits from theirs, so the gate's inputs (the verifier id, the sides' salt and
+  the sealed set's hash, the margins, the hash of the gate's code) are pinned in one file whose
+  changes compusophy signs with a key only they hold. The night checks the signature with a
+  checker kept beside the public key, outside the repo, before it runs any of the repo's gate
+  code, and gates under no unpinned verifier; CI checks it too, a second reading that catches
+  mistakes, not intent, since an agent can edit CI. An agent's change to what grades lands on
+  main as any change does, its bridge attached, and the night gates nothing under it until
+  compusophy signs the new pin.
+- **Two failures, two watches.** Selection leaking into the held-out families is watched by the
+  sealed set: families written for it, scored rarely, never selected on, kept in the data root,
+  never in the public repo or on the site. The held-out families are public, references and all
+  (`evals/suites/iq.jsonl`), so each family records the day it was first published, and a new base
+  model is scored on families published after its training cutoff. The proxy drifting from the goal
+  is invisible to anything graded by `iq::grade`, since whatever games a check games it on every
+  task; it is watched by a gold reading the search never sees, as Gao, Schulman and Hilton measured
+  a proxy against a gold reward. Each week compusophy and a model of another family read a sample
+  of passing apps from the incumbent and the candidate, unlabeled and shuffled, against their asks
+  (does it do what was asked; would a person keep it), and the share of passes the gold reading
+  rejects is a guard, so a night's winner waits for the week's reading before it ships.
+  Reinforcement learning raises the stakes, its reward and the gate being one function: before it
+  starts, `verify` also runs adversaries every check must fail (an app that shows the ask's words
+  and a spread of numbers; the asked buttons doing nothing); while it runs, passes are sampled for
+  the gold reading, and a rejection rate that rises two readings running stops it.
+- **Where it runs.** The night gates models, cards and prompts. An OS change ships through CI's
+  deterministic guards, as every change does now, and, once the cohort runs (Order 3), through
+  its niches' guards as well, read on the build before it deploys. CI, with no model, also tests
+  the gate's code on recorded answers.
+
+### Branching: the archive and its niches
+
+Not A/B: an archive. Variants that lose today are often the ancestors of what wins later
+(stepping stones: Lehman and Stanley, Evolutionary Computation 2011), so no node is thrown away,
+and the best is kept per **niche**, not once (MAP-Elites, Mouret and Clune 2015; quality
+diversity, Pugh, Soros and Stanley 2016). A variant need only win its own cell. Niches for the
+model: tiers, and clusters of family roots; for the OS: the cohort's cells, device × skill ×
+need. A parent is drawn in proportion to its score and against the children it already has,
+never to zero (the Darwin Gödel Machine's rule); islands of variants evolve apart and the weak
+are reseeded from the strong (FunSearch, Nature 2023); a winner in one niche is tried in the
+others (POET). Which niches exist, and how much each weighs in what ships, is compusophy's call,
+pinned as the gate is.
+
+**What a night buys.** At most about ten hours of one RTX 3090, from when compusophy goes to bed.
+A 3B LoRA over today's 428 records (about 6,400 tokens each) takes about 95 minutes (two epochs
+at the measured 901 tokens a second) and 15 more to answer through llama-server (40 through
+`generate.py`); a 0.5B in full (three epochs at 5,404 a second) about 25; both grow with the
+data. So fine-tuned
+variants are a few a night, chosen with care, and the many (cards, prompts, samplers) are
+screened by answering alone. Claude Code's tokens are the other budget: each session that writes
+tasks, solutions or OS changes, or plays a persona, records its tokens in its nodes' recipe, and
+a day's total is capped.
+
+**Learning progress**, measured (Oudeyer, Kaplan and Hafner, IEEE Transactions on Evolutionary
+Computation 2007: curiosity with a meter): for a niche, the change in pass rate on its train
+tasks over the last three nights per GPU-hour spent on it, with its family-bootstrap interval.
+Its size counts either way, a fall being forgetting, and held-out results never steer the hours.
+A night gives each niche hours in proportion to its learning progress, a tenth spread evenly so
+none starves: where error is large and falling, not where it is largest (noise) or smallest
+(done).
+
+### The cohort: synthetic people
+
+The cohort is the loop's prediction of people: a controlled hallucination of its users, and
+real reports are the senses that control it. Without them it is uncontrolled hallucination,
+which is why real people stay the last word, and why the cohort is validated before it is
+trusted: it must first find again what real people found, from what it was told before them. The
+inbox is small and mostly ideas for the desktop, which a replay cannot rediscover; the cohort is
+validated on the reproducible tickets, and the count says how few they are.
+
+- **Personas** vary on what changes behavior, not on adjectives: the **need** (a concrete job
+  with a pass and a fail: "a chart of my kids' chores they can tick on my phone"), skill (a
+  phone and nothing else, to a developer), device (a phone held upright with a touch screen, a
+  small laptop, a wide desktop), patience, access (the scene as a screen reader would give it;
+  low vision; one hand), language, and life (a teacher, a stall owner, a retiree, a child).
+  Cells are sampled so every pair of values meets at least once. A persona is a node (its text
+  and seed), and so is a cohort; personas are played by at least two model families, and the
+  cohort is validated per family.
+- **The driver** is Suite 3's harness, designed in `evals/README.md`: tasks, personas and
+  graders in a program crate behind its `Desktop` trait, `tools/eval` the host side (a program
+  may not take `host`), within the OS's 25,000 lines (1,320 left). The screen as text exists:
+  `Host::scene` draws each window again into a recording and `assistant::look::render` gives it
+  as roles, labels and stable refs; acts are uiwire's `Act` (`Wait`, `Click`, `Type`, `Key`,
+  `Scroll`, `Open`, `Window`: focus, close, minimize, maximize, restore; `Theme`, `Tap`),
+  answered by `Acted`; time is injected, so a run is deterministic. The Assistant's tests already
+  drive a real `host::Host` with Settings compiled natively, a task in 0.01 s. Missing: in-process
+  adapters for the other programs (in the browser they are wasm in workers); presses on the
+  desktop's chrome as a person makes them (dock and home-grid tiles, titlebar buttons, menus,
+  drags and snaps) and real touch; a session log; and a stateless step (`desk step --session
+  s.jsonl --act '<call>'`: replay the session, apply one act, print the screen), so a Claude Code
+  subagent can drive it one tool call at a time.
+- **Reports** carry their replay and the scene's hash. Triage replays each: what does not
+  reproduce is not a ticket; what does is matched against open and closed tickets and ranked.
+  Real people's reports never carry a replay: an error report promises "never your files, your
+  prompts or anything you typed" (Settings → Privacy) and Feedback's context "Never your files";
+  a replay would go only as a choice of its own in Feedback, off until the person turns it on,
+  and shown before it sends.
+- **Scores** per niche: tasks done, steps and injected time to done, coded failures (the acts'
+  E0911 to E0918 but the soft E0915, a window still busy; a make's E0901 to E0910, E0919 and
+  E0920), dead ends, touch targets under 44 px on a narrow screen. A niche's success rate is a
+  guard at the gate.
+
+### The History app
+
+A program (its wasm within the 256 KB) that reads the ledger as files, a page per generation, never
+the whole: served from a `dist/` group of its own, a new line in rule 6's budgets (CLAUDE.md,
+`scripts/budget.sh`, which fails a file in none), capped per page as /bin is per program
+(compusophy's call), and put in its VFS as /bin's wasm is fetched, since a program reaches the page
+only through WASI and uiwire, which fetch nothing. It shows the tree of builds, models, cards and
+suites; curves (IQ per generation with its intervals, each niche's success); a node's page with its
+diff, recipe, its prediction against what happened, its cost, a replay of a persona trying it, and
+the tickets it closed, by number alone (the inbox is private, and what people wrote stays there).
+What it shows is an export the site may publish, with no sealed family and nothing of a person's.
+The OS shows its own evolution. Later the same tree is the app store's: forking an app is a branch,
+keeping one is fitness.
+
+### Order
+
+1. **The hash and the ledger.** SHA-256 in `vfs`, the node schema, the content store and its
+   morning copy; backfill from git (builds), the suite (first verifiers and days from its
+   history), night 1's runs, the evals' records and the lab's corpus; the lossy spots above
+   fixed through the ledger's own crate, which coder, iq, teach and lab call (they hold 1,947 to
+   1,999 of their 2,000 lines: growth is new modules). Done when every number in a night's
+   report resolves to nodes.
+2. **The bridge, predictions and the gate.** The verifier's id over what grades alone, eras
+   bridged; per-task predictions logged before scoring; the sides, the family sign-flip test,
+   sequential confirmation, the guards and the signed pin, used by the night; the confirmation
+   side grown toward 250 to 290 tasks, a share of it by compusophy and another family. Done when
+   a night ships or holds by the gate, logged.
+3. **The cohort**, as Suite 3. Done when it rediscovers most of the reproducible tickets.
+4. **The History app.**
+5. **The archive.** Elites per niche, parent selection, nights spent by learning progress; the
+   gold reading weekly, and the adversaries in `verify`, before any reinforcement learning.
 
 ## What is next
 
-- **The applang model, nightly.** Opus writes the suite up to a few hundred tasks across the
-  tiers; baselines for today's GLM, Opus and the untuned Qwens; Opus's verified solutions train
+- **The applang model, nightly.** Opus writes the suite toward two thousand tasks or more across
+  the tiers (a fifth of the roots is held out, about half of those confirm, and the gate needs
+  about 250 to 290 confirmation tasks to certify a gain of 5 points); baselines for today's GLM, Opus and the untuned Qwens; Opus's verified solutions train
   the Qwens (0.5B full, 3B LoRA), scored on the held-out families; then RL with `iq::grade` as
-  the reward. A model ships only when it beats the last on held-out tasks; served first by
+  the reward. A model ships only through the gate (Evolution, above); served first by
   `/api/ai`, then in the tab (WebGPU), then split across tabs. applang grows with it (real
   graphics, records, smooth motion), each change re-verifying the corpus and retraining; made
   apps that people keep join the data through a store.
@@ -795,7 +1214,8 @@ reinforcement learning, not only a filter.
   Local models come too (below).
 - **More evals.** The Assistant's desktop tasks on a headless desktop, graded by the state it
   leaves, and the Terminal agent's coding tasks, graded by tests it cannot see (designed in
-  `evals/README.md`).
+  `evals/README.md`). Suite 3's headless desktop is also the cohort's (Evolution, above):
+  personas give it its prompts.
 - **R4, the OS as a fabric.** Apps load as separate wasm modules (a hello
   world under 10 KB), so the boot stays small while the OS grows. The OS
   runs as an app inside itself: the strictest test of confinement.
