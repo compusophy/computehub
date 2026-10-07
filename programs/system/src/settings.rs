@@ -1,5 +1,5 @@
-//! Settings: the themes, the living grain and the profile's face, the AI model, what gets
-//! reported, and a reset.
+//! Settings: the themes, the living grain and the profile's face, the AI model, and privacy:
+//! what gets reported, and a reset.
 
 use std::mem;
 
@@ -9,7 +9,7 @@ use uiwire::{Event, Frame, Node, Request, Style, Variant};
 use crate::{Disk, View, space, text};
 
 /// The pages, one a line: Settings opens on the first.
-const PAGES: &str = "Appearance\nAI\nPrivacy\nReset";
+const PAGES: &str = "Appearance\nAI\nPrivacy";
 /// Widget ids: page `i` is `NAV + i`, theme `i` `THEME + i`, model `i` `MODEL + i`; the reports
 /// switch, the feedback link and the grain's switch; the reset's word and its button; face `i`
 /// `FACE + i`.
@@ -56,10 +56,10 @@ const ROW_MAX: u16 = 440;
 
 /// Settings: Appearance (the desktop's themes as cards, a click applying one; the living grain's
 /// switch; then the faces, a click picking one, which the desktop keeps), AI (a note on the free
-/// AI, the models as cards; a click picks one, which the desktop stores), Privacy (the automatic
-/// reports switch, what a report holds, where files stay or that they could not be kept, a link
-/// to Feedback) and Reset (what it erases; once `reset` is typed, Erase or Enter asks the
-/// desktop to, [`Request::Reset`]), as the desktop's pages ([`Node::Pages`]). A profile's name
+/// AI, the models as cards; a click picks one, which the desktop stores) and Privacy (the
+/// automatic reports switch, what a report holds, where files stay or that they could not be
+/// kept, a link to Feedback; then the reset: what it erases, and once `reset` is typed, Erase or
+/// Enter asks the desktop to, [`Request::Reset`]), as the desktop's pages ([`Node::Pages`]). A profile's name
 /// is the welcome's to change, and signing out the desktop's menu's.
 #[derive(Debug)]
 pub struct Settings {
@@ -163,7 +163,7 @@ impl Settings {
         } else if id.wrapping_sub(FACE) < u32::from(FACES) {
             self.face = (id - FACE) as u8;
             self.requests.push(pref("face", &self.face.to_string()));
-        } else if id.wrapping_sub(NAV) < 4 {
+        } else if id.wrapping_sub(NAV) < 3 {
             self.page = (id - NAV) as u8;
         }
     }
@@ -205,31 +205,33 @@ impl Settings {
                     Node::Pane { id: 0, w: ROW_MAX, children: models.collect() },
                 ]);
             }
-            3 => {
+            _ => {
                 let (value, placeholder) = (self.word.clone(), SAY.into());
                 let variant = if self.armed() { Variant::Danger } else { Variant::Normal };
                 nodes.extend([
-                    text(Style::Heading, "Reset"),
-                    text(Style::Body, RESET),
+                    text(Style::Heading, "Privacy"),
+                    switch(REPORTS, self.on[0], REPORT),
+                    text(Style::Small, HOLDS),
+                    text(Style::Small, TYPED),
+                    if self.on[2] {
+                        text(Style::Small, FILES)
+                    } else {
+                        text(Style::Warning, UNKEPT)
+                    },
                     space(0),
+                    row(Node::Button {
+                        id: FEEDBACK,
+                        variant: Variant::Link,
+                        label: "Send feedback".into(),
+                    }),
+                    space(0),
+                    text(Style::Subheading, "Reset"),
+                    text(Style::Body, RESET),
                     text(Style::Small, TYPE),
                     row(Node::Input { id: WORD, value, placeholder }),
                     row(Node::Button { id: ERASE, variant, label: "Erase everything".into() }),
                 ]);
             }
-            _ => nodes.extend([
-                text(Style::Heading, "Privacy"),
-                switch(REPORTS, self.on[0], REPORT),
-                text(Style::Small, HOLDS),
-                text(Style::Small, TYPED),
-                if self.on[2] { text(Style::Small, FILES) } else { text(Style::Warning, UNKEPT) },
-                space(0),
-                row(Node::Button {
-                    id: FEEDBACK,
-                    variant: Variant::Link,
-                    label: "Send feedback".into(),
-                }),
-            ]),
         }
         nodes
     }

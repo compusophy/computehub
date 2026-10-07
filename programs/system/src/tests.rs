@@ -767,7 +767,7 @@ fn settings_ends_its_appearance_with_the_faces_a_click_picks() {
         Node::Pages { on: 0, labels, .. } => labels.as_str(),
         _ => "",
     };
-    assert!(pages == "Appearance\nAI\nPrivacy\nReset" && faces(&f) == Some(0));
+    assert!(pages == "Appearance\nAI\nPrivacy" && faces(&f) == Some(0));
     let at = |want: fn(&Node) -> bool| f.nodes.iter().position(want);
     let themes = at(|n| matches!(n, Node::Themes { .. }));
     let face = at(|n| matches!(n, Node::Faces { .. }));
@@ -788,7 +788,8 @@ fn settings_ends_its_appearance_with_the_faces_a_click_picks() {
 fn settings_resets_only_once_the_word_is_typed() {
     use crate::settings::{ERASE, NAV, SAY, WORD};
     let mut w = Win::new("/bin/settings");
-    let f = w.last(&[resize(720), Event::Click { id: NAV + 3 }]);
+    // The reset ends the Privacy page; there is no fourth.
+    let f = w.last(&[resize(720), Event::Click { id: NAV + 2 }]);
     let erase = |f: &Frame| {
         all(&f.nodes).into_iter().find_map(|n| match n {
             Node::Button { id: ERASE, variant, .. } => Some(*variant),

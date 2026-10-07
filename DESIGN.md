@@ -574,8 +574,9 @@ one. Forked crates keep their Apache-2.0 license and note their origin.
   is the first screen; **Settings** opens on Appearance (the theme, the
   grain, then the profile's face in a row of ten, each named by its dots
   for whoever reads the screen: `no dots`, `1 dot`...), then picks the AI
-  model and what is reported, and resets the device. Renaming a profile
-  is the welcome's (its menu) and signing out the desktop's menu's.
+  model, and what is reported, with the device's reset below it. Renaming
+  a profile is the welcome's (its menu) and signing out the desktop's
+  menu's.
 - **Activity**, the resource monitor. Performance: graphs of the last
   minute, a point a second (uiwire's `Chart`), of CPU (the desktop's and the
   programs' share of a core), memory, frames a second and the AI's tokens a
@@ -657,10 +658,10 @@ first frame, at about 15 ms a MiB of /home in Chrome (noted as `home <KB>
 <ms>`). `localStorage` holds about 5 MB; IndexedDB or OPFS replace it when
 homes grow past that. Preferences and the theme are kept there too.
 
-Settings → Reset erases it all: once the person types `reset`, every
-`compusophy.` key goes from `localStorage` and `sessionStorage` (each
-profile's /home, preferences and PIN, the outbox) and the page reloads to the
-welcome as a first visit. Only the person can: the host drops a reset from a
+Settings → Privacy ends with the reset, which erases it all: once the
+person types `reset`, every `compusophy.` key goes from `localStorage` and
+`sessionStorage` (each profile's /home, preferences and PIN, the outbox) and
+the page reloads to the welcome as a first visit. Only the person can: the host drops a reset from a
 window the Assistant put input into (whose Terminal's programs may not ask
 the AI either: `Cx::driven`), and the uiwire request is the OS's own
 windows' alone.
