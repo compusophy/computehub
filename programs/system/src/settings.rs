@@ -24,7 +24,7 @@ pub(crate) const ERASE: u32 = 41;
 pub(crate) const FACE: u32 = 50;
 const FACE_NOTE: &str = "How the welcome shows you, above your name.";
 /// The desktop's themes in its own order, which its theme cards' ids follow.
-pub(crate) const THEMES: [&str; 4] = ["Midnight", "Dawn", "Mono Dark", "Mono Light"];
+pub(crate) const THEMES: [&str; 4] = ["Dusk", "Dawn", "Mono Dark", "Mono Light"];
 /// The models on offer as (name, then what it is best at; the value stored), the first the
 /// default.
 pub(crate) const MODELS: [(&str, &str); 2] =

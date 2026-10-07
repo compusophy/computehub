@@ -213,7 +213,7 @@ studio  assistant  terminal  files  editor  activity  settings  feedback  about 
 $ uname -a
 compusophyOS compusophy 0.2 wasm32
 $ theme
-Midnight
+Dusk
 Dawn
 Mono Dark
 Mono Light

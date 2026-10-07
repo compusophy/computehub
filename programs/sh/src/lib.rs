@@ -21,7 +21,7 @@ use vfs::Vfs;
 pub const APPS: [&str; 10] = ["studio", "assistant", "terminal", "files", "editor",
     "activity", "settings", "feedback", "about", "welcome"];
 /// The desktop's themes, in its order.
-const THEMES: [&str; 4] = ["Midnight", "Dawn", "Mono Dark", "Mono Light"];
+const THEMES: [&str; 4] = ["Dusk", "Dawn", "Mono Dark", "Mono Light"];
 const GREETING: &str = "\x1b[1mcompusophyOS terminal\x1b[m \u{2014} type 'help'.\n";
 const KEYS: &str = "Up and Down recall history, Ctrl+C cancels the line, Ctrl+L clears the \
 screen, Ctrl+D on an empty line closes the terminal. Quotes group words: \"a b\" or 'a b'; ~ \

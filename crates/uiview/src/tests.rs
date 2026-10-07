@@ -28,7 +28,7 @@ impl Drawn {
     }
 }
 
-/// `nodes` drawn at 600 x 400 (content at the origin) in Midnight, the window focused and the
+/// `nodes` drawn at 600 x 400 (content at the origin) in Dusk, the window focused and the
 /// pointer over `hover`.
 fn draw(nodes: &[Node], texts: &mut Texts, view: &mut View, hover: Option<u32>) -> Drawn {
     draw_at(600.0, nodes, texts, view, hover)
@@ -925,7 +925,7 @@ fn pages_are_a_column_or_tabs_and_cards_ring_what_is_chosen() {
     assert!(a.x == b.x && b.y > a.y && d.hit(10).rect.x > a.x + a.w, "{a:?} {b:?}");
     let row = |d: &Drawn| [10, 13, 50, 59].map(|id| d.hit(id).rect.y);
     assert!([row(&d), row(&less)].iter().all(|[a, b, c, e]| a == b && c == e));
-    // The current theme (the first card's, Midnight's) and the chosen model wear the accent's
+    // The current theme (the first card's, Dusk's) and the chosen model wear the accent's
     // ring 3 px out; the switch and the link fill the width.
     let ring = |b: &&&Instance| b.color == t.accent && b.p0 == 2.0;
     let rings: Vec<_> = d.of(Kind::Border).iter().filter(ring).map(|b| b.rect).collect();

@@ -101,7 +101,7 @@ fn desk_with(w: f32, h: f32, prefs: Prefs) -> (Shell, Log) {
     (Shell::new(w, h, text, Vfs::new(), reg, prefs), log)
 }
 
-/// A first visit (Welcome opens) in Midnight.
+/// A first visit (Welcome opens) in Dusk, kept by its old name, midnight.
 fn desk_of(w: f32, h: f32) -> (Shell, Log) {
     desk_with(w, h, Prefs { theme: "midnight".into(), ..Prefs::default() })
 }
@@ -195,7 +195,7 @@ fn welcome_opens_on_a_first_visit_once_there_is_a_work_area() {
     let (mut s, _) = desk_of(1280.0, 800.0);
     assert_eq!(s.wm().area(), Rect::new(0, 44, 1280, 694));
     assert_eq!(s.rect(1), Some(Rect::new(300, 151, 680, 480)));
-    assert_eq!((s.names(), s.theme_name()), (vec!["welcome"], "Midnight"));
+    assert_eq!((s.names(), s.theme_name()), (vec!["welcome"], "Dusk"));
     assert_eq!(s.take_effects(), [Effect::Pref { key: "seen".into(), value: "1".into() }]);
     // The dock holds no favorites at first: only what runs.
     let dock: Vec<&str> = s.tiles.iter().map(|d| &*d.0).collect();
@@ -909,7 +909,7 @@ fn the_focused_app_gets_keys_text_and_the_pointer() {
 #[test]
 fn themes_crossfade_and_the_clock_ticks() {
     let (mut s, _) = desk();
-    for name in ["Dawn", "Mono Light", "Mono Dark", "Midnight"] {
+    for name in ["Dawn", "Mono Light", "Mono Dark", "Dusk"] {
         assert!(s.set_theme(name));
         assert_eq!((s.theme_name(), s.clear_color()), (name, ui::theme(name).base));
         assert!(s.animating());
@@ -918,7 +918,7 @@ fn themes_crossfade_and_the_clock_ticks() {
     }
     s.say(1, "theme MONO LIGHT;theme nope");
     assert!(s.input(Input::PointerLeave).redraw);
-    assert_eq!((s.theme_name(), desk_of(800.0, 600.0).0.theme_name()), ("Mono Light", "Midnight"));
+    assert_eq!((s.theme_name(), desk_of(800.0, 600.0).0.theme_name()), ("Mono Light", "Dusk"));
     assert!(!s.set_theme("mono light") && !s.set_theme("mono") && !s.set_theme("nope"));
     s.rest(1000.0);
     let time = LocalTime { year: 2026, month: 10, day: 1, weekday: 3, hour: 9, minute: 5 };

@@ -8,7 +8,7 @@ const MONO: &[u8] = include_bytes!("../../../assets/fonts/deferred/JetBrainsMono
 
 const WHITE: Rgba = Rgba::hex(0xffffff);
 const SANS14: TextStyle = TextStyle::new(FontId::Sans, 14.0, WHITE);
-const MIDNIGHT: &Theme = &THEMES[0];
+const DUSK: &Theme = &THEMES[0];
 const REST: UiState = UiState { hover: None, pressed: None, focused: false, now_ms: 0.0 };
 
 fn ts() -> TextSystem {
@@ -66,9 +66,9 @@ fn contrast(a: Rgba, b: Rgba) -> f32 {
 fn widgets_stack_with_a_rhythm_and_register_hits() {
     let mut t = ts();
     let rect = RectF::new(100.0, 50.0, 400.0, 600.0);
-    let (rs, list, hits) = frame(&mut t, MIDNIGHT, rect, REST, |ui| {
+    let (rs, list, hits) = frame(&mut t, DUSK, rect, REST, |ui| {
         assert_eq!((ui.width(), ui.rect(), ui.cursor()), (360.0, rect, (120.0, 70.0)));
-        assert_eq!(ui.theme().name, "Midnight");
+        assert_eq!(ui.theme().name, "Dusk");
         let h = ui.heading("Settings");
         let l = ui.label("Body text");
         ui.space(10.0);
@@ -87,12 +87,12 @@ fn widgets_stack_with_a_rhythm_and_register_hits() {
     let below = |r: RectF| r.y + r.h;
     // No margin before the first item; SPACING after each, SPACING_MD before a
     // subheading, SPACING_LG before a heading; the larger gap wins.
-    assert_eq!((h.x, h.y, h.h), (120.0, 70.0, t.line_height(MIDNIGHT.heading())));
+    assert_eq!((h.x, h.y, h.h), (120.0, 70.0, t.line_height(DUSK.heading())));
     assert_eq!((l.y, b.y, b.h), (below(h) + SPACING, below(l) + SPACING + 10.0, BUTTON_H));
     assert!(b.w > 40.0 && b.w < 100.0 && b.w.fract() == 0.0);
     assert_eq!((f.y, f.w, f.h), (below(b) + SPACING, 360.0, FIELD_H));
     assert_eq!((sm.y, p.y), (below(f) + SPACING, below(sm) + SPACING));
-    assert_eq!((sub.y, sub.h), (below(p) + SPACING_MD, t.line_height(MIDNIGHT.subheading())));
+    assert_eq!((sub.y, sub.h), (below(p) + SPACING_MD, t.line_height(DUSK.subheading())));
     assert_eq!((l2.y, h2.y), (below(sub) + SPACING, below(l2) + SPACING_LG));
     assert_eq!((fresh.y, after.y), (600.0, 700.0 + SPACING_LG));
     let got: Vec<(u32, RectF, Sense)> = hits.iter().map(|h| (h.id.0, h.rect, h.sense)).collect();
@@ -104,7 +104,7 @@ fn widgets_stack_with_a_rhythm_and_register_hits() {
         let [x, y, w, h] = i.clip;
         x >= 100.0 && y >= 50.0 && x + w <= 500.0 && y + h <= 650.0
     }));
-    let th = MIDNIGHT;
+    let th = DUSK;
     let ink = |c| find(&list, 4.0, Some(c)).len();
     assert_eq!((ink(th.text_faint), ink(th.text_dim), ink(th.accent_text)), (4, 9, 2));
     assert_eq!(find(&list, 0.0, Some(th.surface_lo)).len(), 1);
@@ -114,7 +114,7 @@ fn widgets_stack_with_a_rhythm_and_register_hits() {
 fn rows_run_left_to_right() {
     let mut t = ts();
     let rect = RectF::new(0.0, 0.0, 600.0, 400.0);
-    let ((row, [a, b, c], after), _, hits) = frame(&mut t, MIDNIGHT, rect, REST, |ui| {
+    let ((row, [a, b, c], after), _, hits) = frame(&mut t, DUSK, rect, REST, |ui| {
         let mut r = [RectF::default(); 3];
         let row = ui.row(|ui| {
             r[0] = ui.button(WidgetId(1), "One");
@@ -130,7 +130,7 @@ fn rows_run_left_to_right() {
     assert_eq!(row, RectF::new(PAD, PAD, c.x + c.w - PAD, b.h));
     assert_eq!((after.x, after.y, hits.len()), (PAD, PAD + b.h + SPACING, 2));
     // Nested rows, and custom content with the low-level calls.
-    let ((inner, (w, del), below), list, hits) = frame(&mut t, MIDNIGHT, rect, REST, |ui| {
+    let ((inner, (w, del), below), list, hits) = frame(&mut t, DUSK, rect, REST, |ui| {
         let mut inner = RectF::default();
         ui.row(|ui| {
             ui.label("x");
@@ -156,10 +156,10 @@ fn rows_run_left_to_right() {
     });
     let y = PAD + BUTTON_H + SPACING;
     assert_eq!((inner.h, below.y, w, del.x, del.y), (BUTTON_H, y + 50.0, 50.0, PAD, y));
-    assert_eq!(del.w, button_width(&mut t, MIDNIGHT, "Del"));
+    assert_eq!(del.w, button_width(&mut t, DUSK, "Del"));
     assert_eq!((hits.len(), hits[3].sense), (4, Sense::Scroll));
     assert!(list.len() >= 10 && find(&list, 5.0, None).len() == 1);
-    assert_eq!(find(&list, 0.0, Some(MIDNIGHT.surface_hi)).len(), 3);
+    assert_eq!(find(&list, 0.0, Some(DUSK.surface_hi)).len(), 3);
 }
 
 #[test]
@@ -205,12 +205,12 @@ fn buttons_draw_their_states_and_hits_clip() {
         assert_eq!(find(&list, 4.0, Some(th.accent_text)).len(), 2);
     }
     // Labels sit with their capitals centered.
-    let (b, list, _) = frame(&mut t, MIDNIGHT, rect, REST, |ui| ui.button(WidgetId(1), "HI"));
+    let (b, list, _) = frame(&mut t, DUSK, rect, REST, |ui| ui.button(WidgetId(1), "HI"));
     let g = find(&list, 4.0, None);
     let cap_top = g.iter().map(|i| i.rect[1]).fold(f32::MAX, f32::min);
     let base = g.iter().map(|i| i.rect[1] + i.rect[3]).fold(0.0, f32::max);
     assert!(((cap_top - b.y) - (b.y + b.h - base)).abs() <= 1.0, "{cap_top} {base}");
-    let (_, _, hits) = frame(&mut t, MIDNIGHT, rect, REST, |ui| {
+    let (_, _, hits) = frame(&mut t, DUSK, rect, REST, |ui| {
         ui.push_clip(RectF::new(0.0, 0.0, 300.0, 40.0));
         ui.button(WidgetId(1), "Half"); // y 20..52: clipped at 40
         ui.button(WidgetId(2), "Gone"); // y 60..92: hidden
@@ -228,10 +228,10 @@ fn buttons_draw_their_states_and_hits_clip() {
 
 #[test]
 fn text_fields_scroll_and_show_a_caret() {
-    let (mut t, th) = (ts(), MIDNIGHT);
+    let (mut t, th) = (ts(), DUSK);
     let rect = RectF::new(0.0, 0.0, 200.0, 100.0);
     let mut field = |st, value: &str, has| {
-        frame(&mut t, MIDNIGHT, rect, st, |ui| ui.text_field(WidgetId(1), value, has, "Search"))
+        frame(&mut t, DUSK, rect, st, |ui| ui.text_field(WidgetId(1), value, has, "Search"))
     };
     let focused = state(None, None, true);
     let caret = |list: &DrawList| find(list, 0.0, Some(th.accent)).first().copied();
@@ -271,7 +271,7 @@ fn labels_wrap_to_the_content_width() {
     let mut t = ts();
     let rect = RectF::new(0.0, 0.0, 240.0, 1000.0); // content 200 wide
     let text = "Wrapping keeps every line inside the window, between words.\nA new paragraph.";
-    let (r, list, _) = frame(&mut t, MIDNIGHT, rect, REST, |ui| ui.label(text));
+    let (r, list, _) = frame(&mut t, DUSK, rect, REST, |ui| ui.label(text));
     let lines = t.wrap(text, SANS14, 200.0);
     assert!(lines.len() >= 4 && r.w <= 200.0 && r.h == lines.len() as f32 * 17.0);
     let g = find(&list, 4.0, None);
@@ -281,22 +281,22 @@ fn labels_wrap_to_the_content_width() {
     assert_eq!(rows.len(), lines.len());
     // Lines outside the clip are measured but not drawn.
     let short = RectF::new(0.0, 0.0, 240.0, 50.0);
-    let (r2, list, _) = frame(&mut t, MIDNIGHT, short, REST, |ui| ui.label(text));
+    let (r2, list, _) = frame(&mut t, DUSK, short, REST, |ui| ui.label(text));
     let shown = find(&list, 4.0, None);
     assert!(r2 == r && !shown.is_empty() && shown.len() < g.len());
     assert!(shown.iter().all(|i| i.rect[1] < 50.0));
     // Any style wraps the same way.
-    let (r3, list, _) = frame(&mut t, MIDNIGHT, rect, REST, |ui| ui.wrapped(text, SANS14));
+    let (r3, list, _) = frame(&mut t, DUSK, rect, REST, |ui| ui.wrapped(text, SANS14));
     assert_eq!((r3, find(&list, 4.0, Some(WHITE)).len()), (r, g.len()));
 }
 
 #[test]
 fn cards_hold_their_content() {
-    let (mut t, th) = (ts(), MIDNIGHT);
+    let (mut t, th) = (ts(), DUSK);
     let rect = RectF::new(0.0, 0.0, 400.0, 600.0);
     let mut runs = 0;
     let ((card, [label, button], after), list, hits) =
-        frame(&mut t, MIDNIGHT, rect, state(Some(4), None, false), |ui| {
+        frame(&mut t, DUSK, rect, state(Some(4), None, false), |ui| {
             ui.label("before");
             let mut inner = [RectF::default(); 2];
             let card = ui.card(|ui| {
@@ -323,7 +323,7 @@ fn cards_hold_their_content() {
     assert!(list.instances().iter().position(inside).unwrap() > fill);
     assert_eq!(find(&list, 1.0, Some(th.border)).len(), 2);
     // An empty card is just its padding.
-    let (empty, _, _) = frame(&mut t, MIDNIGHT, rect, REST, |ui| ui.card(|_| {}));
+    let (empty, _, _) = frame(&mut t, DUSK, rect, REST, |ui| ui.card(|_| {}));
     assert_eq!(empty.h, 2.0 * CARD_PAD);
 }
 
@@ -332,7 +332,7 @@ fn a_recording_frame_keeps_text_once_and_the_marks() {
     let mut t = ts();
     let (mut list, mut hits) = (DrawList::recording(), Vec::new());
     let r = RectF::new(0.0, 0.0, 400.0, 300.0);
-    let mut ui = Ui::new(&mut list, &mut t, r, &mut hits, state(None, None, true), MIDNIGHT);
+    let mut ui = Ui::new(&mut list, &mut t, r, &mut hits, state(None, None, true), DUSK);
     // A card's measuring run records nothing; a field marks itself a textbox with its value.
     ui.card(|ui| _ = ui.button(WidgetId(4), "Apply"));
     ui.text_field(WidgetId(5), "", true, "Name");
@@ -345,7 +345,7 @@ fn a_recording_frame_keeps_text_once_and_the_marks() {
     let marks: Vec<_> = sem.marks.iter().map(|m| (m.id, m.role, m.flags, &*m.value)).collect();
     assert_eq!(marks, [(5, sem::TEXTBOX, sem::FOCUSED, ""), (6, 5, 0, "Ada"), (4, 2, 1, "")]);
     // Elsewhere a mark is nothing.
-    let (_, list, _) = frame(&mut t, MIDNIGHT, r, REST, |ui| ui.mark(WidgetId(1), 1, 1, "x"));
+    let (_, list, _) = frame(&mut t, DUSK, r, REST, |ui| ui.mark(WidgetId(1), 1, 1, "x"));
     assert!(list.sem().is_none() && list.is_empty());
 }
 
@@ -354,7 +354,7 @@ fn everything_lands_on_device_pixels() {
     let mut t = ts();
     t.set_dpr(1.5);
     let rect = RectF::new(10.3, 20.7, 401.0, 900.0);
-    let (rects, list, _) = frame(&mut t, MIDNIGHT, rect, state(None, None, true), |ui| {
+    let (rects, list, _) = frame(&mut t, DUSK, rect, state(None, None, true), |ui| {
         let mut out = vec![ui.heading("Title"), ui.label("text")];
         out.push(ui.button(WidgetId(1), "Odd width"));
         out.push(ui.text_field(WidgetId(2), "value", true, ""));
@@ -372,10 +372,20 @@ fn everything_lands_on_device_pixels() {
 
 #[test]
 fn themes_are_complete_readable_and_glow() {
-    assert_eq!(THEMES.map(|t| t.name), ["Midnight", "Dawn", "Mono Dark", "Mono Light"]);
+    assert_eq!(THEMES.map(|t| t.name), ["Dusk", "Dawn", "Mono Dark", "Mono Light"]);
     assert_eq!(THEMES.map(|t| t.dark), [true, false, true, false]);
-    // Any case; Mono (Mono Dark's name before Mono Light) and unknown names are the default.
-    let names = [("dawn", 1), ("MONO DARK", 2), ("mono light", 3), ("Mono", 2), ("", 2), ("x", 2)];
+    // Any case; Mono (Mono Dark's name before Mono Light) and unknown names are the default;
+    // Midnight (Dusk's before Dawn's pair) is Dusk.
+    let names = [
+        ("dusk", 0),
+        ("Midnight", 0),
+        ("dawn", 1),
+        ("MONO DARK", 2),
+        ("mono light", 3),
+        ("Mono", 2),
+        ("", 2),
+        ("x", 2),
+    ];
     for (name, want) in names {
         assert_eq!(theme(name), &THEMES[want], "{name}");
     }
@@ -453,7 +463,7 @@ fn icon_tiles_are_readable_and_crisp() {
         }
     }
     // Mono Dark and Mono Light are monochrome and flat (Light's tiles white over its pale
-    // base); Midnight casts a shadow and fades its tiles.
+    // base); Dusk casts a shadow and fades its tiles.
     let (mono, hue, mut t) = (&THEMES[2], Rgba::hex(0x2dd4bf), ts());
     assert_eq!(mono.icon_colors(hue), [mono.surface_hi, mono.surface_hi, mono.text]);
     let (light, white) = (&THEMES[3], Rgba::hex(0xffffff));
@@ -465,7 +475,7 @@ fn icon_tiles_are_readable_and_crisp() {
         list
     };
     let kinds = |l: &DrawList| l.instances().iter().map(|i| i.kind).collect::<Vec<_>>();
-    let (list, lit) = (tile(&mut t, mono), tile(&mut t, MIDNIGHT));
+    let (list, lit) = (tile(&mut t, mono), tile(&mut t, DUSK));
     assert_eq!((kinds(&list), kinds(&lit)), (vec![0.0, 1.0, 4.0], vec![2.0, 5.0, 1.0, 4.0]));
     // The tile: a 44 px square on device pixels, centered; the glyph inside, in ink.
     let (i, d) = (list.instances(), |v: f32| (v * 1.5 - (v * 1.5).round()).abs() < 1e-3);
@@ -517,8 +527,8 @@ fn palettes_and_keys() {
     let (a, b) = (Rgba(0, 100, 200, 255), Rgba(255, 0, 100, 55));
     assert_eq!((mix(a, b, 0.0), mix(a, b, 1.0), mix(a, b, 2.0)), (a, b, b));
     assert_eq!(mix(a, b, 0.5), Rgba(128, 50, 150, 155));
-    let wash = [MIDNIGHT.wash(false), MIDNIGHT.wash(true)];
-    assert_eq!(wash, [MIDNIGHT.text.with_alpha(16), MIDNIGHT.text.with_alpha(26)]);
+    let wash = [DUSK.wash(false), DUSK.wash(true)];
+    assert_eq!(wash, [DUSK.text.with_alpha(16), DUSK.text.with_alpha(26)]);
     let k = Key::from_code;
     let char_of = |code| if let Key::Char(c) = k(code) { c } else { '?' };
     assert_eq!(["KeyA", "KeyZ", "Digit0", "Numpad9"].map(char_of), ['a', 'z', '0', '9']);
@@ -557,7 +567,7 @@ fn apps_and_their_context() {
     assert_eq!(app.icon(), AppIcon { glyph: icon::Glyph::Window, hue: Rgba::hex(0x64748b) });
     let mut t = ts();
     let rect = RectF::new(0.0, 0.0, 300.0, 200.0);
-    let (_, _, hits) = frame(&mut t, MIDNIGHT, rect, REST, |ui| app.draw(ui));
+    let (_, _, hits) = frame(&mut t, DUSK, rect, REST, |ui| app.draw(ui));
     let mut fs = vfs::Vfs::new();
     let mut kernel = kernel::Kernel::new();
     let mut cx = Cx::new(&mut fs, &mut kernel, 5.0);
@@ -589,11 +599,11 @@ fn code_edits_scrolls_and_colors_its_spans() {
     let mut c = Code::new("let a = \"s\";\n  x", 1);
     c.set_spans(&[(0, 3, 1), (8, 3, 2), (15, 1, 7)]);
     let rect = RectF::new(10.0, 10.0, 300.0, 120.0);
-    let (_, list, hits) = frame(&mut t, MIDNIGHT, rect, state(None, None, true), |ui| {
+    let (_, list, hits) = frame(&mut t, DUSK, rect, state(None, None, true), |ui| {
         c.draw(ui, WidgetId(4), rect, true, true);
     });
     assert_eq!(hits, [Hit { id: WidgetId(4), rect, sense: Sense::Text }]);
-    let th = MIDNIGHT;
+    let th = DUSK;
     let ink = |c| find(&list, 4.0, Some(c)).len();
     // `let` in the accent, `"s"` green, the gutter's 1 and 2, an underline.
     assert_eq!((ink(th.accent), ink(th.ansi[2]), ink(th.text_dim) + ink(th.text_faint)), (3, 3, 2));
@@ -633,7 +643,7 @@ fn code_edits_scrolls_and_colors_its_spans() {
     // A press puts the caret at the nearest char boundary on the grid of 8 x
     // 17 px cells from (16, 16), clamped into the text.
     let mut c = Code::new("state x = 1;\nlabel x;", 0);
-    frame(&mut t, MIDNIGHT, rect, REST, |ui| c.draw(ui, WidgetId(4), rect, false, false));
+    frame(&mut t, DUSK, rect, REST, |ui| c.draw(ui, WidgetId(4), rect, false, false));
     let at = [(3.4, 1.5), (3.6, 0.3), (99.0, 9.0), (-1.0, -1.0), (f32::NAN, 1.2)].map(|(x, y)| {
         c.click(16.0 + 8.0 * x, 16.0 + 17.0 * y);
         c.ed.caret()
@@ -641,7 +651,7 @@ fn code_edits_scrolls_and_colors_its_spans() {
     assert_eq!(at, [(1, 3), (0, 4), (1, 8), (0, 0), (1, 0)]);
     // The wheel scrolls whole rows, and a press lands on the rows in view.
     let mut c = Code::new(&"line\n".repeat(50), 0);
-    frame(&mut t, MIDNIGHT, rect, REST, |ui| c.draw(ui, WidgetId(4), rect, false, false));
+    frame(&mut t, DUSK, rect, REST, |ui| c.draw(ui, WidgetId(4), rect, false, false));
     assert!(c.contains(20.0, 20.0) && !c.contains(5.0, 5.0));
     assert!(c.wheel(1000.0) && !c.wheel(f32::NAN));
     assert!(c.top > 40 && c.ed.caret().0 >= c.top);

@@ -12,7 +12,7 @@ install, and no server runs your apps: the tab is the machine.
 ## What's in it
 
 - **The desktop.** Floating windows that snap, a home screen of every app, a dock you arrange,
-  four themes (Mono Dark, Mono Light, Midnight, Dawn), and touch on phones. Profiles keep
+  four themes (Mono Dark, Mono Light, Dusk, Dawn), and touch on phones. Profiles keep
   separate homes in one browser, each with an optional PIN.
 - **Programs.** Apps are WebAssembly programs (WASI preview 1), each in its own Web Worker,
   under a small kernel in the page: processes, a file system, consoles, jobs and pipes. A program

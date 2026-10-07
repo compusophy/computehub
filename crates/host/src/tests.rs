@@ -118,7 +118,7 @@ fn host() -> (Host, Log, Rc<RefCell<u32>>) {
         Some(Box::new(Probe(*n.borrow(), k, l.clone())) as Box<dyn App>)
     });
     let (wm, text) = (Wm::new(Rect::new(0, 32, 1280, 684)), TextSystem::new(SANS.to_vec()));
-    let mut h = Host::new(wm, text.unwrap(), Vfs::new(), registry, "Midnight");
+    let mut h = Host::new(wm, text.unwrap(), Vfs::new(), registry, "Dusk");
     let mut out = Response::default();
     h.open("welcome", Some((680, 480)), &mut out);
     h.open("terminal", None, &mut out);
@@ -489,7 +489,7 @@ fn tweens_ease_out_from_their_first_frame_replays_scale_and_themes_crossfade() {
     assert_eq!((blend(mid, dawn, 1.0), blend(dawn, mid, 1.0)), (*dawn, *mid));
     let half = blend(mid, mono, 0.5);
     assert_eq!((half.name, half.grain), ("Mono Dark", 7));
-    // Mono Dark has no lights: Midnight's stay in place and fade out.
+    // Mono Dark has no lights: Dusk's stay in place and fade out.
     let (g, h) = (mid.glows[0], half.glows[0]);
     assert_eq!((h.cx, h.rx, h.color), (g.cx, g.rx, g.color.with_alpha(45)));
     assert_eq!(blend(mono, mid, 0.5).glows[1].cy, mid.glows[1].cy);
@@ -582,7 +582,7 @@ fn the_scene_holds_each_window_its_hits_its_marks_and_the_text_that_shows() {
     h.text.atlas_mut().take_dirty();
     let s = h.scene();
     let head = (s.w, s.h, s.touch, &*s.theme, s.focus, &*s.apps);
-    assert_eq!(head, (1280, 800, true, "Midnight", 3, &["page".to_string()][..]));
+    assert_eq!(head, (1280, 800, true, "Dusk", 3, &["page".to_string()][..]));
     // Shown windows top first, then the minimized; never the overlay.
     let wins: Vec<_> = s.wins.iter().map(|w| (w.id, &*w.app, &*w.title, w.state)).collect();
     let want =

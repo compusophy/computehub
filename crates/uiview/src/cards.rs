@@ -278,7 +278,7 @@ pub(crate) fn themes_size(w: f32) -> (usize, f32, f32, f32) {
 }
 
 /// The theme cards from `(x, y)`, `w` wide, theme `i` the button `id + i`: the default first
-/// (Mono Dark), then the rest in [`THEMES`]'s order from it, around (Mono Light, Midnight,
+/// (Mono Dark), then the rest in [`THEMES`]'s order from it, around (Mono Light, Dusk,
 /// Dawn; two across, the dark ones over each other).
 pub(crate) fn themes(ui: &mut Ui<'_>, id: u32, (x, y, w): (f32, f32, f32)) {
     let (cols, cw, ph, _) = themes_size(w);

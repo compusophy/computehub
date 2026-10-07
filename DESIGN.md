@@ -360,14 +360,14 @@ one. Forked crates keep their Apache-2.0 license and note their origin.
   (200 ms); dock tiles lift (120 ms), icons and dock tiles slide aside
   (180 ms), themes crossfade (200 ms). Drags and resizes follow the pointer
   exactly.
-- **Themes**: Midnight (near-black `#07080C` with violet, cyan and magenta
+- **Themes**: Dusk (near-black `#07080C` with violet, cyan and magenta
   light), Dawn (warm paper with peach, lilac and sky light), Mono Dark
   (black, white and grays, no light; the default, which a first visit and
   an unknown name get, as does Mono, its name before Mono Light) and Mono
   Light (its opposite: white windows over a pale gray, black ink and
   grays, a black accent, no light; a soft shadow and a white top edge as
   on Dawn). Settings shows them in a row, the default first and the rest
-  after it, around (Mono Light, Midnight, Dawn), the current one ringed
+  after it, around (Mono Light, Dusk, Dawn), the current one ringed
   in the accent and checked at any width (a check on a disc of the accent
   in its miniature's top right corner, clear of its name); narrower, two
   across, the dark ones over each other. A theme is plain

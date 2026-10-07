@@ -97,8 +97,8 @@ const fn ansi(rgb: [u32; 16]) -> [Rgba; 16] {
 
 /// Near-black with violet, cyan and magenta light.
 #[rustfmt::skip]
-const MIDNIGHT: Theme = Theme {
-    name: "Midnight", dark: true, base: Rgba::hex(0x07080c), grain: 9,
+const DUSK: Theme = Theme {
+    name: "Dusk", dark: true, base: Rgba::hex(0x07080c), grain: 9,
     glows: [
         glow(0x6d5cff, 90, (0.18, 0.22), (0.55, 0.50)),
         glow(0x22d3ee, 60, (0.82, 0.74), (0.50, 0.45)),
@@ -180,13 +180,15 @@ const MONO_LIGHT: Theme = Theme {
     icon: IconStyle { ground: Rgba::hex(0xffffff), tile: [100, 100], ink: 100, shadow: 0 },
 };
 
-/// The built-in themes: Midnight, Dawn, Mono Dark (the default) and Mono Light.
-pub static THEMES: [Theme; 4] = [MIDNIGHT, DAWN, MONO_DARK, MONO_LIGHT];
+/// The built-in themes: Dusk, Dawn, Mono Dark (the default) and Mono Light.
+pub static THEMES: [Theme; 4] = [DUSK, DAWN, MONO_DARK, MONO_LIGHT];
 
 /// The theme named `name`, ignoring ASCII case; else the default, Mono Dark (which a name kept
-/// before it was renamed, Mono, thus still means).
+/// before it was renamed, Mono, thus still means). Midnight, Dusk's name before it was Dawn's
+/// pair, still means Dusk.
 pub fn theme(name: &str) -> &'static Theme {
     let all: &'static [Theme; 4] = &THEMES;
+    let name = if name.eq_ignore_ascii_case("midnight") { "Dusk" } else { name };
     all.iter().find(|t| t.name.eq_ignore_ascii_case(name)).unwrap_or(&all[2])
 }
 
