@@ -147,7 +147,9 @@ intermediates are overwritten in place.
 At bedtime compusophy types `/night` in Claude Code, the effort mode on ultracode; the
 procedure is `.claude/skills/night/SKILL.md`. Two halves run until morning:
 
-- **The GPU half**: `night.sh --wait`, detached (below).
+- **The GPU half**: `night.sh --wait --until-woken`, detached (below): when tonight's plan is
+  done it keeps going in rounds (the 3B trained again on the data the waves have grown, scored on
+  the same held-out tasks as `q3-r2`, `q3-r3`, ...) until `PAUSE`.
 - **The data half**: `.claude/workflows/night.js`, a Claude Code workflow. *Predict* writes
   tonight's held-out rates with 80% intervals before they are scored
   (`<root>/iq/predictions-<night>.jsonl`, which `report.py` checks). *Plan* chooses new
@@ -157,13 +159,15 @@ procedure is `.claude/skills/night/SKILL.md`. Two halves run until morning:
   agent, writes fair and wrong programs from each ask alone and fixes or drops the tasks that
   fail them. *Solve* writes the training replies from the asks alone
   (`replies-<wave>-t<tier>-<b>.jsonl`, train tasks only). Then *Import* runs `day.sh import`
-  and `day.sh data`, which make tomorrow night's inputs (tonight's are copies). Every phase
-  skips what a run before it finished, and no agent starts a task after 07:30 or while `PAUSE`
-  exists.
+  and `day.sh data`, which grow the data the GPU's next round trains on (tonight's first runs
+  read copies). Every phase skips what a run before it finished; waves follow one another, and
+  no agent starts a task while `PAUSE` exists.
 
-At 07:48 the morning wrap-up confirms the GPU is idle, touches `PAUSE`, reads the report, tests
-and commits the grown suite, and writes `<root>/iq/morning-<night>.md`. "Pause" stops both
-halves at once (the skill says how).
+No clock ends the night: compusophy says when they are up. Then the wrap-up touches `PAUSE`,
+ends the running step so the report is written, reads it, tests and commits the grown suite,
+and writes `<root>/iq/morning-<night>.md`. "Pause" stops both halves at once (the skill says
+how). `NIGHT_DRY=1` with a scratch `--root` runs night.sh's whole flow with made-up answers and
+runs, no model and no GPU.
 
 ## The night run
 

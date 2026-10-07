@@ -35,6 +35,13 @@
 # nothing, and works at any hour. --report writes the night's report from the answers it has,
 # runs nothing on the GPU, and works at any hour (the morning's, when a step was stopped). One
 # night.sh runs at a time (<root>/iq/night.pid).
+# --until-woken (how /night starts it): no clock stops it, only <root>/iq/PAUSE, which the session
+# touches when compusophy says they are up; the start-by hours are lifted; and when tonight's
+# plan is done the GPU keeps going in rounds: the 3B trained again, from its base, on the data the
+# night's waves have grown (ROUND_EPOCHS 1, once ROUND_MIN 200 new records are in), scored on
+# tonight's held-out tasks as q3-r2, q3-r3, ...
+# NIGHT_DRY=1 (with a scratch --root) runs the whole flow with made-up answers and runs, no model
+# and no GPU: a by-day test of the night's control flow.
 # Environment: COMPUTEHUB_DATA, PYTHON, MIN_FREE_GB (50), Q3_BY (3), SELF_BY (5), Q3_EPOCHS (2).
 # To pause: touch <root>/iq/PAUSE (no new step starts), then stop the running step's python.
 set -uo pipefail
@@ -42,7 +49,8 @@ set -uo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 REPO=$(cd "$HERE/.." && pwd)
 PY=${PYTHON:-python}
-FORCE=0 SELF=1 BIG=1 WAIT=0 CHECK=0 REPORT=0
+FORCE=0 SELF=1 BIG=1 WAIT=0 CHECK=0 REPORT=0 UNTIL=0
+DRY=${NIGHT_DRY:-0}
 ROOT_ARG=()
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -50,6 +58,7 @@ while [ $# -gt 0 ]; do
     --wait) WAIT=1; shift ;;
     --check) CHECK=1; shift ;;
     --report) REPORT=1; shift ;;
+    --until-woken) UNTIL=1; shift ;;
     --no-self) SELF=0; shift ;;
     --no-3b) BIG=0; shift ;;
     --root) ROOT_ARG=(--root "$2"); shift 2 ;;
@@ -57,6 +66,9 @@ while [ $# -gt 0 ]; do
   esac
 done
 ROOT=$("$PY" "$HERE/common.py" root "${ROOT_ARG[@]}") || exit 2
+if [ "$DRY" = 1 ] && [ ${#ROOT_ARG[@]} -eq 0 ]; then
+  echo "night: NIGHT_DRY makes up answers and runs: give it a scratch data root (--root)" >&2; exit 2
+fi
 export COMPUTEHUB_DATA="$ROOT"   # sft.py and generate.py read it
 D=$(cygpath -u "$ROOT" 2>/dev/null || echo "$ROOT")/iq   # this shell's path
 W=$(cygpath -m "$D" 2>/dev/null || echo "$D")            # the tools' path
@@ -164,6 +176,16 @@ LLAMA_CUDA="${LLAMA_CPP_DIR:-C:/llama-cpp}/build-cuda/bin/llama-server.exe"
 if [ "${SCORER:-}" != hf ] && [ -f "$LLAMA_CUDA" ]; then SERVER=1; else SERVER=0; fi
 gen() {  # gen OUT PROMPTS K BATCH (--base ID | --run NAME) [--name ROLE]
   local out=$1 prompts=$2 k=$3 batch=$4; shift 4
+  if [ "$DRY" = 1 ]; then  # NIGHT_DRY: K made-up answers a prompt, no model, no GPU
+    say "dry: answers $out (k $k)"
+    "$PY" - "$I/$prompts" "$W/$out" "$k" <<'PY'
+import json, sys
+rows = [json.loads(l) for l in open(sys.argv[1], encoding="utf-8") if l.strip()]
+open(sys.argv[2], "w", encoding="utf-8").write("".join(
+    json.dumps({"task": r["task"], "model": "dry", "reply": "dry"}) + "\n" for r in rows for _ in range(int(sys.argv[3]))))
+PY
+    return
+  fi
   if [ "$SERVER" = 1 ]; then
     local spec=() name="" args=("$@")
     while [ $# -gt 0 ]; do
@@ -192,6 +214,11 @@ gen() {  # gen OUT PROMPTS K BATCH (--base ID | --run NAME) [--name ROLE]
 }
 sft() {  # sft RUN BASE [sft.py args]
   local run=$1 base=$2; shift 2
+  if [ "$DRY" = 1 ]; then  # NIGHT_DRY: a run that says it finished, no model, no GPU
+    say "dry: train $run on $base ($*)"
+    mkdir -p "$RUNS/$run" && printf '{\n  "status": "done"\n}\n' > "$RUNS/$run/manifest.json"
+    return
+  fi
   say "train: $run on $base"
   (cd "$REPO" && "$PY" train/sft.py --held "$I/held.txt" --tasks "$SUITE" --base "$base" --run "$run" "$@") 2>&1 | quiet
 }
@@ -223,6 +250,9 @@ finish() {  # the report, from whatever answers tonight has, then stop
             "answers-$N-q05.jsonl=$KR" "answers-$N-q05-self.jsonl=$KR" "answers-$N-q3.jsonl=$KR"; do
     [ -s "$D/${fk%=*}" ] && files+=("$W/$fk")
   done
+  for fk in "$D/answers-$N"-q3-r*.jsonl; do  # the rounds (--until-woken)
+    [ -s "$fk" ] && files+=("$W/$(basename "$fk")=$KR")
+  done
   if [ ${#files[@]} -gt 0 ]; then
     (cd "$REPO" && "$PY" train/report.py --night "$N" --iq "$IQ" --suite "$SUITE" --data "$W" \
       --prompts "$I/prompts-held.jsonl" "${pred[@]}" "${files[@]}") 2>&1 | tee -a "$LOG"
@@ -232,20 +262,22 @@ finish() {  # the report, from whatever answers tonight has, then stop
 }
 morning() {  # from 07:45 the GPU is compusophy's again, or whenever <root>/iq/PAUSE exists: no new
   # step starts (a rerun before noon the next day resumes the night; a later /night begins a new
-  # one on that day's inputs)
+  # one on that day's inputs). With --until-woken only PAUSE stops it: compusophy says when they
+  # are up, and the session touches it.
   [ -e "$D/PAUSE" ] && finish "paused (iq/PAUSE)"
+  [ "$UNTIL" = 1 ] && return 0
   local hm=$((10#$(date +%H) * 60 + 10#$(date +%M)))
   [ "$FORCE" = 0 ] && [ "$hm" -ge 465 ] && [ "$hm" -lt 1320 ] && finish "stopped for the morning"
   return 0
 }
 late() {  # late HOUR: past HOUR o'clock this night (the evening is before every start-by hour)
   local h=$((10#$(date +%H)))
-  [ "$FORCE" = 0 ] && [ "$h" -lt 18 ] && [ "$h" -ge "$1" ]
+  [ "$FORCE" = 0 ] && [ "$UNTIL" = 0 ] && [ "$h" -lt 18 ] && [ "$h" -ge "$1" ]
 }
 ends_by_morning() {  # ends_by_morning MINUTES: a step begun now and lasting MINUTES ends by 07:45
   local hm=$((10#$(date +%H) * 60 + 10#$(date +%M)))
   [ "$hm" -ge 1080 ] && hm=$((hm - 1440))   # the evening, as minutes before midnight
-  [ "$FORCE" = 1 ] || [ $((hm + $1)) -le 465 ]
+  [ "$FORCE" = 1 ] || [ "$UNTIL" = 1 ] || [ $((hm + $1)) -le 465 ]
 }
 q3_minutes() {  # the 3B round's minutes: its LoRA unless done, and its answers
   local records
@@ -328,5 +360,47 @@ PY
     gen "answers-$N-q05-self.jsonl" prompts-held.jsonl "$KR" 64 --run "$N-q05-self" --name q05-self
   fi
 fi
+
+# Until compusophy wakes (--until-woken), the GPU keeps learning. Each round trains the 3B again,
+# from its base, on the training data the night's waves have grown since the last round (one
+# epoch, ROUND_EPOCHS, to fit), and scores it on tonight's held-out tasks as q3-r<k>: whether
+# more data helps, read the same night on the same tasks. A round waits for ROUND_MIN (200) new
+# records; its data is copied once, so a rerun resumes it on the same bytes.
+round=2 fails=0
+while [ "$UNTIL" = 1 ] && [ "$BIG" = 1 ]; do
+  morning
+  if ! started "$N-q3-r$round"; then
+    if [ "$round" -gt 2 ]; then prev=$(wc -l < "$S/r$((round - 1))/sft.jsonl"); else prev=$(wc -l < "$S/sft.jsonl"); fi
+    now=$(wc -l < "$D/sft.jsonl")
+    if [ "$now" -lt $((prev + ${ROUND_MIN:-200})) ]; then
+      say "round $round waits: $now records, $prev in the last round's data"
+      sleep "${ROUND_WAIT:-300}"
+      continue
+    fi
+    mkdir -p "$S/r$round"
+    cp "$D/sft.jsonl" "$S/r$round/sft.jsonl.part"
+    # A whole file (day.sh data may be writing it): every line reads.
+    if ! "$PY" -c "import json, sys; [json.loads(l) for l in open(sys.argv[1], encoding='utf-8') if l.strip()]" \
+         "$I/r$round/sft.jsonl.part"; then
+      say "round $round: sft.jsonl was being written; again in a minute"
+      sleep 60
+      continue
+    fi
+    mv "$S/r$round/sft.jsonl.part" "$S/r$round/sft.jsonl"
+    (cd "$S/r$round" && sha256sum sft.jsonl > inputs.sha256)
+    say "round $round: $(wc -l < "$S/r$round/sft.jsonl") records ($prev before)"
+  fi
+  morning
+  sft "$N-q3-r$round" "$LARGE" --data "$I/r$round/sft.jsonl" --epochs "${ROUND_EPOCHS:-1}" \
+    --batch 2 --accum 8 --save-every 13
+  if ! finished "$N-q3-r$round"; then
+    fails=$((fails + 1))
+    [ "$fails" -ge 2 ] && finish "round $round's training failed twice"
+    continue
+  fi
+  morning
+  gen "answers-$N-q3-r$round.jsonl" prompts-held.jsonl "$KR" 32 --run "$N-q3-r$round" --name "q3-r$round"
+  round=$((round + 1)) fails=0
+done
 
 finish "done"

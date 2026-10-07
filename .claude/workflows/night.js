@@ -14,7 +14,7 @@ export const meta = {
 
 // args (all optional but night, day, wave, repo): {night: 'n20261006', day: '2026-10-06',
 // wave: 'w4', repo: '<worktree>', data: 'C:\\sept30\\computehub-data', tiers: [1..6],
-// teachersPerTier: 2, familiesPerTeacher: 8, perFamily: 2, looseFrom: 3, deadline: '07:30',
+// teachersPerTier: 2, familiesPerTeacher: 8, perFamily: 2, looseFrom: 3, deadline: none (only PAUSE stops it),
 // importToo: true, smoke: false}
 //
 // A batch's tasks pass through the attacker before anything can import them: a teacher writes
@@ -37,7 +37,9 @@ const PER = A.perFamily || 2
 // Loose asks (as people type them) from this tier up: below it, checks barred from labels and
 // numbers rarely kill half the mutants `iq verify` asks for. 0: none.
 const LOOSE_FROM = A.looseFrom === undefined ? 3 : A.looseFrom
-const DEADLINE = A.deadline === undefined ? (SMOKE ? '' : '07:30') : A.deadline
+// No clock: the night runs until compusophy says they are up, and the session touches PAUSE then.
+// A deadline ('HH:MM') is only for a run that must end by a time.
+const DEADLINE = A.deadline || ''
 const IMPORT = A.importToo !== false && !SMOKE
 const TEACH = REPO + '\\target\\release\\teach.exe'
 const IQ = REPO + '\\target\\release\\iq.exe'
