@@ -196,6 +196,10 @@ open(sys.argv[2], "w", encoding="utf-8").write("".join(
 PY
     return
   fi
+  # GRAMMAR_FILE (set for one call): llama-server samples only what applang's grammar accepts
+  # (train/applang.gbnf); generate.py cannot, so such a call has no fallback.
+  local gram=()
+  [ -n "${GRAMMAR_FILE:-}" ] && gram=(--grammar "$(cygpath -m "$GRAMMAR_FILE" 2>/dev/null || echo "$GRAMMAR_FILE")")
   if [ "$SERVER" = 1 ]; then
     local spec=() name="" args=("$@")
     while [ $# -gt 0 ]; do
@@ -210,15 +214,18 @@ PY
     say "score: $(basename "$out") (${spec[*]}, k $k) on llama-server"
     if (cd "$REPO" && "$PY" train/export.py "${spec[@]}" --quant q8_0 \
           && "$PY" train/serve.py "${spec[@]}" --quant q8_0 --parallel 16 --ctx 12288 \
-          && "$PY" train/ask.py --prompts "$I/$prompts" --out "$W/$out" --name "$name" --k "$k" --jobs 16) 2>&1 | quiet; then
+          && "$PY" train/ask.py --prompts "$I/$prompts" --out "$W/$out" --name "$name" --k "$k" --jobs 16 \
+               "${gram[@]}") 2>&1 | quiet; then
       (cd "$REPO" && "$PY" train/serve.py --stop) 2>&1 | quiet
       return
     fi
     (cd "$REPO" && "$PY" train/serve.py --stop) 2>&1 | quiet
     # A pause or the morning may be why it failed (its server stopped): then nothing more starts.
     morning
+    [ ${#gram[@]} -gt 0 ] && { say "llama-server failed for $(basename "$out"), which needs it (a grammar)"; return 1; }
     say "llama-server failed for $(basename "$out"): generate.py answers it"
   fi
+  [ ${#gram[@]} -gt 0 ] && { say "$(basename "$out") skipped: a grammar needs llama-server"; return 1; }
   say "generate: $(basename "$out") ($*, k $k)"
   (cd "$REPO" && "$PY" train/generate.py --prompts "$I/$prompts" --out "$W/$out" --k "$k" --batch "$batch" "$@") 2>&1 | quiet
 }
@@ -326,6 +333,18 @@ three_b() {  # three_b RUN ROLE SUB EPOCHS: the 3B trained on <night>/SUB's apps
     "$PY" "$HERE/select.py" --iq "$IQ" --suite "$SUITE" --programs "$W/answers-$N-$role.jsonl" \
       --checks "$W/answers-$N-$role-checks.jsonl" --out "$W/answers-$N-$role-sel.jsonl" \
       --summary "$W/select-$N-$role.json" 2>&1 | tee -a "$LOG"
+  fi
+  # The same, its decoding held to applang's grammar (no syntax error can be written: last night
+  # 79 of the 3B's 137 compile failures were syntax), and chosen by its own checks again.
+  if [ -s "$HERE/applang.gbnf" ] && [ "${GRAMMAR:-1}" = 1 ]; then
+    morning
+    GRAMMAR_FILE="$HERE/applang.gbnf" gen "answers-$N-$role-gram.jsonl" prompts-held.jsonl "$KR" 32 \
+      --run "$run" --name "$role-gram" || return 0
+    if [ -s "$W/answers-$N-$role-checks.jsonl" ] || [ -s "$D/answers-$N-$role-checks.jsonl" ]; then
+      "$PY" "$HERE/select.py" --iq "$IQ" --suite "$SUITE" --programs "$W/answers-$N-$role-gram.jsonl" \
+        --checks "$W/answers-$N-$role-checks.jsonl" --out "$W/answers-$N-$role-gram-sel.jsonl" \
+        --summary "$W/select-$N-$role-gram.json" 2>&1 | tee -a "$LOG"
+    fi
   fi
 }
 

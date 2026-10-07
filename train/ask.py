@@ -40,6 +40,7 @@ def parse_args():
     h.add_argument("--k", type=int, default=4)
     h.add_argument("--jobs", type=int, default=16, help="requests at once (serve.py's --parallel)")
     h.add_argument("--seed", type=int, default=1)
+    h.add_argument("--grammar", help="a GBNF file: the server samples only what it accepts (train/applang.gbnf)")
     return h.parse_args()
 
 
@@ -48,11 +49,13 @@ def settings(r):
             "max_new_tokens": int(r["max_tokens"]), "engine": ENGINE}
 
 
-def ask(url, r, seed):
+def ask(url, r, seed, grammar=None):
     """One sample of r: its reply, cut where Studio stops reading."""
     body = {"messages": r["messages"], "max_tokens": int(r["max_tokens"]), "temperature": float(r["temperature"]),
             "top_p": 1.0, "top_k": 0, "min_p": 0.0, "repeat_penalty": 1.0, "seed": seed, "stream": True,
             "cache_prompt": True}
+    if grammar:
+        body["grammar"] = grammar
     req = urllib.request.Request(url + "/v1/chat/completions", data=json.dumps(body).encode("utf-8"),
                                  headers={"content-type": "application/json"})
     text = ""
@@ -79,6 +82,10 @@ def main():
     a = parse_args()
     prompts = [json.loads(l) for l in open(a.prompts, encoding="utf-8") if l.strip()]
     want = {r["task"]: settings(r) for r in prompts}
+    if a.grammar:  # an answer under a grammar is another way of making it
+        g = common.sha256_text(open(a.grammar, encoding="utf-8").read())[:16]
+        for v in want.values():
+            v["grammar"] = g
     kept, have = [], {}
     if os.path.exists(a.out):
         for line in open(a.out, encoding="utf-8"):
@@ -96,11 +103,12 @@ def main():
     if not jobs:
         print("every task of %s is answered in %s already" % (a.prompts, a.out))
         return
+    grammar = open(a.grammar, encoding="utf-8").read() if a.grammar else None
     lock, out, t0 = threading.Lock(), list(kept), time.time()
 
     def one(job):
         i, s, r = job
-        reply = ask(a.url, r, a.seed + i * 1000 + s)
+        reply = ask(a.url, r, a.seed + i * 1000 + s, grammar)
         line = json.dumps({"task": r["task"], "model": a.name, "reply": reply, "gen": want[r["task"]]},
                           ensure_ascii=False)
         with lock:

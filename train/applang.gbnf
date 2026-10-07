@@ -1,0 +1,182 @@
+# applang.gbnf: a reply to Studio as llama.cpp's GBNF, so a model served by llama-server
+# (ask.py --grammar train/applang.gbnf: the chat body's "grammar" field) can only write an app
+# that lexes and parses. It follows programs/applang-syntax (lex.rs, parse.rs) token by token;
+# names declared before use, types and arity stay the checker's (E03xx). test_grammar.py runs
+# every suite reference and a list of syntax errors through llama.cpp's own grammar engine.
+#
+# The reply: "```app\n", the program, "\n```", then the end of the reply. The program's first
+# token is a comment, as in "// Name: what it does" (Studio reads only such an "honest" block),
+# and it ends with a line break, so the closing fence starts its line (coder::ai::blocks).
+#
+# What a context-free grammar leaves out: the parser's depth cap of 96 (E0102: about 90 operators
+# in one chain, or nesting that deep), a state's list literal past 4,096 items (E0216), and a
+# string fill past 256 KB (E0212, ["long text"; 4096]). Narrower than applang in one place: a
+# block comment holds no backtick (a line in one that starts with ``` would close the block).
+
+root ::= "```app\n" prog "\n```"
+
+# Trivia between tokens: ws may be empty, sp may not (between two words: `let x`, `else if`).
+# A // comment runs to its line break; the program's last line may end in one (lc).
+prog ::= [ \t\r\n]* ( lc | ( lcn | bc ) ( ws state-item )* ( ws item ( ws ( ";" | item ) )* )? ws lc? )
+ws ::= ( [ \t\r\n] | lcn | bc )*
+sp ::= ( [ \t\r\n] | lcn | bc ) ws
+lc ::= "//" [^\n]*
+lcn ::= lc "\n"
+# /* */ nests. As the lexer scans: */ before /*, else one char. bc-text holds neither; one
+# ending in * is not followed by / (that is a close), nor one ending in / by * (an open).
+bc ::= "/*" ( bc-text "/"* bc )* bc-text "*"* "*/"
+bc-text ::= ( [^*/`] | "*"+ [^*/`] | "/"+ [^*/`] )*
+
+# ---- top level: states first (and stray ;), then functions, handlers and widgets ----
+state-item ::= ";" | ( "saved" sp )? "state" sp name ws "=" ws lit ws ";"
+item ::= fn | every | on-key | widget
+
+lit ::= int-lit | bool-lit | str | "[" ws ( int-lit ws ( fill | int-rest ) | bool-lit ws ( fill | bool-rest ) | str ws ( fill | str-rest ) )
+# A literal's int may be the least one, -2^63.
+int-lit ::= int | "-" ws ( int | ( zeros u )? "9" u "2" u "2" u "3" u "3" u "7" u "2" u "0" u "3" u "6" u "8" u "5" u "4" u "7" u "7" u "5" u "8" u "0" u "8" u )
+bool-lit ::= "true" | "false"
+fill ::= ";" ws count ws "]"
+int-rest ::= "]" | "," ws ( "]" | int-lit ws int-rest )
+bool-rest ::= "]" | "," ws ( "]" | bool-lit ws bool-rest )
+str-rest ::= "]" | "," ws ( "]" | str ws str-rest )
+# A fill's count: an int from 0 to 4096.
+count ::= zeros ( u count-sig )? u | count-sig u
+count-sig ::= [1-9] ( u [0-9] ){0,2} | [1-3] ( u [0-9] ){3} | "4" u "0" u ( [0-8] u [0-9] | "9" u [0-6] )
+
+fn ::= "fn" sp name ws "(" ws ( ")" | param ws param-rest ) ws ( "->" ws type ws )? block
+param ::= name ws ":" ws type
+param-rest ::= ")" | "," ws param ws param-rest
+type ::= "int" | "bool" | "string"
+
+every ::= "every" kx ws block
+on-key ::= "on" sp "key" ws str ws block
+
+# ---- widgets ----
+widget ::= "label" kx ws ";" |
+  "button" kx ws block |
+  "input" sp name ws ";" |
+  ( "row" | "col" ) ws wblock |
+  wif |
+  "for" sp name sp "in" kx ws ".." ws expr ws wblock |
+  "grid" kx ws "," ws expr ( ws "," ws expr )? ws tail |
+  "canvas" kx ws "," ws expr ws "," ws scene ws tail
+wif ::= "if" kx ws wblock ( ws "else" ( ws wblock | sp wif ) )?
+wblock ::= "{" ws ( ( ";" | widget ) ws )* "}"
+tail ::= ";" | block
+# A canvas draws with a call, perhaps in parentheses.
+scene ::= name ws args | "(" ws scene ws ")"
+
+# ---- statements ----
+stmt ::= "let" sp name ws "=" ws expr ws ";" |
+  name ws ( args ws ";" | "[" ws expr ws "]" ws assign ws expr ws ";" | assign ws expr ws ";" ) |
+  sif |
+  "repeat" kx ws block |
+  "for" sp name sp "in" kx ws ".." ws expr ws block |
+  "return" ( ws ";" | kx ws ";" )
+assign ::= "=" | "+=" | "-="
+sif ::= "if" kx ws block ( ws "else" ( ws block | sp sif ) )?
+block ::= "{" ws ( ( ";" | stmt ) ws )* "}"
+
+# ---- expressions (one flat chain: precedence shapes the tree, not what parses) ----
+# kx: an expression after a keyword; a word (name, number, true) needs trivia before it.
+kx ::= sp expr | pexpr
+expr ::= unary ( ws bin )*
+pexpr ::= punary ( ws bin )*
+# After a / operator no comment may start: // or /* would be one.
+bin ::= op ws unary | "/" ( [ \t\r\n] ws )? unary
+op ::= "||" | "&&" | "==" | "!=" | "<=" | ">=" | "<" | ">" | "+" | "-" | "*" | "%"
+unary ::= ( "-" | "!" ) ws unary | primary
+punary ::= ( "-" | "!" ) ws unary | str | list | paren
+primary ::= int | "true" | "false" | str | name ( ws ( args | "[" ws expr ws "]" ) )? | list | paren
+args ::= "(" ws ( ")" | expr ws args-rest )
+args-rest ::= ")" | "," ws expr ws args-rest
+list ::= "[" ws ( "]" | expr ws ( ";" ws expr ws "]" | list-rest ) )
+list-rest ::= "]" | "," ws ( "]" | expr ws list-rest )
+paren ::= "(" ws expr ws ")"
+
+# ---- tokens ----
+# An int: [0-9][0-9_]* (leading zeros too), at most 9223372036854775807 (i64::MAX).
+int ::= zeros ( u nonzero )? u | nonzero u
+zeros ::= "0" ( u "0" )*
+u ::= "_"*
+nonzero ::= [1-9] ( u [0-9] ){0,17} | max19
+# 19 significant digits, at most 9223372036854775807: digit by digit.
+max19 ::= [1-8] ( u [0-9] ){18} | "9" u max19-1
+max19-1 ::= [0-1] ( u [0-9] ){17} | "2" u max19-2
+max19-2 ::= [0-1] ( u [0-9] ){16} | "2" u max19-3
+max19-3 ::= [0-2] ( u [0-9] ){15} | "3" u max19-4
+max19-4 ::= [0-2] ( u [0-9] ){14} | "3" u max19-5
+max19-5 ::= [0-6] ( u [0-9] ){13} | "7" u max19-6
+max19-6 ::= [0-1] ( u [0-9] ){12} | "2" u max19-7
+max19-7 ::= "0" u max19-8
+max19-8 ::= [0-2] ( u [0-9] ){10} | "3" u max19-9
+max19-9 ::= [0-5] ( u [0-9] ){9} | "6" u max19-10
+max19-10 ::= [0-7] ( u [0-9] ){8} | "8" u max19-11
+max19-11 ::= [0-4] ( u [0-9] ){7} | "5" u max19-12
+max19-12 ::= [0-3] ( u [0-9] ){6} | "4" u max19-13
+max19-13 ::= [0-6] ( u [0-9] ){5} | "7" u max19-14
+max19-14 ::= [0-6] ( u [0-9] ){4} | "7" u max19-15
+max19-15 ::= [0-4] ( u [0-9] ){3} | "5" u max19-16
+max19-16 ::= [0-7] ( u [0-9] ){2} | "8" u max19-17
+max19-17 ::= "0" u max19-18
+max19-18 ::= [0-7]
+# One line; the only escapes are \" \\ and \n.
+str ::= "\"" ( [^\"\\\n] | "\\" [\"\\n] )* "\""
+# A name: [A-Za-z_][A-Za-z0-9_]*, but none of the 16 keywords (a trie of their prefixes).
+name ::= [A-Z_adghjkm-qu-z] name-tail | "b" name-b | "c" name-c | "e" name-e | "f" name-f | "i" name-i | "l" name-l | "r" name-r | "s" name-s | "t" name-t
+name-tail ::= [A-Za-z0-9_]*
+name-b ::= ( [0-9A-Z_a-tv-z] name-tail | "u" name-bu )?
+name-bu ::= ( [0-9A-Z_a-su-z] name-tail | "t" name-but )?
+name-but ::= ( [0-9A-Z_a-su-z] name-tail | "t" name-butt )?
+name-butt ::= ( [0-9A-Z_a-np-z] name-tail | "o" name-butto )?
+name-butto ::= ( [0-9A-Z_a-mo-z] name-tail | "n" name-button )?
+name-button ::= [A-Za-z0-9_]+
+name-c ::= ( [0-9A-Z_a-np-z] name-tail | "o" name-co )?
+name-co ::= ( [0-9A-Z_a-km-z] name-tail | "l" name-col )?
+name-col ::= [A-Za-z0-9_]+
+name-e ::= ( [0-9A-Z_a-km-z] name-tail | "l" name-el )?
+name-el ::= ( [0-9A-Z_a-rt-z] name-tail | "s" name-els )?
+name-els ::= ( [0-9A-Z_a-df-z] name-tail | "e" name-else )?
+name-else ::= [A-Za-z0-9_]+
+name-f ::= ( [0-9A-Z_b-mp-z] name-tail | "a" name-fa | "n" name-fn | "o" name-fo )?
+name-fa ::= ( [0-9A-Z_a-km-z] name-tail | "l" name-fal )?
+name-fal ::= ( [0-9A-Z_a-rt-z] name-tail | "s" name-fals )?
+name-fals ::= ( [0-9A-Z_a-df-z] name-tail | "e" name-false )?
+name-false ::= [A-Za-z0-9_]+
+name-fn ::= [A-Za-z0-9_]+
+name-fo ::= ( [0-9A-Z_a-qs-z] name-tail | "r" name-for )?
+name-for ::= [A-Za-z0-9_]+
+name-i ::= ( [0-9A-Z_a-eg-mo-z] name-tail | "f" name-if | "n" name-in )?
+name-if ::= [A-Za-z0-9_]+
+name-in ::= [0-9A-Z_a-oq-z] name-tail | "p" name-inp
+name-inp ::= ( [0-9A-Z_a-tv-z] name-tail | "u" name-inpu )?
+name-inpu ::= ( [0-9A-Z_a-su-z] name-tail | "t" name-input )?
+name-input ::= [A-Za-z0-9_]+
+name-l ::= ( [0-9A-Z_b-df-z] name-tail | "a" name-la | "e" name-le )?
+name-la ::= ( [0-9A-Z_ac-z] name-tail | "b" name-lab )?
+name-lab ::= ( [0-9A-Z_a-df-z] name-tail | "e" name-labe )?
+name-labe ::= ( [0-9A-Z_a-km-z] name-tail | "l" name-label )?
+name-label ::= [A-Za-z0-9_]+
+name-le ::= ( [0-9A-Z_a-su-z] name-tail | "t" name-let )?
+name-let ::= [A-Za-z0-9_]+
+name-r ::= ( [0-9A-Z_a-df-np-z] name-tail | "e" name-re | "o" name-ro )?
+name-re ::= ( [0-9A-Z_a-oq-su-z] name-tail | "p" name-rep | "t" name-ret )?
+name-rep ::= ( [0-9A-Z_a-df-z] name-tail | "e" name-repe )?
+name-repe ::= ( [0-9A-Z_b-z] name-tail | "a" name-repea )?
+name-repea ::= ( [0-9A-Z_a-su-z] name-tail | "t" name-repeat )?
+name-repeat ::= [A-Za-z0-9_]+
+name-ret ::= ( [0-9A-Z_a-tv-z] name-tail | "u" name-retu )?
+name-retu ::= ( [0-9A-Z_a-qs-z] name-tail | "r" name-retur )?
+name-retur ::= ( [0-9A-Z_a-mo-z] name-tail | "n" name-return )?
+name-return ::= [A-Za-z0-9_]+
+name-ro ::= ( [0-9A-Z_a-vx-z] name-tail | "w" name-row )?
+name-row ::= [A-Za-z0-9_]+
+name-s ::= ( [0-9A-Z_a-su-z] name-tail | "t" name-st )?
+name-st ::= ( [0-9A-Z_b-z] name-tail | "a" name-sta )?
+name-sta ::= ( [0-9A-Z_a-su-z] name-tail | "t" name-stat )?
+name-stat ::= ( [0-9A-Z_a-df-z] name-tail | "e" name-state )?
+name-state ::= [A-Za-z0-9_]+
+name-t ::= ( [0-9A-Z_a-qs-z] name-tail | "r" name-tr )?
+name-tr ::= ( [0-9A-Z_a-tv-z] name-tail | "u" name-tru )?
+name-tru ::= ( [0-9A-Z_a-df-z] name-tail | "e" name-true )?
+name-true ::= [A-Za-z0-9_]+
