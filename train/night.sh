@@ -18,6 +18,9 @@
 #      written from the asks (one run, two skills); scored on the held-out tasks one shot (q3, 4
 #      samples a task), then made to write each held-out ask's check (q3-checks), and its sample
 #      that its own check passes chosen (q3-sel, train/select.py: else one that compiles and runs);
+#      the same under applang's grammar (q3-gram, q3-gram-sel); and each held-out task made as
+#      Studio makes it, the model writing, the harness checking and asking for fixes, the best
+#      kept (q3-make, tools/eval's iq: the system a person would use, not one shot);
 #   2. the untuned 3B, answered once ever (new held-out tasks as they come): what tonight adds;
 #   3. only with --with-05: the untuned and the tuned 0.5B, and a self-taught round (unless
 #      --no-self): tonight's 0.5B answers the train tasks 8 times, its answers that pass join the
@@ -44,7 +47,8 @@
 # NIGHT_DRY=1 (with a scratch --root) runs the whole flow with made-up answers and runs, no model
 # and no GPU: a by-day test of the night's control flow.
 # Environment: COMPUTEHUB_DATA, PYTHON, MIN_FREE_GB (50), Q3_BY (3), SELF_BY (5), Q3_EPOCHS (1),
-# ROUND_EPOCHS (1), ROUND_MIN (200), ROUND_WAIT (300 s), NIGHT_DRY.
+# ROUND_EPOCHS (1), ROUND_MIN (200), ROUND_WAIT (300 s), GRAMMAR (1), MAKE (1: the 3B's make
+# loop, not the rounds'), NIGHT_DRY.
 # To pause: touch <root>/iq/PAUSE (no new step starts), then stop the running step's python.
 set -uo pipefail
 
@@ -173,9 +177,10 @@ if [ ! -s "$S/inputs.sha256" ]; then
 fi
 SUITE="$I/iq.jsonl"
 
-(cd "$REPO" && cargo build -q --release -p compusophy-teach -p compusophy-iq) || { say "build failed"; exit 6; }
+(cd "$REPO" && cargo build -q --release -p compusophy-teach -p compusophy-iq -p eval) || { say "build failed"; exit 6; }
 TEACH="$REPO/target/release/teach"
 IQ=$(cygpath -m "$REPO/target/release/iq.exe" 2>/dev/null || echo "$REPO/target/release/iq")
+EVAL="$REPO/target/release/eval"
 
 # The scorer: llama-server's CUDA build when it is there (continuous batching over 16 slots, the
 # coder's system prompt cached once, each stream closed where Studio stops reading, so no batch
@@ -272,7 +277,7 @@ finish() {  # the report, from whatever answers tonight has, then stop
     [ -s "$fk" ] || continue
     case "$fk" in
       *-checks.jsonl) ;;
-      *-sel.jsonl) files+=("$W/$(basename "$fk")=1") ;;
+      *-sel.jsonl | *-make.jsonl) files+=("$W/$(basename "$fk")=1") ;;
       *) files+=("$W/$(basename "$fk")=$KR") ;;
     esac
   done
@@ -338,14 +343,44 @@ three_b() {  # three_b RUN ROLE SUB EPOCHS: the 3B trained on <night>/SUB's apps
   # 79 of the 3B's 137 compile failures were syntax), and chosen by its own checks again.
   if [ -s "$HERE/applang.gbnf" ] && [ "${GRAMMAR:-1}" = 1 ]; then
     morning
-    GRAMMAR_FILE="$HERE/applang.gbnf" gen "answers-$N-$role-gram.jsonl" prompts-held.jsonl "$KR" 32 \
-      --run "$run" --name "$role-gram" || return 0
-    if [ -s "$W/answers-$N-$role-checks.jsonl" ] || [ -s "$D/answers-$N-$role-checks.jsonl" ]; then
+    if GRAMMAR_FILE="$HERE/applang.gbnf" gen "answers-$N-$role-gram.jsonl" prompts-held.jsonl "$KR" 32 \
+         --run "$run" --name "$role-gram" && [ -s "$D/answers-$N-$role-checks.jsonl" ]; then
       "$PY" "$HERE/select.py" --iq "$IQ" --suite "$SUITE" --programs "$W/answers-$N-$role-gram.jsonl" \
         --checks "$W/answers-$N-$role-checks.jsonl" --out "$W/answers-$N-$role-gram-sel.jsonl" \
         --summary "$W/select-$N-$role-gram.json" 2>&1 | tee -a "$LOG"
     fi
   fi
+  # And made as Studio makes it (ROLE-make): what a person using it would get.
+  [ "${MAKE:-1}" = 1 ] && make_loop "$run" "$role"
+  return 0
+}
+
+make_loop() {  # make_loop RUN ROLE: each held-out task made as Studio makes it (coder::Make: write,
+  # check, ask for a fix with the problem's account, keep the best), RUN's model on llama-server
+  # answering every turn; one answer a task, answers-<night>-ROLE-make.jsonl (tools/eval's iq,
+  # which skips the tasks the file holds, so a rerun resumes). The make's own clock is lifted
+  # (16 makes share the GPU); its other budgets are Studio's.
+  local run=$1 role=$2 out="answers-$N-$2-make.jsonl"
+  morning
+  complete "$out" prompts-held.jsonl 1 && return 0
+  if [ "$DRY" = 1 ]; then
+    say "dry: makes $out"
+    "$PY" - "$I/prompts-held.jsonl" "$W/$out" <<'PY'
+import json, sys
+rows = [json.loads(l) for l in open(sys.argv[1], encoding="utf-8") if l.strip()]
+open(sys.argv[2], "w", encoding="utf-8").write("".join(
+    json.dumps({"task": r["task"], "model": "dry", "reply": "dry"}) + "\n" for r in rows))
+PY
+    return 0
+  fi
+  [ "$SERVER" = 1 ] || { say "$out skipped: a make needs llama-server"; return 0; }
+  say "make: $out (Studio's loop; the model on llama-server)"
+  (cd "$REPO" && "$PY" train/export.py --run "$run" --quant q8_0 \
+     && "$PY" train/serve.py --run "$run" --quant q8_0 --parallel 16 --ctx 12288 \
+     && "$EVAL" iq --url http://127.0.0.1:8081/v1/chat/completions --model "$role" --suite "$SUITE" \
+          --held "$I/held.txt" --jobs 16 --ms 3600000 --out "$W/$out") 2>&1 | quiet
+  (cd "$REPO" && "$PY" train/serve.py --stop) 2>&1 | quiet
+  return 0
 }
 
 [ "$REPORT" = 1 ] && finish "report written (--report)"
@@ -456,7 +491,7 @@ while [ "$UNTIL" = 1 ] && [ "$BIG" = 1 ]; do
     (cd "$S/r$round" && sha256sum sft.jsonl $(ls checks.jsonl 2>/dev/null) > inputs.sha256)
     say "round $round: $(wc -l < "$S/r$round/sft.jsonl") records ($prev before)"
   fi
-  if ! three_b "$N-q3-r$round" "q3-r$round" "r$round" "${ROUND_EPOCHS:-1}"; then
+  if ! MAKE=0 three_b "$N-q3-r$round" "q3-r$round" "r$round" "${ROUND_EPOCHS:-1}"; then
     fails=$((fails + 1))
     [ "$fails" -ge 2 ] && finish "round $round's training failed twice"
     continue

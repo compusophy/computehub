@@ -10,6 +10,7 @@ authors.workspace = true
 repository.workspace = true
 
 [dependencies]
+compusophy-coder.workspace = true
 compusophy-evals.workspace = true
 compusophy-makes.workspace = true
 compusophy-uiwire.workspace = true

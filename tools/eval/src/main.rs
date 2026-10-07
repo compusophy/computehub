@@ -9,7 +9,17 @@
 //! cargo run -p eval -- replay --run ID [--write] [--loose]
 //! cargo run -p eval -- summary [--a RUN|MODEL] [--b RUN|MODEL] [--markdown]
 //! cargo run -p eval -- list
+//! cargo run -p eval -- iq --suite S --model M --out OUT [--held H | --tasks a,b] [--url U]
+//!                         [--name N] [--jobs 1] [--ms MS]
 //! ```
+//!
+//! `iq` makes the IQ suite's tasks (the families `--held` lists, or `--tasks`, else all) as
+//! Studio makes them (`coder::Make`: write, check, fix, keep the best) over `--url`: the free
+//! AI by default, paced as `run` is; another URL (a llama-server's chat completions) unpaced,
+//! `--jobs` at once, each request stopped once its program is in. Each make has `--ms` of its
+//! requests' time (Studio's by default). An answer line a task for `iq score` (the program the
+//! make installed, in an app block; no reply if it installed none, and how the make went) is
+//! appended to `--out` as it ends; tasks already there are skipped, so a run cut off resumes.
 //!
 //! `--dir D` reads and writes `D/results` and `D/replays` instead of the repo's `evals/`. Runs
 //! and replays need a debug build (as above): a checker that panics fails its app only where
@@ -20,9 +30,11 @@
 use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
+use std::sync::Mutex;
 use std::sync::mpsc::{RecvTimeoutError, channel};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use coder::json::{Json, quote};
 use evals::record::{Meta, Record, load};
 use evals::replay::Replay;
 use evals::run::{Answer, At, Feed, MODELS, Wire};
@@ -49,20 +61,22 @@ fn sent_file() -> PathBuf {
     std::env::temp_dir().join("compusophy-eval-sent")
 }
 
-/// The live wire: curl, at most `max` requests this run, each paced by this machine's
-/// requests of the last hour (`sent`, ms since the epoch).
+/// The live wire: curl to `url`, at most `max` requests this run; to the free AI each paced by
+/// this machine's requests of the last hour (`sent`, ms since the epoch), each at most 300 s.
 struct Curl {
     sent: Vec<u64>,
     n: usize,
     max: usize,
+    url: String,
+    paced: bool,
 }
 
 impl Curl {
-    fn new(max: usize) -> Curl {
+    fn new(max: usize, url: &str) -> Curl {
         let since = now_ms().saturating_sub(HOUR);
         let kept = std::fs::read_to_string(sent_file()).unwrap_or_default();
         let sent = kept.lines().filter_map(|l| l.trim().parse().ok()).filter(|&t| t > since);
-        Curl { sent: sent.collect(), n: 0, max }
+        Curl { sent: sent.collect(), n: 0, max, url: url.into(), paced: url == URL }
     }
 
     /// Waits until a request keeps under the limits, 2 s after the last at least.
@@ -101,8 +115,11 @@ impl Wire for Curl {
         if self.n >= self.max {
             return fail("the eval's request budget is spent".into());
         }
-        self.pace();
-        let args = ["-sS", "-N", "--max-time", "300", "-X", "POST", URL, "-H", ORIGIN];
+        if self.paced {
+            self.pace();
+        }
+        let secs = if self.paced { "300" } else { "3600" };
+        let args = ["-sS", "-N", "--max-time", secs, "-X", "POST", &self.url, "-H", ORIGIN];
         let more = ["-H", "Content-Type: application/json", "--data-binary", "@-"];
         let mut child = match Command::new("curl")
             .args(args)
@@ -116,8 +133,12 @@ impl Wire for Curl {
             Ok(c) => c,
             Err(e) => return fail(format!("curl: {e}")),
         };
-        self.note();
-        eprintln!("  -> {} request {} ({} bytes)", at.task, at.n, body.len());
+        if self.paced {
+            self.note();
+            eprintln!("  -> {} request {} ({} bytes)", at.task, at.n, body.len());
+        } else {
+            self.n += 1;
+        }
         let (tx, rx) = channel();
         let mut out = child.stdout.take().expect("piped");
         std::thread::spawn(move || {
@@ -148,10 +169,12 @@ impl Wire for Curl {
                     tail.extend_from_slice(&chunk);
                     tail.drain(..tail.len().saturating_sub(512));
                     match feeding.then(|| on(&chunk, ms(t))) {
-                        Some(Feed::Drain) => {
+                        // Only the free AI's receipt is worth reading on for: a local server
+                        // stops writing when its client goes.
+                        Some(Feed::Drain) if self.paced => {
                             (feeding, until) = (false, Some(Instant::now() + DRAIN))
                         }
-                        Some(Feed::Stop) => {
+                        Some(Feed::Drain | Feed::Stop) => {
                             let _ = child.kill();
                             break;
                         }
@@ -274,7 +297,7 @@ fn main() {
                             == (&run, id, trial, true)
                     })
             };
-            let mut wire = Curl::new(max as usize);
+            let mut wire = Curl::new(max as usize, URL);
             if !wire.sent.is_empty() {
                 eprintln!("{} requests from this machine in the last hour", wire.sent.len());
             }
@@ -393,6 +416,71 @@ fn main() {
             print!("{}", evals::summary::compare(&a, &ra, &b, &rb));
         }
         Some("list") => print!("{}", makes::listing()),
-        _ => eprintln!("usage: eval run|replay|summary|list (see tools/eval/src/main.rs)"),
+        Some("iq") => iq(&args),
+        _ => eprintln!("usage: eval run|replay|summary|list|iq (see tools/eval/src/main.rs)"),
     }
+}
+
+/// `iq`: see the crate docs.
+fn iq(args: &[String]) {
+    let need = |name: &str| arg(args, name).unwrap_or_else(|| panic!("{name} is needed"));
+    let (suite, out, model) = (need("--suite"), need("--out"), need("--model"));
+    let url = arg(args, "--url").unwrap_or_else(|| URL.into());
+    let name = arg(args, "--name").unwrap_or_else(|| model.clone());
+    let (held, only) = (arg(args, "--held").map(|h| read(&h)), arg(args, "--tasks"));
+    let mut k = coder::Knobs::default();
+    k.ms = arg(args, "--ms").and_then(|v| v.parse().ok()).unwrap_or(k.ms);
+    let jobs = arg(args, "--jobs").and_then(|v| v.parse().ok()).unwrap_or(1usize);
+    let jobs = if url == URL { 1 } else { jobs.max(1) };
+    let text = |j: &Json, key: &str| j.get(key).and_then(Json::text).unwrap_or("").to_string();
+    let had: Vec<String> =
+        read(&out).lines().filter_map(Json::parse).map(|j| text(&j, "task")).collect();
+    // A dev tool's one run: its tasks' words live as long as it does.
+    let leak = |s: String| -> &'static str { Box::leak(s.into_boxed_str()) };
+    let tasks: Vec<makes::Task> = read(&suite)
+        .lines()
+        .filter_map(Json::parse)
+        .filter(|j| {
+            let (id, family) = (text(j, "id"), text(j, "family"));
+            let asked = match (&only, &held) {
+                (Some(o), _) => o.split(',').any(|o| o == id),
+                (None, Some(h)) => h.lines().any(|f| f.trim() == family),
+                (None, None) => true,
+            };
+            asked && !had.contains(&id)
+        })
+        .map(|j| makes::Task {
+            id: leak(text(&j, "id")),
+            size: "",
+            ask: leak(text(&j, "ask")),
+            check: |_| Ok(()),
+        })
+        .collect();
+    eprintln!("{} tasks to make, {} made already", tasks.len(), had.len());
+    let (next, file) = (Mutex::new(tasks.iter()), Mutex::new(()));
+    std::thread::scope(|s| {
+        for _ in 0..jobs {
+            s.spawn(|| {
+                let mut wire = Curl::new(usize::MAX, &url);
+                while let Some(t) = next.lock().ok().and_then(|mut it| it.next()) {
+                    let (d, _) = evals::run::make(t, &model, 1, k, &mut wire);
+                    eprintln!("{:<28} {} ({} requests)", t.id, d.said(), d.receipt.turns.len());
+                    let program = ["```app\n", d.draft.trim_end_matches('\n'), "\n```"].concat();
+                    let turns: Vec<String> = d.receipt.turns.iter().map(|t| format!("{:?}", t.turn)).collect();
+                    let line = format!(
+                        "{{\"task\":{},\"model\":{},\"reply\":{},\"make\":{{\"said\":{},\"turns\":{},\"code\":{},\"ms\":{}}}}}\n",
+                        quote(t.id),
+                        quote(&name),
+                        quote(if d.install { &program } else { "" }),
+                        quote(&d.said()),
+                        quote(&turns.join(" ")),
+                        d.code,
+                        d.receipt.ms
+                    );
+                    let _one = file.lock();
+                    append(&out, &line);
+                }
+            });
+        }
+    });
 }
