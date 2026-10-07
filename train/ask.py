@@ -46,7 +46,7 @@ def parse_args():
 
 def settings(r):
     return {"temperature": float(r["temperature"]), "top_p": 1.0, "top_k": 0, "repetition_penalty": 1.0,
-            "max_new_tokens": int(r["max_tokens"]), "engine": ENGINE}
+            "max_new_tokens": int(r["max_tokens"]), "engine": ENGINE, "prompt": common.prompt_hash(r["messages"])}
 
 
 def ask(url, r, seed, grammar=None):

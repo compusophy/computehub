@@ -126,7 +126,8 @@ def samples(temp, k):
 def settings(r):
     """What a prompt's samples are made with, as each of its answers records it ("gen")."""
     return {"temperature": float(r["temperature"]), "top_p": SAMPLER["top_p"], "top_k": SAMPLER["top_k"],
-            "repetition_penalty": SAMPLER["repetition_penalty"], "max_new_tokens": int(r["max_tokens"])}
+            "repetition_penalty": SAMPLER["repetition_penalty"], "max_new_tokens": int(r["max_tokens"]),
+            "prompt": common.prompt_hash(r["messages"])}
 
 
 class BlockStop:

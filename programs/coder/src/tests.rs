@@ -373,7 +373,7 @@ fn the_system_prompt_is_stable_and_whole() {
 }
 
 /// The system prompt's hash (see the test above).
-const FNV: u64 = 0x3205_d5e4_cd61_4820;
+const FNV: u64 = 0x9b1a_6771_d343_7fd0;
 
 #[test]
 fn a_clean_write_is_one_request() {

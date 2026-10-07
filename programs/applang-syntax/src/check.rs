@@ -1,16 +1,20 @@
 //! The static checker: the declared states fit in the state limit, every name resolves (to a
-//! state's or a local's slot, written into the tree), every expression has one type, a function
-//! calls only functions above it (so calls never recurse; handlers and widgets call any), a
-//! function with a result ends in `return`, what renders changes nothing, shapes are drawn only
-//! where a canvas draws (in the function it calls, and the functions those call: a function that
-//! draws changes nothing), and which state lists keep their length. Unguarded recursion is safe:
-//! the parser bounds AST depth.
+//! state's or a local's slot, written into the tree), every expression has one type, functions
+//! call one another in any order but never recurse (each is checked after those it calls), a
+//! function with a result ends in `return`, `break` and `continue` sit in loops, what renders
+//! changes nothing, shapes are drawn only where a canvas draws (in the function it calls, and the
+//! functions those call: a function that draws changes nothing), no state list is cleared for
+//! good, and which state lists keep their length. Unguarded recursion is safe: the parser bounds
+//! AST depth.
+
+use std::cmp::Reverse;
+use std::collections::BinaryHeap;
 
 use lang::{Diag, Span};
 
 use crate::codes;
-use crate::parse::{BUILTINS, BinOp, Builtin, Call, DRAWN, Expr, Lit, MAX_STATE_BYTES, Program};
-use crate::parse::{SHAPES, Slot};
+use crate::parse::{BUILTINS, BinOp, Builtin, Call, DRAWN, Expr, FnDecl, Lit, MAX_STATE_BYTES};
+use crate::parse::{Program, SHAPES, Slot};
 use crate::parse::{Stmt, Target, Type, UnOp, Var, Widget};
 
 /// The keys an `on key` handler may name, besides a letter or digit.
@@ -24,35 +28,43 @@ const BUILTIN: [Builtin; 19] = [
     Builtin::Pixels, Builtin::Sin, Builtin::Cos,
 ];
 
-/// A checked function as calls see it: name, parameter types, result, whether it changes
-/// nothing, whether it draws.
+/// A checked function as calls see it: parameter types, result, whether it changes nothing,
+/// whether it draws.
 struct Sig {
-    name: String,
     params: Vec<Type>,
     ret: Option<Type>,
     pure: bool,
     draws: bool,
 }
 
-/// What code is checked against: the states (and their declared lengths, 0 for a scalar), the
-/// functions it may call (in a function, those above it), every function's name, the frame's
-/// locals, the result a `return` gives (in a function), whether it may change nothing (a render
-/// or an interval), whether it changed state, which states' lengths it may change, whether the
-/// program has a canvas, whether it may draw (a function, or a canvas's call) and whether it
-/// drew.
+/// What the code does to each state's length: changes it, grows it (a push, an insert or a whole
+/// list assigned) and where it first clears it.
+struct Sizes {
+    resized: Vec<bool>,
+    grown: Vec<bool>,
+    cleared: Vec<Option<Span>>,
+}
+
+/// What code is checked against: the states (and their declared lengths, 0 for a scalar), every
+/// function's signature once checked (a function is checked after those it calls), every
+/// function's name, the frame's locals, the result a `return` gives (in a function), whether it
+/// may change nothing (a render or an interval), whether it changed state, what it does to the
+/// states' lengths, whether the program has a canvas, whether it may draw (a function, or a
+/// canvas's call), whether it drew, and how many loops enclose it in its function or handler.
 struct Ck<'a> {
     states: &'a [(String, Type)],
     lens: &'a [usize],
-    sigs: &'a [Sig],
+    sigs: &'a [Option<Sig>],
     names: &'a [String],
     locals: Vec<(String, Type)>,
     ret: Option<Option<Type>>,
     pure: bool,
     changes: bool,
-    resized: Vec<bool>,
+    sizes: Sizes,
     canvas: bool,
     draw: bool,
     drew: bool,
+    loops: u32,
 }
 
 fn mismatch(msg: String, sp: Span) -> Diag {
@@ -81,16 +93,13 @@ pub(crate) fn check(p: &mut Program) -> Result<(), Diag> {
         lens.push(if let Lit::List(_, items) = &s.init { items.len() } else { 0 });
     }
     let names: Vec<String> = p.fns.iter().map(|f| f.name.clone()).collect();
-    let (mut sigs, mut resized) = (Vec::new(), vec![false; states.len()]);
     // The names that came with the canvas are built in only beside one: an older program may
     // have its own `line`; and `pixels` came later still, so it may have its own beside one.
     let canvas = p.widgets.iter().any(has_canvas);
-    for f in &mut p.fns {
+    for (k, f) in p.fns.iter().enumerate() {
         let built = BUILTINS.iter().position(|b| *b == f.name);
         let beside = |i| canvas && i != Builtin::Pixels as usize;
-        if sigs.iter().any(|s: &Sig| s.name == f.name)
-            || built.is_some_and(|i| i < DRAWN || beside(i))
-        {
+        if names[..k].contains(&f.name) || built.is_some_and(|i| i < DRAWN || beside(i)) {
             let msg = match built {
                 Some(DRAWN..) => format!(
                     "`{}` is built in beside a canvas (rect, circle, ring, line, text and sprite \
@@ -106,23 +115,28 @@ pub(crate) fn check(p: &mut Program) -> Result<(), Diag> {
                 return Err(dup(n, f.name_span));
             }
         }
-        // Only the functions above it: so no call recurses.
-        let (sigs_now, locals) = (&sigs[..], f.params.clone());
+    }
+    let n = states.len();
+    let mut sizes =
+        Sizes { resized: vec![false; n], grown: vec![false; n], cleared: vec![None; n] };
+    let mut sigs: Vec<Option<Sig>> = p.fns.iter().map(|_| None).collect();
+    for i in order(&p.fns)? {
+        let f = &mut p.fns[i];
         let mut ck = Ck {
             states: &states,
             lens: &lens,
-            sigs: sigs_now,
+            sigs: &sigs,
             names: &names,
-            locals,
-            ret: None,
+            locals: f.params.clone(),
+            ret: Some(f.ret),
             pure: false,
             changes: false,
-            resized,
+            sizes,
             canvas,
             draw: true,
             drew: false,
+            loops: 0,
         };
-        ck.ret = Some(f.ret);
         ck.block(&mut f.body)?;
         if f.ret.is_some() && !ends(&f.body) {
             let msg = format!("`{}` must end in `return` (on every path)", f.name);
@@ -136,10 +150,10 @@ pub(crate) fn check(p: &mut Program) -> Result<(), Diag> {
             );
             return Err(Diag::at_code(codes::IMPURE_RENDER, msg, f.name_span));
         }
-        (f.pure, resized) = (!ck.changes, ck.resized);
+        let (pure, draws) = (!ck.changes, ck.drew);
+        (f.pure, sizes) = (pure, ck.sizes);
         let params = f.params.iter().map(|p| p.1).collect();
-        let (pure, draws) = (f.pure, ck.drew);
-        sigs.push(Sig { name: f.name.clone(), params, ret: f.ret, pure, draws });
+        sigs[i] = Some(Sig { params, ret: f.ret, pure, draws });
     }
     let mut ck = Ck {
         states: &states,
@@ -150,10 +164,11 @@ pub(crate) fn check(p: &mut Program) -> Result<(), Diag> {
         ret: None,
         pure: true,
         changes: false,
-        resized,
+        sizes,
         canvas,
         draw: false,
         drew: false,
+        loops: 0,
     };
     for e in &mut p.everys {
         ck.pure = true;
@@ -174,10 +189,173 @@ pub(crate) fn check(p: &mut Program) -> Result<(), Diag> {
         ck.handler(&mut k.body, &[])?;
     }
     p.widgets.iter_mut().try_for_each(|w| ck.widget(w))?;
-    for (s, resized) in p.states.iter_mut().zip(ck.resized) {
+    // A list a clear empties and nothing grows again holds nothing from then on: a reset meant as
+    // `board = [0; 9];`, whose every index would fault.
+    for (i, s) in p.states.iter().enumerate() {
+        let (Some(sp), false, Lit::List(t, items)) =
+            (ck.sizes.cleared[i], ck.sizes.grown[i], &s.init)
+        else {
+            continue;
+        };
+        if items.is_empty() {
+            continue;
+        }
+        let zero = match t {
+            Type::Bools => "false",
+            Type::Strs => "\"\"",
+            _ => "0",
+        };
+        let msg = format!(
+            "`clear({0})` empties {0} for good: nothing pushes to, inserts into or assigns {0}, \
+             so after it {0} has no items. To reset it, assign a fresh list: {0} = [{zero}; {1}];",
+            s.name,
+            items.len()
+        );
+        return Err(Diag::at_code(codes::CLEARED_FOR_GOOD, msg, sp));
+    }
+    for (s, resized) in p.states.iter_mut().zip(ck.sizes.resized) {
         s.fixed = !resized;
     }
     Ok(())
+}
+
+/// The functions' indexes, each after every function it calls (so a call meets a checked
+/// callee), the earliest in the source first where the order is free; or, if a function calls
+/// itself (directly or through others), an error at that call.
+fn order(fns: &[FnDecl]) -> Result<Vec<usize>, Diag> {
+    let n = fns.len();
+    // Each function's calls of functions: the callee and the call's span, in body order.
+    let calls: Vec<Vec<(usize, Span)>> = fns
+        .iter()
+        .map(|f| {
+            let mut out = Vec::new();
+            each_call(&f.body, &mut |c| {
+                if let Some(g) = fns.iter().position(|g| g.name == c.name) {
+                    out.push((g, c.span));
+                }
+            });
+            out
+        })
+        .collect();
+    let mut waiting: Vec<usize> = calls.iter().map(Vec::len).collect();
+    let mut callers = vec![Vec::new(); n];
+    for (f, cs) in calls.iter().enumerate() {
+        for &(g, _) in cs {
+            callers[g].push(f);
+        }
+    }
+    let mut ready: BinaryHeap<Reverse<usize>> =
+        (0..n).filter(|&f| waiting[f] == 0).map(Reverse).collect();
+    let mut order = Vec::with_capacity(n);
+    while let Some(Reverse(f)) = ready.pop() {
+        order.push(f);
+        for &c in &callers[f] {
+            waiting[c] -= 1;
+            if waiting[c] == 0 {
+                ready.push(Reverse(c));
+            }
+        }
+    }
+    if order.len() == n {
+        return Ok(order);
+    }
+    // Every function left calls one left: walk them until one comes round again.
+    let mut at = (0..n).find(|&f| waiting[f] > 0).unwrap_or(0);
+    let mut path: Vec<(usize, Span)> = Vec::new();
+    loop {
+        if let Some(k) = path.iter().position(|&(g, _)| g == at) {
+            return Err(recursion(fns, &path[k..]));
+        }
+        let Some(&(next, sp)) = calls[at].iter().find(|&&(g, _)| waiting[g] > 0) else {
+            let msg = format!("`{}` calls itself", fns[at].name);
+            return Err(Diag::at_code(codes::RECURSES, msg, fns[at].name_span));
+        };
+        path.push((at, sp));
+        at = next;
+    }
+}
+
+/// The error for `cycle`, each function with its call of the next (the last's of the first): at
+/// the call in the cycle's earliest function.
+fn recursion(fns: &[FnDecl], cycle: &[(usize, Span)]) -> Diag {
+    let Some(k) = (0..cycle.len()).min_by_key(|&k| cycle[k].0) else {
+        return Diag::at_code(codes::RECURSES, "a function calls itself", Span::new(0, 0));
+    };
+    let (f, sp) = cycle[k];
+    let others: Vec<String> = cycle[k + 1..]
+        .iter()
+        .chain(&cycle[..k])
+        .map(|&(g, _)| format!("`{}`", fns[g].name))
+        .collect();
+    let how = match others.len() {
+        0 => String::new(),
+        _ => format!(" through {}", others.join(", ")),
+    };
+    let msg = format!(
+        "`{}` calls itself{how}: applang has no recursion. Loop instead (for, repeat, while), \
+         keeping what is left to do in a list",
+        fns[f].name
+    );
+    Diag::at_code(codes::RECURSES, msg, sp)
+}
+
+/// Runs `f` on every call in `stmts`, the calls in arguments too.
+fn each_call(stmts: &[Stmt], f: &mut dyn FnMut(&Call)) {
+    for s in stmts {
+        match s {
+            Stmt::Let { value, .. } | Stmt::Assign { value, .. } => expr_calls(value, f),
+            Stmt::SetIndex { index, value, .. } => {
+                expr_calls(index, f);
+                expr_calls(value, f);
+            }
+            Stmt::If { arms, els, .. } => {
+                for (cond, body) in arms {
+                    expr_calls(cond, f);
+                    each_call(body, f);
+                }
+                each_call(els, f);
+            }
+            Stmt::Repeat { count, body, .. } => {
+                expr_calls(count, f);
+                each_call(body, f);
+            }
+            Stmt::For { from, to, body, .. } => {
+                expr_calls(from, f);
+                expr_calls(to, f);
+                each_call(body, f);
+            }
+            Stmt::While { cond, body, .. } => {
+                expr_calls(cond, f);
+                each_call(body, f);
+            }
+            Stmt::Return { value, .. } => value.iter().for_each(|v| expr_calls(v, f)),
+            Stmt::Break(_) | Stmt::Continue(_) => {}
+            Stmt::Call(c) => call_calls(c, f),
+        }
+    }
+}
+
+fn expr_calls(e: &Expr, f: &mut dyn FnMut(&Call)) {
+    match e {
+        Expr::Int(..) | Expr::Bool(..) | Expr::Str(..) | Expr::Var(_) => {}
+        Expr::Index(_, inner, _) | Expr::Unary(_, inner, _) => expr_calls(inner, f),
+        Expr::Call(c) => call_calls(c, f),
+        Expr::List(items, _) => items.iter().for_each(|x| expr_calls(x, f)),
+        Expr::Fill(a, b, _) | Expr::Binary(_, a, b, _) | Expr::At(a, b, _) => {
+            expr_calls(a, f);
+            expr_calls(b, f);
+        }
+        Expr::Cond(c, a, b, _) => {
+            expr_calls(c, f);
+            expr_calls(a, f);
+            expr_calls(b, f);
+        }
+    }
+}
+
+fn call_calls(c: &Call, f: &mut dyn FnMut(&Call)) {
+    f(c);
+    c.args.iter().for_each(|a| expr_calls(a, f));
 }
 
 /// Whether `w` is a canvas or holds one.
@@ -201,6 +379,7 @@ fn length(e: &Expr) -> Option<usize> {
             Expr::Int(n, _) => usize::try_from(n).ok(),
             _ => None,
         },
+        Expr::Cond(_, a, b, _) => length(a).filter(|&n| length(b) == Some(n)),
         _ => None,
     }
 }
@@ -299,11 +478,20 @@ impl Ck<'_> {
     /// a grid's, `x` and `y` in a canvas's).
     fn handler(&mut self, body: &mut [Stmt], names: &[&str]) -> Result<(), Diag> {
         let (mark, pure, ret, draw) = (self.locals.len(), self.pure, self.ret, self.draw);
-        (self.pure, self.ret, self.draw) = (false, None, false);
+        let loops = self.loops;
+        (self.pure, self.ret, self.draw, self.loops) = (false, None, false, 0);
         self.locals.extend(names.iter().map(|n| (n.to_string(), Type::Int)));
         let r = self.block(body);
-        (self.pure, self.ret, self.draw) = (pure, ret, draw);
+        (self.pure, self.ret, self.draw, self.loops) = (pure, ret, draw, loops);
         self.locals.truncate(mark);
+        r
+    }
+
+    /// A loop's body: `break` and `continue` may stand in it.
+    fn looped(&mut self, body: &mut [Stmt]) -> Result<(), Diag> {
+        self.loops += 1;
+        let r = self.block(body);
+        self.loops -= 1;
         r
     }
 
@@ -345,7 +533,8 @@ impl Ck<'_> {
                 // A state list given a list of another (or no sure) length changes its length.
                 if let (Slot::State(i), Some(_)) = (target.slot, want.elem()) {
                     let i = i as usize;
-                    self.resized[i] |= length(value) != Some(self.lens[i]);
+                    self.sizes.resized[i] |= length(value) != Some(self.lens[i]);
+                    self.sizes.grown[i] = true;
                 }
             }
             Stmt::SetIndex { target, index, op, value, span } => {
@@ -374,16 +563,22 @@ impl Ck<'_> {
             }
             Stmt::Repeat { count, body, .. } => {
                 self.expect(count, Type::Int, "a `repeat` count")?;
-                self.block(body)?;
+                self.looped(body)?;
             }
             Stmt::For { var, from, to, body, .. } => {
                 self.expect(from, Type::Int, "a `for` start")?;
                 self.expect(to, Type::Int, "a `for` end")?;
                 self.locals.push((var.clone(), Type::Int));
-                let r = self.block(body);
+                let r = self.looped(body);
                 self.locals.pop();
                 r?;
             }
+            Stmt::While { cond, body, .. } => {
+                self.expect(cond, Type::Bool, "a `while` condition")?;
+                self.looped(body)?;
+            }
+            Stmt::Break(sp) => self.in_loop("break", *sp)?,
+            Stmt::Continue(sp) => self.in_loop("continue", *sp)?,
             Stmt::Return { value, span } => match (self.ret, value) {
                 (Some(Some(t)), Some(v)) => self.expect(v, t, "the result")?,
                 (Some(None) | None, None) => {}
@@ -399,6 +594,18 @@ impl Ck<'_> {
             Stmt::Call(c) => _ = self.call(c, false)?,
         }
         Ok(())
+    }
+
+    /// `word` at `sp`, which only a loop may hold.
+    fn in_loop(&self, word: &str, sp: Span) -> Result<(), Diag> {
+        if self.loops > 0 {
+            return Ok(());
+        }
+        let msg = format!(
+            "`{word}` stands only inside a loop (for, repeat or while) of its own function or \
+             handler"
+        );
+        Err(Diag::at_code(codes::OUTSIDE_LOOP, msg, sp))
     }
 
     /// The type of `v`'s slot, resolving it.
@@ -463,7 +670,8 @@ impl Ck<'_> {
             Expr::Str(..) => Ok(Str),
             Expr::Var(v) => self.resolve(v),
             Expr::Index(v, index, _) => {
-                let elem = self.list(v)?;
+                // A string's item is a letter, itself a string.
+                let elem = if self.resolve(v)? == Str { Str } else { self.list(v)? };
                 self.expect(index, Int, "an index")?;
                 Ok(elem)
             }
@@ -494,6 +702,25 @@ impl Ck<'_> {
                 let (lt, rt) = (self.expr(l)?, self.expr(r)?);
                 combine(*op, lt, rt, *sp)
             }
+            Expr::Cond(cond, yes, no, sp) => {
+                self.expect(cond, Bool, "a `?:` condition")?;
+                let (a, b) = (self.expr(yes)?, self.expr(no)?);
+                if a != b {
+                    let (a, b) = (a.name(), b.name());
+                    let msg = format!("the two sides of `?:` give one type, not {a} and {b}");
+                    return Err(mismatch(msg, *sp));
+                }
+                Ok(a)
+            }
+            Expr::At(list, index, _) => {
+                let t = self.expr(list)?;
+                let Some(elem) = t.elem().or((t == Str).then_some(Str)) else {
+                    let msg = format!("only a list or a string has items: this is {}", t.name());
+                    return Err(mismatch(msg, list.span()));
+                };
+                self.expect(index, Int, "an index")?;
+                Ok(elem)
+            }
         }
     }
 
@@ -511,19 +738,14 @@ impl Ck<'_> {
                 self.builtin(b, c)?
             }
             None => {
-                // In a function, `sigs` holds only the functions above it.
-                let found = self.sigs.iter().enumerate().find(|(_, s)| s.name == c.name);
-                let Some((i, sig)) = found else {
-                    if self.names.contains(&c.name) {
-                        let msg = format!(
-                            "`{}` is not defined above this function: a function calls only \
-                             functions defined above it (no recursion)",
-                            c.name
-                        );
-                        return Err(Diag::at_code(codes::CALL_BELOW, msg, c.span));
-                    }
+                let Some(i) = self.names.iter().position(|n| *n == c.name) else {
                     let msg = format!("there is no function `{}`", c.name);
                     return Err(Diag::at_code(codes::UNKNOWN_NAME, msg, c.span));
+                };
+                // A function is checked after those it calls (`order`), so this one was.
+                let Some(sig) = self.sigs.get(i).and_then(Option::as_ref) else {
+                    let msg = format!("`{}` calls itself", c.name);
+                    return Err(Diag::at_code(codes::RECURSES, msg, c.span));
                 };
                 self.args(c, &sig.params)?;
                 if !sig.pure {
@@ -625,8 +847,14 @@ impl Ck<'_> {
                 };
                 let elem = self.list(v)?;
                 if let Slot::State(i) = v.slot {
+                    let i = i as usize;
                     self.impure(&format!("`{}` of a state", c.name), c.span)?;
-                    self.resized[i as usize] = true;
+                    self.sizes.resized[i] = true;
+                    match b {
+                        Builtin::Push | Builtin::Insert => self.sizes.grown[i] = true,
+                        Builtin::Clear => _ = self.sizes.cleared[i].get_or_insert(c.span),
+                        _ => {}
+                    }
                 }
                 for (a, t) in rest.iter_mut().zip(&after(elem)[b as usize - 6]) {
                     self.expect(a, *t, &format!("an argument of `{}`", c.name))?;

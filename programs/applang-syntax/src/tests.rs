@@ -24,7 +24,7 @@ fn every_failure_is_coded_and_a_whole_app_compiles() {
         ("label 1", UNEXPECTED_TOKEN), ("row label 1; }", UNEXPECTED_TOKEN),
         ("widget", UNEXPECTED_TOKEN), ("on press \"a\" { }", UNEXPECTED_TOKEN),
         ("fn f(x) { }", UNEXPECTED_TOKEN), ("fn f(x: float) { }", UNEXPECTED_TOKEN),
-        ("state n = 0; button \"b\" { n *= 2; }", UNEXPECTED_TOKEN),
+        ("state n = 0; button \"b\" { n++; }", UNEXPECTED_TOKEN),
         ("label nope;", UNKNOWN_NAME), ("state x = 1; button \"b\" { y = 2; }", UNKNOWN_NAME),
         ("input missing;", UNKNOWN_NAME), ("state x = 1; state x = 2;", DUP_STATE),
         ("state n = 0; input n;", TYPE_MISMATCH), ("if 1 { label 1; }", TYPE_MISMATCH),
@@ -73,8 +73,8 @@ fn every_failure_is_coded_and_a_whole_app_compiles() {
 fn v2_lists_functions_handlers_and_grids_check_and_fail_coded() {
     #[rustfmt::skip]
     let cases = [
-        // Functions call only functions above them: no recursion, direct or not.
-        ("fn f() { f(); }", CALL_BELOW), ("fn a() { b(); } fn b() { }", CALL_BELOW),
+        // Functions call one another in any order, but never recurse, directly or not.
+        ("fn f() { f(); }", RECURSES), ("fn a() { b(); } fn b() { a(); }", RECURSES),
         ("label h();", UNKNOWN_NAME),
         ("fn f() -> int { if true { return 1; } }", MISSING_RETURN),
         ("fn f() -> int { }", MISSING_RETURN),
@@ -128,10 +128,63 @@ fn v2_lists_functions_handlers_and_grids_check_and_fail_coded() {
     let src = format!("state a = [\"{}\"; 4000]; state b = [\"{0}\"; 4000];", "x".repeat(60));
     let (e, b) = (compile(&src).unwrap_err(), src.find("b =").unwrap());
     assert_eq!((e.code, e.span), (Some(STATE_TOO_BIG), Some(Span::new(b, b + 1))));
-    // Handlers and widgets, unlike functions, call functions in any order.
+    // Handlers and widgets call functions in any order, and so do functions.
     let any = "state n = 0; every 100 { step(); } on key \"left\" { step(); } label twice(n);
                grid 1, [0] { step(); } fn step() { n += 1; } fn twice(x: int) -> int { return x * 2; }";
     assert!(compile(any).is_ok());
+}
+
+#[test]
+fn what_models_write_compiles_and_its_slips_fail_coded() {
+    // Functions in any order, `?:` (loosest, nesting to the right), a list literal or a call's
+    // list indexed, lists passed and returned, `row` and `col` as names, while, break, continue.
+    let ok = "state row = 0; state col = [1, 2];
+        fn first() -> int { return evens(col)[0]; }
+        fn evens(xs: [int]) -> [int] {
+            let ys = [0; 0];
+            for i in 0..len(xs) { if xs[i] % 2 == 1 { continue; } push(ys, xs[i]); }
+            return ys;
+        }
+        button \"b\" { let i = 0; while i < 9 { i += 1; if i == row { break; } } row = first(); }
+        row { label row > 1 ? \"big\" : row == 1 ? \"one\" : \"none\"; }
+        col { label 1 + 1 == 2 ? [5, 6][row] : 0; label \"abc\"[1] + first(); }
+        button \"m\" { row *= 2; row /= 3; row %= 5; col[0] *= 2; let w = \"ab\"; w = w[0] + w; }";
+    assert!(compile(ok).is_ok(), "{:?}", compile(ok).err());
+    #[rustfmt::skip]
+    let cases = [
+        ("label true ? 1 : \"a\";", TYPE_MISMATCH), ("label 1 ? 2 : 3;", TYPE_MISMATCH),
+        ("label 5[0];", TYPE_MISMATCH), ("label [1, 2][true];", TYPE_MISMATCH),
+        ("label true ? 1;", UNEXPECTED_TOKEN), ("fn f(xs: [int) { }", UNEXPECTED_TOKEN),
+        ("button \"b\" { while 1 { } }", TYPE_MISMATCH),
+        ("button \"b\" { break; }", OUTSIDE_LOOP), ("fn f() { continue; }", OUTSIDE_LOOP),
+        ("for i in 0..2 { button \"b\" { break; } }", OUTSIDE_LOOP),
+        ("button \"b\" { repeat 2 { fn_less(); } }", UNKNOWN_NAME),
+        ("fn a() { b(); } fn b() { c(); } fn c() { b(); }", RECURSES),
+        ("state while = 0;", UNEXPECTED_TOKEN), ("fn f(break: int) { }", UNEXPECTED_TOKEN),
+        ("state s = \"ab\"; button \"b\" { s[0] = \"c\"; }", TYPE_MISMATCH),
+        ("state s = \"ab\"; button \"b\" { s *= 2; }", TYPE_MISMATCH),
+        ("fn setup() { } setup(); label 1;", UNEXPECTED_TOKEN),
+        // A list a clear empties and nothing grows is cleared for good: a reset meant otherwise.
+        ("state b = [0; 9]; button \"r\" { clear(b); } label b[0];", CLEARED_FOR_GOOD),
+    ];
+    for (src, want) in cases {
+        assert_eq!(code(src), Some(want), "{src}");
+    }
+    // A list that grows again, or is assigned afresh, or starts empty, may be cleared.
+    for src in [
+        "state b = [0; 9]; button \"r\" { clear(b); push(b, 1); }",
+        "state b = [0; 9]; button \"r\" { clear(b); b = [0; 9]; }",
+        "state b = [0; 0]; button \"r\" { clear(b); }",
+    ] {
+        assert!(compile(src).is_ok(), "{src}");
+    }
+    let e = compile("state on = [true, false]; button \"r\" { clear(on); }").unwrap_err();
+    assert!(e.message.contains("on = [false; 2];"), "{}", e.message);
+    let e = compile("fn a() { b(); } fn b() { c(); } fn c() { a(); }").unwrap_err();
+    assert!(e.message.starts_with("`a` calls itself through `b`, `c`"), "{}", e.message);
+    assert_eq!(e.span, Some(Span::new(9, 12)));
+    let e = compile("fn setup() { } setup(); label 1;").unwrap_err();
+    assert!(e.message.contains("nothing runs as the app opens"), "{}", e.message);
 }
 
 #[test]

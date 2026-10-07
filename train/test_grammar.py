@@ -95,14 +95,33 @@ ACCEPT = [
     ("saved state", H + "saved state best = 0;\nsaved   state   names = [\"a\"];\nstate n = 0;\nlabel best + n + len(names);\n"),
     ("lists in expressions", H + "fn f(n: int) -> int { let xs = [0; n]; let ys = [n, n + 1,]; return len(xs) + len(ys); }\n"
                              "label f(2);\n"),
+    # What models write that applang took in on 2026-10-07.
+    ("ternaries", H + "state n = 0;\nlabel n > 0 ? \"a\" : n < 0 ? \"b\" : \"c\";\nlabel (n == 0?1:2) + (true ? n : -n);\n"
+                  "button n>0?\"x\":\"y\" { n = n > 5 ? 0 : (n < 0 ? 1 : n + 1); }\n"),
+    ("while, break and continue", H + "state n = 0;\nbutton \"b\" { while n < 9 { n += 1; if n == 3 { continue; }"
+                                  " if n > 6 { break ; } }\n  while(n>0){n-=1;}\n  repeat 3 { break; }\n"
+                                  "  for i in 0..3 { continue/**/; } }\nlabel n;\n"),
+    ("functions in any order, lists passed", H + "fn a(xs: [int]) -> [int] { return b(xs); }\n"
+                                             "fn b(ys:[ int ]) -> [int] { return ys; }\n"
+                                             "fn c(s: [string], t: [bool]) -> int { return len(s) + len(t); }\n"
+                                             "label a([1, 2])[0] + c([\"x\"], [true]);\n"),
+    ("row and col as names", H + "state row = 0;\nstate col = 1;\nfn at(row: int, col: int) -> int { return row * 3 + col; }\n"
+                             "row { label at(row, col); }\ncol { label row; }\n"
+                             "button \"b\" { let r = row; row = col; col = r; for row in 0..2 { col += row; } }\n"),
+    ("indexing anything", H + "state s = \"abc\";\nlabel [1, 2, 3][1] + \"xyz\"[0] + s[2] + (s)[0] + [[\"a\"][0]][0];\n"),
+    ("operator assignments", H + "state n = 10;\nstate xs = [1, 2];\nbutton \"b\" { n *= 2; n /= 3; n %= 4; xs[0] *= 5;"
+                             " xs[1] /=2; xs [0]%=3; }\nlabel n;\n"),
+    ("names near the new keywords", H + "state whilst = 1;\nstate breaks = 2;\nstate continu = 3;\nstate continues = 4;\n"
+                                    "state wh = 5;\nstate b = 6;\nstate co = 7;\nstate rows = 8;\nstate w = 9;\n"
+                                    "label whilst + breaks + continu + continues + wh + b + co + rows + w;\n"),
 ]
 
 # Programs applang refuses before it checks names or types, and the code it gives.
 S = H + "state n = 0;\n"
 REJECT = [
-    ("keyword as a let", S + "button \"b\" { let row = 1; }\n", 101),
-    ("keyword as a loop variable", S + "for row in 0..3 { label 1; }\n", 101),
-    ("keyword as a state", H + "state col = 0;\nlabel 1;\n", 101),
+    ("keyword as a let", S + "button \"b\" { let while = 1; }\n", 101),
+    ("keyword as a loop variable", S + "for break in 0..3 { label 1; }\n", 101),
+    ("keyword as a state", H + "state continue = 0;\nlabel 1;\n", 101),
     ("keyword as a function", H + "fn input() { }\nlabel 1;\n", 101),
     ("keyword as a target", S + "button \"b\" { label = 1; }\n", 101),
     ("keyword glued to a name", S + "labeln;\n", 101),
@@ -136,8 +155,17 @@ REJECT = [
     ("negative bool", H + "state b = -true;\nlabel 1;\n", 101),
     ("=+", S + "button \"b\" { n =+ 1; }\n", 101),
     ("- =", S + "button \"b\" { n - = 1; }\n", 101),
-    ("double index", H + "state xs = [1];\nlabel xs[0][0];\n", 101),
-    ("index of a call", H + "fn f() -> int { return 1; }\nlabel f()[0];\n", 101),
+    ("?: without :", S + "label n > 0 ? 1;\n", 101),
+    ("?: missing a side", S + "label n > 0 ? : 2;\n", 101),
+    ("while without braces", S + "button \"b\" { while n < 3 n += 1; }\n", 101),
+    ("break without ;", S + "button \"b\" { repeat 2 { break } }\n", 101),
+    ("break with a value", S + "button \"b\" { repeat 2 { break 1; } }\n", 101),
+    ("while as a widget", S + "while n < 3 { label n; }\n", 101),
+    ("row without braces", S + "row label 1;\n", 101),
+    ("**=", S + "button \"b\" { n **= 2; }\n", 101),
+    ("list type with a count", H + "fn f(a: [int; 2]) { }\nlabel 1;\n", 101),
+    ("list of lists type", H + "fn f(a: [[int]]) { }\nlabel 1;\n", 101),
+    ("index of a canvas's call", S + "fn scene() { }\ncanvas 10, 10, scene()[0];\n", 101),
     ("else without braces", S + "if n > 0 { label 1; } else label 2;\n", 101),
     ("elseif", S + "if n > 0 { label 1; } elseif n < 0 { label 2; }\n", 101),
     ("if without braces", S + "if n > 0 label 1;\n", 101),

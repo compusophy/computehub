@@ -129,15 +129,23 @@ pub(crate) struct Shown {
     pub captured: Vec<Value>,
 }
 
-/// What a block did: ran to its end, or returned (with a value).
+/// What a block did: ran to its end, returned (with a value), or left its loop or turn of it.
 pub(crate) enum Flow {
     Next,
     Ret(Option<Value>),
+    Break,
+    Continue,
 }
 
 fn int(v: Value) -> i64 {
     let Value::Int(n) = v else { unreachable!("checked: an int") };
     n
+}
+
+/// Letter `i` of `s`, a string of one; or how many letters it has.
+fn letter(s: &str, i: i64) -> Result<Value, usize> {
+    let c = usize::try_from(i).ok().and_then(|i| s.chars().nth(i));
+    c.map(|c| Value::Str(c.to_string())).ok_or_else(|| s.chars().count())
 }
 
 /// The steps `n` bytes of text cost.
@@ -245,7 +253,16 @@ impl<'a> Run<'a> {
             Expr::Var(v) => self.read(v),
             Expr::Index(v, i, sp) => {
                 let i = int(self.expr(i)?);
-                self.item(v, i, *sp)
+                let read = match self.slot(v) {
+                    Value::Str(s) => Some((text(s.len()), letter(s, i))),
+                    _ => None,
+                };
+                let Some((cost, got)) = read else { return self.item(v, i, *sp) };
+                self.burn(cost, *sp)?;
+                got.map_err(|n| {
+                    let msg = format!("index {i} is outside `{}`, which has {n} letters", v.name);
+                    fault(codes::INDEX_OUT_OF_RANGE, msg, *sp)
+                })
             }
             Expr::Call(c) => Ok(self.call(c)?.unwrap_or_else(|| unreachable!("checked: a value"))),
             Expr::List(items, sp) => {
@@ -283,6 +300,27 @@ impl<'a> Run<'a> {
                 let lv = self.expr(l)?;
                 let rv = self.expr(r)?;
                 self.binary(*op, lv, rv, *sp)
+            }
+            Expr::Cond(cond, yes, no, _) => match self.expr(cond)? {
+                Value::Bool(true) => self.expr(yes),
+                _ => self.expr(no),
+            },
+            Expr::At(list, i, sp) => {
+                let whole = self.expr(list)?;
+                let i = int(self.expr(i)?);
+                let got = match whole {
+                    Value::List(mut items) => {
+                        let n = items.len();
+                        match usize::try_from(i).ok().filter(|&k| k < n) {
+                            Some(k) => Ok(items.swap_remove(k)),
+                            None => Err(format!("a list of {n} items")),
+                        }
+                    }
+                    Value::Str(s) => letter(&s, i).map_err(|n| format!("a string of {n} letters")),
+                    _ => unreachable!("checked: a list or a string"),
+                };
+                let outside = |what| format!("index {i} is outside {what}");
+                got.map_err(|what| fault(codes::INDEX_OUT_OF_RANGE, outside(what), *sp))
             }
         }
     }
@@ -353,8 +391,9 @@ impl<'a> Run<'a> {
         self.base = base;
         match flow? {
             Flow::Ret(v) => Ok(v),
-            Flow::Next if f.ret.is_none() => Ok(None),
-            Flow::Next => {
+            // `break` and `continue` stand only in loops (the checker sees to it).
+            _ if f.ret.is_none() => Ok(None),
+            _ => {
                 let msg = format!("`{}` finished without a result", f.name);
                 Err(fault(codes::NO_RETURN, msg, c.span))
             }
@@ -614,8 +653,10 @@ impl<'a> Run<'a> {
                 }
                 for _ in 0..n {
                     self.burn(1, *span)?;
-                    if let Flow::Ret(v) = self.block(body)? {
-                        return Ok(Flow::Ret(v));
+                    match self.block(body)? {
+                        Flow::Ret(v) => return Ok(Flow::Ret(v)),
+                        Flow::Break => break,
+                        Flow::Next | Flow::Continue => {}
                     }
                 }
             }
@@ -626,11 +667,27 @@ impl<'a> Run<'a> {
                     self.locals.push(Value::Int(k));
                     let flow = self.block(body);
                     self.locals.pop();
-                    if let Flow::Ret(v) = flow? {
-                        return Ok(Flow::Ret(v));
+                    match flow? {
+                        Flow::Ret(v) => return Ok(Flow::Ret(v)),
+                        Flow::Break => break,
+                        Flow::Next | Flow::Continue => {}
                     }
                 }
             }
+            // As long as its condition holds, and its fuel lasts: a loop that never ends faults.
+            Stmt::While { cond, body, span } => loop {
+                self.burn(1, *span)?;
+                if self.expr(cond)? != Value::Bool(true) {
+                    break;
+                }
+                match self.block(body)? {
+                    Flow::Ret(v) => return Ok(Flow::Ret(v)),
+                    Flow::Break => break,
+                    Flow::Next | Flow::Continue => {}
+                }
+            },
+            Stmt::Break(_) => return Ok(Flow::Break),
+            Stmt::Continue(_) => return Ok(Flow::Continue),
             Stmt::Return { value, .. } => {
                 let v = value.as_ref().map(|e| self.expr(e)).transpose()?;
                 return Ok(Flow::Ret(v));

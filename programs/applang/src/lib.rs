@@ -469,9 +469,9 @@ pub const REFERENCE: &str = "\
 applang: a small TOTAL language for apps and games. Every handler halts; a fault rolls its
 event back and the app shows the error. A program is its states first, then functions,
 handlers and widgets in any order. Comments: // and /* */.
-Never name anything state, label, button, input, row, col, let, if, else, repeat, for, in,
-fn, return, true or false (call a row r and a column c); a function never takes a built-in's
-name (len, max, clear, ...; beside a canvas rect, line, text, ... too).
+Never name anything state, label, button, input, let, if, else, repeat, while, break,
+continue, for, in, fn, return, true or false; a function never takes a built-in's name (len,
+max, clear, ...; beside a canvas rect, line, text, ... too).
 STATE (first; the initial value fixes the type: int (64-bit, checked), bool, string, or a
 list of one of them):
   state n = 0;   state name = \"\";   state on = false;
@@ -479,9 +479,9 @@ list of one of them):
   saved state best = 0;     -- kept when the app is closed and opened again
   A state starts as a literal, never an expression, call or other state ([0; 200], not
   [0; 10 * 20]); nothing runs as the app opens: shuffle, deal or build in Start's handler.
-FUNCTIONS (a function calls only functions defined ABOVE it: no recursion; handlers and
-widgets call any; parameters and results are int, bool or string; a function with a result
-ends in return):
+FUNCTIONS (in any order; a function may call any other, but never itself, directly or through
+others: no recursion; parameters and results are int, bool, string or a list of one ([int],
+[bool], [string]), passed as a copy; a function with a result ends in return):
   fn at(x: int, y: int) -> int { return y * 10 + x; }
   fn reset() { score = 0; }   -- any function may change state (or call random), with a result
                                  or not; widgets, every's N and drawing call only those that do not
@@ -536,31 +536,34 @@ color last):
   hands and pictures. every 33 is about 30 steps a second. A phone has no keys: let a tap or a
   drag on the canvas steer (follow x).
 STATEMENTS (each ends with ; or its { } block; let works in any block):
-  let x = EXPR;   x = EXPR;   x += EXPR;   xs[i] = EXPR;   f(a, b);   return EXPR;   return;
-  if EXPR { } else if EXPR { } else { }   for i in A..B { }   repeat N { }
-  push(xs, v);   insert(xs, i, v);   remove(xs, i);   clear(xs);
+  let x = EXPR;   x = EXPR;   x += EXPR; (-= *= /= %=)   xs[i] = EXPR;   f(a, b);   return EXPR;
+  return;
+  if EXPR { } else if EXPR { } else { }   for i in A..B { }   repeat N { }   while EXPR { }
+  break;   continue;   (inside a for, repeat or while)
+  push(xs, v);   insert(xs, i, v);   remove(xs, i);   clear(xs);  -- clear empties the list; to
+                                       reset a board, assign it afresh: board = [0; 100];
 EXPRESSIONS: 42  true  \"text\" (escapes \\\" \\\\ \\n)  names  xs[i]  f(a, b)  [1, 2]  [0; n]  ( )
-  - !   * / %   + -   < <= > >=   == !=   &&  ||    (/ and % round toward zero)
+  - !   * / %   + -   < <= > >=   == !=   &&  ||   c ? a : b   (/ and % round toward zero)
   + with a string on either side joins text: \"score \" + n
   len(xs)  len(s)  min(a, b)  max(a, b)  abs(a)  random(n) (0 to n-1)  parse(s, d) (int, else d)
   sin(d)  cos(d)  (1000 times the sine and cosine of d degrees: sin(90) is 1000, cos(90) is 0)
-  A string is read whole (len(s) counts its letters; ==, + and parse): no s[i], no slicing.
-  Keep a word read letter by letter as a list (state word = [\"c\", \"a\", \"t\"];) and take
-  letters from buttons: for i in 0..len(abc) { button abc[i] { guess(abc[i]); } }
-  No ?: operator: write a function, fn mark(on: bool) -> string { if on { return \"x\"; } return \"\"; }
+  s[i] is letter i of a string, itself a string (len(s) counts them); a string never changes
+  in place and has no slicing: keep a word you change as a list
+  (state word = [\"c\", \"a\", \"t\"];) and take letters from buttons:
+  for i in 0..len(abc) { button abc[i] { guess(abc[i]); } }
 FAULTS: overflow, divide by zero, an index outside its list, a list past 4,096 items, a grid
 square past 8, a canvas color past 11, a negative size, a shape's number past 32,767 either
 way, more than 4,096 shapes, sprite squares, pixel runs (a row's squares of one color side by
 side) and text characters in one render, pixels not whole rows of 1 to 64 or a square past -1
 to 11, more than 16,384 pixels in one render, past 1,000,000 steps in one event or 200,000 in
-one render. There is no while, no recursion, no float, no clock to read: time comes only from
-every.";
+one render (so a while that never ends faults). There is no recursion, no float, no clock to
+read: time comes only from every.";
 
 /// The rule a diagnostic's code says was broken, in a line, for a model fixing its program:
 /// every code a program can earn; "" for the host's own (a bad event).
 pub fn rule(code: u16) -> &'static str {
     match code {
-        codes::UNEXPECTED_CHAR => "only the card's symbols exist: no . ' ? or @.",
+        codes::UNEXPECTED_CHAR => "only the card's symbols exist: no . ' or @.",
         codes::UNTERMINATED_COMMENT => "every /* comment ends with */.",
         codes::BAD_INT => "ints are whole numbers that fit in 64 bits.",
         codes::UNTERMINATED_STRING => {
@@ -570,16 +573,18 @@ pub fn rule(code: u16) -> &'static str {
         codes::UNEXPECTED_TOKEN => {
             "every widget, let, assignment, call and return ends with ;, also inside the braces \
              of if, row, col and for (if on { label \"a\"; } else { label \"b\"; }). States come \
-             first; there is no while, ?:, ++, *= or class. state, label, button, input, row, \
-             col, let, if, else, repeat, for, in, fn, return, true and false name nothing."
+             first; there is no ++, class or method call. state, label, button, input, let, if, \
+             else, repeat, while, break, continue, for, in, fn, return, true and false name \
+             nothing."
         }
         codes::TOO_DEEP => "nest less: split long expressions and deep if chains into functions.",
         codes::DIV_BY_ZERO => "guard every / and % so the divisor is never 0.",
         codes::OVERFLOW => "keep ints within 64 bits: take % before you multiply.",
         codes::NEGATIVE_REPEAT => "repeat counts and list lengths are never negative.",
         codes::FUEL_EXHAUSTED => {
-            "do less in one event (1,000,000 steps) or render (200,000): keep tables in lists, \
-             loop less, copy long text and lists less, never redo work each tick."
+            "do less in one event (1,000,000 steps) or render (200,000): make every while end, \
+             keep tables in lists, loop less, copy long text and lists less, never redo work \
+             each tick."
         }
         codes::STR_TOO_LONG => "keep each string under 4 KiB.",
         codes::STATE_TOO_BIG => "keep all state under 256 KiB.",
@@ -627,18 +632,27 @@ pub fn rule(code: u16) -> &'static str {
         }
         codes::UNKNOWN_NAME => {
             "use only declared states, the lets of enclosing blocks, parameters, loop variables, \
-             cell in a grid's handler, x and y in a canvas's, the built-ins and functions \
-             defined above."
+             cell in a grid's handler, x and y in a canvas's, the built-ins and the program's \
+             functions."
         }
         codes::TYPE_MISMATCH => {
             "types never convert: compare like with like, conditions are bool, input binds a \
              string state, + with a string joins text, lists are not shown or compared whole, \
              text shows an int, bool or string, sprite takes a list of strings and pixels a \
-             list of ints, and only a function with -> TYPE returns a value."
+             list of ints, both sides of ?: have one type, and only a function with -> TYPE \
+             returns a value."
         }
-        codes::CALL_BELOW => {
-            "define each function above every function that calls it; a function never calls \
-             itself."
+        codes::RECURSES => {
+            "no function calls itself, directly or through others: loop instead (for, repeat, \
+             while), keeping what is left to do in a list."
+        }
+        codes::OUTSIDE_LOOP => {
+            "break and continue stand only inside a for, repeat or while of their own function \
+             or handler."
+        }
+        codes::CLEARED_FOR_GOOD => {
+            "clear(xs) empties xs: to reset a list that never grows, assign it afresh (board = \
+             [0; 100];)."
         }
         codes::IMPURE_RENDER => {
             "widgets, every intervals and functions that draw only read: change state (and call \

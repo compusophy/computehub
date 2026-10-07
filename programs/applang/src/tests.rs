@@ -58,6 +58,48 @@ fn the_counter_demo_end_to_end() {
 }
 
 #[test]
+fn whiles_breaks_and_ternaries_run_and_a_loop_that_never_ends_faults() {
+    let mut a = app("state row = 0; state col = [3, 4, 5, 6]; state out = \"\";
+         fn first() -> int { return evens(col)[0]; }
+         fn evens(xs: [int]) -> [int] {
+           let ys = [0; 0];
+           for i in 0..len(xs) { if xs[i] % 2 == 1 { continue; } push(ys, xs[i]); }
+           return ys;
+         }
+         fn find(xs: [int], v: int) -> int {
+           let i = 0;
+           while i < len(xs) { if xs[i] == v { return i; } i += 1; }
+           return -1;
+         }
+         button \"go\" {
+           let i = 0;
+           while true { i += 1; if i == 5 { break; } }
+           row = i + first();
+           let k = 0;
+           repeat 10 { k += 1; if k == 3 { break; } }
+           for j in 0..10 { if j < 7 { continue; } k += j; }
+           out = (row > 8 ? \"big\" : \"x\" + 1 / (row - row)) + [10, 20, 30][1] + \",\" + k
+             + \",\" + find(col, 5);
+           k *= 3; k /= 2; k %= 7;
+           out = out + \",\" + k + out[0] + \"xyz\"[2];
+         }
+         label row;
+         label out;
+         button \"spin\" { while row > 0 { row += 1; } }
+         button \"far\" { row = [1, 2][row]; }");
+    assert_eq!(shown(&mut a), ["go", "0", "", "spin", "far"]);
+    assert_eq!(click(&mut a, 0), None);
+    assert_eq!(shown(&mut a), ["go", "9", "big20,27,2,5bz", "spin", "far"]);
+    // A while that never ends runs out of fuel, and its event rolls back.
+    assert_eq!(click(&mut a, 1), Some(codes::FUEL_EXHAUSTED));
+    assert_eq!(click(&mut a, 2), Some(codes::INDEX_OUT_OF_RANGE));
+    assert_eq!(shown(&mut a), ["go", "9", "big20,27,2,5bz", "spin", "far"]);
+    let mut a = app("state s = \"hé\"; state t = \"\"; button \"b\" { t = s[1]; t = t + s[2]; }");
+    assert_eq!(click(&mut a, 0), Some(codes::INDEX_OUT_OF_RANGE));
+    assert_eq!(vals(&a)[1], Value::Str(String::new()));
+}
+
+#[test]
 fn expressions_short_circuit_and_check_arithmetic() {
     let mut a = app("state n = 0; state s = \"\";
          button \"b\" { let t = n; if false && 1 / n == 0 || true { s = \"a\" + t + true; } }
@@ -190,7 +232,7 @@ fn plus_equals_runs_its_index_once_and_fuel_pays_for_bytes() {
     let mut a = app("state xs = [0; 4]; state k = 0;
          fn next() -> int { k += 1; return k % 4; }
          fn set() -> int { xs[0] = 100; return 1; }
-         fn empty() -> int { clear(xs); return 1; }
+         fn empty() -> int { xs = [0; 0]; return 1; }
          button \"b\" { xs[next()] += 10; xs[next()] -= 1; xs[0] += set(); }
          button \"c\" { xs[0] += empty(); }");
     assert_eq!((click(&mut a, 0), vals(&a)), (None, vec![ints(&[1, 10, -1, 0]), Value::Int(2)]));
@@ -456,7 +498,6 @@ fn every_card_example_compiles_and_smokes_clean() {
         "saved state best = 0;",
         "fn at(x: int, y: int) -> int { return y * 10 + x; }",
         "fn reset() { score = 0; }",
-        "fn mark(on: bool) -> string { if on { return \"x\"; } return \"\"; }",
         "on key \"left\" {",
         "for i in 0..len(todos) {",
         "grid 10, board;",
@@ -582,7 +623,7 @@ fn each_code_has_a_rule_and_the_card_says_what_models_got_wrong() {
     );
     #[rustfmt::skip]
     let all = [1, 2, 3, 4, 5, 101, 102, 203, 204, 205, 206, 211, 212, 214, 215, 216, 217, 218, 219,
-        220, 221, 222, 223, 224, 225, 301, 302, 303, 304, 305, 306, 307, 308, 309];
+        220, 221, 222, 223, 224, 225, 301, 302, 303, 304, 305, 306, 307, 308, 309, 310, 311];
     for code in all {
         assert!(rule(code).ends_with('.'), "{code}");
     }

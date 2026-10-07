@@ -306,7 +306,7 @@ fn the_fixer_sends_the_coders_own_fix_turn() {
 }
 
 /// The writer's prompt's hash with the card `CARD`: a change to it is a decision, never a drift.
-const WRITER_FNV: u64 = 0xa7f2_6772_d4ff_9b5e;
+const WRITER_FNV: u64 = 0x970a_916a_c711_cd42;
 
 #[test]
 fn the_writer_is_given_applang_the_card_and_the_ladder() {

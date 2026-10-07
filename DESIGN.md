@@ -21,7 +21,7 @@ the short operating map; this file is the why and the shape.
   metered, replayable), at every scale: event handler, app, desktop,
   device, household, mesh. The OS can run inside itself.
 - **From small total languages to models that compute.** applang is total
-  and fuel-bounded: its programs provably halt. Programs that check and run
+  and fuel-bounded: every run provably halts within its fuel. Programs that check and run
   become training data; later, models trained on opcodes and lexicons
   rather than English, an LLM that compiles, abstracting functions into
   functions all the way down. That long arc is why determinism, fuel,
@@ -744,6 +744,17 @@ reinforcement learning, not only a filter.
   3B 5 of 40. The fine-tunes learn the format whole; most of their failures are compile errors.
   Day 2: the suite is 284 tasks (217 trained on, 67 held out in 34 families); GLM 5.3 passes 23
   of the 67, 34% (Wilson 95%: 24 to 46, at one sample a task and clustered by nothing).
+- **applang grows toward what models write** (2026-10-07). GLM 5.3's held-out answers showed
+  what it writes whatever the card says: `c ? a : b`, functions called before they are defined,
+  `while`, `break` and `continue`, `row` and `col` as names, a list literal or a call indexed,
+  `s[i]`, lists as parameters, `*=`. applang now takes all of them, and keeps what made it safe:
+  every run is fuel-bounded (a `while` that never ends faults, coded, and its event rolls back)
+  and there is still no recursion (functions are checked in call order, a cycle refused at its
+  call). One trap became an error: `clear(board)` meant as a reset, on a list nothing grows
+  again (16 of 123 game answers), is refused with the fix written out (`board = [0; 9];`). Every
+  reference still passes, and so does `train/applang.gbnf` (the 3B's decoding) against
+  llama.cpp's engine. GLM's same answers, regraded with no new call: everyday apps (tiers 1-2)
+  77 to 80 of 101, ambitious games (tiers 3-6) 20 to 23 of 123; none lost.
 
 ## Evolution: prediction, lineage, selection
 

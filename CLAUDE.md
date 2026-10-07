@@ -76,7 +76,7 @@ crates/      the OS (boot, kernel, worker); talks WASI and uiwire
   cpu/       the program worker (cdylib; dist/cpu/): loader, WASI imports
 programs/    wasm32-wasip1 programs (dist/bin/), app language, dev crates
   fuel/ lang/ forks of litelite (budgets, parse kit)
-  applang-syntax/ applang/ tier 0 app language: front end, runtime
+  applang-lex/ -syntax/ applang/ app language: tokens, parse, run
   studio/    make apps by describing them; runs `.app` files
   coder/     Studio's agent: write, test, fix, keep the best
   assistant/ the AI using the desktop; chats/ files/: its chats, file tools

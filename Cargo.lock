@@ -48,9 +48,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "compusophy-applang-lex"
+version = "0.1.0"
+dependencies = [
+ "compusophy-lang",
+]
+
+[[package]]
 name = "compusophy-applang-syntax"
 version = "0.1.0"
 dependencies = [
+ "compusophy-applang-lex",
  "compusophy-lang",
 ]
 
@@ -402,6 +410,7 @@ version = "0.1.0"
 name = "eval"
 version = "0.1.0"
 dependencies = [
+ "compusophy-coder",
  "compusophy-evals",
  "compusophy-makes",
  "compusophy-uiwire",

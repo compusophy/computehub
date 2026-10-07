@@ -18,13 +18,13 @@ pixel with the GPU: nothing to install, and your files stay in the tab. AI is bu
 free while compusophy is in early beta.";
 const FONTS: &str = "Inter, JetBrains Mono, and Noto Sans Symbols 1 and 2, under the SIL Open \
 Font License 1.1; their license texts are at /licenses/ on the site.";
-const FORKS: &str = "fuel, lang, applang-syntax and applang are forks of litelite 0.2.0 \
+const FORKS: &str = "fuel, lang, applang-lex, applang-syntax and applang are forks of litelite 0.2.0 \
 (commit 4f5e056, 2026-07-20), under Apache-2.0.";
 const AUTHOR: &str = "Made by compusophy. Apache-2.0.";
 const SOURCE: &str = "github.com/compusophy/computehub";
 /// Every crate and its role.
 #[rustfmt::skip]
-pub(crate) const STACK: [(&str, &str); 45] = [
+pub(crate) const STACK: [(&str, &str); 46] = [
     ("os", "The wasm entry: fonts, files, program windows"),
     ("report", "Telemetry: notes, reports and their outbox"),
     ("platform", "The browser boundary: canvas, WebGL2, input"),
@@ -53,7 +53,9 @@ pub(crate) const STACK: [(&str, &str); 45] = [
     ("sh", "The shell the Terminal runs"), ("agent", "The Terminal's coding agent"),
     ("term", "Terminal screen model"),
     ("vt", "Terminal escape-sequence parser"), ("applang", "The tier 0 app language"),
-    ("applang-syntax", "applang's lexer and parser"), ("lang", "Diagnostics, lexer and parser kit"),
+    ("applang-syntax", "applang's parser and checker"),
+    ("applang-lex", "applang's tokens, colors and error codes"),
+    ("lang", "Diagnostics, lexer and parser kit"),
     ("fuel", "Fuel and byte budgets"), ("toolbox", "Test programs"),
     ("tiny", "A small transformer: train, sample, keep"),
     ("lab", "Its applang corpus, training and measures"),

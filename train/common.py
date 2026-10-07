@@ -130,6 +130,12 @@ def sha256_text(text):
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
+def prompt_hash(messages):
+    """16 hex digits of a prompt's messages: an answer records it, so one made from another
+    prompt (an older language card) is never kept as this one's."""
+    return sha256_text(json.dumps(messages, sort_keys=True, ensure_ascii=False))[:16]
+
+
 def git_commit():
     """The repo's HEAD and whether tracked files differ from it."""
     def git(*args):

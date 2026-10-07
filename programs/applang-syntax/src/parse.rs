@@ -8,7 +8,7 @@ use lang::parse::{DEFAULT_MAX_DEPTH, TokCursor};
 use lang::{Diag, Span};
 
 use crate::codes;
-use crate::lex::{TokKind, Token, lex, unescape};
+use applang_lex::{TokKind, Token, lex, unescape};
 
 /// The most items a list holds.
 pub const MAX_ITEMS: usize = 4096;
@@ -125,6 +125,10 @@ pub enum Expr {
     /// `[a, b, c]`, and `[value; count]`.
     List(Vec<Expr>, Span), Fill(Box<Expr>, Box<Expr>, Span),
     Unary(UnOp, Box<Expr>, Span), Binary(BinOp, Box<Expr>, Box<Expr>, Span),
+    /// `c ? a : b`: only the side `c` picks runs.
+    Cond(Box<Expr>, Box<Expr>, Box<Expr>, Span),
+    /// An item of a list that is no name's: `[1, 2, 3][i]`, `f(x)[i]`.
+    At(Box<Expr>, Box<Expr>, Span),
 }
 
 impl Expr {
@@ -135,6 +139,7 @@ impl Expr {
             Expr::Call(c) => c.span,
             Expr::Index(_, _, sp) | Expr::List(_, sp) | Expr::Fill(_, _, sp) => *sp,
             Expr::Unary(_, _, sp) | Expr::Binary(_, _, _, sp) => *sp,
+            Expr::Cond(_, _, _, sp) | Expr::At(_, _, sp) => *sp,
         }
     }
 
@@ -145,6 +150,7 @@ impl Expr {
             Expr::Call(c) => &mut c.span,
             Expr::Index(_, _, sp) | Expr::List(_, sp) | Expr::Fill(_, _, sp) => sp,
             Expr::Unary(_, _, sp) | Expr::Binary(_, _, _, sp) => sp,
+            Expr::Cond(_, _, _, sp) | Expr::At(_, _, sp) => sp,
         }
     }
 }
@@ -154,12 +160,16 @@ impl Expr {
 pub enum Stmt {
     Let { name: String, value: Expr, span: Span },
     Assign { target: Var, value: Expr, span: Span },
-    /// `xs[i] = v`, or with `op` `xs[i] += v` (`-=`): the index runs once, the item is read
-    /// before `v` runs.
+    /// `xs[i] = v`, or with `op` `xs[i] += v` (`-=`, `*=`, `/=`, `%=`): the index runs once, the
+    /// item is read before `v` runs.
     SetIndex { target: Var, index: Expr, op: Option<BinOp>, value: Expr, span: Span },
     If { arms: Vec<(Expr, Vec<Stmt>)>, els: Vec<Stmt>, span: Span },
     Repeat { count: Expr, body: Vec<Stmt>, span: Span },
     For { var: String, from: Expr, to: Expr, body: Vec<Stmt>, span: Span },
+    /// `while c { }`: fuel bounds it, as it does every run.
+    While { cond: Expr, body: Vec<Stmt>, span: Span },
+    /// `break;` and `continue;`, inside a loop (the checker sees to it).
+    Break(Span), Continue(Span),
     Return { value: Option<Expr>, span: Span },
     Call(Call),
 }
@@ -173,7 +183,10 @@ impl Stmt {
             | Stmt::If { span, .. }
             | Stmt::Repeat { span, .. }
             | Stmt::For { span, .. }
-            | Stmt::Return { span, .. } => *span,
+            | Stmt::While { span, .. }
+            | Stmt::Return { span, .. }
+            | Stmt::Break(span)
+            | Stmt::Continue(span) => *span,
             Stmt::Call(c) => c.span,
         }
     }
@@ -510,16 +523,25 @@ fn int(v: u64, neg: bool, sp: Span) -> PResult<i64> {
     })
 }
 
+/// A parameter's or result's type: `int`, `bool`, `string`, or a list of one, `[int]`.
 fn ty(src: &str, t: &mut Toks<'_>) -> PResult<Type> {
+    let list = t.eat(|x| x.kind == TokKind::LBracket).is_some();
     let tok = *t.peek();
     let found = match (tok.kind == TokKind::Ident).then(|| text(src, tok.span)) {
         Some("int") => Type::Int,
         Some("bool") => Type::Bool,
         Some("string") => Type::Str,
-        _ => return Err(unexpected(src, &tok, "a type (int, bool or string)")),
+        _ => {
+            let what = "a type (int, bool, string, or a list of one: [int], [bool], [string])";
+            return Err(unexpected(src, &tok, what));
+        }
     };
     t.advance();
-    Ok(found)
+    if !list {
+        return Ok(found);
+    }
+    expect(src, t, TokKind::RBracket, "`]` (a list's type is [int], [bool] or [string])")?;
+    Ok(found.list().unwrap_or(found))
 }
 
 fn fn_decl(src: &str, t: &mut Toks<'_>) -> PResult<FnDecl> {
@@ -575,11 +597,12 @@ fn widget(src: &str, t: &mut Toks<'_>, ids: &mut u32) -> PResult<Widget> {
                 let state = Var { name, span: sp, slot: Slot::Local(u32::MAX) };
                 Ok(Widget::Input { state, span: span(end.end) })
             }
-            TokKind::Row | TokKind::Col => {
+            // No widget starts with a name, so here `row` and `col` are words.
+            _ if word(src, &tok, "row") || word(src, &tok, "col") => {
                 t.advance();
                 let (children, end) = braced(src, t, &mut |s, t| widget(s, t, ids))?;
                 let span = span(end.end);
-                Ok(if tok.kind == TokKind::Row {
+                Ok(if word(src, &tok, "row") {
                     Widget::Row { children, span }
                 } else {
                     Widget::Col { children, span }
@@ -622,6 +645,16 @@ fn widget(src: &str, t: &mut Toks<'_>, ids: &mut u32) -> PResult<Widget> {
                 };
                 let (handler, end) = tail(src, t, ids)?;
                 Ok(Widget::Canvas { w, h, scene, handler, span: span(end.end) })
+            }
+            // A model's habit: a call such as `setup();` among the widgets, to run as it opens.
+            TokKind::Ident | TokKind::Let => {
+                let msg = format!(
+                    "expected a widget, fn, every or on key, found `{}`: a statement stands only \
+                     in a handler or function, and nothing runs as the app opens (set things up \
+                     in a handler: button \"New game\" {{ setup(); }})",
+                    text(src, tok.span)
+                );
+                Err(PErr(Diag::at_code(codes::UNEXPECTED_TOKEN, msg, tok.span)))
             }
             _ => Err(unexpected(
                 src,
@@ -748,6 +781,17 @@ fn stmt(src: &str, t: &mut Toks<'_>) -> PResult<Stmt> {
                 let (body, end) = braced(src, t, &mut stmt)?;
                 Ok(Stmt::For { var, from, to, body, span: span(end.end) })
             }
+            TokKind::While => {
+                t.advance();
+                let cond = expr(src, t)?;
+                let (body, end) = braced(src, t, &mut stmt)?;
+                Ok(Stmt::While { cond, body, span: span(end.end) })
+            }
+            TokKind::Break | TokKind::Continue => {
+                t.advance();
+                let sp = semi(t)?;
+                Ok(if tok.kind == TokKind::Break { Stmt::Break(sp) } else { Stmt::Continue(sp) })
+            }
             TokKind::Return => {
                 t.advance();
                 let value = match t.peek().kind {
@@ -764,13 +808,16 @@ fn stmt(src: &str, t: &mut Toks<'_>) -> PResult<Stmt> {
 /// An unresolved slot.
 const NONE: Slot = Slot::Local(u32::MAX);
 
-/// An assignment's operator: none for `=`, the one `+=` or `-=` applies.
+/// An assignment's operator: none for `=`, the one `+=`, `-=`, `*=`, `/=` or `%=` applies.
 fn assign_op(src: &str, t: &mut Toks<'_>) -> PResult<Option<BinOp>> {
     let op = match t.peek().kind {
         TokKind::Assign => None,
         TokKind::PlusEq => Some(BinOp::Add),
         TokKind::MinusEq => Some(BinOp::Sub),
-        _ => return Err(unexpected(src, t.peek(), "`=` (or `+=`, `-=`)")),
+        TokKind::StarEq => Some(BinOp::Mul),
+        TokKind::SlashEq => Some(BinOp::Div),
+        TokKind::PercentEq => Some(BinOp::Rem),
+        _ => return Err(unexpected(src, t.peek(), "`=` (or `+=`, `-=`, `*=`, `/=`, `%=`)")),
     };
     t.advance();
     Ok(op)
@@ -788,8 +835,20 @@ const LADDER: &[&[(TokKind, BinOp)]] = &[
     &[(TokKind::Star, BinOp::Mul), (TokKind::Slash, BinOp::Div), (TokKind::Percent, BinOp::Rem)],
 ];
 
+/// An expression: a binary one, or `c ? a : b`, loosest of all (`a ? b : c ? d : e` nests to
+/// the right).
 fn expr(src: &str, t: &mut Toks<'_>) -> PResult<Expr> {
-    t.guarded(|t| binary(src, t, 0))
+    t.guarded(|t| {
+        let cond = binary(src, t, 0)?;
+        if t.eat(|x| x.kind == TokKind::Question).is_none() {
+            return Ok(cond);
+        }
+        let yes = expr(src, t)?;
+        expect(src, t, TokKind::Colon, "`:` and the value when it is false (c ? a : b)")?;
+        let no = expr(src, t)?;
+        let span = Span::new(cond.span().start, no.span().end);
+        Ok(Expr::Cond(Box::new(cond), Box::new(yes), Box::new(no), span))
+    })
 }
 
 /// One precedence level. Each fold deepens the left spine eval and drop glue
@@ -839,7 +898,32 @@ fn unary(src: &str, t: &mut Toks<'_>) -> PResult<Expr> {
     })
 }
 
+/// An operand and the items it indexes (`[1, 2, 3][i]`, `f(x)[i]`); each index charges a guard
+/// entry until the chain completes, as a binary fold does.
 fn primary(src: &str, t: &mut Toks<'_>) -> PResult<Expr> {
+    let mut entered = 0usize;
+    let r = indexed(src, t, &mut entered);
+    for _ in 0..entered {
+        t.leave();
+    }
+    r
+}
+
+fn indexed(src: &str, t: &mut Toks<'_>, entered: &mut usize) -> PResult<Expr> {
+    let mut e = operand(src, t)?;
+    while t.peek().kind == TokKind::LBracket {
+        *entered += 1;
+        t.enter()?;
+        t.advance();
+        let index = expr(src, t)?;
+        let end = expect(src, t, TokKind::RBracket, "`]`")?.end;
+        let span = Span::new(e.span().start, end);
+        e = Expr::At(Box::new(e), Box::new(index), span);
+    }
+    Ok(e)
+}
+
+fn operand(src: &str, t: &mut Toks<'_>) -> PResult<Expr> {
     let tok = *t.advance();
     let sp = tok.span;
     Ok(match tok.kind {
