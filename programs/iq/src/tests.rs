@@ -471,27 +471,38 @@ fn a_tally_counts_by_tier_split_and_stage() {
 
 /// The committed suite (`evals/suites/iq.jsonl`): it reads, every task verifies (each kill rate
 /// and grade time said), it spans tiers 1 to 4 and six families or more, and it is written as
-/// the writer writes it, byte for byte.
+/// the writer writes it, byte for byte. The tasks are independent, so they verify on every core
+/// (thread `i` takes every `n`th, so the slow high tiers spread out).
 #[test]
 fn the_committed_suite_verifies_and_round_trips() {
     let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../", "evals/suites/iq.jsonl");
     let text = std::fs::read_to_string(path).unwrap();
     let tasks = read_suite(&text).unwrap_or_else(|e| panic!("{e}"));
     assert_eq!(write_suite(&tasks), text, "the suite round-trips byte for byte");
-    let mut bad = Vec::new();
-    for t in &tasks {
-        let t0 = std::time::Instant::now();
-        let g = grade(t, &t.reference);
-        let took = t0.elapsed();
-        match verify(t) {
-            Ok(v) => eprintln!(
-                "{:<10} tier {} kill {}/{} grade {took:?}",
-                t.id, t.tier, v.killed, v.counted
-            ),
-            Err(e) => bad.push(format!("{}: {e}", t.id)),
+    let n = std::thread::available_parallelism().map_or(1, |n| n.get());
+    let check = |i: usize| -> Vec<String> {
+        let mut bad = Vec::new();
+        for t in tasks.iter().skip(i).step_by(n) {
+            let t0 = std::time::Instant::now();
+            let g = grade(t, &t.reference);
+            let took = t0.elapsed();
+            match verify(t) {
+                Ok(v) => eprintln!(
+                    "{:<10} tier {} kill {}/{} grade {took:?}",
+                    t.id, t.tier, v.killed, v.counted
+                ),
+                Err(e) => bad.push(format!("{}: {e}", t.id)),
+            }
+            if !g.pass() {
+                bad.push(format!("{}: {g:?}", t.id));
+            }
         }
-        assert!(g.pass(), "{}: {g:?}", t.id);
-    }
+        bad
+    };
+    let bad: Vec<String> = std::thread::scope(|s| {
+        let all: Vec<_> = (0..n).map(|i| s.spawn(move || check(i))).collect();
+        all.into_iter().flat_map(|h| h.join().unwrap()).collect()
+    });
     assert!(bad.is_empty(), "{bad:#?}");
     let tiers: std::collections::BTreeSet<u8> = tasks.iter().map(|t| t.tier).collect();
     let families: std::collections::BTreeSet<&str> =

@@ -123,6 +123,32 @@ opt-level = 3
 [profile.release.package.compusophy-tiny]
 opt-level = 3
 
+# applang's interpreter and what drives it (its front end and budgets, the probe, the smoke
+# test, iq's mutants and scripts) run thousands of programs in tests: verifying the committed
+# IQ suite grades every mutant of every task. Unoptimized, that was most of a 35-minute CI, and
+# it grows with the suite. So dev builds, tests too, take them at opt-level 3; overflow checks
+# and debug assertions stay on. Release (shipped) builds stay at "z".
+[profile.dev.package.compusophy-applang]
+opt-level = 3
+
+[profile.dev.package.compusophy-applang-syntax]
+opt-level = 3
+
+[profile.dev.package.compusophy-fuel]
+opt-level = 3
+
+[profile.dev.package.compusophy-lang]
+opt-level = 3
+
+[profile.dev.package.compusophy-makes]
+opt-level = 3
+
+[profile.dev.package.compusophy-coder]
+opt-level = 3
+
+[profile.dev.package.compusophy-iq]
+opt-level = 3
+
 # Ultra lite: every shipped byte is budgeted.
 [profile.release]
 opt-level = "z"
