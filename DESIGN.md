@@ -848,6 +848,58 @@ reinforcement learning, not only a filter.
   llama.cpp's engine. GLM's same answers, regraded with no new call: everyday apps (tiers 1-2)
   77 to 80 of 101, ambitious games (tiers 3-6) 20 to 23 of 123; none lost.
 
+## The team: many models, one mind
+
+compusophy, 2026-10-08, after a flat night (the 3B alone 6% to 8% held out, inside the noise;
+GLM 45%): the open model's job is not to climb alone but to **support the cloud model**, and two
+models hand in hand are only the base case. The mesh's heart is N models self-organizing: a
+division of labor, the right-sized model for each subtask ("no jackhammer for a small nail"),
+across this PC, a laptop, a phone and then a public pool anyone joins, whose crowd compute also
+trains them. For serious technical people; useful first, so real users, then paying ones.
+
+**What it is: a coding agent that runs on the pool.** A task goes to a team. The lead (a cloud
+model) writes and rewrites; helpers (small models on the devices) do the small nails: repair a
+compile error or a fault from its coded account, write and run checks, choose among candidates,
+compress context. applang's verifier judges everything, in milliseconds and for free, so no
+model's word is taken: a helper's fix counts when the program then runs clean.
+
+**Models are workers.** The pool already has workers, work stealing, receipts and replay checks;
+a model joins as one more kind of worker, its record kept per subtask kind (tried, succeeded,
+ms, dollars). A router sends each subtask to the worker whose record promises the most success
+per unit of cost, and escalates on failure: the 3B before GLM Flash before GLM before Opus.
+
+**Score: the combined system, never a model alone.** Tasks solved per dollar and per second, and
+cloud calls per solved task, against the cloud model alone; on `iq`'s held-out tasks (everyday
+apps and ambitious games apart) and on Suite 1, the makes people ask for.
+
+**Built from what exists, `coder` untouched** (its files are in the verifier's hash): a new
+sans-IO crate drives the team with `coder`'s public pieces (`prompt::system`, `prompt::fix`,
+`ai::fault`, `edits`), as `teach` builds its fix turns; `evals` and `tools/eval` drive it
+natively; Studio and the pool, in the tab.
+
+Milestones, each a measurement compusophy sees before the next costs anything:
+
+1. **Two models, repair, at no cloud cost.** The night's recorded GLM answers to the held-out
+   tasks (one each, 101 of 222 pass) are replayed as the lead's first draft; a local helper
+   repairs the ones that fail, a few turns each, from `coder`'s fix prompt and the fault's
+   account. Measured: the pass rate gained with no new cloud call, by tier, by failure stage, per
+   helper (the night's 3B fine-tune, the base 3B, the 0.5B). Cost: no tokens; an hour of the GPU
+   when no night runs (never on the night's port), else the CPU, slower.
+2. **Escalation.** What the helper can't fix goes back to the lead (one fix turn with the
+   helper's best), against the lead's own make loop: cloud calls and dollars per solved task.
+   Cost: about 120 failing tasks at a cent or two a call, $2 to $5, past the free AI's daily share
+   for one client (about $0.67): spread over days, or on the AI Gateway budget; compusophy's call.
+3. **The router learns, more helpers, N models.** Records per worker and subtask; helpers that
+   write checks (the 3B already learns checks from asks) and choose among candidates; GLM Flash
+   and Opus as more leads; the 0.5B where it suffices.
+4. **In the tab.** Studio's make loop as a team: the lead through `/api/ai`, the helpers on the
+   pool (a device sharing its model), so a person's own hardware does the small nails. The pool's
+   `Ask` grows into a full chat request any program may send to a pool model (today: 256
+   tokens, one message, Activity only).
+5. **The crowd.** A public pool; every team make's trace (draft, account, fix, outcome) is a
+   labeled example for the helpers, with consent; fine-tuning spread over the crowd's GPUs
+   (adapters per node, merged), each model through the gate (Evolution, below).
+
 ## Evolution: prediction, lineage, selection
 
 Designed 2026-10-06 and checked against the code the same day; none of it is built beyond the
@@ -1258,6 +1310,9 @@ keeping one is fitness.
 
 ## What is next
 
+- **The team** (above): two models repairing first, at no cloud cost; then escalation, the
+  router and N models, the team in the tab, the crowd. The nightly model below now trains the
+  helpers, judged by what the team solves.
 - **The applang model, nightly.** Opus writes the suite toward two thousand tasks or more across
   the tiers (a fifth of the roots is held out, about half of those confirm, and the gate needs
   about 250 to 290 confirmation tasks to certify a gain of 5 points); baselines for today's GLM, Opus and the untuned Qwens; Opus's verified solutions train
