@@ -156,10 +156,10 @@ fn a_job_starts_whole_or_not_at_all() {
     use wire::{E2BIG, EINVAL, ENOENT, ENOEXEC};
     assert_eq!(fails, [ENOENT, ENOEXEC, ENOENT, EINVAL, EINVAL, EINVAL, EINVAL, E2BIG]);
     assert_eq!((s.k.procs().len(), s.k.take_effects()), (1, vec![]));
-    // Eight run at most: the shell and six, then two more are one too many.
-    let seven: Vec<_> = vec![("/bin/a", "a"); 7];
-    assert_eq!(s.spawn(&job(&seven[..6], Stdin::Console, Stdout::Console, b"")).0, 0);
-    assert_eq!(s.spawn(&job(&seven[..2], Stdin::Console, Stdout::Console, b"")).0, wire::EAGAIN);
+    // MAX_PROCS run at most: the shell and all but one more, then two more are one too many.
+    let all: Vec<_> = vec![("/bin/a", "a"); wire::MAX_PROCS - 2];
+    assert_eq!(s.spawn(&job(&all, Stdin::Console, Stdout::Console, b"")).0, 0);
+    assert_eq!(s.spawn(&job(&all[..2], Stdin::Console, Stdout::Console, b"")).0, wire::EAGAIN);
     // Under narrower roots, only what is under them.
     let mut s = Sh::new();
     let (argv, program) = (vec!["sh".into()], Program::Url("bin/toolbox.wasm".into()));

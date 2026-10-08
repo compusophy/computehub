@@ -93,6 +93,8 @@ fn events() -> Vec<Event> {
         Event::Wheel { dy: -34 },
         Event::Ended { status: 127 },
         Event::Key { id: 0, key: Key::F, mods: 0, ch: '\u{c}' },
+        Event::Pool { data: vec![1, 2] },
+        Event::Done { index: 7, node: 1, out: "10 ab 0121".into() },
     ]
 }
 
@@ -132,7 +134,13 @@ fn every_kind_round_trips_and_nothing_else_decodes() {
     ];
     own.iter().for_each(|n| strict(n, Node::encode, Node::decode));
     let pref = Request::Pref { key: "grain".into(), value: "off".into() };
-    let tty = [Request::Tty { cols: 80, rows: 24 }, Request::Input { data: b"ls\r".to_vec() }];
+    let tty = [
+        Request::Tty { cols: 80, rows: 24 },
+        Request::Input { data: b"ls\r".to_vec() },
+        Request::Pair { code: "K7000".into() },
+        Request::Measure,
+        Request::Job { name: "fractal".into(), chunks: vec!["0 0 -0.6 0 3".into(), String::new()] },
+    ];
     [pref, Request::Reset]
         .iter()
         .chain(&tty)
@@ -745,4 +753,46 @@ fn a_receipt_is_read_whole_from_the_end_of_a_stream() {
     for b in bad {
         assert_eq!(receipt(b), None, "{:?}", String::from_utf8_lossy(b));
     }
+}
+
+#[test]
+fn the_meshs_snapshots_and_frames_come_back_whole() {
+    use crate::pool::{Device, Job, Snap, VERSION};
+    use crate::relay::{Frame, HEAD};
+    let d = |name: &str| Device {
+        name: name.into(),
+        cores: 16,
+        units: 1 << 40,
+        tx: 9,
+        ..Device::default()
+    };
+    let job = Job {
+        name: "fractal".into(),
+        mine: true,
+        total: 144,
+        done: 3,
+        per: vec![2, 1],
+        ..Job::default()
+    };
+    let snap = Snap {
+        at: 5,
+        pairing: "Linking".into(),
+        code: "K7".into(),
+        devices: vec![d("a"), d("b")],
+        job: Some(job),
+    };
+    let bytes = snap.encode();
+    assert_eq!((bytes[0], Snap::decode(&bytes)), (VERSION, Some(snap.clone())));
+    assert_eq!(Snap::decode(&[&bytes[..], &[0]].concat()), None, "trailing");
+    assert_eq!(Snap::decode(&bytes[..bytes.len() - 1]), None, "short");
+    assert_eq!(Snap::decode(&[&[VERSION + 1], &bytes[1..]].concat()), None, "another version");
+    // Frames: none until one is whole, then each in turn with the bytes it took.
+    let (a, b) = (Frame { op: 3, a: 7, b: 200, now: 9, data: b"v=0".to_vec() }, Frame::default());
+    let mut out = Vec::new();
+    a.put(&mut out);
+    b.put(&mut out);
+    assert_eq!(out.len(), 2 * HEAD + 3);
+    assert_eq!(Frame::take(&out[..HEAD + 2]), None);
+    assert_eq!(Frame::take(&out), Some((a, HEAD + 3)));
+    assert_eq!(Frame::take(&out[HEAD + 3..]), Some((b, HEAD)));
 }

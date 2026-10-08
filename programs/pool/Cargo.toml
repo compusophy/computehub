@@ -1,0 +1,19 @@
+[package]
+name = "compusophy-pool"
+description = "compusophyOS's pool: the mesh's program, which links tabs (pairing by a short code), spreads a job's chunks over every core of every linked tab (a shared queue, work stealing, a dropped chunk requeued) and checks their answers (fuel receipts, SHA-256, replays); a wasm32-wasip1 program the desktop talks to in frames on its console. Built into dist/bin/, never committed."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[lib]
+name = "pool"
+
+[[bin]]
+name = "pool"
+path = "src/main.rs"
+
+[dependencies]
+compusophy-uiwire.workspace = true

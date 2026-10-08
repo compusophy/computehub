@@ -256,6 +256,11 @@ impl Shell {
         self.host.ai = ai;
     }
 
+    /// The kernel and the filesystem together, for the mesh's workers.
+    pub fn kernel_vfs(&mut self) -> (&mut ui::kernel::Kernel, &Vfs) {
+        (&mut self.host.kernel, &self.host.vfs)
+    }
+
     /// The kernel, for os to set up; its effects leave by [`Shell::take_effects`].
     pub fn kernel_mut(&mut self) -> &mut ui::kernel::Kernel {
         &mut self.host.kernel

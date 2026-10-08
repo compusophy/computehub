@@ -24,7 +24,7 @@ const AUTHOR: &str = "Made by compusophy. Apache-2.0.";
 const SOURCE: &str = "github.com/compusophy/computehub";
 /// Every crate and its role.
 #[rustfmt::skip]
-pub(crate) const STACK: [(&str, &str); 46] = [
+pub(crate) const STACK: [(&str, &str); 49] = [
     ("os", "The wasm entry: fonts, files, program windows"),
     ("report", "Telemetry: notes, reports and their outbox"),
     ("platform", "The browser boundary: canvas, WebGL2, input"),
@@ -34,7 +34,10 @@ pub(crate) const STACK: [(&str, &str); 46] = [
     ("host", "Windows and the apps in them"), ("wm", "Window manager; deterministic"),
     ("apps", "The console a terminal's shell runs on"),
     ("system", "About, Editor, Feedback, Files, Welcome, Settings; serves Activity"),
-    ("activity", "The resource monitor: CPU, memory, frames, AI"),
+    ("activity", "The resource monitor: CPU, memory, frames, AI, the pool"),
+    ("mesh", "Links to other tabs, for the pool"),
+    ("pool", "The mesh: one job on every core of linked tabs"),
+    ("fractal", "The mesh's demo: tiles rendered across devices"),
     ("ui", "Widgets, themes and the App trait"), ("icons", "The mark and the vector icons"),
     ("text", "Fonts and glyphs on the atlas"), ("font", "TrueType reader and rasterizer"),
     ("gfx", "Draw lists and the WebGL2 shaders"), ("vfs", "In-memory filesystem; deterministic"),

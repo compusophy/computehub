@@ -1,0 +1,374 @@
+//! Activity's Pool page: the mesh, as the rest of Activity shows this tab. Pairing (show a code,
+//! or enter the other device's); the pool's size and how busy it is over the minute, how fast it
+//! answers chunks and steps; each device (sortable), its share of the work in its color; each
+//! link's round trip and traffic over the minute, both ways, and its throughput when measured;
+//! the job, if one runs. The pool program sends a snapshot ([`Snap`]) at most once a second
+//! while something changes, so at rest nothing comes and nothing here draws.
+
+use uiwire::pool::{self, Snap};
+use uiwire::{Event, Node, Request, Style, Variant};
+
+use super::{DASH, DOT, History, bytes, card, count, nice, text};
+
+/// Node ids: Show a code, the code field, Link, Measure, Fractal; the devices' head (column `k`
+/// is `SORT + k`).
+pub const SHOW: u32 = 40;
+pub const CODE: u32 = 41;
+pub const JOIN: u32 = 42;
+pub const MEASURE: u32 = 43;
+pub const FRACTAL: u32 = 44;
+pub const SORT: u32 = 50;
+/// Each device's color as RGB, by [`pool::TINTS`]'s canvas colors (cyan, yellow, magenta, green,
+/// red, blue).
+const RGB: [u32; 6] = [0x22d3ee, 0xfacc15, 0xe879f9, 0x4ade80, 0xf87171, 0x60a5fa];
+const NOTE: &str = "Linked tabs share one job: every core of every device takes the next chunk \
+as it goes idle, so faster devices take more. Answers come back with the steps they took and a \
+hash of the result; some are replayed here to check them. Tabs talk directly, encrypted; only \
+pairing passes through the server, briefly.";
+
+/// The Pool page's state: the last two snapshots, the minute of utilization (per mille of the
+/// workers busy), chunks a second and steps a second, each link's bytes a second heard and sent
+/// (by device name), the code typed, the devices' sort column (0 the name).
+#[derive(Debug, Default)]
+pub struct PoolPage {
+    pub prev: Option<Snap>,
+    pub cur: Option<Snap>,
+    pub graphs: [History; 3],
+    pub links: Vec<(String, History, History)>,
+    pub code: String,
+    pub sort: u8,
+}
+
+impl PoolPage {
+    /// Handles one event; whether it was the page's.
+    pub fn event(&mut self, ev: &Event, requests: &mut Vec<Request>) -> bool {
+        match ev {
+            Event::Pool { data } => match Snap::decode(data) {
+                Some(s) => self.take(s),
+                None => return false,
+            },
+            Event::Click { id: SHOW } => requests.push(Request::Pair { code: String::new() }),
+            Event::Change { id: CODE, text, .. } => self.code.clone_from(text),
+            Event::Click { id: JOIN } | Event::Submit { id: CODE } if !self.code.is_empty() => {
+                requests.push(Request::Pair { code: self.code.clone() })
+            }
+            Event::Click { id: MEASURE } => requests.push(Request::Measure),
+            Event::Click { id: FRACTAL } => requests.push(Request::Open { name: "fractal".into() }),
+            Event::Click { id } if (SORT..SORT + 5).contains(id) => self.sort = (id - SORT) as u8,
+            _ => return false,
+        }
+        true
+    }
+
+    /// A new snapshot: rates from the last, into the graphs.
+    fn take(&mut self, s: Snap) {
+        if let Some(p) = &self.cur {
+            let secs = s.at.wrapping_sub(p.at).div_ceil(1000).max(1);
+            let ms = u64::from(s.at.wrapping_sub(p.at).max(1));
+            let sum =
+                |snap: &Snap, f: fn(&pool::Device) -> u64| snap.devices.iter().map(f).sum::<u64>();
+            let rate =
+                |a: u64, b: u64| (b.saturating_sub(a) * 1000 / ms).min(u64::from(u32::MAX)) as u32;
+            let chunks = rate(sum(p, |d| d.chunks.into()), sum(&s, |d| d.chunks.into()));
+            // Steps in thousands: a pool takes billions a second.
+            let units = rate(sum(p, |d| d.units / 1000), sum(&s, |d| d.units / 1000));
+            self.graphs[1].add(secs, chunks);
+            self.graphs[2].add(secs, units);
+            for d in s.devices.iter().skip(1) {
+                let Some(q) = p.devices.iter().find(|q| q.name == d.name) else { continue };
+                let i = match self.links.iter().position(|l| l.0 == d.name) {
+                    Some(i) => i,
+                    None => {
+                        self.links.push((d.name.clone(), History::default(), History::default()));
+                        self.links.len() - 1
+                    }
+                };
+                self.links[i].1.add(secs, rate(q.rx, d.rx));
+                self.links[i].2.add(secs, rate(q.tx, d.tx));
+            }
+            self.graphs[0].level(secs, utilization(&s));
+        } else {
+            self.graphs[0].level(1, utilization(&s));
+        }
+        self.links.retain(|l| s.devices.iter().any(|d| d.name == l.0));
+        self.prev = self.cur.replace(s);
+    }
+
+    /// The page: what it shows now, `wide` with cards two a row.
+    pub fn nodes(&self, wide: bool) -> Vec<Node> {
+        let mut nodes = vec![text(Style::Heading, "Pool")];
+        let s = self.cur.clone().unwrap_or_default();
+        let devices = &s.devices;
+        let cores: u32 = devices.iter().map(|d| u32::from(d.cores)).sum();
+        let ram: u32 = devices.iter().map(|d| d.ram_mb).sum();
+        let quota: u64 = devices.iter().map(|d| u64::from(d.quota_mb)).sum();
+        let mut line = count(devices.len().max(1), "device", "devices");
+        if cores > 0 {
+            line += &[DOT, &cores.to_string(), " cores"].concat();
+        }
+        if ram > 0 {
+            line += &[DOT, &ram_gb(ram), " RAM"].concat();
+        }
+        if quota > 0 {
+            line += &[DOT, &storage(quota), " storage"].concat();
+        }
+        nodes.push(text(Style::Dim, &line));
+        nodes.push(self.pairing(&s));
+        // Busy and speed over the minute.
+        let util = &self.graphs[0];
+        let shown = util.now().map_or(DASH.into(), |u| [&(u / 10).to_string(), "%"].concat());
+        let busy: u32 = devices.iter().map(|d| u32::from(d.busy)).sum();
+        let workers: u32 = devices.iter().map(|d| u32::from(d.workers)).sum();
+        let busy = [&busy.to_string(), " of ", &workers.to_string(), " workers busy"].concat();
+        let util = card("Utilization", &shown, util.chart(11, 64, 1000), &busy);
+        let (speed, steps) = (&self.graphs[1], &self.graphs[2]);
+        let per = speed.now().map_or(DASH.into(), |c| [&c.to_string(), " chunks/s"].concat());
+        let line = steps.now().map_or(String::new(), |k| [&big(k), " steps/s"].concat());
+        let speed = card("Speed", &per, speed.chart(2, 64, nice(speed.peak().max(10))), &line);
+        if wide {
+            nodes.push(Node::Row { id: 0, gap: 12, children: vec![util, speed] });
+        } else {
+            nodes.extend([util, speed]);
+        }
+        nodes.extend(self.devices(&s, wide));
+        nodes.extend(self.linked(&s));
+        nodes.extend(job(&s));
+        let fractal = "Render a fractal on the pool".into();
+        nodes.push(Node::Button { id: FRACTAL, variant: Variant::Primary, label: fractal });
+        nodes.push(text(Style::Small, NOTE));
+        nodes
+    }
+
+    /// Pairing: the code shown, or what pairing says; Show a code, or enter the other's.
+    fn pairing(&self, s: &Snap) -> Node {
+        let mut children = vec![text(Style::Small, "Pair a device")];
+        if !s.code.is_empty() {
+            children.push(text(Style::Title, &s.code));
+        }
+        let say = if s.pairing.is_empty() {
+            "Open computehub on the other device: show a code here and enter it there, or the other way."
+        } else {
+            &s.pairing
+        };
+        children.push(text(Style::Small, say));
+        let show = Node::Button { id: SHOW, variant: Variant::Normal, label: "Show a code".into() };
+        let field = Node::Input { id: CODE, value: self.code.clone(), placeholder: "Code".into() };
+        let join = Node::Button { id: JOIN, variant: Variant::Primary, label: "Link".into() };
+        children.push(Node::Row { id: 0, gap: 8, children: vec![show, field, join] });
+        Node::Card { id: 0, children: vec![Node::Col { id: 0, gap: 6, children }] }
+    }
+
+    /// The devices, sorted by the column picked, and each one's share of the work.
+    fn devices(&self, s: &Snap, wide: bool) -> Vec<Node> {
+        let mut rows: Vec<(usize, &pool::Device)> = s.devices.iter().enumerate().collect();
+        let total: u64 = s.devices.iter().map(|d| u64::from(d.chunks)).sum();
+        let key = |d: &pool::Device| match self.sort {
+            1 => u64::from(d.cores),
+            2 => u64::from(d.ram_mb),
+            3 => u64::from(d.quota_mb),
+            _ => u64::from(d.chunks),
+        };
+        if self.sort == 0 {
+            rows.sort_by(|a, b| a.1.name.cmp(&b.1.name));
+        } else {
+            rows.sort_by_key(|r| std::cmp::Reverse(key(r.1)));
+        }
+        let labels =
+            if wide { "Device\tCores\tRAM\tStorage\tShare" } else { "Device\tCores\tShare" };
+        let on = if wide || matches!(self.sort, 0 | 1 | 4) { self.sort + 1 } else { 0 };
+        let mut nodes = vec![Node::Columns { id: SORT, on, labels: labels.into() }];
+        for (i, d) in &rows {
+            let share = (u64::from(d.chunks) * 1000).checked_div(total).unwrap_or(0);
+            let pct = [&(share / 10).to_string(), "%"].concat();
+            let ram = if d.ram_mb == 0 { DASH.into() } else { ram_gb(d.ram_mb) };
+            let quota = if d.quota_mb == 0 { DASH.into() } else { storage(d.quota_mb.into()) };
+            let cells = match wide {
+                true => [d.cores.to_string(), ram, quota, pct].join("\t"),
+                false => [d.cores.to_string(), pct].join("\t"),
+            };
+            // What tells devices apart first (a row's second line is cut to fit): this tab, or
+            // whether its key was pinned before and how long it is linked; then its GPU and kind.
+            let gpu = if d.gpu { "GPU compute OK" } else { "GPU compute off" };
+            let pinned = if d.known { "known" } else { "new" };
+            let first = match i {
+                0 => "this tab".to_string(),
+                _ => [pinned, DOT, "linked ", &minutes(d.up_ms)].concat(),
+            };
+            let about = [&first, DOT, gpu, DOT, &d.kind].concat();
+            let name = if d.name.is_empty() { "A device" } else { &d.name };
+            let text = [name, "\n", &about].concat();
+            let hue = RGB[i % RGB.len()];
+            nodes.push(Node::Entry {
+                id: 0,
+                glyph: icons::Glyph::Mark as u8,
+                hue,
+                text,
+                detail: cells,
+                more: false,
+            });
+        }
+        // Each device's share in its color, in the table's order, named.
+        nodes.push(text(Style::Small, "Share of the pool's work"));
+        for (i, d) in &rows {
+            let value = (u64::from(d.chunks) * 1000).checked_div(total).unwrap_or(0) as u16;
+            let name = if d.name.is_empty() { "A device" } else { &d.name };
+            let pct = [&(value / 10).to_string(), "%"].concat();
+            nodes.push(text(Style::Small, &[name, DOT, &pct].concat()));
+            nodes.push(Node::Meter { id: 0, hue: pool::TINTS[i % pool::TINTS.len()], value });
+        }
+        nodes
+    }
+
+    /// Each link: its round trip and traffic over the minute both ways, measured throughput.
+    fn linked(&self, s: &Snap) -> Vec<Node> {
+        if s.devices.len() < 2 {
+            return Vec::new();
+        }
+        let mut nodes = vec![text(Style::Heading, "Links")];
+        for d in s.devices.iter().skip(1) {
+            let rtt = if d.rtt == pool::UNKNOWN {
+                DASH.into()
+            } else {
+                [&d.rtt.to_string(), " ms"].concat()
+            };
+            let measured =
+                |b: u32| if b == 0 { DASH.into() } else { [&bytes(b.into()), "/s"].concat() };
+            let line = [
+                "Round trip ",
+                &rtt,
+                DOT,
+                "measured \u{2191} ",
+                &measured(d.up),
+                " \u{2193} ",
+                &measured(d.down),
+            ]
+            .concat();
+            let (down, up) = match self.links.iter().find(|l| l.0 == d.name) {
+                Some(l) => (l.1.clone(), l.2.clone()),
+                None => Default::default(),
+            };
+            let full = nice(down.peak().max(up.peak()).max(1000));
+            let now =
+                |h: &History| h.now().map_or(DASH.into(), |b| [&bytes(b.into()), "/s"].concat());
+            let children = vec![
+                text(Style::Small, &d.name),
+                text(Style::Body, &line),
+                text(Style::Small, &["Heard ", &now(&down)].concat()),
+                down.chart(6, 40, full),
+                text(Style::Small, &["Sent ", &now(&up)].concat()),
+                up.chart(3, 40, full),
+            ];
+            nodes.push(Node::Card { id: 0, children: vec![Node::Col { id: 0, gap: 6, children }] });
+        }
+        nodes.push(Node::Button {
+            id: MEASURE,
+            variant: Variant::Normal,
+            label: "Measure links".into(),
+        });
+        nodes
+    }
+}
+
+/// The share of the pool's workers busy, per mille.
+fn utilization(s: &Snap) -> u32 {
+    let busy: u32 = s.devices.iter().map(|d| u32::from(d.busy)).sum();
+    let workers: u32 = s.devices.iter().map(|d| u32::from(d.workers)).sum();
+    (busy * 1000).checked_div(workers).unwrap_or(0)
+}
+
+/// The job: chunks done and waiting, each device's, work stealing, checks, time and what is left.
+fn job(s: &Snap) -> Vec<Node> {
+    let Some(j) = &s.job else { return Vec::new() };
+    let mut children = vec![text(Style::Small, &["Job", DOT, &j.name].concat())];
+    let secs =
+        |ms: u32| [&(ms / 1000).to_string(), ".", &(ms % 1000 / 100).to_string(), " s"].concat();
+    if !j.mine {
+        children.push(text(Style::Title, &count(j.done as usize, "chunk", "chunks")));
+        let line = ["answered here for another device, in ", &secs(j.ms)].concat();
+        children.push(text(Style::Small, &line));
+        // Answers here that came second: their chunks were taken back and answered there first.
+        if j.used > 0 || j.ms > 0 {
+            let late = j.done.saturating_sub(j.used);
+            let used =
+                [&j.used.to_string(), " used", DOT, &late.to_string(), " answered first there"];
+            children.push(text(Style::Small, &used.concat()));
+        }
+        return vec![Node::Card { id: 0, children: vec![Node::Col { id: 0, gap: 6, children }] }];
+    }
+    let left = j.total - j.done.min(j.total);
+    children
+        .push(text(Style::Title, &[&j.done.to_string(), " of ", &j.total.to_string()].concat()));
+    let value = (j.done * 1000).checked_div(j.total).unwrap_or(1000) as u16;
+    children.push(Node::Meter { id: 0, hue: 11, value });
+    let eta = match (left, j.done) {
+        (0, _) => ["done in ", &secs(j.ms)].concat(),
+        (_, 0) => [&secs(j.ms), " so far"].concat(),
+        _ => {
+            let rest = u64::from(j.ms) * u64::from(left) / u64::from(j.done);
+            [&secs(j.ms), " so far", DOT, "about ", &secs(rest as u32), " left"].concat()
+        }
+    };
+    children.push(text(Style::Body, &[&left.to_string(), " left", DOT, &eta].concat()));
+    let per: Vec<String> = s
+        .devices
+        .iter()
+        .zip(&j.per)
+        .map(|(d, n)| [&d.name, " ", &n.to_string()].concat())
+        .collect();
+    children.push(text(Style::Small, &per.join(DOT)));
+    let steal = [
+        &count(j.steals as usize, "chunk", "chunks"),
+        " taken back from slower devices",
+        DOT,
+        &j.requeued.to_string(),
+        " requeued",
+        DOT,
+        &j.checked.to_string(),
+        " checked by replay, ",
+        &j.mismatched.to_string(),
+        " differed",
+    ]
+    .concat();
+    children.push(text(if j.mismatched > 0 { Style::Error } else { Style::Small }, &steal));
+    vec![Node::Card { id: 0, children: vec![Node::Col { id: 0, gap: 6, children }] }]
+}
+
+/// RAM as the browser gives it (whole GiB, or fractions under one) in GB: `8 GB`, `0.5 GB`.
+fn ram_gb(mb: u32) -> String {
+    match mb {
+        0..1024 => ["0.", &(mb * 10 / 1024).to_string(), " GB"].concat(),
+        _ => [&(mb / 1024).to_string(), " GB"].concat(),
+    }
+}
+
+/// MB of storage in decimal units: `740 MB`, `25.7 GB`, `1.2 TB`.
+fn storage(mb: u64) -> String {
+    let tenths =
+        |n: u64, unit: &str| [&(n / 10).to_string(), ".", &(n % 10).to_string(), unit].concat();
+    match mb {
+        0..1000 => [&mb.to_string(), " MB"].concat(),
+        1000..1_000_000 => tenths(mb / 100, " GB"),
+        _ => tenths(mb / 100_000, " TB"),
+    }
+}
+
+/// ms as people say how long: `40 s`, `3 min`, `2 h`.
+fn minutes(ms: u32) -> String {
+    match ms / 1000 {
+        s @ 0..60 => [&s.to_string(), " s"].concat(),
+        s @ 60..3600 => [&(s / 60).to_string(), " min"].concat(),
+        s => [&(s / 3600).to_string(), " h"].concat(),
+    }
+}
+
+/// Thousands as people say a big count: `940k`, `12.4M`, `3.1G`, `2.0T`.
+fn big(k: u32) -> String {
+    let (scale, unit) = match k {
+        0 => return "0".into(),
+        1..1000 => return [&k.to_string(), "k"].concat(),
+        1000..1_000_000 => (1000, "M"),
+        1_000_000..1_000_000_000 => (1_000_000, "G"),
+        _ => (1_000_000_000, "T"),
+    };
+    [&(k / scale).to_string(), ".", &(k % scale / (scale / 10)).to_string(), unit].concat()
+}

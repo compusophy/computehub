@@ -53,44 +53,45 @@ crates/      the OS (boot, kernel, worker); talks WASI and uiwire
   wm/        floating window manager: stacking, snapping, focus
   vfs/       in-memory filesystem (/apps, /home, /tmp)
   font/      TrueType reader + glyph rasterizer
-  gfx/       instanced-quad draw list, glyph atlas, the WebGL2 shaders
+  gfx/       instanced-quad draw list, glyph atlas, WebGL2 shaders
   text/      TextSystem: font slots, fallbacks, glyphs on the atlas
   icons/     the mark, glyphs and made icons as vector outlines
-  ui/        immediate-mode widgets, themes, App, Cx, the Code editor
+  ui/        immediate-mode widgets, themes, App, Cx, Code editor
   apps/      a terminal's console: its shell, its keys
   uiwire/    remote UI protocol: programs send widget trees, get events
-  uiview/    draws them with ui; edited text; canvas/: Canvases
-  host/      wm + one app per window; agent; grabs, squeeze; motion, frames
-  home/      top bar, home grid, dock + Assistant row, menus, touch
-  logon/     the welcome: mark, real boot record, sign-in, PIN
-  profiles/  the list: each profile's keys, face, name, PIN
-  shell/     the desktop: window chrome, keys, overlay; wires host + home
+  uiview/    draws them with ui; edited text; canvas/: canvases
+  host/      wm + one app per window; agent; grabs, squeeze; motion
+  home/      top bar, home grid, dock, menus, touch
+  logon/     the welcome: mark, boot record, sign-in, PIN
+  profiles/  each profile's keys, face, name, PIN
+  shell/     the desktop: window chrome, keys, overlay
   platform/  the browser boundary: canvas, WebGL2, input, textarea, fetch,
-             frames on demand, storage, workers
+             frames on demand, storage, workers, WebRTC
+  mesh/      relays links and workers to the pool program
   report/    telemetry: notes, reports, outbox, panic beacon
   os/        wasm entry: fonts, VFS, registry, prefs, events, Remote
-             windows, ai, /home kept
-  kernel/    wire protocol, process table, consoles, jobs, file
+             windows, ai, /home
+  kernel/    wire protocol, processes, consoles, jobs, file
              server (main), snap (/home), module
-  wasi/      the kernel's worker half: WASI preview 1 Proc, fds, /dev
+  wasi/      the kernel's worker half: WASI preview 1, fds, /dev
   cpu/       the program worker (cdylib; dist/cpu/): loader, WASI imports
 programs/    wasm32-wasip1 programs (dist/bin/), app language, dev crates
   fuel/ lang/ forks of litelite (budgets, parse kit)
   applang-lex/ -syntax/ applang/ app language: tokens, parse, run
   studio/    make apps by describing them; runs `.app` files
   coder/     Studio's agent: write, test, fix, keep the best
-  assistant/ the AI using the desktop; chats/ files/: its chats, file tools
+  assistant/ the AI using the desktop; chats/ files/: its chats, files
   tiny/ lab/ a transformer; dev: its corpus, training, measures
   system/    About, Editor, Feedback, Files, Welcome, Settings
-  activity/  the resource monitor
+  activity/  resource monitor; pool/ fractal/: the mesh, its demo
   terminal/  the Terminal; vt/ term/: its parser, screen model
   sh/ agent/ shell: editor, commands, jobs; AI coder
   toolbox/   test programs, one binary
   evals/ makes/ iq/ teach/  dev: evals; IQ tasks; Opus the teacher
 assets/fonts/  the fonts (see Fonts below)
-api/           server functions (Vercel, Node): ai.mjs, feedback.mjs
-tools/serve/   dev-only static server for dist/; mocks /api/*
-tools/eval/    dev-only eval runner (curl, the free AI)
+api/           server functions (Vercel, Node): ai, feedback, signal
+tools/serve/   dev-only server for dist/; mocks /api/*
+tools/eval/    dev-only eval runner (the free AI)
 train/         dev: fine-tuning on the 3090 (Python)
 web/index.html the page: <canvas id="os"> + a one-line bootstrap
 web/worker.js  the program worker's one-line bootstrap

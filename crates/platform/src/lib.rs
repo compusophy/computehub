@@ -19,6 +19,7 @@
 
 mod ctl;
 mod io;
+mod link;
 mod nav;
 mod proc;
 mod render;
@@ -26,7 +27,7 @@ mod render;
 mod tests;
 
 pub use ctl::{Ctl, Effect, Load, LocalTime, Timing};
-pub use nav::{Device, beacon, device};
+pub use nav::{Device, Hardware, beacon, device, hardware};
 pub use render::Renderer;
 
 use std::cell::{Cell, RefCell};
@@ -95,6 +96,16 @@ pub enum Event {
     Hidden,
     /// Derivation `id` ([`Ctl::derive`]) finished: the 32 bytes, or why there are none.
     Derived { id: u32, result: Result<Vec<u8>, String> },
+    /// Link `id`'s description ([`Ctl::link`]), for the other tab: an offer or an answer.
+    Signal { id: u32, sdp: String },
+    /// Link `id`'s channel opened.
+    Linked { id: u32 },
+    /// A message came on link `id`.
+    LinkData { id: u32, data: Vec<u8> },
+    /// Link `id` failed or closed (never after [`Ctl::unlink`]).
+    Unlinked { id: u32 },
+    /// The page's storage quota ([`Ctl::estimate`]), in MB (0 if unknown).
+    Estimated { quota_mb: u32 },
 }
 
 /// What an [`App`] did with an [`Event`].
@@ -163,6 +174,8 @@ pub fn run<A: App + 'static>(app: A) -> Result<(), JsValue> {
         frame_timer: Cell::new(None),
         streams: RefCell::new(Vec::new()),
         derives: RefCell::new(Vec::new()),
+        links: RefCell::new(Vec::new()),
+        cert: RefCell::default(),
     });
 
     resize(&s);
@@ -225,6 +238,9 @@ struct Shared {
     streams: RefCell<Vec<io::Stream>>,
     /// Each PBKDF2 derivation's algorithm, by id, while its key is imported.
     derives: RefCell<Vec<(u32, js_sys::Object)>>,
+    /// The links to other tabs, and the certificate they share.
+    links: RefCell<Vec<link::Link>>,
+    cert: RefCell<link::Cert>,
 }
 
 /// Which pointer [`Event`] a DOM pointer event becomes.

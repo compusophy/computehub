@@ -46,11 +46,14 @@ use crate::ai::Ai;
 pub const STUDIO: &str = "/bin/studio";
 pub const ASSISTANT: &str = "/bin/assistant";
 pub const TERMINAL: &str = "/bin/terminal";
+pub const FRACTAL: &str = "/bin/fractal";
 /// Studio's icon (braces on violet), and that of every `.app` it runs.
 pub const STUDIO_ICON: AppIcon = AppIcon { glyph: Glyph::Studio, hue: Rgba::hex(0x8b7bff) };
 pub const APP_ICON: AppIcon = AppIcon { glyph: Glyph::Window, hue: Rgba::hex(0xf59e0b) };
 pub const ASSISTANT_ICON: AppIcon = AppIcon { glyph: Glyph::Assistant, hue: Rgba::hex(0xa78bfa) };
 pub const TERMINAL_ICON: AppIcon = AppIcon { glyph: Glyph::Terminal, hue: Rgba::hex(0x2dd4bf) };
+/// Fractal's: the mark (a sphere of dots) on cyan, the mesh's first device.
+pub const FRACTAL_ICON: AppIcon = AppIcon { glyph: Glyph::Mark, hue: Rgba::hex(0x22d3ee) };
 /// A system app as (name, title, icon, size, whether compact).
 pub type SystemApp = (&'static str, &'static str, AppIcon, (f32, f32), bool);
 /// About, Feedback, Files, Welcome, Editor, Activity and Settings: one program, bin/system.wasm,
@@ -112,6 +115,9 @@ pub fn open(name: &str, ai: &Ai) -> Option<Box<dyn App>> {
         _ if name == "terminal" => {
             (vec![name.into()], "Terminal".into(), TERMINAL_ICON, Some((668.0, 436.0)))
         }
+        _ if name == "fractal" => {
+            (vec![name.into()], "Fractal".into(), FRACTAL_ICON, Some((440.0, 640.0)))
+        }
         _ if name == "studio" => (vec![name.into()], "Studio".into(), STUDIO_ICON, STUDIO_SIZE),
         Some(p) => {
             let path = abs(p)?;
@@ -127,6 +133,7 @@ pub fn open(name: &str, ai: &Ai) -> Option<Box<dyn App>> {
     let program = match name {
         "assistant" => ASSISTANT,
         "terminal" => TERMINAL,
+        "fractal" => FRACTAL,
         _ => STUDIO,
     };
     let mut r = Remote::new(program, argv, ai);

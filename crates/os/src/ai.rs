@@ -50,6 +50,8 @@ pub(crate) struct Hub {
     retell: bool,
     pub(crate) watch: Option<u32>,
     pub(crate) fresh: bool,
+    /// The mesh's asks (Pair, Measure, Job), for the desktop's [`mesh::Hub`].
+    pub(crate) mesh: Vec<(u32, Request)>,
     pub(crate) counts: [u32; 6],
 }
 
@@ -178,6 +180,10 @@ impl Ai {
                 }
                 Request::End { pid } => {
                     k.kill(pid, KILLED);
+                    continue;
+                }
+                r @ (Request::Pair { .. } | Request::Measure | Request::Job { .. }) => {
+                    h.mesh.push((pid, r));
                     continue;
                 }
                 _ => None,

@@ -685,6 +685,58 @@ panic is reported unless the signed-in profile turned reports off (before
 a sign-in, unless any listed profile did). The shell still runs as `guest`
 in its home; names in it, and roots per profile, wait for R2.
 
+### Mesh
+
+compusophy, 2026-10-08: share compute, don't just delegate it. Tabs on several devices work on
+the same job, a worker on every core of each; later, people join and lend theirs, and our own
+model runs on top (the legion: fixed-size units of model and mesh nested in fixed ratios, growing
+with the RAM lent, learning continuously). This is the foundation, as built.
+
+- **Pairing** (`api/signal.mjs`): one tab shows a short code (Activity, Pool, "Show a code"),
+  the other enters it. The two swap WebRTC descriptions through the function's own memory, kept
+  three minutes and read once; a miss (another instance) is retried. Nothing else goes through
+  the server.
+- **The link** (`platform::link`): a WebRTC data channel, encrypted (DTLS), direct where the
+  network allows (one public STUN server; no relay). Its certificate is made once per profile and
+  kept in IndexedDB, so a tab's fingerprint survives reloads; the other side pins it (`known`
+  in the Pool page). WebRTC exists only on a page's main thread, so this is boot code.
+- **The relay** (`crates/mesh`): the boot's whole share, kept small. It does what only the page
+  can (links, posts, workers, storage, the clock) and passes everything to the pool program as
+  `uiwire::relay` frames on its console.
+- **The pool** (`programs/pool`, `/bin/pool`), fetched when a tab first pairs or starts a job: the
+  messages tabs send each other (`msg`), the shared chunk queue, work stealing and receipts
+  (`pool`), pairing (`hub`). A job is a `/bin` program (every tab has the same `/bin`: a link
+  never ships code) and its chunks, a line each. The tab that starts it holds the queue; every
+  worker, here or on a linked tab, takes the next chunk when idle (a linked tab asks for its idle
+  workers' worth and half again, to hide the link). Once the queue is empty, idle workers take
+  back the chunk out longest elsewhere; a chunk whose worker or link is gone goes back to the
+  front. An answer carries its fuel and the SHA-256 of its result; every eighth chunk another tab
+  answered is replayed here and the hashes compared.
+- **Workers**: one per core (`hardwareConcurrency`, at most 32), each a kernel process of the
+  job's program with `work`, on a console of its own, owned by no window, with no files. The
+  kernel runs up to 48 processes (8 before).
+- **Liveness**: each tab says what it has (its Hello) with every ping, every 2 s, so one whose
+  channel opened late still learns it; a link silent for 15 s is closed and its chunks requeued.
+  When a job ends its tab tells each helper how many of its answers it used: the rest were taken
+  back at the tail and answered elsewhere first.
+- **The demo** (`programs/fractal`): a Mandelbrot picture of 144 tiles, each a chunk of about
+  100 ms on a core, tinted by the device that rendered it; a tap zooms in. f64 math in wasm is
+  exact IEEE, so every device answers a tile with the same bytes.
+- **The dashboard**: Activity's Pool page. Pairing; the pool's devices (cores, RAM, storage the
+  browser grants, GPU compute, linked since, share of the work), utilization and speed over the
+  minute; each link's round trip and traffic both ways, and a measured throughput; the job's
+  chunks, each device's, steals, requeues and checks. Each tab sends its stats on the link once a
+  second.
+
+First run across machines (2026-10-08, the dev server tunnelled to the laptop): this PC
+(Chrome, Windows, 16 threads) and a laptop (Firefox, Linux, 8 threads) on one Wi-Fi network
+linked directly in about 10 s; round trip 3 to 5 ms, measured 7 to 10 MB/s each way. 144 tiles
+took 2.9 s against 4.1 s on this PC alone (75 and 69 tiles); every answer replayed here matched.
+
+Boot cost: about 7 KB gzipped (the link and relay; measured with `budget.sh`). Next: applang
+checks from the IQ suite as real work for the mesh, then a laptop's local model offered to paired
+tabs, a small model drafting and a big one checking.
+
 ### Evals
 
 So that a change to a model, a prompt, the harness or the language shows as a measured gain or

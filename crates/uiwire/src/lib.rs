@@ -497,6 +497,14 @@ pub enum Request {
     Tty { cols: u16, rows: u16 },
     /// The Terminal's window only: bytes typed into the shell's console.
     Input { data: Vec<u8> },
+    /// Activity's window only: link this tab to another's (the mesh, [`pool`]): `code` empty
+    /// shows a pairing code for the other tab to enter, else joins the tab showing `code`.
+    Pair { code: String },
+    /// Activity's window only: measure each link's throughput, both ways.
+    Measure,
+    /// Run `chunks` on every core of the linked tabs, each a line for `/bin/<name> work` there
+    /// to read and answer; each answer comes back as an [`Event::Done`]. A new job ends the last.
+    Job { name: String, chunks: Vec<String> },
     /// The overlay only: it steps aside for window `win`, which the person uses next (a game it
     /// started, an app it opened). That window takes the keys (raised while the overlay shows);
     /// `hide`, the overlay hides too, its task done, its answer waiting; else its pill stays,
@@ -561,6 +569,13 @@ pub enum Event {
     Wheel { dy: i32 },
     /// The Terminal's window only: the shell ended, with `status` (or could not start: 127).
     Ended { status: i32 },
+    /// The mesh as [`pool::Snap`] says: to the watcher, and to a job's window while it runs, at
+    /// most once a second.
+    Pool { data: Vec<u8> },
+    /// A job's window only: chunk `index` answered, `out` the line `/bin/<name> work` wrote for it
+    /// (its fuel, its SHA-256, then its result), by device `node` (0 this tab, as [`pool::Snap`]
+    /// lists them).
+    Done { index: u32, node: u8, out: String },
 }
 
 /// The public `encode` and `decode` of each message, from its `put` and `get`.
@@ -585,6 +600,8 @@ macro_rules! wire {
 
 wire!(Frame Node Request Event Act);
 
+pub mod pool;
+pub mod relay;
 pub mod scene;
 
 impl Node {
@@ -892,6 +909,11 @@ impl Request {
             Self::Tty { cols, rows } => o.u8(16).u16(*cols).u16(*rows),
             Self::Input { data } => o.u8(17).bytes(data),
             Self::Yield { win, hide } => o.u8(18).u32(*win).u8((*hide).into()),
+            Self::Pair { code } => o.u8(19).str(code),
+            Self::Measure => o.u8(20),
+            Self::Job { name, chunks } => {
+                chunks.iter().fold(o.u8(21).str(name).len(chunks.len()), |o, c| o.str(c))
+            }
         }
     }
 
@@ -918,16 +940,36 @@ impl Request {
             16 => Self::Tty { cols: r.u16()?, rows: r.u16()? },
             17 => Self::Input { data: r.bytes()?.to_vec() },
             18 => Self::Yield { win: r.u32()?, hide: r.bool()? },
+            19 => Self::Pair { code: r.str()? },
+            20 => Self::Measure,
+            21 => {
+                let (name, n) = (r.str()?, r.count()?);
+                // Each chunk is at least its length's 4 bytes: a count past that is malformed.
+                let n = Some(n).filter(|n| *n <= r.0.len() / 4)?;
+                let chunks = (0..n).map(|_| r.str()).collect::<Option<_>>()?;
+                Self::Job { name, chunks }
+            }
             _ => return None,
         })
     }
 }
 
 impl Request {
-    /// Whether only the OS's own windows may ask it: Watch, End, Pref, Reset, Tty and Input.
+    /// Whether only the OS's own windows may ask it: Watch, End, Pref, Reset, Tty, Input, Pair
+    /// and Measure.
     pub fn own(&self) -> bool {
         use Request::*;
-        matches!(self, Watch { .. } | End { .. } | Pref { .. } | Reset | Tty { .. } | Input { .. })
+        matches!(
+            self,
+            Watch { .. }
+                | End { .. }
+                | Pref { .. }
+                | Reset
+                | Tty { .. }
+                | Input { .. }
+                | Pair { .. }
+                | Measure
+        )
     }
 
     /// Whether only the overlay may ask it (the desktop's agent hears it): Act, Status and Yield.
@@ -1004,6 +1046,8 @@ impl Event {
             Self::Text { text } => o.u8(20).str(text),
             Self::Wheel { dy } => o.u8(21).u32(*dy as u32),
             Self::Ended { status } => o.u8(22).u32(*status as u32),
+            Self::Pool { data } => o.u8(23).bytes(data),
+            Self::Done { index, node, out } => o.u8(24).u32(*index).u8(*node).str(out),
         }
     }
 
@@ -1041,29 +1085,32 @@ impl Event {
             20 => Self::Text { text: r.str()? },
             21 => Self::Wheel { dy: r.u32()? as i32 },
             22 => Self::Ended { status: r.u32()? as i32 },
+            23 => Self::Pool { data: r.bytes()?.to_vec() },
+            24 => Self::Done { index: r.u32()?, node: r.u8()?, out: r.str()? },
             _ => return None,
         })
     }
 }
 
-/// Bytes being written, little-endian; each write returns the writer.
-struct Out(Vec<u8>);
+/// Bytes being written, little-endian; each write returns the writer. Public for the desktop's
+/// other wire formats (the mesh's tab-to-tab messages), so they share this code.
+pub struct Out(pub Vec<u8>);
 
 impl Out {
-    fn put(&mut self, b: &[u8]) -> &mut Out {
+    pub fn put(&mut self, b: &[u8]) -> &mut Out {
         self.0.extend_from_slice(b);
         self
     }
 
-    fn len(&mut self, n: usize) -> &mut Out {
+    pub fn len(&mut self, n: usize) -> &mut Out {
         self.u32(u32::try_from(n).unwrap_or(u32::MAX))
     }
 
-    fn bytes(&mut self, b: &[u8]) -> &mut Out {
+    pub fn bytes(&mut self, b: &[u8]) -> &mut Out {
         self.len(b.len()).put(b)
     }
 
-    fn str(&mut self, s: &str) -> &mut Out {
+    pub fn str(&mut self, s: &str) -> &mut Out {
         self.bytes(s.as_bytes())
     }
 
@@ -1077,42 +1124,42 @@ impl Out {
 macro_rules! ints {
     ($($t:ident)*) => {
         impl Out {
-            $(fn $t(&mut self, v: $t) -> &mut Out { self.put(&v.to_le_bytes()) })*
+            $(pub fn $t(&mut self, v: $t) -> &mut Out { self.put(&v.to_le_bytes()) })*
         }
         impl Reader<'_> {
-            $(fn $t(&mut self) -> Option<$t> {
+            $(pub fn $t(&mut self) -> Option<$t> {
                 Some($t::from_le_bytes(self.take(size_of::<$t>())?.try_into().ok()?))
             })*
         }
     };
 }
 
-ints!(u8 u16 u32 i16);
+ints!(u8 u16 u32 u64 i16);
 
 /// The unread input; every read is bounds-checked.
-struct Reader<'a>(&'a [u8]);
+pub struct Reader<'a>(pub &'a [u8]);
 
 impl<'a> Reader<'a> {
-    fn take(&mut self, n: usize) -> Option<&'a [u8]> {
+    pub fn take(&mut self, n: usize) -> Option<&'a [u8]> {
         let (head, tail) = self.0.split_at_checked(n)?;
         self.0 = tail;
         Some(head)
     }
 
-    fn count(&mut self) -> Option<usize> {
+    pub fn count(&mut self) -> Option<usize> {
         usize::try_from(self.u32()?).ok()
     }
 
-    fn bool(&mut self) -> Option<bool> {
+    pub fn bool(&mut self) -> Option<bool> {
         self.u8().filter(|b| *b < 2).map(|b| b == 1)
     }
 
-    fn bytes(&mut self) -> Option<&'a [u8]> {
+    pub fn bytes(&mut self) -> Option<&'a [u8]> {
         let n = self.count()?;
         self.take(n)
     }
 
-    fn str(&mut self) -> Option<String> {
+    pub fn str(&mut self) -> Option<String> {
         core::str::from_utf8(self.bytes()?).ok().map(str::to_owned)
     }
 }

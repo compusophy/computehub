@@ -74,6 +74,11 @@ pub(crate) fn apply(s: &Rc<Shared>, effects: Vec<Effect>) {
                 };
             }
             Effect::Derive { id, pin, salt, iterations } => derive(s, id, &pin, &salt, iterations),
+            Effect::Link { id, cert, offer } => crate::link::link(s, id, &cert, offer),
+            Effect::Accept { id, answer } => crate::link::accept(s, id, &answer),
+            Effect::LinkSend { id, data } => crate::link::send(s, id, &data),
+            Effect::Unlink(id) => crate::link::close(s, id),
+            Effect::Estimate => crate::link::estimate(s),
         }
     }
 }
@@ -272,7 +277,7 @@ fn fetched(s: &Rc<Shared>, id: u32, result: Result<Vec<u8>, String>) {
 
 /// Dispatches `ev` from a microtask, after the current DOM event; events
 /// queued together go out in order from one microtask.
-fn later(s: &Shared, ev: Event) {
+pub(crate) fn later(s: &Shared, ev: Event) {
     let mut queue = s.later.borrow_mut();
     if queue.is_empty() {
         s.window.queue_microtask(&s.later_fn);

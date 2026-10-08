@@ -1,0 +1,18 @@
+[package]
+name = "compusophy-mesh"
+description = "compusophyOS's mesh, the desktop's side: the links between tabs (WebRTC), pairing's posts, the workers and pinned keys, relayed to the pool program (programs/pool), which holds the queue, work stealing and receipts."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[lib]
+name = "mesh"
+
+[dependencies]
+compusophy-kernel.workspace = true
+compusophy-platform.workspace = true
+compusophy-uiwire.workspace = true
+compusophy-vfs.workspace = true
