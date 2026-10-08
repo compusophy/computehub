@@ -17,6 +17,10 @@ pub const CODE: u32 = 41;
 pub const JOIN: u32 = 42;
 pub const MEASURE: u32 = 43;
 pub const FRACTAL: u32 = 44;
+pub const VERIFY: u32 = 45;
+/// The IQ suite's job: the program, and the file its chunks are made of, three tasks each.
+pub const IQ_JOB: &str = "iq";
+pub const IQ_SUITE: &str = "@suites/iq.jsonl 3";
 pub const SORT: u32 = 50;
 /// Each device's color as RGB, by [`pool::TINTS`]'s canvas colors (cyan, yellow, magenta, green,
 /// red, blue).
@@ -27,16 +31,52 @@ hash of the result; some are replayed here to check them. Tabs talk directly, en
 pairing passes through the server, briefly.";
 
 /// The Pool page's state: the last two snapshots, the minute of utilization (per mille of the
-/// workers busy), chunks a second and steps a second, each link's bytes a second heard and sent
-/// (by device name), the code typed, the devices' sort column (0 the name).
+/// workers busy) and chunks a second, the steps a second last taken, each link's bytes a second
+/// heard and sent (by device name), the code typed, the devices' sort column (0 the name), and the IQ suite's
+/// run, if one was asked for.
 #[derive(Debug, Default)]
 pub struct PoolPage {
     pub prev: Option<Snap>,
     pub cur: Option<Snap>,
-    pub graphs: [History; 3],
+    pub graphs: [History; 2],
+    pub steps: u64,
     pub links: Vec<(String, History, History)>,
     pub code: String,
     pub sort: u8,
+    pub iq: Option<Iq>,
+}
+
+/// The IQ suite verified on the pool: each chunk's answer (its verifier, then its tasks' lines)
+/// by index.
+#[derive(Debug, Default)]
+pub struct Iq {
+    pub answers: std::collections::BTreeMap<u32, String>,
+}
+
+impl Iq {
+    /// The report as the native runs are compared: `verifier <hash>: <n> tasks`, each task's line
+    /// sorted, `<v> verified, <r> refused`, each ending in a newline; and its SHA-256.
+    pub fn report(&self) -> (String, String) {
+        let (mut verifier, mut lines) = (String::new(), Vec::new());
+        for a in self.answers.values() {
+            let mut parts = a.split('\t');
+            verifier = parts.next().unwrap_or("").to_string();
+            lines.extend(parts.map(String::from));
+        }
+        lines.sort();
+        let refused = lines.iter().filter(|l| l.contains(" REFUSED ")).count();
+        let n = lines.len();
+        let head = ["verifier ", &verifier, ": ", &n.to_string(), " tasks"].concat();
+        let foot =
+            [&(n - refused).to_string(), " verified, ", &refused.to_string(), " refused"].concat();
+        let mut text = String::new();
+        for l in std::iter::once(&head).chain(&lines).chain([&foot]) {
+            text.push_str(l);
+            text.push('\n');
+        }
+        let hash = sha::hex(&sha::sha256(text.as_bytes()));
+        (text, hash)
+    }
 }
 
 impl PoolPage {
@@ -54,6 +94,18 @@ impl PoolPage {
             }
             Event::Click { id: MEASURE } => requests.push(Request::Measure),
             Event::Click { id: FRACTAL } => requests.push(Request::Open { name: "fractal".into() }),
+            Event::Click { id: VERIFY } => {
+                self.iq = Some(Iq::default());
+                let chunks = vec![IQ_SUITE.into()];
+                requests.push(Request::Job { name: IQ_JOB.into(), chunks });
+            }
+            // A chunk's answer: `<made> <sha256> <answer>`.
+            Event::Done { index, out, .. } if self.iq.is_some() => {
+                let answer = out.splitn(3, ' ').nth(2).unwrap_or("");
+                if let Some(q) = &mut self.iq {
+                    q.answers.insert(*index, answer.into());
+                }
+            }
             Event::Click { id } if (SORT..SORT + 5).contains(id) => self.sort = (id - SORT) as u8,
             _ => return false,
         }
@@ -62,6 +114,14 @@ impl PoolPage {
 
     /// A new snapshot: rates from the last, into the graphs.
     fn take(&mut self, s: Snap) {
+        // Rates span half a second at least: two snapshots close together (one sent at once, to a
+        // new watcher) would make any bytes between them a torrent.
+        if self.cur.as_ref().is_some_and(|p| s.at.wrapping_sub(p.at) < 500) {
+            if let Some(c) = &mut self.cur {
+                (c.pairing, c.code, c.job) = (s.pairing, s.code, s.job);
+            }
+            return;
+        }
         if let Some(p) = &self.cur {
             let secs = s.at.wrapping_sub(p.at).div_ceil(1000).max(1);
             let ms = u64::from(s.at.wrapping_sub(p.at).max(1));
@@ -70,10 +130,10 @@ impl PoolPage {
             let rate =
                 |a: u64, b: u64| (b.saturating_sub(a) * 1000 / ms).min(u64::from(u32::MAX)) as u32;
             let chunks = rate(sum(p, |d| d.chunks.into()), sum(&s, |d| d.chunks.into()));
-            // Steps in thousands: a pool takes billions a second.
-            let units = rate(sum(p, |d| d.units / 1000), sum(&s, |d| d.units / 1000));
             self.graphs[1].add(secs, chunks);
-            self.graphs[2].add(secs, units);
+            // Steps whole: a fractal takes billions a second, the IQ suite's mutants hundreds.
+            let steps = sum(&s, |d| d.units).saturating_sub(sum(p, |d| d.units));
+            self.steps = steps.saturating_mul(1000) / ms;
             for d in s.devices.iter().skip(1) {
                 let Some(q) = p.devices.iter().find(|q| q.name == d.name) else { continue };
                 let i = match self.links.iter().position(|l| l.0 == d.name) {
@@ -121,9 +181,12 @@ impl PoolPage {
         let workers: u32 = devices.iter().map(|d| u32::from(d.workers)).sum();
         let busy = [&busy.to_string(), " of ", &workers.to_string(), " workers busy"].concat();
         let util = card("Utilization", &shown, util.chart(11, 64, 1000), &busy);
-        let (speed, steps) = (&self.graphs[1], &self.graphs[2]);
+        let speed = &self.graphs[1];
         let per = speed.now().map_or(DASH.into(), |c| [&c.to_string(), " chunks/s"].concat());
-        let line = steps.now().map_or(String::new(), |k| [&big(k), " steps/s"].concat());
+        let line = match self.prev {
+            Some(_) => [&big(self.steps), " steps/s"].concat(),
+            None => String::new(),
+        };
         let speed = card("Speed", &per, speed.chart(2, 64, nice(speed.peak().max(10))), &line);
         if wide {
             nodes.push(Node::Row { id: 0, gap: 12, children: vec![util, speed] });
@@ -135,8 +198,36 @@ impl PoolPage {
         nodes.extend(job(&s));
         let fractal = "Render a fractal on the pool".into();
         nodes.push(Node::Button { id: FRACTAL, variant: Variant::Primary, label: fractal });
+        nodes.push(self.verifying(&s));
         nodes.push(text(Style::Small, NOTE));
         nodes
+    }
+
+    /// The IQ suite on the pool: a button, then its progress, then its report's hash and time.
+    fn verifying(&self, s: &Snap) -> Node {
+        let mut children = vec![text(Style::Small, "The IQ suite, verified on the pool")];
+        let job = s.job.as_ref().filter(|j| j.mine && j.name == IQ_JOB);
+        match (&self.iq, job) {
+            (Some(q), Some(j)) if j.total > 0 && q.answers.len() as u32 >= j.total => {
+                let (report, hash) = q.report();
+                let foot = report.lines().last().unwrap_or("");
+                let secs =
+                    [&(j.ms / 1000).to_string(), ".", &(j.ms % 1000 / 100).to_string(), " s"]
+                        .concat();
+                children.push(text(Style::Title, &[foot, DOT, &secs].concat()));
+                children.push(text(Style::Mono, &["sha256 ", &hash].concat()));
+            }
+            (Some(q), Some(j)) => {
+                let line = [&q.answers.len().to_string(), " of ", &j.total.to_string(), " chunks"]
+                    .concat();
+                children.push(text(Style::Body, &line));
+            }
+            (Some(_), None) => children.push(text(Style::Body, "Starting")),
+            (None, _) => {}
+        }
+        let label = "Verify the IQ suite".into();
+        children.push(Node::Button { id: VERIFY, variant: Variant::Normal, label });
+        Node::Card { id: 0, children: vec![Node::Col { id: 0, gap: 6, children }] }
     }
 
     /// Pairing: the code shown, or what pairing says; Show a code, or enter the other's.
@@ -284,7 +375,9 @@ fn job(s: &Snap) -> Vec<Node> {
         |ms: u32| [&(ms / 1000).to_string(), ".", &(ms % 1000 / 100).to_string(), " s"].concat();
     if !j.mine {
         children.push(text(Style::Title, &count(j.done as usize, "chunk", "chunks")));
-        let line = ["answered here for another device, in ", &secs(j.ms)].concat();
+        // Busy until its last answer here; the rest of the job's time, other devices' tails.
+        let line = ["answered here for another device: busy ", &secs(j.busy), " of ", &secs(j.ms)];
+        let line = line.concat();
         children.push(text(Style::Small, &line));
         // Answers here that came second: their chunks were taken back and answered there first.
         if j.used > 0 || j.ms > 0 {
@@ -361,14 +454,14 @@ fn minutes(ms: u32) -> String {
     }
 }
 
-/// Thousands as people say a big count: `940k`, `12.4M`, `3.1G`, `2.0T`.
-fn big(k: u32) -> String {
-    let (scale, unit) = match k {
-        0 => return "0".into(),
-        1..1000 => return [&k.to_string(), "k"].concat(),
-        1000..1_000_000 => (1000, "M"),
-        1_000_000..1_000_000_000 => (1_000_000, "G"),
-        _ => (1_000_000_000, "T"),
+/// A count as people say it: `412`, `9.4k`, `12.4M`, `3.1G`, `2.0T`.
+fn big(n: u64) -> String {
+    let (scale, unit) = match n {
+        0..1000 => return n.to_string(),
+        1000..1_000_000 => (1000, "k"),
+        1_000_000..1_000_000_000 => (1_000_000, "M"),
+        1_000_000_000..1_000_000_000_000 => (1_000_000_000, "G"),
+        _ => (1_000_000_000_000, "T"),
     };
-    [&(k / scale).to_string(), ".", &(k % scale / (scale / 10)).to_string(), unit].concat()
+    [&(n / scale).to_string(), ".", &(n % scale / (scale / 10)).to_string(), unit].concat()
 }

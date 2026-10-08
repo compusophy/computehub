@@ -79,14 +79,14 @@ programs/    wasm32-wasip1 programs (dist/bin/), app language, dev crates
   fuel/ lang/ forks of litelite (budgets, parse kit)
   applang-lex/ -syntax/ applang/ app language: tokens, parse, run
   studio/    make apps by describing them; runs `.app` files
-  coder/     Studio's agent: write, test, fix, keep the best
+  coder/     Studio's agent: write, test, fix, keep best
   assistant/ the AI using the desktop; chats/ files/: its chats, files
   tiny/ lab/ a transformer; dev: its corpus, training, measures
   system/    About, Editor, Feedback, Files, Welcome, Settings
-  activity/  resource monitor; pool/ fractal/: the mesh, its demo
+  activity/  resource monitor; pool/ fractal/ sha/: the mesh, demo, hash
   terminal/  the Terminal; vt/ term/: its parser, screen model
   sh/ agent/ shell: editor, commands, jobs; AI coder
-  toolbox/   test programs, one binary
+  toolbox/   test programs
   evals/ makes/ iq/ teach/  dev: evals; IQ tasks; Opus the teacher
 assets/fonts/  the fonts (see Fonts below)
 api/           server functions (Vercel, Node): ai, feedback, signal

@@ -61,6 +61,9 @@ pub mod to_desk {
     pub const PINS: u8 = 10;
     /// Wake the pool in `a` ms ([`super::to_pool::TICK`]).
     pub const WAKE: u8 = 11;
+    /// Fetch the same-origin relative URL named, as post `a` (its answer an HTTP: 200 and the
+    /// body, or 0 and why not).
+    pub const FETCH: u8 = 12;
 }
 
 /// One frame.

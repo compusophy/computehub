@@ -771,6 +771,7 @@ fn the_meshs_snapshots_and_frames_come_back_whole() {
         mine: true,
         total: 144,
         done: 3,
+        busy: 7,
         per: vec![2, 1],
         ..Job::default()
     };

@@ -2,27 +2,6 @@ use uiwire::{Event, Node, Request};
 
 use crate::*;
 
-fn hex(b: &[u8]) -> String {
-    b.iter().map(|b| format!("{b:02x}")).collect()
-}
-
-#[test]
-fn sha256_matches_its_standard_vectors() {
-    assert_eq!(
-        hex(&sha256(b"")),
-        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-    );
-    assert_eq!(
-        hex(&sha256(b"abc")),
-        "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
-    );
-    let long = b"abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq";
-    assert_eq!(
-        hex(&sha256(long)),
-        "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1"
-    );
-}
-
 #[test]
 fn a_tile_answers_its_fuel_hash_and_pixels_the_same_every_time() {
     let line = chunk(&HOME, 4, 6);
@@ -33,7 +12,7 @@ fn a_tile_answers_its_fuel_hash_and_pixels_the_same_every_time() {
     assert!(fuel.parse::<u64>().unwrap() > 0 && w.next().is_none());
     assert_eq!(
         (hash, pixels.len()),
-        (hex(&sha256(pixels.as_bytes())).as_str(), (TILE * TILE) as usize)
+        (sha::hex(&sha::sha256(pixels.as_bytes())).as_str(), (TILE * TILE) as usize)
     );
     assert!(pixels.bytes().all(|b| b"012".contains(&b)));
     // A tile inside the set is all 0, and costs the most.

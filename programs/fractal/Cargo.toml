@@ -16,4 +16,5 @@ name = "fractal"
 path = "src/main.rs"
 
 [dependencies]
+compusophy-sha.workspace = true
 compusophy-uiwire.workspace = true

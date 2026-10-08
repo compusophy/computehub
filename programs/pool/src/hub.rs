@@ -26,12 +26,14 @@ pub const OPEN: u64 = 30_000;
 pub const LINE: usize = 4096;
 pub const CHUNKS: usize = 1 << 16;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 enum Op {
     Host,
     Poll,
     Join,
     Answer,
+    /// A job's chunks to fetch for process `.0`: its program and the lines a chunk holds.
+    Fetch(u32, String, usize),
 }
 
 /// Pairing under way: the link, the code (as typed or given), whether this tab shows it, the
@@ -229,13 +231,31 @@ impl Hub {
                 self.pairing = Some(Pairing { link, code, host, until, ..Pairing::default() });
             }
             Request::Measure => self.pool.measure(),
+            // A job whose one chunk is `@<url> <per>`: its chunks are the lines of that
+            // same-origin file, `per` a chunk (tab-joined), fetched first.
+            Request::Job { name, chunks } if chunks.len() == 1 && chunks[0].starts_with('@') => {
+                let at = chunks[0].get(1..).unwrap_or("");
+                let (url, per) = at.split_once(' ').unwrap_or((at, "1"));
+                let per = per.parse().unwrap_or(1usize).clamp(1, 64);
+                let url = url.to_string();
+                self.last_post += 1;
+                self.posts.push((self.last_post, Op::Fetch(pid, name, per)));
+                self.send(to_desk::FETCH, self.last_post, url.as_bytes());
+                self.note = ["Fetching ", &url].concat();
+            }
             Request::Job { name, chunks } => {
                 let word = name.bytes().all(|b| b.is_ascii_lowercase());
                 let line =
                     |c: &String| c.len() <= LINE && c.bytes().all(|b| (0x20..0x7f).contains(&b));
                 let ok = !name.is_empty() && name.len() <= 32 && word && chunks.len() <= CHUNKS;
-                if ok && chunks.iter().all(line) {
+                // A fetched file's chunks may be long (tasks of a suite): each must fit a message
+                // with room to spare, and never hold a newline.
+                let fits = |c: &String| c.len() <= crate::msg::MAX - 1024 && !c.contains('\n');
+                if ok && (chunks.iter().all(line) || chunks.iter().all(fits)) {
                     self.pool.start(pid, &name, chunks, now);
+                } else {
+                    let why = " was refused: a chunk too long, or not text";
+                    self.note = ["The job ", &name, why].concat();
                 }
             }
             _ => {}
@@ -244,6 +264,15 @@ impl Hub {
 
     fn answered(&mut self, op: Op, status: u32, body: &str) {
         let now = self.now;
+        if let Op::Fetch(pid, name, per) = op {
+            if status != 200 {
+                return self.note = ["The job's file could not be fetched: ", body].concat();
+            }
+            let lines: Vec<&str> = body.lines().filter(|l| !l.trim().is_empty()).collect();
+            let chunks = lines.chunks(per).map(|c| c.join("\t")).collect();
+            self.note.clear();
+            return self.ask(pid, Request::Job { name, chunks });
+        }
         let Some(p) = self.pairing.as_mut() else { return };
         let (ok, link) = (status == 200, p.link);
         match op {
@@ -291,7 +320,7 @@ impl Hub {
         self.pool.tick(now);
         self.acts();
         let mut to: Vec<u32> = Some(self.watcher).filter(|w| *w != 0).into_iter().collect();
-        to.extend(self.pool.job.as_ref().map(|j| j.window));
+        to.extend(self.pool.job.as_ref().map(|j| j.window).filter(|w| !to.contains(w)));
         let code = self.pairing.as_ref().filter(|p| p.host).map_or("", |p| p.code.as_str());
         let bytes = self.pool.snap(now, &self.note, code).encode();
         // `at` (bytes 1 to 4) changes every time: the rest says whether anything did. A change

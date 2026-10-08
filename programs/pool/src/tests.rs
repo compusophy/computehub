@@ -172,6 +172,7 @@ fn two_tabs_share_a_job_steal_its_tail_and_check_each_others_answers() {
     // B heard the end: it helps no more, and keeps a record of what it answered.
     let record = b.pool.snap(32, "", "").job.unwrap();
     assert_eq!((record.mine, record.done, record.used, record.queued), (false, n - 2, n - 2, 0));
+    assert!(0 < record.busy && record.busy < record.ms, "busy to its last answer, not the end");
     b.pool.tick(33);
     assert!(!b.pool.out.iter().any(|a| matches!(a, Act::Send(_, Msg::Want { .. }))));
     b.pool.out.clear();
@@ -191,6 +192,27 @@ fn two_tabs_share_a_job_steal_its_tail_and_check_each_others_answers() {
     talk(&mut a, &mut b, 43);
     let j = a.pool.job.as_ref().unwrap();
     assert_eq!((j.done, j.mismatched), (4, 1));
+}
+
+#[test]
+fn a_give_of_long_chunks_stays_under_the_message_cap() {
+    let mut a = tab("A", 1);
+    a.pool.linked(1, false, 0);
+    // Half a message, then nearly a whole one: they go in two Gives, not one too long to decode.
+    let sizes = [32_000, 63_000, 20_000, 20_000, 20_000, 1];
+    a.pool.start(7, "iq", sizes.iter().map(|&n| "t".repeat(n)).collect(), 0);
+    let job = a.pool.job.as_ref().unwrap().id;
+    let mut per = Vec::new();
+    for now in 1..6 {
+        a.pool.out.clear();
+        a.pool.heard(1, Msg::Want { job, n: 8 }, now);
+        let Some(Act::Send(1, give)) = a.pool.out.pop() else { panic!("no Give") };
+        let bytes = give.encode();
+        assert!(bytes.len() <= MAX && Msg::decode(&bytes).as_ref() == Some(&give));
+        let Msg::Give { chunks, .. } = give else { panic!("{give:?}") };
+        per.push(chunks.len());
+    }
+    assert_eq!(per, [1, 1, 4, 0, 0]);
 }
 
 #[test]

@@ -7,7 +7,8 @@
 //!         | u8 known | u16 workers | u16 busy | u32 chunks | u64 units | u32 rtt | u64 tx
 //!         | u64 rx | u32 up | u32 down
 //! job:    str name | u8 mine | u32 total | u32 done | u32 queued | u32 steals | u32 requeued
-//!         | u32 checked | u32 mismatched | u32 ms | u32 used | u16 m, m u32 (chunks by device)
+//!         | u32 checked | u32 mismatched | u32 ms | u32 used | u32 busy | u16 m, m u32
+//!         (chunks by device)
 //! ```
 //!
 //! Device 0 is this tab, the rest each linked tab in the order it joined. Counts (`chunks`,
@@ -18,7 +19,7 @@
 use crate::{Out, Reader};
 
 /// The format's version, a snapshot's first byte.
-pub const VERSION: u8 = 2;
+pub const VERSION: u8 = 3;
 /// An unknown round trip.
 pub const UNKNOWN: u32 = u32::MAX;
 /// Each device's canvas color, by its place in a snapshot (cycling): cyan here, then yellow,
@@ -66,8 +67,8 @@ pub struct Device {
 /// waiting; how often a device took chunks from the queue and how many came back to it (a worker
 /// or a link gone); answers replayed here to check them and those that differed; ms since it
 /// started; for a job helped, how many of the answers here its tab used (the first for their
-/// chunk: the rest were taken back and answered there first); and the chunks each device
-/// answered.
+/// chunk: the rest were taken back and answered there first) and the ms from its start to the
+/// last answer here (how long this tab was busy with it); and the chunks each device answered.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Job {
     pub name: String,
@@ -81,6 +82,7 @@ pub struct Job {
     pub mismatched: u32,
     pub ms: u32,
     pub used: u32,
+    pub busy: u32,
     pub per: Vec<u32>,
 }
 
@@ -97,7 +99,8 @@ impl Snap {
         o.u8(self.job.is_some().into());
         if let Some(j) = &self.job {
             o.str(&j.name).u8(j.mine.into()).u32(j.total).u32(j.done).u32(j.queued);
-            o.u32(j.steals).u32(j.requeued).u32(j.checked).u32(j.mismatched).u32(j.ms).u32(j.used);
+            o.u32(j.steals).u32(j.requeued).u32(j.checked).u32(j.mismatched);
+            o.u32(j.ms).u32(j.used).u32(j.busy);
             j.per.iter().fold(o.u16(j.per.len() as u16), |o, n| o.u32(*n));
         }
         o.0
@@ -144,6 +147,7 @@ impl Snap {
                 mismatched: r.u32()?,
                 ms: r.u32()?,
                 used: r.u32()?,
+                busy: r.u32()?,
                 per: (0..r.u16()?).map(|_| r.u32()).collect::<Option<_>>()?,
             }),
         };

@@ -143,7 +143,8 @@ pub struct Job {
 
 /// A job another tab started that this one helps: the link it came on, its id and program, the
 /// chunks given and not begun, whether an ask is out, when to ask again, chunks answered here,
-/// when it started and ended (kept after it ends, for the Pool page's record of it).
+/// when it started, last answered here and ended (kept after it ends, for the Pool page's record
+/// of it).
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Help {
     owner: u32,
@@ -155,6 +156,7 @@ struct Help {
     done: u32,
     used: u32,
     started: u64,
+    last: u64,
     ended: Option<u64>,
 }
 
@@ -371,7 +373,7 @@ impl Pool {
             }
             Kind::Help => {
                 if let Some(h) = self.help.as_mut().filter(|h| h.job == t.job) {
-                    h.done += 1;
+                    (h.done, h.last) = (h.done + 1, now);
                     let done = Msg::Done { job: t.job, index: t.index, out: out.into() };
                     self.out.push(Act::Send(h.owner, done));
                 }
@@ -533,10 +535,22 @@ impl Pool {
             }
             Msg::Heard { bytes, ms } => p.up = rate(bytes, ms),
             Msg::Job { job, name } => {
-                let (leased, program, started) = (VecDeque::new(), name.clone(), now);
+                let (leased, program, started, last) = (VecDeque::new(), name.clone(), now, now);
                 let (asked, next, done, used, ended) = (false, 0, 0, 0, None);
                 let owner = link;
-                let h = Help { owner, job, name, leased, asked, next, done, used, started, ended };
+                let h = Help {
+                    owner,
+                    job,
+                    name,
+                    leased,
+                    asked,
+                    next,
+                    done,
+                    used,
+                    started,
+                    last,
+                    ended,
+                };
                 self.help = Some(h);
                 self.want_workers(&program);
                 self.ask(now);
@@ -544,9 +558,18 @@ impl Pool {
             Msg::Want { job, n } => {
                 let mut chunks = Vec::new();
                 if let Some(j) = self.job.as_mut().filter(|j| j.id == job && j.ended.is_none()) {
+                    // As many as asked for while the message stays under its cap, a chunk's
+                    // bytes and 8 each; the first always goes (a job's chunks each fit).
+                    let mut bytes = 0;
                     while chunks.len() < usize::from(n) {
-                        let Some(i) = j.queue.pop_front() else { break };
+                        let Some(&i) = j.queue.front() else { break };
+                        let len = j.inputs[i as usize].len() + 8;
+                        if !chunks.is_empty() && bytes + len > crate::msg::MAX - 1024 {
+                            break;
+                        }
+                        j.queue.pop_front();
                         j.state[i as usize] = State::Out(link, now);
+                        bytes += len;
                         chunks.push((i, j.inputs[i as usize].clone()));
                     }
                 }
@@ -681,6 +704,7 @@ impl Pool {
                     mismatched: j.mismatched,
                     ms: j.ended.unwrap_or(now).saturating_sub(j.started) as u32,
                     used: 0,
+                    busy: 0,
                     per,
                 })
             }
@@ -690,6 +714,7 @@ impl Pool {
                 queued: h.leased.len() as u32,
                 ms: h.ended.unwrap_or(now).saturating_sub(h.started) as u32,
                 used: h.used,
+                busy: h.last.saturating_sub(h.started) as u32,
                 per: vec![h.done],
                 ..pool::Job::default()
             }),

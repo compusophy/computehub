@@ -162,11 +162,12 @@ cp web/worker.js dist/cpu/
 # The programs, each fetched when it first runs: std binaries for WASI, the
 # Terminal (terminal.wasm), its shell (sh.wasm) and coding agent (agent.wasm), the test programs (toolbox.wasm), Studio
 # (studio.wasm), the Assistant (assistant.wasm), the system apps (system.wasm), the mesh's pool
-# (pool.wasm) and Fractal (fractal.wasm), in one cargo run.
+# (pool.wasm), Fractal (fractal.wasm) and the IQ verifier, a mesh worker (iq.wasm), in one cargo
+# run.
 rustup target list --installed 2>/dev/null | tr -d '\r' | grep -qx wasm32-wasip1 || { echo "ERROR: run: rustup target add wasm32-wasip1" >&2; exit 1; }
-cargo build -p compusophy-terminal -p compusophy-sh -p compusophy-agent -p compusophy-toolbox -p compusophy-studio -p compusophy-assistant -p compusophy-system -p compusophy-pool -p compusophy-fractal --bins --release --target wasm32-wasip1
+cargo build -p compusophy-terminal -p compusophy-sh -p compusophy-agent -p compusophy-toolbox -p compusophy-studio -p compusophy-assistant -p compusophy-system -p compusophy-pool -p compusophy-fractal -p compusophy-iq --bins --release --target wasm32-wasip1
 mkdir -p dist/bin
-for p in terminal sh agent toolbox studio assistant system pool fractal; do
+for p in terminal sh agent toolbox studio assistant system pool fractal iq; do
   cp "$target_dir/wasm32-wasip1/release/$p.wasm" dist/bin/
   optimize "dist/bin/$p.wasm"
 done

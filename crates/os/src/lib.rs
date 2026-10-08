@@ -65,10 +65,11 @@ pub const ALL: &str = "compusophy.";
 pub const PREFS: [&str; 7] =
     [ui::AI_MODEL, "dock", "seen", "reports", "home.order", ui::GRAIN, "folders"];
 /// The `/bin` markers' programs ([`kernel::install`]), each named as its wasm: the shell, the
-/// coding agent, the Terminal, Studio, the Assistant, the mesh's pool and Fractal; then the
+/// coding agent, the Terminal, Studio, the Assistant, the mesh's pool, Fractal and the IQ suite's
+/// verifier (a mesh worker); then the
 /// applets, which share
 /// `bin/toolbox.wasm` (as the windows of [`remote::SYSTEM`] share `bin/system.wasm`).
-const BIN: [&str; 7] = ["sh", "agent", "terminal", "studio", "assistant", "pool", "fractal"];
+const BIN: [&str; 8] = ["sh", "agent", "terminal", "studio", "assistant", "pool", "fractal", "iq"];
 const APPLETS: [&str; 9] =
     ["hello", "rev", "wc", "spin", "nap", "fstest", "keys", "bench", "selftest"];
 
@@ -237,6 +238,11 @@ impl Desktop {
             if let Event::PointerUp { x, y, button: 0 } = ev { Some((x, y)) } else { None };
         let r = match ev {
             Event::Key { down: false, ref code, .. } => return key_up(code),
+            ev @ Event::Fetched { .. } if matches!(ev, Event::Fetched { id, .. } if self.mesh.streams(id)) =>
+            {
+                self.mesh.heard(ev, ctl.monotonic_ms());
+                return Handled::default();
+            }
             Event::Fetched { id, result } => match self.take_deferred(id) {
                 Some(slot) => return self.set_font(slot, result, ctl),
                 None => self.shell.as_mut().map(|s| s.fetched(id, result)),

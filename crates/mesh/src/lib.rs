@@ -71,7 +71,7 @@ impl Relay {
         self.tell(to_pool::ASK, pid, kind, data.into_bytes(), now);
     }
 
-    /// The page's news for the mesh: links, the posts' answers, the storage quota.
+    /// The page's news for the mesh: links, the posts' and fetches' answers, the storage quota.
     pub fn heard(&mut self, ev: Heard, now: f64) {
         let (op, a, b, data) = match ev {
             Heard::Signal { id, sdp } => (to_pool::SIGNAL, id, 0, sdp.into_bytes()),
@@ -86,6 +86,11 @@ impl Relay {
             Heard::StreamEnd { id, status, .. } => {
                 let Some(i) = self.posts.iter().position(|p| p.0 == id) else { return };
                 (to_pool::HTTP, id - FIRST, status.into(), self.posts.remove(i).1)
+            }
+            Heard::Fetched { id, result } => {
+                self.posts.retain(|p| p.0 != id);
+                let (status, body) = result.map_or_else(|e| (0, e.into_bytes()), |b| (200, b));
+                (to_pool::HTTP, id - FIRST, status, body)
             }
             _ => return,
         };
@@ -185,9 +190,14 @@ impl Relay {
             to_desk::ACCEPT => ctl.accept(f.a, text),
             to_desk::SEND => ctl.link_send(f.a, f.data),
             to_desk::UNLINK => ctl.unlink(f.a),
-            to_desk::POST => {
+            to_desk::POST | to_desk::FETCH => {
                 let id = FIRST + (f.a & 0xffff);
-                ctl.stream(id, URL, vec![("content-type", "text/plain".into())], f.data);
+                match f.op {
+                    to_desk::POST => {
+                        ctl.stream(id, URL, vec![("content-type", "text/plain".into())], f.data)
+                    }
+                    _ => ctl.fetch(id, &text),
+                }
                 self.posts.push((id, Vec::new()));
             }
             to_desk::SPAWN => {

@@ -19,6 +19,7 @@ name = "compusophy-activity"
 version = "0.1.0"
 dependencies = [
  "compusophy-icons",
+ "compusophy-sha",
  "compusophy-uiwire",
 ]
 
@@ -150,6 +151,7 @@ version = "0.1.0"
 name = "compusophy-fractal"
 version = "0.1.0"
 dependencies = [
+ "compusophy-sha",
  "compusophy-uiwire",
 ]
 
@@ -308,6 +310,10 @@ dependencies = [
  "compusophy-kernel",
  "compusophy-vfs",
 ]
+
+[[package]]
+name = "compusophy-sha"
+version = "0.1.0"
 
 [[package]]
 name = "compusophy-shell"

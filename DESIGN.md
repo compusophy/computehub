@@ -733,7 +733,16 @@ First run across machines (2026-10-08, the dev server tunnelled to the laptop): 
 linked directly in about 10 s; round trip 3 to 5 ms, measured 7 to 10 MB/s each way. 144 tiles
 took 2.9 s against 4.1 s on this PC alone (75 and 69 tiles); every answer replayed here matched.
 
-Boot cost: about 7 KB gzipped (the link and relay; measured with `budget.sh`). Next: applang
+The first real job (2026-10-08): the IQ suite verified on the pool. `/bin/iq work` is the IQ
+verifier built for wasm32-wasip1 (its worker mode in `main.rs`, so the verifier's hash, which
+build.rs takes of the library and what it stands on, is the native one). Activity's "Verify the
+IQ suite" asks for a job whose one chunk is `@suites/iq.jsonl 3`: the pool fetches that
+same-origin file (the dev server serves `evals/suites/`) and makes a chunk of every three tasks.
+The report, assembled as the native runs are compared (timings aside, sorted by task), hashes
+the same as theirs: one tab in 165 s (16 workers; native 16 threads, about 183 s), this PC and
+the laptop in 135 s (native, 131 s).
+
+Boot cost: about 7.5 KB gzipped (the link and relay; measured with `budget.sh`). Next: applang
 checks from the IQ suite as real work for the mesh, then a laptop's local model offered to paired
 tabs, a small model drafting and a big one checking.
 
