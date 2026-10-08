@@ -363,7 +363,7 @@ fn programs_reach_the_kernel_and_its_effects_the_page() {
     // /bin holds each applet's marker; kernel events before the shell are dropped.
     let mut desk = fresh();
     let vfs = &desk.parts.as_ref().expect("unused").1;
-    assert_eq!(vfs.list("/bin").map(|l| l.len()), Ok(21));
+    assert_eq!(vfs.list("/bin").map(|l| l.len()), Ok(24));
     assert_eq!(vfs.read("/bin/sh").unwrap(), b"#!wasm bin/sh.wasm\n");
     assert_eq!(vfs.read("/bin/selftest").unwrap(), b"#!wasm bin/toolbox.wasm\n");
     assert_eq!(vfs.read("/bin/agent").unwrap(), b"#!wasm bin/agent.wasm\n");

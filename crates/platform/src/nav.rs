@@ -20,6 +20,26 @@ fn navigator(key: &str) -> (JsValue, JsValue) {
     (nav, value)
 }
 
+/// What a device has to lend: logical cores (`hardwareConcurrency`), RAM in MB as the browser
+/// rounds it (`deviceMemory`: Chromium's only, at most 8 GB; 0 when unknown) and whether it has
+/// WebGPU to compute on.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Hardware {
+    pub cores: u16,
+    pub ram_mb: u32,
+    pub gpu: bool,
+}
+
+/// This device's [`Hardware`]; natively, none.
+pub fn hardware() -> Hardware {
+    if !cfg!(target_arch = "wasm32") {
+        return Hardware::default();
+    }
+    let num = |k| navigator(k).1.as_f64().unwrap_or(0.0);
+    let (cores, ram) = (num("hardwareConcurrency").min(1024.0), num("deviceMemory") * 1024.0);
+    Hardware { cores: cores as u16, ram_mb: ram as u32, gpu: navigator("gpu").1.is_object() }
+}
+
 /// The device now; natively, a blank one.
 pub fn device() -> Device {
     if !cfg!(target_arch = "wasm32") {

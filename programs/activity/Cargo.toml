@@ -13,4 +13,5 @@ name = "activity"
 
 [dependencies]
 compusophy-icons.workspace = true
+compusophy-sha.workspace = true
 compusophy-uiwire.workspace = true

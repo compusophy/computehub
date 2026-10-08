@@ -9,15 +9,23 @@
 //! ([`sse`]; to a request with tools, a scripted agent's next step, [`agent`], or the
 //! Terminal's coding agent's, [`coding`]);
 //! `/api/feedback` prints the body to stdout, prefixed with
-//! `feedback: `, and answers 201 with `{"url":"local"}`.
+//! `feedback: `, and answers 201 with `{"url":"local"}`; `/api/signal` keeps
+//! pairing codes in memory as the real one does ([`signal`]), so two tabs on
+//! one machine can pair. `GET /suites/<name>.jsonl` serves the repository's
+//! eval suite of that name (beside `<dir>`'s parent, in `evals/suites/`), for a
+//! mesh job run locally ([`suite`]).
 
 #![forbid(unsafe_code)]
 
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use std::time::Duration;
 use std::{env, fs, process, thread};
+
+/// Pairing codes as `/api/signal` keeps them: (code, offer, answer).
+static CODES: Mutex<Vec<(String, String, Option<String>)>> = Mutex::new(Vec::new());
 
 /// The headers every response sends unless `--plain`.
 const ISOLATION: &str = "Cross-Origin-Opener-Policy: same-origin\r\n\
@@ -66,10 +74,21 @@ fn handle(mut stream: TcpStream, root: &Path, extra: &str) -> io::Result<()> {
     }
     let mut parts = line.split_whitespace();
     let (method, target) = (parts.next().unwrap_or(""), parts.next().unwrap_or(""));
-    if method == "POST" && matches!(target, "/api/ai" | "/api/feedback") {
+    if method == "POST" && matches!(target, "/api/ai" | "/api/feedback" | "/api/signal") {
         let mut body = vec![0; len];
         reader.read_exact(&mut body)?;
         let body = String::from_utf8_lossy(&body);
+        if target == "/api/signal" {
+            let (status, text) = signal(&body);
+            println!("{method} {target} {status}");
+            let head = "Content-Type: text/plain\r\nConnection: close";
+            let n = text.len();
+            write!(
+                stream,
+                "HTTP/1.1 {status}\r\n{head}\r\nContent-Length: {n}\r\n{extra}\r\n{text}"
+            )?;
+            return stream.flush();
+        }
         if target == "/api/feedback" {
             println!("feedback: {body}");
             let (json, close) = (r#"{"url":"local"}"#, "Connection: close");
@@ -90,7 +109,10 @@ fn handle(mut stream: TcpStream, root: &Path, extra: &str) -> io::Result<()> {
         return Ok(());
     }
     let head = method == "HEAD";
-    let found = || resolve(root, target).and_then(|p| Some((mime(&p), fs::read(p).ok()?)));
+    let found = || {
+        let file = suite(root, target).or_else(|| resolve(root, target))?;
+        Some((mime(&file), fs::read(file).ok()?))
+    };
     let (status, ty, body) = match (method == "GET" || head).then(found) {
         None => ("405 Method Not Allowed", "text/plain", b"405\n".to_vec()),
         Some(Some((ty, body))) => ("200 OK", ty, body),
@@ -105,6 +127,41 @@ fn handle(mut stream: TcpStream, root: &Path, extra: &str) -> io::Result<()> {
     )?;
     stream.write_all(if head { &[] } else { &body })?;
     stream.flush()
+}
+
+/// `/api/signal`'s answer to `body` (see api/signal.mjs): `host` keeps an offer under a new
+/// code, `join` gives it, `answer` keeps the answer, `poll` gives that once. Codes count up.
+fn signal(body: &str) -> (&'static str, String) {
+    let mut codes = CODES.lock().unwrap_or_else(|e| e.into_inner());
+    let (op, rest) = body.split_once('\n').unwrap_or((body, ""));
+    let (code, sdp) = rest.split_once('\n').unwrap_or((rest, ""));
+    let i = codes.iter().position(|c| c.0 == code);
+    match (op, i) {
+        ("host", _) => {
+            let code = format!("K{}", 7000 + codes.len());
+            codes.push((code.clone(), rest.into(), None));
+            ("200 OK", code)
+        }
+        ("join", Some(i)) if codes[i].2.is_none() => ("200 OK", codes[i].1.clone()),
+        ("answer", Some(i)) => {
+            codes[i].2 = Some(sdp.into());
+            ("200 OK", String::new())
+        }
+        ("poll", Some(i)) => match codes[i].2.take() {
+            Some(answer) => ("200 OK", answer),
+            None => ("204 No Content", String::new()),
+        },
+        _ => ("404 Not Found", "no such code".into()),
+    }
+}
+
+/// The eval suite `/suites/<name>.jsonl` names, beside `root`'s parent: a name of letters, digits
+/// and `-` only.
+fn suite(root: &Path, target: &str) -> Option<PathBuf> {
+    let name = target.strip_prefix("/suites/")?.strip_suffix(".jsonl")?;
+    let word = !name.is_empty() && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-');
+    let dir = root.canonicalize().ok()?.parent()?.join("evals").join("suites");
+    word.then(|| dir.join([name, ".jsonl"].concat()))
 }
 
 /// The file under `root` a request target names; `None` if it could leave it.

@@ -16,6 +16,7 @@
 use std::mem;
 
 use icons::Glyph;
+pub use pool::PoolPage;
 use uiwire::stat::{self, Proc, Stats};
 use uiwire::{Event, Frame, Key, Node, Request, SIGIL, Style, Variant};
 
@@ -135,6 +136,8 @@ pub enum Page {
     Processes,
     /// A row's page, by its key: the desktop 0, Activity `u32::MAX`, else a pid.
     Of(u32),
+    /// The mesh: linked devices and the job they share.
+    Pool,
 }
 
 /// Activity: see the crate docs.
@@ -148,6 +151,8 @@ pub struct Activity {
     /// second and AI tokens a second; each row's CPU, by key.
     pub graphs: [History; 4],
     pub rows: Vec<(u32, History)>,
+    /// The Pool page's own.
+    pub pool: PoolPage,
     pub page: Page,
     /// The table's column, by its index in the head (0 the name; CPU at first).
     pub sort: Column,
@@ -184,6 +189,7 @@ pub struct Row {
 impl Activity {
     /// Handles one event; whether the window changed.
     pub fn event(&mut self, ev: &Event) -> bool {
+        self.pool.event(ev, &mut self.requests);
         match ev {
             // From the first size; and again once wide, if a phone's focus had paused it.
             Event::Resize { w, .. } => {
@@ -219,6 +225,7 @@ impl Activity {
             Event::Click { id: OWN } => self.page = Page::Of(OWN_KEY),
             Event::Click { id } if *id == NAV => self.page = Page::Performance,
             Event::Click { id } if *id == NAV + 1 => self.page = Page::Processes,
+            Event::Click { id } if *id == NAV + 2 => self.page = Page::Pool,
             Event::Click { id } if (SORT..SORT + 4).contains(id) => {
                 self.sort = Column((id - SORT) as u8)
             }
@@ -399,11 +406,17 @@ impl Activity {
     }
 
     fn nodes(&self) -> Vec<Node> {
-        let on = u8::from(self.page != Page::Performance);
-        let mut nodes = vec![Node::Pages { id: NAV, on, labels: "Performance\nProcesses".into() }];
+        let on = match self.page {
+            Page::Performance => 0,
+            Page::Pool => 2,
+            _ => 1,
+        };
+        let labels = "Performance\nProcesses\nPool".into();
+        let mut nodes = vec![Node::Pages { id: NAV, on, labels }];
         nodes.extend(match self.page {
             Page::Performance => self.performance(),
             Page::Processes => self.processes(),
+            Page::Pool => self.pool.nodes(self.width >= NARROW),
             Page::Of(key) => self
                 .table()
                 .into_iter()
@@ -714,5 +727,6 @@ fn count(n: usize, one: &str, more: &str) -> String {
     format!("{n} {}", if n == 1 { one } else { more })
 }
 
+mod pool;
 #[cfg(test)]
 mod tests;

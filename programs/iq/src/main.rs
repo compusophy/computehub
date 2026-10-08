@@ -13,6 +13,7 @@
 //! - `card`: the card a teacher writing checks is prompted with.
 //! - `add --id --tier --family --ask --check FILE --ref FILE --day [--teacher hand] [--prompt]
 //!   [--suite file]`: a task written by hand, verified, stamped and added to the suite.
+//! - `work`: a worker of the mesh's pool (see [`work`]), which the browser runs as `/bin/iq work`.
 
 #![forbid(unsafe_code)]
 
@@ -22,6 +23,10 @@ use std::time::Instant;
 
 use coder::json::quote;
 use iq::{By, Tally, Task};
+
+// The pool's SHA-256, the `sha` crate's source in the binary: out of the verifier's hash (build.rs's).
+#[path = "../../sha/src/lib.rs"]
+mod sha;
 
 const USAGE: &str = "usage: iq verify [file] [--stamp DAY] [--survivors] | grade <task-id> \
                      <program-file> [--suite file] | score <answers.jsonl> [--suite file] \
@@ -46,6 +51,7 @@ fn main() {
                 0
             }
             Some("add") => add(&a),
+            Some("work") => work(),
             _ => {
                 eprintln!("{USAGE}");
                 2
@@ -130,6 +136,52 @@ fn fail(why: String) -> i32 {
 
 fn ms(t: Instant) -> u128 {
     t.elapsed().as_millis()
+}
+
+/// A task's line as `verify` prints it, timings aside, and runs of spaces as one (as the runs
+/// are compared); and the mutants it made.
+fn verified(t: &Task, now: &str) -> (String, usize) {
+    let split = if iq::held(&t.family) { "held" } else { "train" };
+    let (said, made) = match iq::verify(t) {
+        Ok(v) if t.by.verifier != now => {
+            (format!("{} (stamped by {})", kills(&v), t.by.verifier), v.made)
+        }
+        Ok(v) => (kills(&v), v.made),
+        Err(e) => (format!("REFUSED {e}"), 0),
+    };
+    let line = format!("{} tier {} {} {split} {said}", t.id, t.tier, t.family);
+    (line.split(' ').filter(|w| !w.is_empty()).collect::<Vec<_>>().join(" "), made)
+}
+
+/// The pool's worker: echo off, `ready`, then each line `<index> <tasks>` (suite lines joined by
+/// tabs) answered with one line `<index> <made> <sha256> <answer>`: the answer is this verifier's
+/// hash and each task's line ([`verified`]), tab-separated, its fuel the mutants made, its
+/// SHA-256 what another device's replay of the chunk must match.
+fn work() -> i32 {
+    use std::io::{BufRead, Write};
+    let ctl = std::fs::OpenOptions::new().write(true).open("/dev/consctl");
+    _ = ctl.and_then(|mut c| c.write_all(b"echooff"));
+    let mut out = std::io::stdout().lock();
+    if writeln!(out, "ready").and_then(|()| out.flush()).is_err() {
+        return 1;
+    }
+    let now = iq::verifier_hash();
+    for line in std::io::stdin().lock().lines() {
+        let Ok(line) = line else { return 1 };
+        let (index, tasks) = line.split_once(' ').unwrap_or((&line, ""));
+        let lines: Vec<(String, usize)> = match iq::read_suite(&tasks.replace('\t', "\n")) {
+            Ok(tasks) => tasks.iter().map(|t| verified(t, &now)).collect(),
+            Err(e) => vec![(format!("REFUSED {e}"), 0)],
+        };
+        let made: usize = lines.iter().map(|l| l.1).sum();
+        let answer = [now.as_str()].into_iter().chain(lines.iter().map(|l| l.0.as_str()));
+        let answer = answer.collect::<Vec<_>>().join("\t");
+        let hash = sha::hex(&sha::sha256(answer.as_bytes()));
+        if writeln!(out, "{index} {made} {hash} {answer}").and_then(|()| out.flush()).is_err() {
+            return 1;
+        }
+    }
+    0
 }
 
 fn verify(a: &Args) -> i32 {

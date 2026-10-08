@@ -24,6 +24,7 @@ members = [
     "crates/uiwire",
     "crates/uiview",
     "crates/canvas",
+    "crates/mesh",
     # Programs: what runs in the OS, and the app language they share.
     "programs/fuel",
     "programs/lang",
@@ -37,6 +38,9 @@ members = [
     "programs/files",
     "programs/system",
     "programs/activity",
+    "programs/pool",
+    "programs/fractal",
+    "programs/sha",
     "programs/sh",
     "programs/agent",
     "programs/vt",
@@ -89,6 +93,7 @@ compusophy-wasi = { path = "crates/wasi", version = "0.1.0" }
 compusophy-uiwire = { path = "crates/uiwire", version = "0.1.0" }
 compusophy-uiview = { path = "crates/uiview", version = "0.1.0" }
 compusophy-canvas = { path = "crates/canvas", version = "0.1.0" }
+compusophy-mesh = { path = "crates/mesh", version = "0.1.0" }
 compusophy-fuel = { path = "programs/fuel", version = "0.1.0" }
 compusophy-lang = { path = "programs/lang", version = "0.1.0" }
 compusophy-applang-lex = { path = "programs/applang-lex", version = "0.1.0" }
@@ -101,6 +106,9 @@ compusophy-chats = { path = "programs/chats", version = "0.1.0" }
 compusophy-files = { path = "programs/files", version = "0.1.0" }
 compusophy-system = { path = "programs/system", version = "0.1.0" }
 compusophy-activity = { path = "programs/activity", version = "0.1.0" }
+compusophy-pool = { path = "programs/pool", version = "0.1.0" }
+compusophy-fractal = { path = "programs/fractal", version = "0.1.0" }
+compusophy-sha = { path = "programs/sha", version = "0.1.0" }
 compusophy-sh = { path = "programs/sh", version = "0.1.0" }
 compusophy-evals = { path = "programs/evals", version = "0.1.0" }
 compusophy-makes = { path = "programs/makes", version = "0.1.0" }

@@ -1,0 +1,12 @@
+[package]
+name = "compusophy-sha"
+description = "SHA-256 (FIPS 180-4) for compusophyOS's programs: the hashes mesh answers carry, content addresses that any device can recompute."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[lib]
+name = "sha"

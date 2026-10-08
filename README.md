@@ -42,9 +42,9 @@ install, and no server runs your apps: the tab is the machine.
   but its living grain, 8 frames a second, which Settings can still.
 - **Deterministic core.** The window manager, file system and kernel use no floats, clocks or
   randomness, so their state replays bit for bit.
-- **Small by rule.** The boot download is at most 224 KB gzipped; everything else is a program
-  fetched when it first runs. A module is at most 2,000 lines. `scripts/caps.sh` and
-  `scripts/budget.sh` enforce both.
+- **Small by aim.** The boot download aims at 224 KB gzipped; everything else is a program
+  fetched when it first runs. A module aims at 2,000 lines. `scripts/caps.sh` and
+  `scripts/budget.sh` measure both on every build, as gauges: a size never blocks work.
 - **Server code only where a tab cannot go.** `api/` holds two functions: the proxy that makes
   the AI free (no key in the browser) and the feedback inbox.
 

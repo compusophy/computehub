@@ -32,8 +32,8 @@ the short operating map; this file is the why and the shape.
 
 ## Principles
 
-The constitution. `scripts/caps.sh` and `scripts/budget.sh` enforce what
-they can, in CI.
+The constitution. `scripts/caps.sh` holds its gates in CI and gauges the
+sources' sizes; `scripts/budget.sh` gauges the download's.
 
 1. **Rust only.** JavaScript is wasm-bindgen's generated glue, the one-line
    bootstraps (`web/index.html`, `web/worker.js`) and the server functions
@@ -42,26 +42,27 @@ they can, in CI.
 2. **Zero external dependencies.** Only workspace siblings, except the web
    crates `platform` and `os`, which take wasm-bindgen (pinned), js-sys
    and web-sys. Build-time tools never ship.
-3. **Scale without bloat.** Every cap measures a real cost, never size for
-   its own sake:
+3. **Scale without bloat.** Sizes are gauges, never gates: measured and
+   reported on every build, a figure past its aim marked, and none ever
+   blocks a feature, a commit or a deploy (compusophy, 2026-10-08: the caps
+   had come to cost more than they saved). Each gauges a real cost:
    - *speed* is bytes: what boots, and each program, which loads only when
-     opened (the budgets below), so a thousand programs cost nothing until
+     opened (the sizes below), so a thousand programs cost nothing until
      one is used;
    - *understanding* is module size: a crate, a program or a server
-     function holds at most 2,000 lines (tests 1,000 more), small enough to
-     read whole; the OS (`crates/`, `tools/`), which everything stands on,
-     at most 25,000 (tests 12,500) in all;
-   - *coupling* is the boundary: a program depends only on `programs/` and
-     the OS's pure shared libraries (`uiwire`, `icons`, `vfs`), and reaches
-     the rest of the OS only through WASI preview 1 (files, the console) and
-     uiwire (its windows).
+     function aims at 2,000 lines (tests 1,000 more), small enough to read
+     whole; the OS (`crates/`, `tools/`), which everything stands on, at
+     25,000 (tests 12,500) in all.
 
-   So growth is new modules, never bigger ones: `programs/` has no total,
-   and programs can live in repos of their own, a library anyone adds to.
-   At a cap: split, shrink or delete. Never raise it.
-4. **Budgets** (gzip -9; a real host's brotli is smaller):
+   *Coupling* is a gate, not a size: a program depends only on `programs/`
+   and the OS's pure shared libraries (`uiwire`, `icons`, `vfs`), and
+   reaches the rest of the OS only through WASI preview 1 (files, the
+   console) and uiwire (its windows). So programs can live in repos of their
+   own, a library anyone adds to, and `programs/` has no total. Past an aim,
+   a split or a lazy load is worth a thought; the work goes on either way.
+4. **Sizes** (gzip -9; a real host's brotli is smaller), aims to steer by:
 
-   | budget | cap |
+   | what | aim |
    |---|---|
    | boot: every top-level file in `dist/` (page, glue, wasm with the boot font) | 224 KB |
    | deferred: `dist/fonts/deferred/`, fetched right after the first frame | 30 KB |
@@ -685,6 +686,97 @@ panic is reported unless the signed-in profile turned reports off (before
 a sign-in, unless any listed profile did). The shell still runs as `guest`
 in its home; names in it, and roots per profile, wait for R2.
 
+### Mesh
+
+compusophy, 2026-10-08: share compute, don't just delegate it. Tabs on several devices work on
+the same job, a worker on every core of each; later, people join and lend theirs, and our own
+model runs on top (the legion: fixed-size units of model and mesh nested in fixed ratios, growing
+with the RAM lent, learning continuously). This is the foundation, as built.
+
+- **Pairing** (`api/signal.mjs`): one tab shows a short code (Activity, Pool, "Show a code"),
+  the other enters it. The two swap WebRTC descriptions through the function's own memory, kept
+  three minutes and read once; a miss (another instance) is retried. Nothing else goes through
+  the server.
+- **The link** (`platform::link`): a WebRTC data channel, encrypted (DTLS), direct where the
+  network allows (one public STUN server; no relay). Its certificate is made once per profile and
+  kept in IndexedDB, so a tab's fingerprint survives reloads; the other side pins it (`known`
+  in the Pool page). WebRTC exists only on a page's main thread, so this is boot code.
+- **The relay** (`crates/mesh`): the boot's whole share, kept small. It does what only the page
+  can (links, posts, workers, storage, the clock) and passes everything to the pool program as
+  `uiwire::relay` frames on its console.
+- **The pool** (`programs/pool`, `/bin/pool`), fetched when a tab first pairs or starts a job: the
+  messages tabs send each other (`msg`), the shared chunk queue, work stealing and receipts
+  (`pool`), pairing (`hub`). A job is a `/bin` program (every tab has the same `/bin`: a link
+  never ships code) and its chunks, a line each. The tab that starts it holds the queue; every
+  worker, here or on a linked tab, takes the next chunk when idle (a linked tab asks for its idle
+  workers' worth and half again, to hide the link). Once the queue is empty, idle workers take
+  back the chunk out longest elsewhere; a chunk whose worker or link is gone goes back to the
+  front. An answer carries its fuel and the SHA-256 of its result; every eighth chunk another tab
+  answered is replayed here and the hashes compared.
+- **Workers**: one per core (`hardwareConcurrency`, at most 32), each a kernel process of the
+  job's program with `work`, on a console of its own, owned by no window, with no files. The
+  kernel runs up to 48 processes (8 before).
+- **Liveness**: each tab says what it has (its Hello) with every ping, every 2 s, so one whose
+  channel opened late still learns it; a link silent for 15 s is closed and its chunks requeued.
+  When a job ends its tab tells each helper how many of its answers it used: the rest were taken
+  back at the tail and answered elsewhere first.
+- **The demo** (`programs/fractal`): a Mandelbrot picture of 144 tiles, each a chunk of about
+  100 ms on a core, tinted by the device that rendered it; a tap zooms in. f64 math in wasm is
+  exact IEEE, so every device answers a tile with the same bytes.
+- **The dashboard**: Activity's Pool page. Pairing; the pool's devices (cores, RAM, storage the
+  browser grants, GPU compute, linked since, share of the work), utilization and speed over the
+  minute; each link's round trip and traffic both ways, and a measured throughput; the job's
+  chunks, each device's, steals, requeues and checks. Each tab sends its stats on the link once a
+  second.
+
+First run across machines (2026-10-08, the dev server tunnelled to the laptop): this PC
+(Chrome, Windows, 16 threads) and a laptop (Firefox, Linux, 8 threads) on one Wi-Fi network
+linked directly in about 10 s; round trip 3 to 5 ms, measured 7 to 10 MB/s each way. 144 tiles
+took 2.9 s against 4.1 s on this PC alone (75 and 69 tiles); every answer replayed here matched.
+
+The first real job (2026-10-08): the IQ suite verified on the pool. `/bin/iq work` is the IQ
+verifier built for wasm32-wasip1 (its worker mode in `main.rs`, so the verifier's hash, which
+build.rs takes of the library and what it stands on, is the native one). Activity's "Verify the
+IQ suite" asks for a job whose one chunk is `@suites/iq.jsonl 3`: the pool fetches that
+same-origin file (the dev server serves `evals/suites/`) and makes a chunk of every three tasks.
+The report, assembled as the native runs are compared (timings aside, sorted by task), hashes
+the same as theirs: one tab in 165 s (16 workers; native 16 threads, about 183 s), this PC and
+the laptop in 135 s (native, 131 s).
+
+A model shared (`pool/src/model.rs`): a tab may share the OpenAI-compatible server on its own
+device (llama-server; `http://localhost:8080` unless the person names another), and a linked tab
+may ask it. Sharing starts with a short question of its own (16 tokens): the answer names the
+model and times it, then the server's own account of itself (`GET /props`: a post with no body is
+a get) gives its context, and the tab's Hello says all three, the Pool page each device's model and speed.
+Activity's "Ask the pool's model" goes to the fastest a linked device shares (this tab's own if
+none other); that tab posts the question to its server as a streamed chat, and what the model
+writes goes back on the link as it comes, then its end (its speed, or why it failed), into the
+Pool snapshots (four a second while it writes). One answer at a time a device; at most 256
+tokens; a linked tab sends a question, never a URL, and only a loopback URL is ever shared. The
+post is `text/plain`, a CORS simple request: no preflight, and llama-server echoes the page's
+origin, which COOP/COEP allow (a CORS response needs no CORP). The boot only carries it: posts
+now name their URL, and a post's body goes to the pool as it comes (PART frames), which the
+pool's pairing posts gather and a model's streams; the boot lost 77 bytes doing it. The URL
+shared is kept with the profile's pins, so sharing starts again with the pool (a question asked
+while it is checked waits for it). An answer begun is finished even if its device stops
+sharing: only new questions are refused, and a server named anew is checked once it ends. An
+asker that hears nothing from the device answering for 8 s (a linked tab says something each
+second) gives up, keeping what came.
+
+First run across machines (2026-10-08): the laptop (Firefox, Linux) shared qwen2.5-3b-instruct
+q4_k_m on its CPU (llama-server, 4 threads, checked at 8.3 tokens a second); this PC's Chrome
+tab asked it, and the answer streamed onto the page in about 10 s (29 prompt tokens in 1.0 s, 69
+written at 9.1 a second). A second question met the laptop's Stop sharing and tab close: the
+words stopped while its server went on writing, and the asker waited out the link's 15 s of
+silence. Hence the rules above.
+
+Not yet: a queue for a busy model, a conversation
+(each question stands alone), and the public origin: there a page reaching `localhost` meets
+Chrome's local-network permission prompt, so sharing stays a person's act, never automatic.
+
+Boot cost: about 7.5 KB gzipped (the link and relay; measured with `budget.sh`). Next: a small
+model drafting and a big one checking, across devices.
+
 ### Evals
 
 So that a change to a model, a prompt, the harness or the language shows as a measured gain or
@@ -880,9 +972,9 @@ train's manifests (Python's hashlib), the kernel's `#!wasm <target> [<sha256>]` 
 browser's WebCrypto already speak, written in-house (zero dependencies) over one canonical
 encoding, in `vfs`, one of the three OS crates a program may take (Principle 3), so the OS
 (vfs's canonical hash, the kernel's marker, a build's id) and programs share one; its lines
-count toward the OS's 25,000 (23,680 now) and, once the tab hashes, its bytes toward the boot. A
-crate of its own would change Principle 3's list (CLAUDE.md's rule 3, `scripts/caps.sh`):
-compusophy's call.
+count toward the OS's aim of 25,000 (23,680 then) and, once the tab hashes, its bytes toward the
+boot's. A crate of its own would change Principle 3's list of what a program may take (CLAUDE.md's
+rule 3, `scripts/caps.sh`): compusophy's call.
 Principle 9's content addressing across a network needs it. FNV-1a stays for checksums and for
 `iq::held`'s split (another hash would move families across it, and train's held.txt with them);
 the FNV ids already recorded (the verifier's, the evals' suite, prompt and harness hashes,
@@ -1136,9 +1228,8 @@ validated on the reproducible tickets, and the count says how few they are.
 ### The History app
 
 A program (its wasm within the 256 KB) that reads the ledger as files, a page per generation, never
-the whole: served from a `dist/` group of its own, a new line in rule 6's budgets (CLAUDE.md,
-`scripts/budget.sh`, which fails a file in none), capped per page as /bin is per program
-(compusophy's call), and put in its VFS as /bin's wasm is fetched, since a program reaches the page
+the whole: served from a `dist/` group of its own, a new line in rule 6's sizes (CLAUDE.md,
+`scripts/budget.sh`, which names a file in none), gauged per page as /bin is per program, and put in its VFS as /bin's wasm is fetched, since a program reaches the page
 only through WASI and uiwire, which fetch nothing. It shows the tree of builds, models, cards and
 suites; curves (IQ per generation with its intervals, each niche's success); a node's page with its
 diff, recipe, its prediction against what happened, its cost, a replay of a persona trying it, and
@@ -1290,7 +1381,7 @@ keeping one is fitness.
   Alt+Q, Alt+arrows and Alt+Backquote before a terminal sees them
   (readline's Alt+F still arrives). A way through for apps that want them
   waits on the Super key question.
-- **The boot budget** (224 KB since 2026-10-02) pays for what must draw the
+- **The boot size** (aim 224 KB; a cap until 2026-10-08) pays for what must draw the
   first frame. With the canvas, the welcome, profiles and the PIN it held
   229,101 of 229,376 bytes; Settings and the Terminal's shell then became
   programs (2026-10-03), the kernel gaining consoles, jobs and pipes:

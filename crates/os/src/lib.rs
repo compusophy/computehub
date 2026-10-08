@@ -65,9 +65,11 @@ pub const ALL: &str = "compusophy.";
 pub const PREFS: [&str; 7] =
     [ui::AI_MODEL, "dock", "seen", "reports", "home.order", ui::GRAIN, "folders"];
 /// The `/bin` markers' programs ([`kernel::install`]), each named as its wasm: the shell, the
-/// coding agent, the Terminal, Studio and the Assistant; then the applets, which share
+/// coding agent, the Terminal, Studio, the Assistant, the mesh's pool, Fractal and the IQ suite's
+/// verifier (a mesh worker); then the
+/// applets, which share
 /// `bin/toolbox.wasm` (as the windows of [`remote::SYSTEM`] share `bin/system.wasm`).
-const BIN: [&str; 5] = ["sh", "agent", "terminal", "studio", "assistant"];
+const BIN: [&str; 8] = ["sh", "agent", "terminal", "studio", "assistant", "pool", "fractal", "iq"];
 const APPLETS: [&str; 9] =
     ["hello", "rev", "wc", "spin", "nap", "fstest", "keys", "bench", "selftest"];
 
@@ -98,6 +100,8 @@ struct Desktop {
     /// the one-shot timer fires (page clock ms; past, or once it fired: unarmed).
     saved: &'static str,
     ai: ai::Ai,
+    /// The mesh: this tab linked to others, a job on all their cores (the pool program's relay).
+    mesh: mesh::Relay,
     wake: f64,
     /// Notes, feedback and error reports, and the outbox; /home as kept.
     report: report::Reports,
@@ -173,6 +177,7 @@ impl Desktop {
         let shell = Shell::new(w, h, text, vfs, registry(self.ai.clone()), prefs);
         let shell = self.shell.insert(shell);
         self.ai.load(ctl);
+        self.mesh.load(&logon::own("compusophy.mesh"));
         self.saved = shell.theme_name();
         shell.set_now(ctl.monotonic_ms());
         let mut r = shell.input(Input::Resize { w, h });
@@ -233,11 +238,22 @@ impl Desktop {
             if let Event::PointerUp { x, y, button: 0 } = ev { Some((x, y)) } else { None };
         let r = match ev {
             Event::Key { down: false, ref code, .. } => return key_up(code),
+            ev @ Event::Fetched { .. } if matches!(ev, Event::Fetched { id, .. } if self.mesh.streams(id)) =>
+            {
+                self.mesh.heard(ev, ctl.monotonic_ms());
+                return Handled::default();
+            }
             Event::Fetched { id, result } => match self.take_deferred(id) {
                 Some(slot) => return self.set_font(slot, result, ctl),
                 None => self.shell.as_mut().map(|s| s.fetched(id, result)),
             },
             ev @ (Event::Chunk { .. } | Event::StreamEnd { .. }) => {
+                if let Event::Chunk { id, .. } | Event::StreamEnd { id, .. } = &ev {
+                    if self.mesh.streams(*id) {
+                        self.mesh.heard(ev, ctl.monotonic_ms());
+                        return Handled::default();
+                    }
+                }
                 // A report's answer is the report's; an AI request's failure is noted.
                 if let Event::StreamEnd { id, status, ref error } = ev {
                     if self.report.ended(ctl, id, status) {
@@ -265,6 +281,14 @@ impl Desktop {
                 self.kernel(KernelIn::Wake)
             }
             Event::Hidden => self.kernel(KernelIn::Hidden),
+            ev @ (Event::Signal { .. }
+            | Event::Linked { .. }
+            | Event::LinkData { .. }
+            | Event::Unlinked { .. }
+            | Event::Estimated { .. }) => {
+                self.mesh.heard(ev, ctl.monotonic_ms());
+                return Handled::default();
+            }
             Event::Derived { id, result } => {
                 let (now, get) = (ctl.monotonic_ms(), |k: &str| ctl.storage_get(k));
                 let got = self.logon.as_mut().map(|l| l.derived(id, result, now, &get));
@@ -320,6 +344,14 @@ impl Desktop {
             if self.report.retell() | told {
                 let status = self.report.status(self.ai.status());
                 shell.set_ai(ui::AiStatus { unkept: self.home.unkept, ..status });
+            }
+            // The mesh: the asks the AI hub passed on, then what it does now.
+            let (asks, now) = (mem::take(&mut self.ai.0.borrow_mut().mesh), ctl.monotonic_ms());
+            let (k, vfs) = shell.kernel_vfs();
+            asks.iter().for_each(|(pid, r)| self.mesh.ask(*pid, r, now));
+            let due = self.mesh.pump(ctl, k, vfs, self.watcher);
+            if let Some(ms) = due.filter(|&ms| arm(&mut self.wake, ctl, ms)) {
+                ctl.wake_in(ms);
             }
             apply(shell.take_effects(), ctl, (&self.ai, &mut self.wake), &mut self.report);
         }
@@ -644,7 +676,8 @@ fn input_of(ev: Event) -> Option<Input> {
         Event::Key { down: false, .. } | Event::Fetched { .. } => return None,
         Event::Chunk { .. } | Event::StreamEnd { .. } => return None,
         Event::Proc { .. } | Event::ProcError { .. } | Event::Wake | Event::Hidden => return None,
-        Event::Derived { .. } => return None,
+        Event::Derived { .. } | Event::Signal { .. } | Event::Linked { .. } => return None,
+        Event::LinkData { .. } | Event::Unlinked { .. } | Event::Estimated { .. } => return None,
         Event::Key { code, key, shift, ctrl, alt, meta, altgr, .. } => {
             let (ctrl, alt) = without_altgr(ctrl, alt, altgr);
             let mods = Mods { shift, ctrl, alt, meta };

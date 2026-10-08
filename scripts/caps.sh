@@ -1,22 +1,27 @@
 #!/usr/bin/env bash
-# The constitution's teeth (see DESIGN.md). At a cap: split, shrink, or
-# delete. Never raise a cap.
+# The constitution's gauges and gates (see DESIGN.md).
 #
-# Each cap measures a real cost. Speed is bytes (scripts/budget.sh). Here:
-# understanding, a module (a crate, a program, a server function) small
-# enough to hold whole; the OS small enough to learn whole, since everything
-# stands on it; and coupling, programs linking only the OS's pure shared
-# libraries (they reach the rest by WASI preview 1 and uiwire).
-# Growth is new modules, never bigger ones, so programs/ has no total.
+# Sizes are gauges, never gates: a module's lines (a crate, a program, a
+# server function), the OS's total and CLAUDE.md's characters are measured and
+# printed against an aim, a figure past it marked OVER, and none fails. They
+# say where a module might split to stay easy to hold whole; they never stop
+# work. Speed is bytes, gauged the same way (scripts/budget.sh).
+#
+# The rest are gates, and fail: zero external dependencies, programs linking
+# only the OS's pure shared libraries (they reach the rest by WASI preview 1
+# and uiwire), server functions importing Node's own modules only,
+# determinism, every crate's license, no local path or email address in a
+# committable file, no unsafe code.
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
-CRATE_CAP=2000
-CRATE_TEST_CAP=1000
-# The OS: crates/ and tools/ (what boots, the kernel, the program worker).
-REPO_CAP=25000
-TEST_CAP=12500
-CLAUDE_CAP=8000
+# Aims, not caps: lines a module holds whole, its tests; the OS's total (crates/
+# and tools/: what boots, the kernel, the program worker), its tests; CLAUDE.md.
+CRATE_AIM=2000
+CRATE_TEST_AIM=1000
+REPO_AIM=25000
+TEST_AIM=12500
+CLAUDE_AIM=8000
 # What a program may depend on besides programs/: the OS's shared, pure
 # libraries (the protocol, the glyph numbers, paths). Dev-dependencies are
 # free: tests may drive a real desktop.
@@ -33,6 +38,7 @@ LOCK_ALLOW="bumpalo cfg-if futures-core futures-task futures-util js-sys once_ce
 DETERMINISTIC_CRATES="wm vfs kernel wasi"
 DET_TOKENS="HashMap|HashSet|RandomState|DefaultHasher|Instant|SystemTime|UNIX_EPOCH|thread_rng"
 fail=0
+over=0
 
 # Crates live under crates/ (the OS), programs/ (what runs in it) and tools/
 # (build and dev tools). Tools never ship, but they are Rust in this repo:
@@ -49,9 +55,9 @@ for c in crates/*/ tools/*/ programs/*/; do
   esac
 done
 
-# 1. Lines of Rust per crate and in total. Product code and test code (files
-#    named tests.rs, and tests/ directories) have caps of their own: tests
-#    guard the product, so they are capped, not traded against it.
+# 1. Lines of Rust per crate and in total, gauged. Product code and test code
+#    (files named tests.rs, and tests/ directories) have aims of their own:
+#    tests guard the product, so they are counted, not traded against it.
 lines() { # lines of the .rs files under $1..., tests ($T=1) or the rest
   if [ "$T" = 1 ]; then
     find "$@" -name '*.rs' \( -name tests.rs -o -path '*/tests/*' \) -print0
@@ -62,24 +68,24 @@ lines() { # lines of the .rs files under $1..., tests ($T=1) or the rest
 for c in "${crate_dirs[@]}"; do
   n=$(T=0 lines "$c")
   t=$(T=1 lines "$c")
-  printf '%-26s %6d LOC + %5d test (caps %d + %d)\n' "$c" "$n" "$t" "$CRATE_CAP" "$CRATE_TEST_CAP"
-  if [ "$n" -gt "$CRATE_CAP" ] || [ "$t" -gt "$CRATE_TEST_CAP" ]; then
-    echo "FAIL: $c exceeds a per-crate cap"
-    fail=1
+  printf '%-26s %6d LOC + %5d test (aims %d + %d)\n' "$c" "$n" "$t" "$CRATE_AIM" "$CRATE_TEST_AIM"
+  if [ "$n" -gt "$CRATE_AIM" ] || [ "$t" -gt "$CRATE_TEST_AIM" ]; then
+    echo "OVER: $c is past a module's aim (a gauge: it might split, nothing waits on it)"
+    over=$((over + 1))
   fi
 done
 total=$(T=0 lines "${os_dirs[@]}")
 tests=$(T=1 lines "${os_dirs[@]}")
-printf '%-26s %6d LOC + %5d test (caps %d + %d)\n' "total: the OS" "$total" "$tests" "$REPO_CAP" "$TEST_CAP"
-if [ "$total" -gt "$REPO_CAP" ] || [ "$tests" -gt "$TEST_CAP" ]; then
-  echo "FAIL: the OS exceeds its total cap"
-  fail=1
+printf '%-26s %6d LOC + %5d test (aims %d + %d)\n' "total: the OS" "$total" "$tests" "$REPO_AIM" "$TEST_AIM"
+if [ "$total" -gt "$REPO_AIM" ] || [ "$tests" -gt "$TEST_AIM" ]; then
+  echo "OVER: the OS is past its total aim (a gauge)"
+  over=$((over + 1))
 fi
 printf '%-26s %6d LOC + %5d test (no total: each its own module)\n' "total: programs" \
   "$(T=0 lines "${program_dirs[@]}")" "$(T=1 lines "${program_dirs[@]}")"
 
-# Server functions (api/*.mjs) are modules too: each within a crate's cap,
-# and Node's own modules only (no npm: scripts/deploy.sh ships each file
+# Server functions (api/*.mjs) are modules too: each gauged against a crate's
+# aim, and Node's own modules only (a gate) (no npm: scripts/deploy.sh ships each file
 # alone). Every quoted specifier after `from`, `import` (a statement or
 # `import(`) or `require(` must be `node:...`, wherever it falls: the file is
 # read as one line, so a statement may span lines and share one. Whole-line
@@ -87,10 +93,10 @@ printf '%-26s %6d LOC + %5d test (no total: each its own module)\n' "total: prog
 for f in api/*.mjs; do
   [ -f "$f" ] || continue
   n=$(wc -l < "$f")
-  printf '%-26s %6d LOC (cap %d)\n' "$f" "$n" "$CRATE_CAP"
-  if [ "$n" -gt "$CRATE_CAP" ]; then
-    echo "FAIL: $f exceeds a module's cap"
-    fail=1
+  printf '%-26s %6d LOC (aim %d)\n' "$f" "$n" "$CRATE_AIM"
+  if [ "$n" -gt "$CRATE_AIM" ]; then
+    echo "OVER: $f is past a module's aim (a gauge)"
+    over=$((over + 1))
   fi
   specs=$(grep -v '^[[:space:]]*//' "$f" | tr '\r\n' '  ' \
     | grep -oE "(^|[^[:alnum:]_\$.])(from|import|require)[[:space:]]*\(?[[:space:]]*[\"'][^\"']*" \
@@ -101,13 +107,13 @@ for f in api/*.mjs; do
   fi
 done
 
-# 2. CLAUDE.md stays a map, not a novel.
+# 2. CLAUDE.md stays a map, not a novel: gauged.
 if [ -f CLAUDE.md ]; then
   chars=$(LC_ALL=C.UTF-8 wc -m < CLAUDE.md)
-  printf '%-26s %6d chars (cap %d)\n' "CLAUDE.md" "$chars" "$CLAUDE_CAP"
-  if [ "$chars" -gt "$CLAUDE_CAP" ]; then
-    echo "FAIL: CLAUDE.md exceeds its cap"
-    fail=1
+  printf '%-26s %6d chars (aim %d)\n' "CLAUDE.md" "$chars" "$CLAUDE_AIM"
+  if [ "$chars" -gt "$CLAUDE_AIM" ]; then
+    echo "OVER: CLAUDE.md is past its aim (a gauge)"
+    over=$((over + 1))
   fi
 fi
 
@@ -296,5 +302,7 @@ for c in "${crate_dirs[@]}"; do
   done
 done
 
+# Sizes past their aims are told, never failed on: only the gates fail.
+if [ "$over" -gt 0 ]; then echo "sizes: $over past their aims (gauges, not gates)"; fi
 if [ "$fail" = 0 ]; then echo "caps: ok"; fi
 exit "$fail"

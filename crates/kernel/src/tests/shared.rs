@@ -290,9 +290,11 @@ fn spawn_refuses_past_its_limits_and_a_closed_window_ends_its_processes() {
     assert_eq!(k.spawn(long), Err("argument list too long"));
     assert!(k.take_effects().is_empty() && k.procs().is_empty());
     let pids: Vec<u32> = (0..wire::MAX_PROCS).map(|_| k.spawn(hello()).unwrap()).collect();
-    assert_eq!((pids, k.spawn(hello())), ((2..10).collect(), Err("too many programs are running")));
+    let all = (2..2 + wire::MAX_PROCS as u32).collect();
+    assert_eq!((pids, k.spawn(hello())), (all, Err("too many programs are running")));
     k.kill(2, wire::KILLED);
-    assert_eq!(k.spawn(hello()), Ok(10)); // An ended process frees its slot, not its pid.
+    // An ended process frees its slot, not its pid.
+    assert_eq!(k.spawn(hello()), Ok(2 + wire::MAX_PROCS as u32));
     // Closing a window kills and forgets its processes.
     let mut k = kernel();
     let [a, b, c] = [5, 6, 5].map(|owner| (k.set_owner(owner), k.spawn(hello()).unwrap()).1);

@@ -38,6 +38,11 @@ pub enum Effect {
     Reload,
     InputMode(bool),
     Derive { id: u32, pin: Vec<u8>, salt: [u8; 16], iterations: u32 },
+    Link { id: u32, cert: String, offer: Option<String> },
+    Accept { id: u32, answer: String },
+    LinkSend { id: u32, data: Vec<u8> },
+    Unlink(u32),
+    Estimate,
 }
 
 /// A load the browser timed ([`Ctl::timings`]): its URL (empty for the page itself), then its
@@ -135,8 +140,9 @@ impl Ctl {
         /// such timer: a slow animation's next frame, with no frame loop between. A hidden page
         /// draws no frame until it shows again.
         frame_in(ms: u32) => Effect::FrameIn(ms);
-        /// POSTs `body` with `headers` to `url` (any: the caller vouches for it); the body
-        /// streams back as [`crate::Event::Chunk`]s, then a [`crate::Event::StreamEnd`].
+        /// POSTs `body` with `headers` to `url` (any: the caller vouches for it), or GETs it
+        /// when `body` is empty; the body streams back as [`crate::Event::Chunk`]s, then a
+        /// [`crate::Event::StreamEnd`].
         stream(id: u32, url: &str, headers: Vec<(&'static str, String)>, body: Vec<u8>) =>
             Effect::Stream { id, url: url.to_owned(), headers, body };
         /// Aborts stream `id`, which then says nothing more.
@@ -159,6 +165,20 @@ impl Ctl {
         /// [`crate::Event::Derived`] with `id`.
         derive(id: u32, pin: Vec<u8>, salt: [u8; 16], iterations: u32) =>
             Effect::Derive { id, pin, salt, iterations };
+        /// Makes link `id` to another tab (`crate::link`): an offer, or with `offer` the answer to
+        /// it. Its description arrives as [`crate::Event::Signal`] for the other tab, then
+        /// [`crate::Event::Linked`] once its channel opens, or [`crate::Event::Unlinked`].
+        /// `cert` is where the page's certificate is kept (the first link's says).
+        link(id: u32, cert: &str, offer: Option<String>) =>
+            Effect::Link { id, cert: cert.to_owned(), offer };
+        /// The other tab's answer to link `id`'s offer.
+        accept(id: u32, answer: String) => Effect::Accept { id, answer };
+        /// Sends `data` on link `id` (dropped unless its channel is open), as one message.
+        link_send(id: u32, data: Vec<u8>) => Effect::LinkSend { id, data };
+        /// Closes link `id`, which sends no Unlinked.
+        unlink(id: u32) => Effect::Unlink(id);
+        /// Asks for the page's storage quota: [`crate::Event::Estimated`].
+        estimate() => Effect::Estimate;
     }
 
     /// Asks for one more frame; from a frame, exactly one after it.

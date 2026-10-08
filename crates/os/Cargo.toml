@@ -25,3 +25,4 @@ compusophy-uiwire.workspace = true
 compusophy-uiview.workspace = true
 compusophy-logon.workspace = true
 compusophy-report.workspace = true
+compusophy-mesh.workspace = true

@@ -19,6 +19,7 @@ name = "compusophy-activity"
 version = "0.1.0"
 dependencies = [
  "compusophy-icons",
+ "compusophy-sha",
  "compusophy-uiwire",
 ]
 
@@ -147,6 +148,14 @@ name = "compusophy-font"
 version = "0.1.0"
 
 [[package]]
+name = "compusophy-fractal"
+version = "0.1.0"
+dependencies = [
+ "compusophy-sha",
+ "compusophy-uiwire",
+]
+
+[[package]]
 name = "compusophy-fuel"
 version = "0.1.0"
 
@@ -233,12 +242,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "compusophy-mesh"
+version = "0.1.0"
+dependencies = [
+ "compusophy-kernel",
+ "compusophy-platform",
+ "compusophy-uiwire",
+ "compusophy-vfs",
+]
+
+[[package]]
 name = "compusophy-os"
 version = "0.1.0"
 dependencies = [
  "compusophy-apps",
  "compusophy-gfx",
  "compusophy-logon",
+ "compusophy-mesh",
  "compusophy-platform",
  "compusophy-report",
  "compusophy-shell",
@@ -258,6 +278,14 @@ dependencies = [
  "js-sys",
  "wasm-bindgen",
  "web-sys",
+]
+
+[[package]]
+name = "compusophy-pool"
+version = "0.1.0"
+dependencies = [
+ "compusophy-coder",
+ "compusophy-uiwire",
 ]
 
 [[package]]
@@ -283,6 +311,10 @@ dependencies = [
  "compusophy-kernel",
  "compusophy-vfs",
 ]
+
+[[package]]
+name = "compusophy-sha"
+version = "0.1.0"
 
 [[package]]
 name = "compusophy-shell"

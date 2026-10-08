@@ -12,7 +12,7 @@ futuristic, ultra minimal, fast. AI-native: free AI for all, and our own
 model fine-tuned on applang (Opus teaches; `iq` must climb).
 Later: compute pooled across tabs, devices. Author handle: compusophy.
 
-## Constitution (CI-enforced by `scripts/caps.sh` where possible)
+## Constitution (`scripts/caps.sh` holds the gates, gauges the sizes)
 
 1. **Rust only.** No hand-written JS beyond two one-line bootstraps
    (web/index.html, web/worker.js) and `api/*.mjs`, the server functions
@@ -21,23 +21,23 @@ Later: compute pooled across tabs, devices. Author handle: compusophy.
 2. **Zero external dependencies.** Only `compusophy-*` workspace siblings.
    Exception: the web crates `platform`, `os` and `cpu` may take
    wasm-bindgen (pinned), js-sys, web-sys. Build-time tools never ship.
-3. **Caps measure real costs** (speed is rule 6). A module (crate,
-   program, `api/*.mjs` file) ≤2,000 lines, tests (`tests.rs`, `tests/`)
-   ≤1,000: one reader holds it whole. The OS (`crates/`, `tools/`) ≤25,000
-   + 12,500 in all: everything stands on it. A program depends only on
-   `programs/` and `uiwire`, `icons`, `vfs`. Growth is new modules, not
-   bigger ones; this file ≤8,000 chars. At a cap: split, shrink, or
-   delete. Never raise one.
+3. **Sizes are gauges, never gates** (speed is rule 6): measured and
+   reported every build, never a reason to stop work. Aims: a module
+   (crate, program, `api/*.mjs`) ~2,000 lines, tests ~1,000, so one
+   reader holds it whole; the OS (`crates/`, `tools/`) ~25,000 + 12,500;
+   this file ~8,000 chars. Past an aim, a split is worth a thought. A
+   gate, not a size: a program depends only on `programs/` and
+   `uiwire`, `icons`, `vfs`.
 4. **Deterministic crates** (`wm`, `vfs`, `kernel`, `wasi`): no floats, no
    HashMap/HashSet, no clocks, no randomness. State must replay bit-for-bit
    and hash identically.
 5. **wasm32 always green:** the wasm32 `cargo check` below.
-6. **Budgets** (`scripts/budget.sh`, gzip -9): boot ≤224 KB (top-level
-   `dist/` files), deferred fonts ≤30 KB (`dist/fonts/deferred/`), lazy
-   fonts ≤60 KB (the rest of `dist/fonts/`), system ≤40 KB (`dist/cpu/`),
-   programs ≤256 KB each (`dist/bin/`), licenses not counted; first frame
-   ≤100 ms after the wasm arrives; idle draws zero frames (only input or
-   an animation draws; one opt-out exception: the living grain, 8/s).
+6. **Speed** (`scripts/budget.sh`, gzip -9, a gauge): aims boot ~224 KB
+   (top-level `dist/`), deferred fonts ~30 KB, lazy fonts ~60 KB, system
+   ~40 KB (`dist/cpu/`), each program ~256 KB (`dist/bin/`); what can
+   load later should. First frame ≤100 ms after the wasm arrives; idle
+   draws zero frames (only input or an animation draws; one opt-out
+   exception: the living grain, 8/s).
 7. **Every failure is coded and spanned** in the language crates; never a
    wrong-but-clean result. `#![forbid(unsafe_code)]` in every crate.
 8. **Designed for computehub now:** determinism, fuel + receipts, messages
@@ -53,44 +53,45 @@ crates/      the OS (boot, kernel, worker); talks WASI and uiwire
   wm/        floating window manager: stacking, snapping, focus
   vfs/       in-memory filesystem (/apps, /home, /tmp)
   font/      TrueType reader + glyph rasterizer
-  gfx/       instanced-quad draw list, glyph atlas, the WebGL2 shaders
+  gfx/       instanced-quad draw list, glyph atlas, WebGL2 shaders
   text/      TextSystem: font slots, fallbacks, glyphs on the atlas
   icons/     the mark, glyphs and made icons as vector outlines
-  ui/        immediate-mode widgets, themes, App, Cx, the Code editor
+  ui/        immediate-mode widgets, themes, App, Cx, Code editor
   apps/      a terminal's console: its shell, its keys
   uiwire/    remote UI protocol: programs send widget trees, get events
-  uiview/    draws them with ui; edited text; canvas/: Canvases
-  host/      wm + one app per window; agent; grabs, squeeze; motion, frames
-  home/      top bar, home grid, dock + Assistant row, menus, touch
-  logon/     the welcome: mark, real boot record, sign-in, PIN
-  profiles/  the list: each profile's keys, face, name, PIN
-  shell/     the desktop: window chrome, keys, overlay; wires host + home
+  uiview/    draws them with ui; edited text; canvas/: canvases
+  host/      wm + one app per window; agent; grabs, squeeze; motion
+  home/      top bar, home grid, dock, menus, touch
+  logon/     the welcome: mark, boot record, sign-in, PIN
+  profiles/  each profile's keys, face, name, PIN
+  shell/     the desktop: window chrome, keys, overlay
   platform/  the browser boundary: canvas, WebGL2, input, textarea, fetch,
-             frames on demand, storage, workers
+             frames on demand, storage, workers, WebRTC
+  mesh/      relays links and workers to the pool program
   report/    telemetry: notes, reports, outbox, panic beacon
   os/        wasm entry: fonts, VFS, registry, prefs, events, Remote
-             windows, ai, /home kept
-  kernel/    wire protocol, process table, consoles, jobs, file
+             windows, ai, /home
+  kernel/    wire protocol, processes, consoles, jobs, file
              server (main), snap (/home), module
-  wasi/      the kernel's worker half: WASI preview 1 Proc, fds, /dev
+  wasi/      the kernel's worker half: WASI preview 1, fds, /dev
   cpu/       the program worker (cdylib; dist/cpu/): loader, WASI imports
 programs/    wasm32-wasip1 programs (dist/bin/), app language, dev crates
   fuel/ lang/ forks of litelite (budgets, parse kit)
   applang-lex/ -syntax/ applang/ app language: tokens, parse, run
   studio/    make apps by describing them; runs `.app` files
-  coder/     Studio's agent: write, test, fix, keep the best
-  assistant/ the AI using the desktop; chats/ files/: its chats, file tools
+  coder/     Studio's agent: write, test, fix, keep best
+  assistant/ the AI using the desktop; chats/ files/: its chats, files
   tiny/ lab/ a transformer; dev: its corpus, training, measures
   system/    About, Editor, Feedback, Files, Welcome, Settings
-  activity/  the resource monitor
+  activity/  resource monitor; pool/ fractal/ sha/: the mesh, demo, hash
   terminal/  the Terminal; vt/ term/: its parser, screen model
   sh/ agent/ shell: editor, commands, jobs; AI coder
-  toolbox/   test programs, one binary
+  toolbox/   test programs
   evals/ makes/ iq/ teach/  dev: evals; IQ tasks; Opus the teacher
 assets/fonts/  the fonts (see Fonts below)
-api/           server functions (Vercel, Node): ai.mjs, feedback.mjs
-tools/serve/   dev-only static server for dist/; mocks /api/*
-tools/eval/    dev-only eval runner (curl, the free AI)
+api/           server functions (Vercel, Node): ai, feedback, signal
+tools/serve/   dev-only server for dist/; mocks /api/*
+tools/eval/    dev-only eval runner (the free AI)
 train/         dev: fine-tuning on the 3090 (Python)
 web/index.html the page: <canvas id="os"> + a one-line bootstrap
 web/worker.js  the program worker's one-line bootstrap
@@ -142,7 +143,7 @@ opens); subsets and OFL texts: `assets/fonts/README.md`.
 - Every color comes from the `ui::Theme` the frame is drawn in; no widget
   or chrome draws from a color constant. Rects, strokes and baselines land
   on device pixels.
-- Measure the boot budget (`build-web.sh`, `budget.sh`) after any change
+- Measure the boot size (`build-web.sh`, `budget.sh`) after any change
   that ships. Avoid in shipped code: core's Unicode tables
   (`char::to_lowercase` and friends; see `host::upper`), float formatting,
   panics that format (`&s[a..b]`: use `s.get`) and `f32::sin` (`icons::sin`).

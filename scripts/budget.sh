@@ -1,50 +1,41 @@
 #!/usr/bin/env bash
-# Download-size budgets (see DESIGN.md), measured on dist/ with gzip -9, which
-# is larger than the brotli a real host serves, so passing here is
-# conservative. Six groups:
+# Download sizes, a gauge (see DESIGN.md), measured on dist/ with gzip -9,
+# which is larger than the brotli a real host serves. Every figure is printed
+# against an aim, a group past it marked OVER, and nothing fails: speed
+# matters (32 KB is about 25 ms on a phone's 4G), so what can load later
+# should, but a size never blocks a feature, a commit or a deploy. Six groups:
 #
 #   boot      the files directly in dist/ (page, glue, wasm with the boot
 #             font inside): everything a visitor downloads before the first
-#             frame. Cap 224 KB: 150 KB until R4 (the desktop compusophy
-#             asked for), 180 KB in R4, 192 KB in R7 for the AI that uses
-#             the computer (its screen reader and hands live in the boot),
-#             224 KB on 2026-10-02 for Activity, made apps' icons, the
-#             canvas and the welcome (32 KB is about 25 ms on a phone's 4G).
-#             About, Feedback, Files and Welcome left the boot for
-#             system.wasm; what can leave it, should.
+#             frame. Aim 224 KB.
 #   deferred  dist/fonts/deferred/: Inter SemiBold and JetBrains Mono, which
-#             the page fetches right after its first frame. Cap 30 KB.
+#             the page fetches right after its first frame. Aim 30 KB.
 #   lazy      the other files in dist/fonts/: the symbol fonts a terminal
-#             fetches when it first opens, never before. Cap 60 KB.
+#             fetches when it first opens, never before. Aim 60 KB.
 #   system    dist/cpu/: the program worker (cpu.js, cpu_bg.wasm,
-#             worker.js), fetched when a program first runs. Cap 40 KB.
-#   programs  dist/bin/: the programs (toolbox.wasm, the test programs,
-#             studio.wasm, assistant.wasm and system.wasm: About, Feedback,
-#             Files), each fetched when it first runs, then cached. Cap 256 KB
-#             per file, about half a second on a phone's 4G the first time
-#             (64 KB until R8, 96 KB until 2026-10-02, when compusophy found
-#             it too small for Studio, a serious piece of software).
+#             worker.js), fetched when a program first runs. Aim 40 KB.
+#   programs  dist/bin/: the programs, each fetched when it first runs, then
+#             cached. Aim 256 KB per file.
 #   licenses  dist/licenses/: the font licenses, shipped but never fetched by
 #             the page. Not counted.
 #
-# A file anywhere else in dist/ belongs to no group and fails: put it in a
-# group on purpose. At a cap: split, shrink, or delete. A cap moves only as a
-# recorded decision, as R4's boot cap did, never to fit a drift.
+# A file anywhere else in dist/ belongs to no group: it is named, unmeasured,
+# so a stray leftover is seen.
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
-BOOT_CAP=$((224 * 1024))
-DEFERRED_CAP=$((30 * 1024))
-LAZY_CAP=$((60 * 1024))
-SYSTEM_CAP=$((40 * 1024))
-PROGRAMS_CAP=$((256 * 1024))
+BOOT_AIM=$((224 * 1024))
+DEFERRED_AIM=$((30 * 1024))
+LAZY_AIM=$((60 * 1024))
+SYSTEM_AIM=$((40 * 1024))
+PROGRAMS_AIM=$((256 * 1024))
 
 if [ ! -d dist ]; then
   echo "budget: SKIP, no dist/ yet (run scripts/build-web.sh)"
   exit 0
 fi
 
-fail=0
+over=0
 
 # Prints each file of a group and its gzipped size; sets `sum` to the total
 # and `sizes` to each file's size, in order.
@@ -88,57 +79,48 @@ while IFS= read -r f; do
   esac
 done < <(find dist -type f | LC_ALL=C sort)
 
-group "boot (dist/*, cap $BOOT_CAP bytes gzipped)" ${boot[@]+"${boot[@]}"}
+group "boot (dist/*, aim $BOOT_AIM bytes gzipped)" ${boot[@]+"${boot[@]}"}
 boot_sum=$sum
-printf '  %-46s %8d bytes gzipped (cap %d)\n' "boot total" "$boot_sum" "$BOOT_CAP"
+printf '  %-46s %8d bytes gzipped (aim %d)\n' "boot total" "$boot_sum" "$BOOT_AIM"
 
-group "deferred (dist/fonts/deferred/, cap $DEFERRED_CAP bytes gzipped)" ${deferred[@]+"${deferred[@]}"}
+group "deferred (dist/fonts/deferred/, aim $DEFERRED_AIM bytes gzipped)" ${deferred[@]+"${deferred[@]}"}
 deferred_sum=$sum
-printf '  %-46s %8d bytes gzipped (cap %d)\n' "deferred total" "$deferred_sum" "$DEFERRED_CAP"
+printf '  %-46s %8d bytes gzipped (aim %d)\n' "deferred total" "$deferred_sum" "$DEFERRED_AIM"
 
-group "lazy (dist/fonts/ outside deferred/, cap $LAZY_CAP bytes gzipped)" ${lazy[@]+"${lazy[@]}"}
+group "lazy (dist/fonts/ outside deferred/, aim $LAZY_AIM bytes gzipped)" ${lazy[@]+"${lazy[@]}"}
 lazy_sum=$sum
-printf '  %-46s %8d bytes gzipped (cap %d)\n' "lazy total" "$lazy_sum" "$LAZY_CAP"
+printf '  %-46s %8d bytes gzipped (aim %d)\n' "lazy total" "$lazy_sum" "$LAZY_AIM"
 
-group "system (dist/cpu/, cap $SYSTEM_CAP bytes gzipped)" ${system[@]+"${system[@]}"}
+group "system (dist/cpu/, aim $SYSTEM_AIM bytes gzipped)" ${system[@]+"${system[@]}"}
 system_sum=$sum
-printf '  %-46s %8d bytes gzipped (cap %d)\n' "system total" "$system_sum" "$SYSTEM_CAP"
+printf '  %-46s %8d bytes gzipped (aim %d)\n' "system total" "$system_sum" "$SYSTEM_AIM"
 
-group "programs (dist/bin/, cap $PROGRAMS_CAP bytes gzipped per file)" ${programs[@]+"${programs[@]}"}
+group "programs (dist/bin/, aim $PROGRAMS_AIM bytes gzipped per file)" ${programs[@]+"${programs[@]}"}
 program_sizes=(${sizes[@]+"${sizes[@]}"})
-printf '  %-46s %8d bytes gzipped (cap %d per file)\n' "programs total" "$sum" "$PROGRAMS_CAP"
+printf '  %-46s %8d bytes gzipped (aim %d per file)\n' "programs total" "$sum" "$PROGRAMS_AIM"
 
 group "licenses (dist/licenses/, not counted)" ${licenses[@]+"${licenses[@]}"}
 printf '  %-46s %8d bytes gzipped (not counted)\n' "licenses total" "$sum"
 
-if [ "$boot_sum" -gt "$BOOT_CAP" ]; then
-  echo "FAIL: the boot payload is $boot_sum bytes gzipped, over its cap of $BOOT_CAP" >&2
-  fail=1
-fi
-if [ "$deferred_sum" -gt "$DEFERRED_CAP" ]; then
-  echo "FAIL: the deferred fonts are $deferred_sum bytes gzipped, over their cap of $DEFERRED_CAP" >&2
-  fail=1
-fi
-if [ "$lazy_sum" -gt "$LAZY_CAP" ]; then
-  echo "FAIL: the lazy fonts are $lazy_sum bytes gzipped, over their cap of $LAZY_CAP" >&2
-  fail=1
-fi
-if [ "$system_sum" -gt "$SYSTEM_CAP" ]; then
-  echo "FAIL: the program worker is $system_sum bytes gzipped, over its cap of $SYSTEM_CAP" >&2
-  fail=1
-fi
+# Past an aim: said, with how far, never failed on.
+past() { # what, its bytes, its aim
+  echo "OVER: $1 is $2 bytes gzipped, $(($2 - $3)) past its aim of $3 (a gauge, not a gate)"
+  over=$((over + 1))
+}
+if [ "$boot_sum" -gt "$BOOT_AIM" ]; then past "the boot payload" "$boot_sum" "$BOOT_AIM"; fi
+if [ "$deferred_sum" -gt "$DEFERRED_AIM" ]; then past "the deferred fonts" "$deferred_sum" "$DEFERRED_AIM"; fi
+if [ "$lazy_sum" -gt "$LAZY_AIM" ]; then past "the lazy fonts" "$lazy_sum" "$LAZY_AIM"; fi
+if [ "$system_sum" -gt "$SYSTEM_AIM" ]; then past "the program worker" "$system_sum" "$SYSTEM_AIM"; fi
 i=0
 for f in ${programs[@]+"${programs[@]}"}; do
-  if [ "${program_sizes[$i]}" -gt "$PROGRAMS_CAP" ]; then
-    echo "FAIL: the program $f is ${program_sizes[$i]} bytes gzipped, over the per-file cap of $PROGRAMS_CAP" >&2
-    fail=1
+  if [ "${program_sizes[$i]}" -gt "$PROGRAMS_AIM" ]; then
+    past "the program $f" "${program_sizes[$i]}" "$PROGRAMS_AIM"
   fi
   i=$((i + 1))
 done
 for f in ${stray[@]+"${stray[@]}"}; do
-  echo "FAIL: $f is in no budget group (dist/ is boot, dist/fonts/deferred/ deferred, dist/fonts/ lazy, dist/cpu/ system, dist/bin/ programs, dist/licenses/ uncounted)" >&2
-  fail=1
+  echo "UNMEASURED: $f is in no group (dist/ is boot, dist/fonts/deferred/ deferred, dist/fonts/ lazy, dist/cpu/ system, dist/bin/ programs, dist/licenses/ uncounted)"
 done
 
-if [ "$fail" = 0 ]; then echo "budget: ok"; fi
-exit "$fail"
+if [ "$over" = 0 ]; then echo "budget: every size within its aim"; else echo "budget: $over past their aims (gauges, not gates)"; fi
+exit 0

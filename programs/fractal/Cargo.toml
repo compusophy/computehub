@@ -1,0 +1,20 @@
+[package]
+name = "compusophy-fractal"
+description = "compusophyOS's Fractal: the mesh's demo, a Mandelbrot picture rendered tile by tile on every core of every linked tab, each tile tinted by the device that computed it; a wasm32-wasip1 GUI program on uiwire, and with `work` the worker that answers tiles. Built into dist/bin/, never committed."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[lib]
+name = "fractal"
+
+[[bin]]
+name = "fractal"
+path = "src/main.rs"
+
+[dependencies]
+compusophy-sha.workspace = true
+compusophy-uiwire.workspace = true
