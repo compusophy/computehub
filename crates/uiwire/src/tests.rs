@@ -768,6 +768,7 @@ fn the_meshs_snapshots_and_frames_come_back_whole() {
         tx: 9,
         model: name.into(),
         tok: 95,
+        ctx: 4096,
         ..Device::default()
     };
     let job = Job {

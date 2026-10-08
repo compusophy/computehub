@@ -308,9 +308,11 @@ fn stream(s: &Rc<Shared>, id: u32, url: &str, headers: Vec<(&str, String)>, body
     let set = |o: &Object, k: &str, v: &JsValue| _ = Reflect::set(o, &k.into(), v);
     let (init, map) = (Object::new(), Object::new());
     headers.iter().for_each(|(k, v)| set(&map, k, &v.into()));
-    set(&init, "method", &"POST".into());
+    set(&init, "method", &(if body.is_empty() { "GET" } else { "POST" }).into());
     set(&init, "headers", &map);
-    set(&init, "body", &Uint8Array::from(body));
+    if !body.is_empty() {
+        set(&init, "body", &Uint8Array::from(body));
+    }
     set(&init, "signal", &Reflect::get(&abort, &"signal".into()).unwrap_or_default());
     let cb = ManuallyDrop::new(callback(s, id, on_stream));
     let _ = s.window.fetch_with_str_and_init(url, init.unchecked_ref()).then2(&cb, &cb);

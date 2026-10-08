@@ -76,8 +76,8 @@ fi
 
 mkdir -p dist
 # Nothing here deletes files: outputs have fixed names and are overwritten in
-# place, and scripts/budget.sh rejects any file in dist/ that belongs to no
-# budget group, so a stale leftover cannot ship unnoticed.
+# place, and scripts/budget.sh names any file in dist/ that belongs to no
+# group, so a stale leftover cannot ship unnoticed.
 # The glue's flags: TextEncoder.encodeInto only (every engine that runs this
 # page has it; the fallback path costs glue), and no producers section.
 bindgen=(--target web --no-typescript --encode-into always --remove-producers-section)

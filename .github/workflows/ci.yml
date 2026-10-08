@@ -17,7 +17,9 @@ jobs:
           toolchain: "1.96.0"
           targets: wasm32-unknown-unknown, wasm32-wasip1
           components: clippy, rustfmt
-      - name: constitution caps
+      # The gates fail (dependencies, privacy, unsafe, determinism, licenses);
+      # sizes are gauges, printed and never failed on.
+      - name: constitution gates, size gauges
         run: bash scripts/caps.sh
       - name: server functions parse
         run: for f in api/*.mjs; do node --check "$f"; done
@@ -39,16 +41,16 @@ jobs:
         uses: taiki-e/install-action@v2
         with:
           tool: wasm-bindgen@0.2.121
-      # Without wasm-opt the budget would measure the unoptimized module,
-      # which is over the boot cap. Pinned to binaryen 112, the version the
-      # boot size is measured with locally.
+      # Without wasm-opt the gauge would measure the unoptimized module, far
+      # past the boot's aim. Pinned to binaryen 112, the version the boot size
+      # is measured with locally.
       - name: install wasm-opt (binaryen 112)
         run: |
           curl -sSfL https://github.com/WebAssembly/binaryen/releases/download/version_112/binaryen-version_112-x86_64-linux.tar.gz | tar -xz -C "$RUNNER_TEMP"
           echo "$RUNNER_TEMP/binaryen-version_112/bin" >> "$GITHUB_PATH"
       - name: web build
         run: bash scripts/build-web.sh
-      - name: size budget
+      - name: size gauge
         run: bash scripts/budget.sh
 
   # The oldest compiler the manifests promise (rust-version in Cargo.toml).

@@ -314,7 +314,9 @@ impl PoolPage {
         let say = match me.map(|d| (d.model.as_str(), d.tok)) {
             _ if !s.serving.is_empty() => s.serving.clone(),
             Some((model, tok)) if !model.is_empty() => {
-                ["Sharing ", model, DOT, &speed(tok)].concat()
+                let ctx = me.map_or(0, |d| d.ctx);
+                let ctx = if ctx == 0 { String::new() } else { [DOT, &context(ctx)].concat() };
+                ["Sharing ", model, DOT, &speed(tok), &ctx].concat()
             }
             _ => "Run an OpenAI-compatible server on this device (as llama-server), then share \
                   it: linked devices may ask it, and only they."
@@ -554,6 +556,14 @@ fn speed(tenths: u32) -> String {
     match tenths {
         0 => [DASH, " tok/s"].concat(),
         t => [&(t / 10).to_string(), ".", &(t % 10).to_string(), " tok/s"].concat(),
+    }
+}
+
+/// A model's context in tokens, as people say it: `4k context`, `32k context`, `512 context`.
+fn context(tokens: u32) -> String {
+    match tokens {
+        0..1024 => [&tokens.to_string(), " context"].concat(),
+        t => [&(t / 1024).to_string(), "k context"].concat(),
     }
 }
 

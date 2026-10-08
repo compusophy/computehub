@@ -56,6 +56,8 @@ pub enum Act {
     Done { window: u32, index: u32, node: u8, out: String },
     /// Post a chat to the model this tab shares ([`crate::model`]): its server's URL and body.
     Post { url: String, body: String },
+    /// Get what the model's server says of itself (its `/props`): [`Pool::props`] hears it.
+    Get(String),
 }
 
 /// What a tab has to lend ([`Msg::Hello`]).
@@ -69,6 +71,7 @@ pub struct Info {
     pub gpu: bool,
     pub model: String,
     pub tok: u32,
+    pub ctx: u32,
 }
 
 /// A linked tab: what it has and says (workers, busy, chunks, units), when it linked and was last
@@ -230,6 +233,7 @@ impl Pool {
             gpu: i.gpu,
             model,
             tok: i.tok,
+            ctx: i.ctx,
         }
     }
 
@@ -523,8 +527,8 @@ impl Pool {
         let p = &mut self.peers[k];
         p.last = now;
         match m {
-            Msg::Hello { name, kind, cores, ram_mb, quota_mb, gpu, model, tok } => {
-                p.info = Info { name, kind, cores, ram_mb, quota_mb, gpu, model, tok }
+            Msg::Hello { name, kind, cores, ram_mb, quota_mb, gpu, model, tok, ctx } => {
+                p.info = Info { name, kind, cores, ram_mb, quota_mb, gpu, model, tok, ctx }
             }
             Msg::Ask { ask, text } => self.write(link, ask, &text),
             Msg::Words { ask, text } => self.words(link, ask, &text),
@@ -675,6 +679,7 @@ impl Pool {
             rtt: 0,
             model: i.model.clone(),
             tok: i.tok,
+            ctx: i.ctx,
             ..pool::Device::default()
         }];
         for p in &self.peers {
@@ -699,6 +704,7 @@ impl Pool {
                 down: p.down,
                 model: i.model.clone(),
                 tok: i.tok,
+                ctx: i.ctx,
             });
         }
         // A job helped now, else this tab's own, else the last helped (its record).

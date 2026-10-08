@@ -140,8 +140,9 @@ impl Ctl {
         /// such timer: a slow animation's next frame, with no frame loop between. A hidden page
         /// draws no frame until it shows again.
         frame_in(ms: u32) => Effect::FrameIn(ms);
-        /// POSTs `body` with `headers` to `url` (any: the caller vouches for it); the body
-        /// streams back as [`crate::Event::Chunk`]s, then a [`crate::Event::StreamEnd`].
+        /// POSTs `body` with `headers` to `url` (any: the caller vouches for it), or GETs it
+        /// when `body` is empty; the body streams back as [`crate::Event::Chunk`]s, then a
+        /// [`crate::Event::StreamEnd`].
         stream(id: u32, url: &str, headers: Vec<(&'static str, String)>, body: Vec<u8>) =>
             Effect::Stream { id, url: url.to_owned(), headers, body };
         /// Aborts stream `id`, which then says nothing more.

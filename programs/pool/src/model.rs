@@ -25,6 +25,8 @@ pub const ANSWER: usize = 16 << 10;
 pub const CHECK: &str = "Say hello in five words.";
 /// Where an OpenAI-compatible server answers chats, after its URL.
 pub const CHAT: &str = "/v1/chat/completions";
+/// What a server says of itself, after its URL (llama-server's).
+pub const PROPS: &str = "/props";
 /// The server a tab shares unless told another.
 pub const DEFAULT: &str = "http://localhost:8080";
 /// ms an asker waits hearing nothing from the device answering (it says something each second).
@@ -139,8 +141,8 @@ impl Reading {
     }
 }
 
-/// This tab's model, if it shares one: its server's URL; the model's name and speed once its
-/// server answered (empty until then, and after a failure); what sharing says (empty when it is
+/// This tab's model, if it shares one: its server's URL; the model's name, speed and context
+/// once its server said them (empty until then, and after a failure); what sharing says (empty when it is
 /// well); the answer being written, for whom (a link, 0 here) and which ask (0: the check); the
 /// URL the check under way asks; and whether a check waits for the server to be free.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -148,6 +150,7 @@ pub struct Shared {
     pub url: String,
     pub model: String,
     pub tok: u32,
+    pub ctx: u32,
     pub note: String,
     pub writing: Option<(u32, u32, Reading)>,
     pub checking: String,
@@ -210,6 +213,7 @@ impl Pool {
     /// The model this tab shares, as its Hello says it: told to every link.
     fn said_model(&mut self) {
         (self.me.model, self.me.tok) = (self.shared.model.clone(), self.shared.tok);
+        self.me.ctx = if self.me.model.is_empty() { 0 } else { self.shared.ctx };
         let hello = self.hello();
         self.send_all(&hello);
     }
@@ -303,6 +307,10 @@ impl Pool {
                 false => (String::new(), 0),
             };
             self.said_model();
+            // Its context, which only its server's own account of itself says.
+            if why.is_empty() {
+                self.out.push(Act::Get([&self.shared.url, PROPS].concat()));
+            }
             // A question asked here while it was checked: asked now, or told why not.
             let waiting = self.asking.as_ref().filter(|a| a.link == 0 && !a.answer.done);
             let Some((ask, question)) = waiting.map(|a| (a.ask, a.answer.question.clone())) else {
@@ -322,6 +330,19 @@ impl Pool {
         }
         self.reply(link, ask, Reply::End(r.tok, why));
         self.check();
+    }
+
+    /// What the shared server said of itself (`status`, its body): the model's context, from
+    /// llama-server's `default_generation_settings.n_ctx` (or a top-level `n_ctx`). Another
+    /// server's silence leaves it unknown.
+    pub fn props(&mut self, status: u32, body: &str) {
+        let Some(j) = Json::parse(body).filter(|_| status == 200) else { return };
+        let settings = j.get("default_generation_settings");
+        let n = settings.and_then(|s| s.get("n_ctx")).or_else(|| j.get("n_ctx"));
+        if let Some(n) = n.and_then(Json::text).and_then(|n| n.parse().ok()) {
+            self.shared.ctx = n;
+            self.said_model();
+        }
     }
 
     /// More of the answer to this tab's `ask`, from link `link`.

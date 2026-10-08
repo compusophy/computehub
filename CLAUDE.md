@@ -12,7 +12,7 @@ futuristic, ultra minimal, fast. AI-native: free AI for all, and our own
 model fine-tuned on applang (Opus teaches; `iq` must climb).
 Later: compute pooled across tabs, devices. Author handle: compusophy.
 
-## Constitution (CI-enforced by `scripts/caps.sh` where possible)
+## Constitution (`scripts/caps.sh` holds the gates, gauges the sizes)
 
 1. **Rust only.** No hand-written JS beyond two one-line bootstraps
    (web/index.html, web/worker.js) and `api/*.mjs`, the server functions
@@ -21,23 +21,23 @@ Later: compute pooled across tabs, devices. Author handle: compusophy.
 2. **Zero external dependencies.** Only `compusophy-*` workspace siblings.
    Exception: the web crates `platform`, `os` and `cpu` may take
    wasm-bindgen (pinned), js-sys, web-sys. Build-time tools never ship.
-3. **Caps measure real costs** (speed is rule 6). A module (crate,
-   program, `api/*.mjs` file) ≤2,000 lines, tests (`tests.rs`, `tests/`)
-   ≤1,000: one reader holds it whole. The OS (`crates/`, `tools/`) ≤25,000
-   + 12,500 in all: everything stands on it. A program depends only on
-   `programs/` and `uiwire`, `icons`, `vfs`. Growth is new modules, not
-   bigger ones; this file ≤8,000 chars. At a cap: split, shrink, or
-   delete. Never raise one.
+3. **Sizes are gauges, never gates** (speed is rule 6): measured and
+   reported every build, never a reason to stop work. Aims: a module
+   (crate, program, `api/*.mjs`) ~2,000 lines, tests ~1,000, so one
+   reader holds it whole; the OS (`crates/`, `tools/`) ~25,000 + 12,500;
+   this file ~8,000 chars. Past an aim, a split is worth a thought. A
+   gate, not a size: a program depends only on `programs/` and
+   `uiwire`, `icons`, `vfs`.
 4. **Deterministic crates** (`wm`, `vfs`, `kernel`, `wasi`): no floats, no
    HashMap/HashSet, no clocks, no randomness. State must replay bit-for-bit
    and hash identically.
 5. **wasm32 always green:** the wasm32 `cargo check` below.
-6. **Budgets** (`scripts/budget.sh`, gzip -9): boot ≤224 KB (top-level
-   `dist/` files), deferred fonts ≤30 KB (`dist/fonts/deferred/`), lazy
-   fonts ≤60 KB (the rest of `dist/fonts/`), system ≤40 KB (`dist/cpu/`),
-   programs ≤256 KB each (`dist/bin/`), licenses not counted; first frame
-   ≤100 ms after the wasm arrives; idle draws zero frames (only input or
-   an animation draws; one opt-out exception: the living grain, 8/s).
+6. **Speed** (`scripts/budget.sh`, gzip -9, a gauge): aims boot ~224 KB
+   (top-level `dist/`), deferred fonts ~30 KB, lazy fonts ~60 KB, system
+   ~40 KB (`dist/cpu/`), each program ~256 KB (`dist/bin/`); what can
+   load later should. First frame ≤100 ms after the wasm arrives; idle
+   draws zero frames (only input or an animation draws; one opt-out
+   exception: the living grain, 8/s).
 7. **Every failure is coded and spanned** in the language crates; never a
    wrong-but-clean result. `#![forbid(unsafe_code)]` in every crate.
 8. **Designed for computehub now:** determinism, fuel + receipts, messages
@@ -143,7 +143,7 @@ opens); subsets and OFL texts: `assets/fonts/README.md`.
 - Every color comes from the `ui::Theme` the frame is drawn in; no widget
   or chrome draws from a color constant. Rects, strokes and baselines land
   on device pixels.
-- Measure the boot budget (`build-web.sh`, `budget.sh`) after any change
+- Measure the boot size (`build-web.sh`, `budget.sh`) after any change
   that ships. Avoid in shipped code: core's Unicode tables
   (`char::to_lowercase` and friends; see `host::upper`), float formatting,
   panics that format (`&s[a..b]`: use `s.get`) and `f32::sin` (`icons::sin`).

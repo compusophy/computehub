@@ -51,8 +51,8 @@ pub mod to_desk {
     /// Send the bytes on link `a`.
     pub const SEND: u8 = 3;
     pub const UNLINK: u8 = 4;
-    /// Post the bytes after the first line to the URL on it as post `a`: the same origin's
-    /// `/api/signal`, or a model's local server.
+    /// Post the bytes after the first line to the URL on it as post `a` (none: get it): the
+    /// same origin's `/api/signal`, or a model's local server.
     pub const POST: u8 = 5;
     /// Start `a` workers of the program named.
     pub const SPAWN: u8 = 6;

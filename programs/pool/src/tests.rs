@@ -28,7 +28,7 @@ fn answer(line: &str, wrong: bool) -> String {
 
 /// Carries out `t`'s acts: messages to `other` (each side calls the other link 1), workers
 /// started and ready at once, lines fed kept for [`work`], posts to a model's server left for
-/// [`serve`].
+/// [`serve`] (and what it says of itself, unasked here).
 fn acts(t: &mut Tab, other: &mut Vec<Msg>) {
     let mut posts = Vec::new();
     while !t.pool.out.is_empty() {
@@ -49,6 +49,7 @@ fn acts(t: &mut Tab, other: &mut Vec<Msg>) {
                 Act::Unlink(_) => {}
                 Act::Done { index, node, out, .. } => t.told.push((index, node, out)),
                 a @ Act::Post { .. } => posts.push(a),
+                Act::Get(_) => {}
             }
         }
     }
@@ -93,6 +94,7 @@ fn every_message_comes_back_whole_and_nothing_malformed_does() {
             gpu: false,
             model: "qwen2.5-3b-instruct".into(),
             tok: 95,
+            ctx: 4096,
         },
         Msg::Stats { workers: 8, busy: 3, chunks: 40, units: 1 << 40 },
         Msg::Ping { t: 7 },
@@ -582,6 +584,17 @@ fn the_model_shared_is_kept_with_the_pins_and_shared_again_when_the_pool_starts(
     h.frame(frame(p::PART, check.0, 0, 2, &STREAM[40..]));
     h.frame(frame(p::HTTP, check.0, 200, 3, ""));
     assert_eq!(h.pool.me.model, "qwen2.5-coder-0.5b-instruct-q8_0");
+    // Checked: what the server says of itself is asked for (a post with no body is a get), and
+    // its context comes into the Hello.
+    h.pump();
+    let said = asked(&mut h);
+    let props = said.iter().find(|s| s.0 == d::POST).map(|s| (s.1, s.2.clone())).unwrap();
+    assert_eq!(props.1, "http://localhost:8080/props\n");
+    let body = "{\"default_generation_settings\":{\"params\":{},\"n_ctx\":4096},\"total_slots\":1}";
+    h.frame(frame(p::PART, props.0, 0, 4, &body[..20]));
+    h.frame(frame(p::HTTP, props.0, 200, 4, &body[20..]));
+    assert!(matches!(h.pool.hello(), Msg::Hello { ctx: 4096, .. }));
+    assert_eq!(h.pool.snap(4, "", "").devices[0].ctx, 4096);
     // Another start: the pins as they were, the model shared again.
     let mut h = crate::Hub::default();
     h.frame(frame(p::INFO, 0, 0, 0, "2 0 0 0\nagent\nsha-256 OLD\nserve http://localhost:8080"));

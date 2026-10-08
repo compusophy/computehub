@@ -17,6 +17,7 @@ if ! grep -Eq '"projectName": *"computehub"' .vercel/project.json 2>/dev/null; t
 fi
 
 bash scripts/build-web.sh
+# The sizes, as a gauge: printed for the record, never a reason to refuse.
 bash scripts/budget.sh
 
 # Clears Vercel's prebuilt output folder so a removed file never ships. It

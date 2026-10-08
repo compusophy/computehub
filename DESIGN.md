@@ -32,8 +32,8 @@ the short operating map; this file is the why and the shape.
 
 ## Principles
 
-The constitution. `scripts/caps.sh` and `scripts/budget.sh` enforce what
-they can, in CI.
+The constitution. `scripts/caps.sh` holds its gates in CI and gauges the
+sources' sizes; `scripts/budget.sh` gauges the download's.
 
 1. **Rust only.** JavaScript is wasm-bindgen's generated glue, the one-line
    bootstraps (`web/index.html`, `web/worker.js`) and the server functions
@@ -42,26 +42,27 @@ they can, in CI.
 2. **Zero external dependencies.** Only workspace siblings, except the web
    crates `platform` and `os`, which take wasm-bindgen (pinned), js-sys
    and web-sys. Build-time tools never ship.
-3. **Scale without bloat.** Every cap measures a real cost, never size for
-   its own sake:
+3. **Scale without bloat.** Sizes are gauges, never gates: measured and
+   reported on every build, a figure past its aim marked, and none ever
+   blocks a feature, a commit or a deploy (compusophy, 2026-10-08: the caps
+   had come to cost more than they saved). Each gauges a real cost:
    - *speed* is bytes: what boots, and each program, which loads only when
-     opened (the budgets below), so a thousand programs cost nothing until
+     opened (the sizes below), so a thousand programs cost nothing until
      one is used;
    - *understanding* is module size: a crate, a program or a server
-     function holds at most 2,000 lines (tests 1,000 more), small enough to
-     read whole; the OS (`crates/`, `tools/`), which everything stands on,
-     at most 25,000 (tests 12,500) in all;
-   - *coupling* is the boundary: a program depends only on `programs/` and
-     the OS's pure shared libraries (`uiwire`, `icons`, `vfs`), and reaches
-     the rest of the OS only through WASI preview 1 (files, the console) and
-     uiwire (its windows).
+     function aims at 2,000 lines (tests 1,000 more), small enough to read
+     whole; the OS (`crates/`, `tools/`), which everything stands on, at
+     25,000 (tests 12,500) in all.
 
-   So growth is new modules, never bigger ones: `programs/` has no total,
-   and programs can live in repos of their own, a library anyone adds to.
-   At a cap: split, shrink or delete. Never raise it.
-4. **Budgets** (gzip -9; a real host's brotli is smaller):
+   *Coupling* is a gate, not a size: a program depends only on `programs/`
+   and the OS's pure shared libraries (`uiwire`, `icons`, `vfs`), and
+   reaches the rest of the OS only through WASI preview 1 (files, the
+   console) and uiwire (its windows). So programs can live in repos of their
+   own, a library anyone adds to, and `programs/` has no total. Past an aim,
+   a split or a lazy load is worth a thought; the work goes on either way.
+4. **Sizes** (gzip -9; a real host's brotli is smaller), aims to steer by:
 
-   | budget | cap |
+   | what | aim |
    |---|---|
    | boot: every top-level file in `dist/` (page, glue, wasm with the boot font) | 224 KB |
    | deferred: `dist/fonts/deferred/`, fetched right after the first frame | 30 KB |
@@ -745,7 +746,8 @@ the laptop in 135 s (native, 131 s).
 A model shared (`pool/src/model.rs`): a tab may share the OpenAI-compatible server on its own
 device (llama-server; `http://localhost:8080` unless the person names another), and a linked tab
 may ask it. Sharing starts with a short question of its own (16 tokens): the answer names the
-model and times it, and the tab's Hello says both, the Pool page each device's model and speed.
+model and times it, then the server's own account of itself (`GET /props`: a post with no body is
+a get) gives its context, and the tab's Hello says all three, the Pool page each device's model and speed.
 Activity's "Ask the pool's model" goes to the fastest a linked device shares (this tab's own if
 none other); that tab posts the question to its server as a streamed chat, and what the model
 writes goes back on the link as it comes, then its end (its speed, or why it failed), into the
@@ -768,8 +770,7 @@ written at 9.1 a second). A second question met the laptop's Stop sharing and ta
 words stopped while its server went on writing, and the asker waited out the link's 15 s of
 silence. Hence the rules above.
 
-Not yet: the model's context size (llama-server says it only to `GET /props`, and the page's
-fetch is same-origin only; `platform` is at its cap), a queue for a busy model, a conversation
+Not yet: a queue for a busy model, a conversation
 (each question stands alone), and the public origin: there a page reaching `localhost` meets
 Chrome's local-network permission prompt, so sharing stays a person's act, never automatic.
 
@@ -971,9 +972,9 @@ train's manifests (Python's hashlib), the kernel's `#!wasm <target> [<sha256>]` 
 browser's WebCrypto already speak, written in-house (zero dependencies) over one canonical
 encoding, in `vfs`, one of the three OS crates a program may take (Principle 3), so the OS
 (vfs's canonical hash, the kernel's marker, a build's id) and programs share one; its lines
-count toward the OS's 25,000 (23,680 now) and, once the tab hashes, its bytes toward the boot. A
-crate of its own would change Principle 3's list (CLAUDE.md's rule 3, `scripts/caps.sh`):
-compusophy's call.
+count toward the OS's aim of 25,000 (23,680 then) and, once the tab hashes, its bytes toward the
+boot's. A crate of its own would change Principle 3's list of what a program may take (CLAUDE.md's
+rule 3, `scripts/caps.sh`): compusophy's call.
 Principle 9's content addressing across a network needs it. FNV-1a stays for checksums and for
 `iq::held`'s split (another hash would move families across it, and train's held.txt with them);
 the FNV ids already recorded (the verifier's, the evals' suite, prompt and harness hashes,
@@ -1227,9 +1228,8 @@ validated on the reproducible tickets, and the count says how few they are.
 ### The History app
 
 A program (its wasm within the 256 KB) that reads the ledger as files, a page per generation, never
-the whole: served from a `dist/` group of its own, a new line in rule 6's budgets (CLAUDE.md,
-`scripts/budget.sh`, which fails a file in none), capped per page as /bin is per program
-(compusophy's call), and put in its VFS as /bin's wasm is fetched, since a program reaches the page
+the whole: served from a `dist/` group of its own, a new line in rule 6's sizes (CLAUDE.md,
+`scripts/budget.sh`, which names a file in none), gauged per page as /bin is per program, and put in its VFS as /bin's wasm is fetched, since a program reaches the page
 only through WASI and uiwire, which fetch nothing. It shows the tree of builds, models, cards and
 suites; curves (IQ per generation with its intervals, each niche's success); a node's page with its
 diff, recipe, its prediction against what happened, its cost, a replay of a persona trying it, and
@@ -1381,7 +1381,7 @@ keeping one is fitness.
   Alt+Q, Alt+arrows and Alt+Backquote before a terminal sees them
   (readline's Alt+F still arrives). A way through for apps that want them
   waits on the Super key question.
-- **The boot budget** (224 KB since 2026-10-02) pays for what must draw the
+- **The boot size** (aim 224 KB; a cap until 2026-10-08) pays for what must draw the
   first frame. With the canvas, the welcome, profiles and the PIN it held
   229,101 of 229,376 bytes; Settings and the Terminal's shell then became
   programs (2026-10-03), the kernel gaining consoles, jobs and pipes:

@@ -13,7 +13,7 @@ pub const MAX: usize = 64 << 10;
 pub enum Msg {
     /// What the tab has to lend (sent once linked): its name and kind, cores, RAM and storage in
     /// MB (0 when unknown), whether it has a GPU to compute on, and the model it shares (empty:
-    /// none) and its speed, tenths of a token a second.
+    /// none), its speed (tenths of a token a second) and its context (tokens; 0 unknown).
     Hello {
         name: String,
         kind: String,
@@ -23,6 +23,7 @@ pub enum Msg {
         gpu: bool,
         model: String,
         tok: u32,
+        ctx: u32,
     },
     /// Its workers and how many are busy, the chunks it answered and their fuel (cumulative):
     /// each second while linked.
@@ -100,9 +101,9 @@ impl Msg {
     pub fn encode(&self) -> Vec<u8> {
         let mut o = Out(Vec::new());
         match self {
-            Msg::Hello { name, kind, cores, ram_mb, quota_mb, gpu, model, tok } => {
+            Msg::Hello { name, kind, cores, ram_mb, quota_mb, gpu, model, tok, ctx } => {
                 o.u8(1).str(name).str(kind).u16(*cores).u32(*ram_mb).u32(*quota_mb);
-                o.u8((*gpu).into()).str(model).u32(*tok)
+                o.u8((*gpu).into()).str(model).u32(*tok).u32(*ctx)
             }
             Msg::Stats { workers, busy, chunks, units } => {
                 o.u8(2).u16(*workers).u16(*busy).u32(*chunks).u64(*units)
@@ -139,6 +140,7 @@ impl Msg {
                 gpu: r.bool()?,
                 model: r.str()?,
                 tok: r.u32()?,
+                ctx: r.u32()?,
             },
             2 => {
                 Msg::Stats { workers: r.u16()?, busy: r.u16()?, chunks: r.u32()?, units: r.u64()? }

@@ -6,7 +6,7 @@
 //!         | str serve | str serving | u8 has answer, answer
 //! device: str name | str kind | u16 cores | u32 ram_mb | u32 quota_mb | u8 gpu | u32 up_ms
 //!         | u8 known | u16 workers | u16 busy | u32 chunks | u64 units | u32 rtt | u64 tx
-//!         | u64 rx | u32 up | u32 down | str model | u32 tok
+//!         | u64 rx | u32 up | u32 down | str model | u32 tok | u32 ctx
 //! job:    str name | u8 mine | u32 total | u32 done | u32 queued | u32 steals | u32 requeued
 //!         | u32 checked | u32 mismatched | u32 ms | u32 used | u32 busy | u16 m, m u32
 //!         (chunks by device)
@@ -21,7 +21,7 @@
 use crate::{Out, Reader};
 
 /// The format's version, a snapshot's first byte.
-pub const VERSION: u8 = 4;
+pub const VERSION: u8 = 5;
 /// An unknown round trip.
 pub const UNKNOWN: u32 = u32::MAX;
 /// Each device's canvas color, by its place in a snapshot (cycling): cyan here, then yellow,
@@ -47,8 +47,9 @@ pub struct Snap {
 /// grants in MB, a GPU it can compute on), how long it has been linked (ms), whether its key was
 /// pinned before; its workers and how many are busy, the chunks it answered and their fuel; the
 /// link's round trip (ms), bytes sent to it and heard from it, and the throughput last measured
-/// each way (bytes a second); the model it shares (empty: none) and its speed, in tenths of a
-/// token a second (0: not measured). This tab's link figures are 0.
+/// each way (bytes a second); the model it shares (empty: none), its speed in tenths of a token
+/// a second (0: not measured) and its context in tokens (0: unknown). This tab's link figures
+/// are 0.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Device {
     pub name: String,
@@ -70,6 +71,7 @@ pub struct Device {
     pub down: u32,
     pub model: String,
     pub tok: u32,
+    pub ctx: u32,
 }
 
 /// The job on the pool: the program, whether this tab started it, its chunks in all, answered and
@@ -116,7 +118,7 @@ impl Snap {
             o.str(&d.name).str(&d.kind).u16(d.cores).u32(d.ram_mb).u32(d.quota_mb);
             o.u8(d.gpu.into()).u32(d.up_ms).u8(d.known.into()).u16(d.workers).u16(d.busy);
             o.u32(d.chunks).u64(d.units).u32(d.rtt).u64(d.tx).u64(d.rx).u32(d.up).u32(d.down);
-            o.str(&d.model).u32(d.tok);
+            o.str(&d.model).u32(d.tok).u32(d.ctx);
         }
         o.u8(self.job.is_some().into());
         if let Some(j) = &self.job {
@@ -159,6 +161,7 @@ impl Snap {
                 down: r.u32()?,
                 model: r.str()?,
                 tok: r.u32()?,
+                ctx: r.u32()?,
             });
         }
         let job = match r.bool()? {

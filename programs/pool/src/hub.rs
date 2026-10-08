@@ -41,6 +41,8 @@ enum Op {
     Fetch(u32, String, usize),
     /// A chat to the model this tab shares: its body goes to the pool as it comes.
     Model,
+    /// What the model's server says of itself: gathered, then to the pool.
+    Props,
 }
 
 /// Pairing under way: the link, the code (as typed or given), whether this tab shows it, the
@@ -310,6 +312,9 @@ impl Hub {
 
     fn answered(&mut self, op: Op, status: u32, body: &str) {
         let now = self.now;
+        if op == Op::Props {
+            return self.pool.props(status, body);
+        }
         if let Op::Fetch(pid, name, per) = op {
             if status != 200 {
                 return self.note = ["The job's file could not be fetched: ", body].concat();
@@ -413,6 +418,7 @@ impl Hub {
                         self.send(to_desk::TELL, window, &ev);
                     }
                     Act::Post { url, body } => self.post_to(&url, Op::Model, &body),
+                    Act::Get(url) => self.post_to(&url, Op::Props, ""),
                 }
             }
             self.pool.assign(self.now);
