@@ -255,3 +255,18 @@ fn numbers_read_as_people_say_them() {
     );
     assert_eq!([growth(5, 9), growth(9, 5), growth(u32::MAX, 1)], [4, 0, 2]);
 }
+
+#[test]
+fn a_pool_snapshot_close_on_the_last_still_brings_each_devices_model_and_speed() {
+    use uiwire::pool::{Device, Snap};
+    let (mut page, mut asked) = (PoolPage::default(), Vec::new());
+    let snap = |at, tok, units| {
+        let d = Device { name: "A".into(), model: "m".into(), tok, units, ..Device::default() };
+        Event::Pool { data: Snap { at, devices: vec![d], ..Snap::default() }.encode() }
+    };
+    for (at, tok, units) in [(1000, 455, 0), (2000, 455, 1000), (2250, 439, 5000)] {
+        page.event(&snap(at, tok, units), &mut asked);
+    }
+    let d = &page.cur.as_ref().unwrap().devices[0];
+    assert_eq!((d.tok, d.units), (439, 1000), "its speed as it is now, its counter for the rates");
+}

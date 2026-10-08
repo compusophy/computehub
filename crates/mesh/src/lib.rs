@@ -1,8 +1,8 @@
 //! compusophyOS's mesh, the desktop's side: tabs linked tab to tab share one job on every core
 //! of every device. What only the page can do lives here, kept small (it ships with the boot):
-//! the links (WebRTC, [`platform::Ctl::link`]), posts to [`URL`] for pairing, the workers (kernel
-//! processes on consoles of their own, owned by no window ([`OWNER`]) and given no files) and the
-//! pinned keys in storage. Everything else, the queue, work stealing, receipts, pairing and what
+//! the links (WebRTC, [`platform::Ctl::link`]), the posts it asks for (pairing's, a shared
+//! model's to its local server), the workers (kernel processes on consoles of their own, owned by
+//! no window ([`OWNER`]) and given no files) and the pinned keys in storage. Everything else, the queue, work stealing, receipts, pairing and what
 //! tabs say to each other, is the pool program (`/bin/pool`), started the first time something
 //! needs it and told everything as [`uiwire::relay`] frames on its console, which it answers the
 //! same way.
@@ -15,15 +15,13 @@ use uiwire::Request;
 use uiwire::relay::{Frame, to_desk, to_pool};
 use vfs::Vfs;
 
-/// The same-origin endpoint pairing posts to.
-pub const URL: &str = "/api/signal";
 /// The kernel owner of the pool and its workers: no window.
 pub const OWNER: u32 = u32::MAX - 7;
 /// Stream ids from here up are the pool's posts.
 pub const FIRST: u32 = 0x6d65_0000;
 
 /// The relay: the pool's pid and whether it reads frames yet, frames waiting for it, its output
-/// short of a frame, posts in flight (stream id, body so far), the workers, the process watching,
+/// short of a frame, posts and fetches in flight (their stream ids), the workers, the process watching,
 /// when the pool wants waking, and where this profile keeps the mesh.
 #[derive(Default)]
 pub struct Relay {
@@ -31,7 +29,7 @@ pub struct Relay {
     ready: bool,
     queue: Vec<u8>,
     buf: Vec<u8>,
-    posts: Vec<(u32, Vec<u8>)>,
+    posts: Vec<u32>,
     workers: Vec<u32>,
     watcher: u32,
     wake: Option<f64>,
@@ -50,16 +48,18 @@ impl Relay {
 
     /// Whether stream `id` is a pool's post.
     pub fn streams(&self, id: u32) -> bool {
-        self.posts.iter().any(|p| p.0 == id)
+        self.posts.contains(&id)
     }
 
     /// Process `pid` asked for `r`: Pair (from Activity's window alone) as its code, Measure,
-    /// Job as its program's name, then its chunks, a line each.
+    /// Job as its program's name, then its chunks, a line each; Ask its question, Serve its URL.
     pub fn ask(&mut self, pid: u32, r: &Request, now: f64) {
         let (kind, mut data) = match r {
             Request::Pair { code } => (1, code.clone()),
             Request::Measure => (2, String::new()),
             Request::Job { name, .. } => (3, name.clone()),
+            Request::Ask { text } => (4, text.clone()),
+            Request::Serve { url } => (5, url.clone()),
             _ => return,
         };
         if let Request::Job { chunks, .. } = r {
@@ -79,16 +79,13 @@ impl Relay {
             Heard::LinkData { id, data } => (to_pool::DATA, id, 0, data),
             Heard::Unlinked { id } => (to_pool::UNLINKED, id, 0, vec![]),
             Heard::Estimated { quota_mb } => (to_pool::QUOTA, quota_mb, 0, vec![]),
-            Heard::Chunk { id, data } => {
-                self.posts.iter_mut().filter(|p| p.0 == id).for_each(|p| p.1.extend(&data));
-                return;
-            }
+            Heard::Chunk { id, data } => (to_pool::PART, id - FIRST, 0, data),
             Heard::StreamEnd { id, status, .. } => {
-                let Some(i) = self.posts.iter().position(|p| p.0 == id) else { return };
-                (to_pool::HTTP, id - FIRST, status.into(), self.posts.remove(i).1)
+                self.posts.retain(|p| *p != id);
+                (to_pool::HTTP, id - FIRST, status.into(), vec![])
             }
             Heard::Fetched { id, result } => {
-                self.posts.retain(|p| p.0 != id);
+                self.posts.retain(|p| *p != id);
                 let (status, body) = result.map_or_else(|e| (0, e.into_bytes()), |b| (200, b));
                 (to_pool::HTTP, id - FIRST, status, body)
             }
@@ -192,13 +189,16 @@ impl Relay {
             to_desk::UNLINK => ctl.unlink(f.a),
             to_desk::POST | to_desk::FETCH => {
                 let id = FIRST + (f.a & 0xffff);
-                match f.op {
-                    to_desk::POST => {
-                        ctl.stream(id, URL, vec![("content-type", "text/plain".into())], f.data)
+                match (f.op, text.split_once('\n')) {
+                    // text/plain: a simple request, which a local server needs no preflight for.
+                    (to_desk::POST, Some((url, body))) => {
+                        let plain = vec![("content-type", "text/plain".into())];
+                        ctl.stream(id, url, plain, body.as_bytes().to_vec())
                     }
+                    (to_desk::POST, None) => return,
                     _ => ctl.fetch(id, &text),
                 }
-                self.posts.push((id, Vec::new()));
+                self.posts.push(id);
             }
             to_desk::SPAWN => {
                 for _ in 0..f.a.min(64) {

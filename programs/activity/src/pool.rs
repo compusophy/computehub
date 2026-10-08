@@ -2,7 +2,7 @@
 //! or enter the other device's); the pool's size and how busy it is over the minute, how fast it
 //! answers chunks and steps; each device (sortable), its share of the work in its color; each
 //! link's round trip and traffic over the minute, both ways, and its throughput when measured;
-//! the job, if one runs. The pool program sends a snapshot ([`Snap`]) at most once a second
+//! the job, if one runs; the model a device shares, asked from here, and this device's to share. The pool program sends a snapshot ([`Snap`]) at most once a second
 //! while something changes, so at rest nothing comes and nothing here draws.
 
 use uiwire::pool::{self, Snap};
@@ -10,8 +10,9 @@ use uiwire::{Event, Node, Request, Style, Variant};
 
 use super::{DASH, DOT, History, bytes, card, count, nice, text};
 
-/// Node ids: Show a code, the code field, Link, Measure, Fractal; the devices' head (column `k`
-/// is `SORT + k`).
+/// Node ids: Show a code, the code field, Link, Measure, Fractal, Verify; the server field and
+/// Share, Ask; the devices' head (column `k` is `SORT + k`); the question field, `QUESTION` and
+/// one more for each question asked (a new field is an empty one, as a chat's is).
 pub const SHOW: u32 = 40;
 pub const CODE: u32 = 41;
 pub const JOIN: u32 = 42;
@@ -21,7 +22,13 @@ pub const VERIFY: u32 = 45;
 /// The IQ suite's job: the program, and the file its chunks are made of, three tasks each.
 pub const IQ_JOB: &str = "iq";
 pub const IQ_SUITE: &str = "@suites/iq.jsonl 3";
+pub const SERVER: u32 = 46;
+pub const SHARE: u32 = 47;
+pub const ASK: u32 = 49;
+/// The server a device shares unless the person names another.
+pub const LOCAL: &str = "http://localhost:8080";
 pub const SORT: u32 = 50;
+pub const QUESTION: u32 = 1 << 30;
 /// Each device's color as RGB, by [`pool::TINTS`]'s canvas colors (cyan, yellow, magenta, green,
 /// red, blue).
 const RGB: [u32; 6] = [0x22d3ee, 0xfacc15, 0xe879f9, 0x4ade80, 0xf87171, 0x60a5fa];
@@ -32,8 +39,8 @@ pairing passes through the server, briefly.";
 
 /// The Pool page's state: the last two snapshots, the minute of utilization (per mille of the
 /// workers busy) and chunks a second, the steps a second last taken, each link's bytes a second
-/// heard and sent (by device name), the code typed, the devices' sort column (0 the name), and the IQ suite's
-/// run, if one was asked for.
+/// heard and sent (by device name), the code typed, the devices' sort column (0 the name), the IQ
+/// suite's run if one was asked for, the server and the question typed, and the questions asked.
 #[derive(Debug, Default)]
 pub struct PoolPage {
     pub prev: Option<Snap>,
@@ -44,6 +51,9 @@ pub struct PoolPage {
     pub code: String,
     pub sort: u8,
     pub iq: Option<Iq>,
+    pub server: String,
+    pub question: String,
+    pub asked: u32,
 }
 
 /// The IQ suite verified on the pool: each chunk's answer (its verifier, then its tasks' lines)
@@ -106,6 +116,24 @@ impl PoolPage {
                     q.answers.insert(*index, answer.into());
                 }
             }
+            Event::Change { id: SERVER, text, .. } => self.server.clone_from(text),
+            Event::Click { id: SHARE } | Event::Submit { id: SERVER } => {
+                let sharing = self.cur.as_ref().is_some_and(|s| !s.serve.is_empty());
+                let url = match (sharing, self.server.trim()) {
+                    (true, _) => String::new(),
+                    (false, "") => LOCAL.into(),
+                    (false, typed) => typed.into(),
+                };
+                requests.push(Request::Serve { url });
+            }
+            Event::Change { id, text, .. } if *id == self.field() => self.question.clone_from(text),
+            Event::Click { id } | Event::Submit { id }
+                if (*id == ASK || *id == self.field()) && !self.question.trim().is_empty() =>
+            {
+                // Asked: a new field, empty for the next question.
+                requests.push(Request::Ask { text: self.question.trim().into() });
+                (self.question, self.asked) = (String::new(), self.asked.wrapping_add(1));
+            }
             Event::Click { id } if (SORT..SORT + 5).contains(id) => self.sort = (id - SORT) as u8,
             _ => return false,
         }
@@ -116,9 +144,18 @@ impl PoolPage {
     fn take(&mut self, s: Snap) {
         // Rates span half a second at least: two snapshots close together (one sent at once, to a
         // new watcher) would make any bytes between them a torrent.
+        // The rest is taken as it is now: the devices too (a model's speed, what is busy), their
+        // counters kept as they were for the rates. Else the last of a burst would be lost.
         if self.cur.as_ref().is_some_and(|p| s.at.wrapping_sub(p.at) < 500) {
             if let Some(c) = &mut self.cur {
-                (c.pairing, c.code, c.job) = (s.pairing, s.code, s.job);
+                let mut devices = s.devices;
+                for (i, d) in devices.iter_mut().enumerate() {
+                    if let Some(o) = c.devices.get(i).filter(|o| o.name == d.name) {
+                        (d.chunks, d.units, d.tx, d.rx) = (o.chunks, o.units, o.tx, o.rx);
+                    }
+                }
+                (c.pairing, c.code, c.job, c.answer) = (s.pairing, s.code, s.job, s.answer);
+                (c.serve, c.serving, c.devices) = (s.serve, s.serving, devices);
             }
             return;
         }
@@ -194,6 +231,8 @@ impl PoolPage {
             nodes.extend([util, speed]);
         }
         nodes.extend(self.devices(&s, wide));
+        nodes.push(self.asking(&s));
+        nodes.push(self.sharing(&s));
         nodes.extend(self.linked(&s));
         nodes.extend(job(&s));
         let fractal = "Render a fractal on the pool".into();
@@ -227,6 +266,67 @@ impl PoolPage {
         }
         let label = "Verify the IQ suite".into();
         children.push(Node::Button { id: VERIFY, variant: Variant::Normal, label });
+        Node::Card { id: 0, children: vec![Node::Col { id: 0, gap: 6, children }] }
+    }
+
+    /// The question field's id now.
+    fn field(&self) -> u32 {
+        QUESTION + (self.asked & 0xffff)
+    }
+
+    /// The pool's model asked: the question field and Ask, then the answer as it is written,
+    /// whose model wrote it and how fast, or why it failed.
+    fn asking(&self, s: &Snap) -> Node {
+        let mut children = vec![text(Style::Small, "Ask the pool's model")];
+        if s.devices.iter().all(|d| d.model.is_empty()) {
+            children.push(text(Style::Small, "No device shares a model yet."));
+        }
+        let field = Node::Input {
+            id: self.field(),
+            value: self.question.clone(),
+            placeholder: "A question".into(),
+        };
+        let ask = Node::Button { id: ASK, variant: Variant::Primary, label: "Ask".into() };
+        children.push(Node::Row { id: 0, gap: 8, children: vec![field, ask] });
+        if let Some(a) = &s.answer {
+            children.push(text(Style::Small, &a.question));
+            if !a.text.is_empty() {
+                children.push(text(Style::Body, &a.text));
+            }
+            let by = if a.by.is_empty() { String::new() } else { ["by ", &a.by].concat() };
+            let line = match (a.done, a.tok) {
+                (false, _) => [&by, DOT, "writing"].concat(),
+                (true, 0) => by,
+                (true, t) => [&by, DOT, &speed(t)].concat(),
+            };
+            children.push(text(Style::Small, line.trim_start_matches(DOT)));
+            if !a.why.is_empty() {
+                children.push(text(Style::Error, &a.why));
+            }
+        }
+        Node::Card { id: 0, children: vec![Node::Col { id: 0, gap: 6, children }] }
+    }
+
+    /// This device's model to share: what sharing says, the server field and Share (or Stop).
+    fn sharing(&self, s: &Snap) -> Node {
+        let mut children = vec![text(Style::Small, "Share this device's model")];
+        let me = s.devices.first();
+        let say = match me.map(|d| (d.model.as_str(), d.tok)) {
+            _ if !s.serving.is_empty() => s.serving.clone(),
+            Some((model, tok)) if !model.is_empty() => {
+                ["Sharing ", model, DOT, &speed(tok)].concat()
+            }
+            _ => "Run an OpenAI-compatible server on this device (as llama-server), then share \
+                  it: linked devices may ask it, and only they."
+                .into(),
+        };
+        children.push(text(Style::Small, &say));
+        let sharing = !s.serve.is_empty();
+        let value = if self.server.is_empty() { s.serve.clone() } else { self.server.clone() };
+        let field = Node::Input { id: SERVER, value, placeholder: LOCAL.into() };
+        let label = if sharing { "Stop sharing" } else { "Share" }.into();
+        let share = Node::Button { id: SHARE, variant: Variant::Normal, label };
+        children.push(Node::Row { id: 0, gap: 8, children: vec![field, share] });
         Node::Card { id: 0, children: vec![Node::Col { id: 0, gap: 6, children }] }
     }
 
@@ -285,7 +385,11 @@ impl PoolPage {
                 0 => "this tab".to_string(),
                 _ => [pinned, DOT, "linked ", &minutes(d.up_ms)].concat(),
             };
-            let about = [&first, DOT, gpu, DOT, &d.kind].concat();
+            let model = match d.model.as_str() {
+                "" => String::new(),
+                m => [DOT, m, " ", &speed(d.tok)].concat(),
+            };
+            let about = [&first, &model, DOT, gpu, DOT, &d.kind].concat();
             let name = if d.name.is_empty() { "A device" } else { &d.name };
             let text = [name, "\n", &about].concat();
             let hue = RGB[i % RGB.len()];
@@ -442,6 +546,14 @@ fn storage(mb: u64) -> String {
         0..1000 => [&mb.to_string(), " MB"].concat(),
         1000..1_000_000 => tenths(mb / 100, " GB"),
         _ => tenths(mb / 100_000, " TB"),
+    }
+}
+
+/// A model's speed from tenths of a token a second: `9.5 tok/s`; unmeasured, a dash.
+fn speed(tenths: u32) -> String {
+    match tenths {
+        0 => [DASH, " tok/s"].concat(),
+        t => [&(t / 10).to_string(), ".", &(t % 10).to_string(), " tok/s"].concat(),
     }
 }
 

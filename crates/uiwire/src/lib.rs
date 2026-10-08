@@ -505,6 +505,12 @@ pub enum Request {
     /// Run `chunks` on every core of the linked tabs, each a line for `/bin/<name> work` there
     /// to read and answer; each answer comes back as an [`Event::Done`]. A new job ends the last.
     Job { name: String, chunks: Vec<String> },
+    /// Activity's window only: ask the pool's model `text` (the fastest a device shares); the
+    /// answer comes as it is written, in the [`pool`] snapshots.
+    Ask { text: String },
+    /// Activity's window only: share this device's model with the linked tabs, the local
+    /// OpenAI-compatible server at `url` (`http://localhost:8080`, as llama-server); empty stops.
+    Serve { url: String },
     /// The overlay only: it steps aside for window `win`, which the person uses next (a game it
     /// started, an app it opened). That window takes the keys (raised while the overlay shows);
     /// `hide`, the overlay hides too, its task done, its answer waiting; else its pill stays,
@@ -914,6 +920,8 @@ impl Request {
             Self::Job { name, chunks } => {
                 chunks.iter().fold(o.u8(21).str(name).len(chunks.len()), |o, c| o.str(c))
             }
+            Self::Ask { text } => o.u8(22).str(text),
+            Self::Serve { url } => o.u8(23).str(url),
         }
     }
 
@@ -949,14 +957,16 @@ impl Request {
                 let chunks = (0..n).map(|_| r.str()).collect::<Option<_>>()?;
                 Self::Job { name, chunks }
             }
+            22 => Self::Ask { text: r.str()? },
+            23 => Self::Serve { url: r.str()? },
             _ => return None,
         })
     }
 }
 
 impl Request {
-    /// Whether only the OS's own windows may ask it: Watch, End, Pref, Reset, Tty, Input, Pair
-    /// and Measure.
+    /// Whether only the OS's own windows may ask it: Watch, End, Pref, Reset, Tty, Input, Pair,
+    /// Measure, Ask and Serve.
     pub fn own(&self) -> bool {
         use Request::*;
         matches!(
@@ -969,6 +979,8 @@ impl Request {
                 | Input { .. }
                 | Pair { .. }
                 | Measure
+                | Ask { .. }
+                | Serve { .. }
         )
     }
 

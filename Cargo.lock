@@ -284,6 +284,7 @@ dependencies = [
 name = "compusophy-pool"
 version = "0.1.0"
 dependencies = [
+ "compusophy-coder",
  "compusophy-uiwire",
 ]
 

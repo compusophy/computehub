@@ -19,6 +19,7 @@ use std::collections::VecDeque;
 
 use uiwire::pool::{self, Snap};
 
+use crate::model::{Asking, Shared};
 use crate::msg::Msg;
 
 /// Every this many chunks, one another tab answered is replayed here.
@@ -53,6 +54,8 @@ pub enum Act {
     Unlink(u32),
     /// Tell the job's window that chunk `index` was answered, by device `node`.
     Done { window: u32, index: u32, node: u8, out: String },
+    /// Post a chat to the model this tab shares ([`crate::model`]): its server's URL and body.
+    Post { url: String, body: String },
 }
 
 /// What a tab has to lend ([`Msg::Hello`]).
@@ -64,6 +67,8 @@ pub struct Info {
     pub ram_mb: u32,
     pub quota_mb: u32,
     pub gpu: bool,
+    pub model: String,
+    pub tok: u32,
 }
 
 /// A linked tab: what it has and says (workers, busy, chunks, units), when it linked and was last
@@ -178,6 +183,10 @@ pub struct Pool {
     idle: u64,
     next_tick: u64,
     next_ping: u64,
+    /// The model this tab shares, the answer it asked the pool's for, and its last ask's name.
+    pub shared: Shared,
+    pub asking: Option<Asking>,
+    pub last_ask: u32,
     pub out: Vec<Act>,
 }
 
@@ -203,15 +212,15 @@ impl Pool {
         Pool { me, ..Pool::default() }
     }
 
-    fn send_all(&mut self, m: &Msg) {
+    pub(crate) fn send_all(&mut self, m: &Msg) {
         for p in &self.peers {
             self.out.push(Act::Send(p.link, m.clone()));
         }
     }
 
-    fn hello(&self) -> Msg {
+    pub(crate) fn hello(&self) -> Msg {
         let i = &self.me;
-        let (name, kind) = (i.name.clone(), i.kind.clone());
+        let (name, kind, model) = (i.name.clone(), i.kind.clone(), i.model.clone());
         Msg::Hello {
             name,
             kind,
@@ -219,6 +228,8 @@ impl Pool {
             ram_mb: i.ram_mb,
             quota_mb: i.quota_mb,
             gpu: i.gpu,
+            model,
+            tok: i.tok,
         }
     }
 
@@ -242,6 +253,7 @@ impl Pool {
     /// Link `link` is gone at `now`: its chunks go back to the queue, and a job it started ends.
     pub fn unlinked(&mut self, link: u32, now: u64) {
         self.peers.retain(|p| p.link != link);
+        self.lost(link);
         if let Some(j) = &mut self.job {
             for i in (0..j.state.len()).rev() {
                 if matches!(j.state[i], State::Out(l, _) if l == link) {
@@ -511,9 +523,12 @@ impl Pool {
         let p = &mut self.peers[k];
         p.last = now;
         match m {
-            Msg::Hello { name, kind, cores, ram_mb, quota_mb, gpu } => {
-                p.info = Info { name, kind, cores, ram_mb, quota_mb, gpu }
+            Msg::Hello { name, kind, cores, ram_mb, quota_mb, gpu, model, tok } => {
+                p.info = Info { name, kind, cores, ram_mb, quota_mb, gpu, model, tok }
             }
+            Msg::Ask { ask, text } => self.write(link, ask, &text),
+            Msg::Words { ask, text } => self.words(link, ask, &text),
+            Msg::Answered { ask, tok, why } => self.finished(link, ask, tok, why),
             Msg::Stats { workers, busy, chunks, units } => p.stats = (workers, busy, chunks, units),
             Msg::Ping { t } => self.out.push(Act::Send(link, Msg::Pong { t })),
             Msg::Pong { t } => p.rtt = (now as u32).wrapping_sub(t),
@@ -611,6 +626,7 @@ impl Pool {
             return;
         }
         self.next_tick = now + TICK;
+        self.quiet(now);
         let silent: Vec<u32> =
             self.peers.iter().filter(|p| now >= p.last + SILENT).map(|p| p.link).collect();
         for link in silent {
@@ -657,6 +673,8 @@ impl Pool {
             chunks: self.chunks,
             units: self.units,
             rtt: 0,
+            model: i.model.clone(),
+            tok: i.tok,
             ..pool::Device::default()
         }];
         for p in &self.peers {
@@ -679,6 +697,8 @@ impl Pool {
                 rx: p.rx,
                 up: p.up,
                 down: p.down,
+                model: i.model.clone(),
+                tok: i.tok,
             });
         }
         // A job helped now, else this tab's own, else the last helped (its record).
@@ -720,7 +740,10 @@ impl Pool {
             }),
             (None, None) => None,
         };
-        Snap { at: now as u32, pairing: pairing.into(), code: code.into(), devices, job }
+        let (pairing, code) = (pairing.into(), code.into());
+        let (serve, serving) = (self.shared.url.clone(), self.shared.note.clone());
+        let answer = self.asking.as_ref().map(|a| a.answer.clone());
+        Snap { at: now as u32, pairing, code, devices, job, serve, serving, answer }
     }
 }
 

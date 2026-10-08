@@ -23,7 +23,8 @@ pub mod to_pool {
     /// A message on link `a`.
     pub const DATA: u8 = 5;
     pub const UNLINKED: u8 = 6;
-    /// Post `a` answered with status `b` and the body.
+    /// Post `a` ended with status `b` (0: none came), its body having come in [`PART`]s; or
+    /// fetch `a` answered, 200 and the body (0 and why not).
     pub const HTTP: u8 = 7;
     /// Worker `a` wrote this; worker `a` ended; a worker started as `a` (0: none could).
     pub const OUT: u8 = 8;
@@ -35,6 +36,8 @@ pub mod to_pool {
     pub const WATCH: u8 = 12;
     /// The page's storage quota, `a` MB.
     pub const QUOTA: u8 = 13;
+    /// More of post `a`'s body, as it comes (a model's answer streams).
+    pub const PART: u8 = 14;
 }
 
 /// What the pool asks of the desktop.
@@ -48,7 +51,8 @@ pub mod to_desk {
     /// Send the bytes on link `a`.
     pub const SEND: u8 = 3;
     pub const UNLINK: u8 = 4;
-    /// Post the bytes to `/api/signal` as post `a`.
+    /// Post the bytes after the first line to the URL on it as post `a`: the same origin's
+    /// `/api/signal`, or a model's local server.
     pub const POST: u8 = 5;
     /// Start `a` workers of the program named.
     pub const SPAWN: u8 = 6;

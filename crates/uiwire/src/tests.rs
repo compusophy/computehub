@@ -140,6 +140,8 @@ fn every_kind_round_trips_and_nothing_else_decodes() {
         Request::Pair { code: "K7000".into() },
         Request::Measure,
         Request::Job { name: "fractal".into(), chunks: vec!["0 0 -0.6 0 3".into(), String::new()] },
+        Request::Ask { text: "Why is the sky blue?".into() },
+        Request::Serve { url: "http://localhost:8080".into() },
     ];
     [pref, Request::Reset]
         .iter()
@@ -757,13 +759,15 @@ fn a_receipt_is_read_whole_from_the_end_of_a_stream() {
 
 #[test]
 fn the_meshs_snapshots_and_frames_come_back_whole() {
-    use crate::pool::{Device, Job, Snap, VERSION};
+    use crate::pool::{Answer, Device, Job, Snap, VERSION};
     use crate::relay::{Frame, HEAD};
     let d = |name: &str| Device {
         name: name.into(),
         cores: 16,
         units: 1 << 40,
         tx: 9,
+        model: name.into(),
+        tok: 95,
         ..Device::default()
     };
     let job = Job {
@@ -775,12 +779,22 @@ fn the_meshs_snapshots_and_frames_come_back_whole() {
         per: vec![2, 1],
         ..Job::default()
     };
+    let answer = Answer {
+        question: "Hi?".into(),
+        by: "b".into(),
+        text: "Hello".into(),
+        tok: 95,
+        ..Answer::default()
+    };
     let snap = Snap {
         at: 5,
         pairing: "Linking".into(),
         code: "K7".into(),
         devices: vec![d("a"), d("b")],
         job: Some(job),
+        serve: "http://localhost:8080".into(),
+        serving: String::new(),
+        answer: Some(answer),
     };
     let bytes = snap.encode();
     assert_eq!((bytes[0], Snap::decode(&bytes)), (VERSION, Some(snap.clone())));

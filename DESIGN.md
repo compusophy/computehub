@@ -742,9 +742,39 @@ The report, assembled as the native runs are compared (timings aside, sorted by 
 the same as theirs: one tab in 165 s (16 workers; native 16 threads, about 183 s), this PC and
 the laptop in 135 s (native, 131 s).
 
-Boot cost: about 7.5 KB gzipped (the link and relay; measured with `budget.sh`). Next: applang
-checks from the IQ suite as real work for the mesh, then a laptop's local model offered to paired
-tabs, a small model drafting and a big one checking.
+A model shared (`pool/src/model.rs`): a tab may share the OpenAI-compatible server on its own
+device (llama-server; `http://localhost:8080` unless the person names another), and a linked tab
+may ask it. Sharing starts with a short question of its own (16 tokens): the answer names the
+model and times it, and the tab's Hello says both, the Pool page each device's model and speed.
+Activity's "Ask the pool's model" goes to the fastest a linked device shares (this tab's own if
+none other); that tab posts the question to its server as a streamed chat, and what the model
+writes goes back on the link as it comes, then its end (its speed, or why it failed), into the
+Pool snapshots (four a second while it writes). One answer at a time a device; at most 256
+tokens; a linked tab sends a question, never a URL, and only a loopback URL is ever shared. The
+post is `text/plain`, a CORS simple request: no preflight, and llama-server echoes the page's
+origin, which COOP/COEP allow (a CORS response needs no CORP). The boot only carries it: posts
+now name their URL, and a post's body goes to the pool as it comes (PART frames), which the
+pool's pairing posts gather and a model's streams; the boot lost 77 bytes doing it. The URL
+shared is kept with the profile's pins, so sharing starts again with the pool (a question asked
+while it is checked waits for it). An answer begun is finished even if its device stops
+sharing: only new questions are refused, and a server named anew is checked once it ends. An
+asker that hears nothing from the device answering for 8 s (a linked tab says something each
+second) gives up, keeping what came.
+
+First run across machines (2026-10-08): the laptop (Firefox, Linux) shared qwen2.5-3b-instruct
+q4_k_m on its CPU (llama-server, 4 threads, checked at 8.3 tokens a second); this PC's Chrome
+tab asked it, and the answer streamed onto the page in about 10 s (29 prompt tokens in 1.0 s, 69
+written at 9.1 a second). A second question met the laptop's Stop sharing and tab close: the
+words stopped while its server went on writing, and the asker waited out the link's 15 s of
+silence. Hence the rules above.
+
+Not yet: the model's context size (llama-server says it only to `GET /props`, and the page's
+fetch is same-origin only; `platform` is at its cap), a queue for a busy model, a conversation
+(each question stands alone), and the public origin: there a page reaching `localhost` meets
+Chrome's local-network permission prompt, so sharing stays a person's act, never automatic.
+
+Boot cost: about 7.5 KB gzipped (the link and relay; measured with `budget.sh`). Next: a small
+model drafting and a big one checking, across devices.
 
 ### Evals
 

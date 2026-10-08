@@ -27,8 +27,10 @@ fn answer(line: &str, wrong: bool) -> String {
 }
 
 /// Carries out `t`'s acts: messages to `other` (each side calls the other link 1), workers
-/// started and ready at once, lines fed kept for [`work`].
+/// started and ready at once, lines fed kept for [`work`], posts to a model's server left for
+/// [`serve`].
 fn acts(t: &mut Tab, other: &mut Vec<Msg>) {
+    let mut posts = Vec::new();
     while !t.pool.out.is_empty() {
         for a in std::mem::take(&mut t.pool.out) {
             match a {
@@ -46,9 +48,11 @@ fn acts(t: &mut Tab, other: &mut Vec<Msg>) {
                 Act::Stop(pids) => t.fed.retain(|f| !pids.contains(&f.0)),
                 Act::Unlink(_) => {}
                 Act::Done { index, node, out, .. } => t.told.push((index, node, out)),
+                a @ Act::Post { .. } => posts.push(a),
             }
         }
     }
+    t.pool.out.extend(posts);
 }
 
 /// Every worker of `t` answers its line at `now`.
@@ -87,6 +91,8 @@ fn every_message_comes_back_whole_and_nothing_malformed_does() {
             ram_mb: 0,
             quota_mb: 9,
             gpu: false,
+            model: "qwen2.5-3b-instruct".into(),
+            tok: 95,
         },
         Msg::Stats { workers: 8, busy: 3, chunks: 40, units: 1 << 40 },
         Msg::Ping { t: 7 },
@@ -98,6 +104,9 @@ fn every_message_comes_back_whole_and_nothing_malformed_does() {
         Msg::Give { job: 3, chunks: vec![(0, "a".into()), (5, String::new())] },
         Msg::Done { job: 3, index: 5, out: "10 ab r".into() },
         Msg::End { job: 3, used: 9 },
+        Msg::Ask { ask: 2, text: "Why is the sky blue?".into() },
+        Msg::Words { ask: 2, text: "Rayleigh".into() },
+        Msg::Answered { ask: 2, tok: 95, why: String::new() },
     ];
     for m in &all {
         let b = m.encode();
@@ -331,7 +340,7 @@ fn pairing_shows_a_code_polls_for_the_answer_and_pins_the_device_once_linked() {
     h.frame(frame(p::TICK, 0, 0, 30 + crate::hub::POLL as u32, ""));
     h.pump();
     let polls = asked(&mut h);
-    assert!(polls.iter().any(|s| s.0 == d::POST && s.2 == "poll\nK7000"), "{polls:?}");
+    assert!(polls.iter().any(|s| s.0 == d::POST && s.2 == "/api/signal\npoll\nK7000"), "{polls:?}");
     h.frame(frame(p::HTTP, 2, 204, 1600, ""));
     h.frame(frame(p::HTTP, 3, 200, 1700, "v=0\r\na=fingerprint:sha-256 NEW\r\n"));
     // Post 3 was never asked for: dropped. The poll is asked again, and answered.
@@ -375,4 +384,212 @@ fn a_job_asked_for_starts_workers_and_tells_its_window_each_answer() {
     let done = uiwire::Event::Done { index: 0, node: 0, out: "5 h r".into() }.encode();
     assert!(told.iter().any(|s| s.0 == d::TELL && s.1 == 9 && s.2.as_bytes() == done), "{told:?}");
     assert!(told.contains(&(d::FEED, 20, "2 c\n".into())));
+}
+
+/// A stream as llama-server wrote one (its ids cut): a role, then words, then the end with its
+/// timings, then `[DONE]`.
+const STREAM: &str = concat!(
+    "data: {\"choices\":[{\"finish_reason\":null,\"index\":0,\"delta\":{\"role\":\"assistant\",",
+    "\"content\":null}}],\"model\":\"C:\\\\models\\\\qwen2.5-coder-0.5b-instruct-q8_0.gguf\",",
+    "\"object\":\"chat.completion.chunk\"}\n\n",
+    "data: {\"choices\":[{\"finish_reason\":null,\"index\":0,\"delta\":{\"content\":\"Hello\"}}]}\n\n",
+    "data: {\"choices\":[{\"finish_reason\":null,\"index\":0,\"delta\":{\"content\":\"! How\"}}]}\n\n",
+    "data: {\"choices\":[{\"finish_reason\":\"length\",\"index\":0,\"delta\":{}}],",
+    "\"timings\":{\"prompt_n\":6,\"predicted_n\":6,\"predicted_per_second\":56.130372144367314}}\n\n",
+    "data: [DONE]\n\n",
+);
+
+#[test]
+fn a_servers_stream_reads_in_pieces_of_any_size_and_only_a_local_one_is_shared() {
+    use crate::model::{Reading, local, why};
+    for size in [1, 7, 64, STREAM.len()] {
+        let (mut r, mut said) = (Reading::default(), String::new());
+        STREAM.as_bytes().chunks(size).for_each(|c| said.push_str(&r.feed(c)));
+        said.push_str(&r.end());
+        assert_eq!((said.as_str(), r.text.as_str()), ("Hello! How", "Hello! How"), "{size}");
+        assert_eq!((r.model.as_str(), r.tok), ("qwen2.5-coder-0.5b-instruct-q8_0", 561));
+        assert_eq!(why(200, &r), "");
+    }
+    // An error's body, not a stream; no answer at all; another status.
+    let mut r = Reading::default();
+    r.feed(b"{\"error\":{\"code\":400,\"message\":\"the request exceeds the context\"}}");
+    r.end();
+    assert_eq!(why(400, &r), "the request exceeds the context");
+    assert!(why(0, &Reading::default()).contains("CORS"));
+    assert_eq!(why(503, &Reading::default()), "HTTP 503");
+    let near = [
+        "http://localhost:8080",
+        "http://127.0.0.1:8081/",
+        "https://localhost",
+        "http://[::1]:8080",
+    ];
+    near.iter().for_each(|u| assert!(local(u), "{u}"));
+    let far = [
+        "http://localhost.evil.example",
+        "http://192.168.1.2:8080",
+        "file:///x",
+        "http://localhost:80 x",
+    ];
+    far.iter().chain(&["localhost:8080"]).for_each(|u| assert!(!local(u), "{u}"));
+}
+
+/// Carries out a tab's post to its model's server: its body, then how it ended.
+fn serve(t: &mut Tab, stream: &str, status: u32) {
+    let post = t.pool.out.iter().position(|a| matches!(a, Act::Post { .. }));
+    let Some(Act::Post { url, body }) = post.map(|i| t.pool.out.remove(i)) else {
+        panic!("no post")
+    };
+    assert!(url.ends_with("/v1/chat/completions") && body.contains("\"stream\":true"), "{body}");
+    t.pool.part(stream.as_bytes());
+    t.pool.posted(status);
+}
+
+#[test]
+fn a_tab_shares_its_model_once_checked_and_a_linked_tab_asks_it_and_hears_it_write() {
+    let (mut a, mut b) = (tab("A", 2), tab("B", 2));
+    a.pool.linked(1, false, 0);
+    b.pool.linked(1, true, 0);
+    // B shares its server: checked first, then said in its Hello.
+    b.pool.serve("http://localhost:8080/");
+    assert_eq!(b.pool.shared.note, "Reaching http://localhost:8080");
+    serve(&mut b, STREAM, 200);
+    assert!(b.pool.shared.note.is_empty() && b.pool.me.tok == 561);
+    talk(&mut a, &mut b, 1);
+    let model = a.pool.peers[0].info.model.clone();
+    assert_eq!(model, "qwen2.5-coder-0.5b-instruct-q8_0");
+    let snap = a.pool.snap(1, "", "");
+    assert_eq!((snap.devices[1].model.as_str(), snap.devices[1].tok), (model.as_str(), 561));
+    // A asks the pool's model: B's writes, a piece at a time, back to A.
+    a.pool.question("Say hi.");
+    talk(&mut a, &mut b, 2);
+    let (head, tail) = STREAM.split_at(STREAM.find("! How").unwrap());
+    let post = b.pool.out.iter().position(|x| matches!(x, Act::Post { .. })).unwrap();
+    b.pool.out.remove(post);
+    b.pool.part(head.as_bytes());
+    talk(&mut a, &mut b, 3);
+    let answer = &a.pool.asking.as_ref().unwrap().answer;
+    assert_eq!((answer.text.as_str(), answer.by.as_str(), answer.done), ("Hello", "B", false));
+    assert!(a.pool.answering());
+    // Another tab's question while B writes: refused, and said so.
+    b.pool.write(2, 1, "Me too?");
+    let busy = |a: Option<&Act>| matches!(a, Some(Act::Send(2, Msg::Answered { why, .. })) if why.contains("busy"));
+    assert!(busy(b.pool.out.last()));
+    b.pool.out.pop();
+    b.pool.part(tail.as_bytes());
+    b.pool.posted(200);
+    talk(&mut a, &mut b, 4);
+    let answer = a.pool.asking.as_ref().unwrap().answer.clone();
+    let got = (answer.text.as_str(), answer.done, answer.tok, answer.why.as_str());
+    assert_eq!(got, ("Hello! How", true, 561, ""));
+    assert_eq!(a.pool.snap(4, "", "").answer, Some(answer));
+    // Asked again, B goes before answering: the answer says so.
+    a.pool.question("And again?");
+    talk(&mut a, &mut b, 5);
+    a.pool.unlinked(1, 6);
+    let answer = &a.pool.asking.as_ref().unwrap().answer;
+    assert!(answer.done && answer.why.contains("left"), "{answer:?}");
+    // B finishes it unheard: an end that comes late changes nothing.
+    serve(&mut b, STREAM, 200);
+    a.pool.finished(1, a.pool.last_ask, 561, String::new());
+    assert!(a.pool.asking.as_ref().unwrap().answer.why.contains("left"));
+    // B stops sharing while it writes: the answer still comes whole; new questions are refused.
+    b.pool.out.clear();
+    b.pool.unlinked(1, 6);
+    a.pool.linked(1, false, 6);
+    b.pool.linked(1, true, 6);
+    talk(&mut a, &mut b, 6);
+    a.pool.question("Once more?");
+    talk(&mut a, &mut b, 7);
+    b.pool.serve("");
+    talk(&mut a, &mut b, 8);
+    assert!(a.pool.peers[0].info.model.is_empty());
+    serve(&mut b, STREAM, 200);
+    talk(&mut a, &mut b, 9);
+    let answer = &a.pool.asking.as_ref().unwrap().answer;
+    assert_eq!((answer.text.as_str(), answer.done, answer.why.as_str()), ("Hello! How", true, ""));
+    b.pool.write(1, 99, "And now?");
+    let refused = |x: Option<&Act>| matches!(x, Some(Act::Send(1, Msg::Answered { why, .. })) if why.contains("no model"));
+    assert!(refused(b.pool.out.last()));
+    b.pool.out.clear();
+    // Shared anew while it writes: the new server is checked once the answer ends.
+    b.pool.serve("http://localhost:8080");
+    serve(&mut b, STREAM, 200);
+    talk(&mut a, &mut b, 10);
+    a.pool.question("Last one?");
+    talk(&mut a, &mut b, 11);
+    b.pool.serve("http://localhost:8081");
+    let posts = |t: &Tab| t.pool.out.iter().filter(|x| matches!(x, Act::Post { .. })).count();
+    assert_eq!(posts(&b), 1, "the answer's post alone");
+    serve(&mut b, STREAM, 200);
+    let check = b.pool.out.iter().find(|x| matches!(x, Act::Post { .. }));
+    assert!(
+        matches!(check, Some(Act::Post { url, .. }) if url.starts_with("http://localhost:8081"))
+    );
+    serve(&mut b, STREAM, 200);
+    assert_eq!((b.pool.shared.url.as_str(), b.pool.me.tok), ("http://localhost:8081", 561));
+    talk(&mut a, &mut b, 12);
+    // B goes quiet mid-answer: A gives up after QUIET, keeping what came.
+    a.pool.question("Quiet?");
+    talk(&mut a, &mut b, 13);
+    let post = b.pool.out.iter().position(|x| matches!(x, Act::Post { .. })).unwrap();
+    b.pool.out.remove(post);
+    b.pool.part(head.as_bytes());
+    talk(&mut a, &mut b, 14);
+    a.pool.tick(14 + crate::model::QUIET);
+    let answer = &a.pool.asking.as_ref().unwrap().answer;
+    let gave_up = answer.done && answer.text == "Hello" && answer.why.contains("stopped answering");
+    assert!(gave_up, "{answer:?}");
+    b.pool.posted(0);
+    a.pool.unlinked(1, 30_000);
+    // With no model in the pool, asking says so at once; a server elsewhere is never shared.
+    a.pool.question("Anyone?");
+    assert!(a.pool.asking.as_ref().unwrap().answer.why.contains("No device"));
+    a.pool.serve("http://192.168.1.2:8080");
+    assert!(a.pool.shared.note.starts_with("Only a server on this device"));
+    assert!(a.pool.out.iter().all(|x| !matches!(x, Act::Post { .. })));
+    // Asked while its own model is checked: asked once the check is done.
+    let mut c = tab("C", 1);
+    c.pool.serve("http://localhost:8080");
+    c.pool.question("Early?");
+    assert!(!c.pool.asking.as_ref().unwrap().answer.done);
+    serve(&mut c, STREAM, 200);
+    serve(&mut c, STREAM, 200);
+    let answer = &c.pool.asking.as_ref().unwrap().answer;
+    assert_eq!((answer.text.as_str(), answer.done, answer.by.as_str()), ("Hello! How", true, "C"));
+    // A server that fails its check is not shared, and the Hello says no model.
+    b.pool.serve("http://localhost:9");
+    serve(&mut b, "", 0);
+    let note = &b.pool.shared.note;
+    assert!(note.starts_with("Could not share http://localhost:9: the server did not answer"));
+    assert!(matches!(b.pool.hello(), Msg::Hello { model, .. } if model.is_empty()));
+}
+
+#[test]
+fn the_model_shared_is_kept_with_the_pins_and_shared_again_when_the_pool_starts() {
+    use uiwire::relay::{to_desk as d, to_pool as p};
+    let mut h = crate::Hub::default();
+    h.frame(frame(p::INFO, 0, 0, 0, "2 0 0 0\nagent\nsha-256 OLD"));
+    h.frame(frame(p::ASK, 9, 5, 1, "http://localhost:8080"));
+    h.pump();
+    let said = asked(&mut h);
+    let kept = (d::PINS, 0, "sha-256 OLD\nserve http://localhost:8080".into());
+    assert!(said.contains(&kept), "{said:?}");
+    let check = said.iter().find(|s| s.0 == d::POST).map(|s| (s.1, s.2.clone())).unwrap();
+    let url = "http://localhost:8080/v1/chat/completions\n{\"messages\"";
+    assert!(check.1.starts_with(url), "{check:?}");
+    // Its answer comes in parts: the pool reads them as they come.
+    h.frame(frame(p::PART, check.0, 0, 2, &STREAM[..40]));
+    h.frame(frame(p::PART, check.0, 0, 2, &STREAM[40..]));
+    h.frame(frame(p::HTTP, check.0, 200, 3, ""));
+    assert_eq!(h.pool.me.model, "qwen2.5-coder-0.5b-instruct-q8_0");
+    // Another start: the pins as they were, the model shared again.
+    let mut h = crate::Hub::default();
+    h.frame(frame(p::INFO, 0, 0, 0, "2 0 0 0\nagent\nsha-256 OLD\nserve http://localhost:8080"));
+    h.pump();
+    let again = asked(&mut h);
+    assert!(again.iter().any(|s| s.0 == d::POST && s.2.starts_with("http://localhost:8080/v1/")));
+    assert_eq!(h.pool.shared.url, "http://localhost:8080");
+    // Stopping forgets it.
+    h.frame(frame(p::ASK, 9, 5, 4, ""));
+    assert!(asked(&mut h).contains(&(d::PINS, 0, "sha-256 OLD".into())));
 }

@@ -12,7 +12,8 @@ pub const MAX: usize = 64 << 10;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Msg {
     /// What the tab has to lend (sent once linked): its name and kind, cores, RAM and storage in
-    /// MB (0 when unknown), and whether it has a GPU to compute on.
+    /// MB (0 when unknown), whether it has a GPU to compute on, and the model it shares (empty:
+    /// none) and its speed, tenths of a token a second.
     Hello {
         name: String,
         kind: String,
@@ -20,6 +21,8 @@ pub enum Msg {
         ram_mb: u32,
         quota_mb: u32,
         gpu: bool,
+        model: String,
+        tok: u32,
     },
     /// Its workers and how many are busy, the chunks it answered and their fuel (cumulative):
     /// each second while linked.
@@ -75,15 +78,31 @@ pub enum Msg {
         job: u32,
         used: u32,
     },
+    /// A question for the model the other tab shares, the asker's `ask` its name.
+    Ask {
+        ask: u32,
+        text: String,
+    },
+    /// More of the answer to `ask`, as the model writes it.
+    Words {
+        ask: u32,
+        text: String,
+    },
+    /// The answer to `ask` is whole: the model's speed, or why it failed (empty: it did not).
+    Answered {
+        ask: u32,
+        tok: u32,
+        why: String,
+    },
 }
 
 impl Msg {
     pub fn encode(&self) -> Vec<u8> {
         let mut o = Out(Vec::new());
         match self {
-            Msg::Hello { name, kind, cores, ram_mb, quota_mb, gpu } => {
+            Msg::Hello { name, kind, cores, ram_mb, quota_mb, gpu, model, tok } => {
                 o.u8(1).str(name).str(kind).u16(*cores).u32(*ram_mb).u32(*quota_mb);
-                o.u8((*gpu).into())
+                o.u8((*gpu).into()).str(model).u32(*tok)
             }
             Msg::Stats { workers, busy, chunks, units } => {
                 o.u8(2).u16(*workers).u16(*busy).u32(*chunks).u64(*units)
@@ -100,6 +119,9 @@ impl Msg {
             }
             Msg::Done { job, index, out } => o.u8(10).u32(*job).u32(*index).str(out),
             Msg::End { job, used } => o.u8(11).u32(*job).u32(*used),
+            Msg::Ask { ask, text } => o.u8(12).u32(*ask).str(text),
+            Msg::Words { ask, text } => o.u8(13).u32(*ask).str(text),
+            Msg::Answered { ask, tok, why } => o.u8(14).u32(*ask).u32(*tok).str(why),
         };
         o.0
     }
@@ -115,6 +137,8 @@ impl Msg {
                 ram_mb: r.u32()?,
                 quota_mb: r.u32()?,
                 gpu: r.bool()?,
+                model: r.str()?,
+                tok: r.u32()?,
             },
             2 => {
                 Msg::Stats { workers: r.u16()?, busy: r.u16()?, chunks: r.u32()?, units: r.u64()? }
@@ -134,6 +158,9 @@ impl Msg {
             }
             10 => Msg::Done { job: r.u32()?, index: r.u32()?, out: r.str()? },
             11 => Msg::End { job: r.u32()?, used: r.u32()? },
+            12 => Msg::Ask { ask: r.u32()?, text: r.str()? },
+            13 => Msg::Words { ask: r.u32()?, text: r.str()? },
+            14 => Msg::Answered { ask: r.u32()?, tok: r.u32()?, why: r.str()? },
             _ => return None,
         };
         r.0.is_empty().then_some(m)

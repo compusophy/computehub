@@ -8,7 +8,8 @@
 //! posts the answer (`answer`). Each body is lines of text: the op, then the code and the
 //! description as they apply. Once the channel opens the link joins the pool, its DTLS
 //! fingerprint (from the other tab's description) pinned for this profile: a device seen before
-//! is `known`.
+//! is `known`. The model this tab shares, its server's URL, is kept with the pins, so sharing
+//! starts again with the pool.
 
 use uiwire::relay::{Frame, to_desk, to_pool};
 use uiwire::{Event, Request};
@@ -25,6 +26,10 @@ pub const OPEN: u64 = 30_000;
 /// A chunk's longest line, and a job's most chunks.
 pub const LINE: usize = 4096;
 pub const CHUNKS: usize = 1 << 16;
+/// The same-origin endpoint pairing posts to.
+pub const SIGNAL: &str = "/api/signal";
+/// The line kept with the pins that says the model this tab shares.
+const SERVE: &str = "serve ";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Op {
@@ -34,6 +39,8 @@ enum Op {
     Answer,
     /// A job's chunks to fetch for process `.0`: its program and the lines a chunk holds.
     Fetch(u32, String, usize),
+    /// A chat to the model this tab shares: its body goes to the pool as it comes.
+    Model,
 }
 
 /// Pairing under way: the link, the code (as typed or given), whether this tab shows it, the
@@ -49,7 +56,8 @@ struct Pairing {
 }
 
 /// The hub: the pool, what pairing says and is doing, the pinned fingerprints and those heard
-/// while pairing, posts in flight, the last post and link ids, the process watching, the
+/// while pairing, posts in flight (each its id, what it is and its body so far), the last post
+/// and link ids, the process watching, the
 /// snapshot last sent and to whom, when the next may go and when a wake was last asked for, the
 /// clock (page ms), and the frames for the desktop.
 #[derive(Debug, Default)]
@@ -59,7 +67,7 @@ pub struct Hub {
     pairing: Option<Pairing>,
     pins: Vec<String>,
     heard_fp: Vec<(u32, String)>,
-    posts: Vec<(u32, Op)>,
+    posts: Vec<(u32, Op, Vec<u8>)>,
     last_post: u32,
     last_link: u32,
     watcher: u32,
@@ -103,10 +111,24 @@ impl Hub {
         Frame { op, a, data: data.into(), ..Frame::default() }.put(&mut self.out);
     }
 
-    fn post(&mut self, op: Op, body: &str) {
+    /// Posts `body` to `url` as `op`.
+    fn post_to(&mut self, url: &str, op: Op, body: &str) {
         self.last_post += 1;
-        self.posts.push((self.last_post, op));
-        self.send(to_desk::POST, self.last_post, body.as_bytes());
+        self.posts.push((self.last_post, op, Vec::new()));
+        self.send(to_desk::POST, self.last_post, [url, "\n", body].concat().as_bytes());
+    }
+
+    fn post(&mut self, op: Op, body: &str) {
+        self.post_to(SIGNAL, op, body);
+    }
+
+    /// Keeps the pins and the model shared for this profile.
+    fn keep(&mut self) {
+        let mut kept = self.pins.join("\n");
+        if !self.pool.shared.url.is_empty() {
+            kept = [&kept, "\n", SERVE, &self.pool.shared.url].concat();
+        }
+        self.send(to_desk::PINS, 0, kept.trim_start_matches('\n').as_bytes());
     }
 
     /// Pairing stops: with `why` said, and its link closed unless it opened.
@@ -134,10 +156,16 @@ impl Hub {
                 let (cores, ram_mb, gpu, touch) = (n(), n(), n() == 1, n() == 1);
                 let (name, kind) = named(lines.next().unwrap_or(""), touch);
                 let cores = cores.min(1024) as u16;
-                self.pool = Pool::new(Info { name, kind, cores, ram_mb, quota_mb: 0, gpu });
-                self.pins = lines.map(String::from).collect();
+                let info = Info { name, kind, cores, ram_mb, gpu, ..Info::default() };
+                self.pool = Pool::new(info);
+                let (served, pins): (Vec<&str>, _) = lines.partition(|l| l.starts_with(SERVE));
+                self.pins = pins.into_iter().map(String::from).collect();
+                if let Some(url) = served.last().and_then(|l| l.strip_prefix(SERVE)) {
+                    self.pool.serve(url);
+                }
             }
-            // Pair (its code), Measure, or Job (its program, then its chunks, a line each).
+            // Pair (its code), Measure, Job (its program, then its chunks, a line each), Ask (its
+            // question) or Serve (its URL).
             to_pool::ASK => {
                 let text = text();
                 let mut lines = text.split('\n');
@@ -148,6 +176,8 @@ impl Hub {
                         let name = lines.next().unwrap_or("").into();
                         Request::Job { name, chunks: lines.map(String::from).collect() }
                     }
+                    4 => Request::Ask { text },
+                    5 => Request::Serve { url: text },
                     _ => return,
                 };
                 self.ask(f.a, r);
@@ -178,10 +208,21 @@ impl Hub {
                     self.stop("The link failed: try again, both devices on one network");
                 }
             }
+            to_pool::PART => {
+                let Some(p) = self.posts.iter_mut().find(|p| p.0 == f.a) else { return };
+                match p.1 {
+                    Op::Model => self.pool.part(&f.data),
+                    _ => p.2.extend_from_slice(&f.data),
+                }
+            }
             to_pool::HTTP => {
                 let Some(i) = self.posts.iter().position(|p| p.0 == f.a) else { return };
-                let op = self.posts.remove(i).1;
-                self.answered(op, f.b, &text());
+                let (_, op, mut body) = self.posts.remove(i);
+                if op == Op::Model {
+                    return self.pool.posted(f.b);
+                }
+                body.extend_from_slice(&f.data);
+                self.answered(op, f.b, &String::from_utf8_lossy(&body));
             }
             to_pool::OUT => self.pool.output(f.a, &f.data, now),
             to_pool::GONE => self.pool.ended(f.a, now),
@@ -203,8 +244,7 @@ impl Hub {
         let known = !fp.is_empty() && self.pins.contains(&fp);
         if !known && !fp.is_empty() {
             self.pins.push(fp);
-            let pins = self.pins.join("\n");
-            self.send(to_desk::PINS, 0, pins.as_bytes());
+            self.keep();
         }
         if self.pairing.as_ref().is_some_and(|p| p.link == link) {
             (self.pairing, self.note) = (None, String::new());
@@ -212,7 +252,8 @@ impl Hub {
         self.pool.linked(link, known, self.now);
     }
 
-    /// Process `pid` asked for `r`: Pair and Measure (from Activity's window alone), Job.
+    /// Process `pid` asked for `r`: Pair, Measure, Ask and Serve (from Activity's window alone),
+    /// Job.
     pub fn ask(&mut self, pid: u32, r: Request) {
         let now = self.now;
         match r {
@@ -231,6 +272,11 @@ impl Hub {
                 self.pairing = Some(Pairing { link, code, host, until, ..Pairing::default() });
             }
             Request::Measure => self.pool.measure(),
+            Request::Ask { text } => self.pool.question(&text),
+            Request::Serve { url } => {
+                self.pool.serve(&url);
+                self.keep();
+            }
             // A job whose one chunk is `@<url> <per>`: its chunks are the lines of that
             // same-origin file, `per` a chunk (tab-joined), fetched first.
             Request::Job { name, chunks } if chunks.len() == 1 && chunks[0].starts_with('@') => {
@@ -239,7 +285,7 @@ impl Hub {
                 let per = per.parse().unwrap_or(1usize).clamp(1, 64);
                 let url = url.to_string();
                 self.last_post += 1;
-                self.posts.push((self.last_post, Op::Fetch(pid, name, per)));
+                self.posts.push((self.last_post, Op::Fetch(pid, name, per), Vec::new()));
                 self.send(to_desk::FETCH, self.last_post, url.as_bytes());
                 self.note = ["Fetching ", &url].concat();
             }
@@ -324,13 +370,15 @@ impl Hub {
         let code = self.pairing.as_ref().filter(|p| p.host).map_or("", |p| p.code.as_str());
         let bytes = self.pool.snap(now, &self.note, code).encode();
         // `at` (bytes 1 to 4) changes every time: the rest says whether anything did. A change
-        // goes at most once a second, unless it is to someone new.
+        // goes at most once a second (four times while a model writes an answer here), unless it
+        // is to someone new.
         let (fresh, mut later) = (to != self.told.1, None);
         if (fresh || bytes.get(5..) != self.told.0.get(5..)) && !to.is_empty() {
             if fresh || now >= self.next_snap {
                 let ev = Event::Pool { data: bytes.clone() }.encode();
                 to.iter().for_each(|&pid| self.send(to_desk::TELL, pid, &ev));
-                (self.told, self.next_snap) = ((bytes, to), now + 1000);
+                let gap = if self.pool.answering() { 250 } else { 1000 };
+                (self.told, self.next_snap) = ((bytes, to), now + gap);
             } else {
                 later = Some(self.next_snap);
             }
@@ -364,6 +412,7 @@ impl Hub {
                         let ev = Event::Done { index, node, out }.encode();
                         self.send(to_desk::TELL, window, &ev);
                     }
+                    Act::Post { url, body } => self.post_to(&url, Op::Model, &body),
                 }
             }
             self.pool.assign(self.now);

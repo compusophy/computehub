@@ -3,12 +3,14 @@
 //!
 //! ```text
 //! u8 VERSION | u32 at (page ms) | str pairing | str code | u16 n, n device | u8 has job, job
+//!         | str serve | str serving | u8 has answer, answer
 //! device: str name | str kind | u16 cores | u32 ram_mb | u32 quota_mb | u8 gpu | u32 up_ms
 //!         | u8 known | u16 workers | u16 busy | u32 chunks | u64 units | u32 rtt | u64 tx
-//!         | u64 rx | u32 up | u32 down
+//!         | u64 rx | u32 up | u32 down | str model | u32 tok
 //! job:    str name | u8 mine | u32 total | u32 done | u32 queued | u32 steals | u32 requeued
 //!         | u32 checked | u32 mismatched | u32 ms | u32 used | u32 busy | u16 m, m u32
 //!         (chunks by device)
+//! answer: str question | str by | str text | u8 done | u32 tok | str why
 //! ```
 //!
 //! Device 0 is this tab, the rest each linked tab in the order it joined. Counts (`chunks`,
@@ -19,7 +21,7 @@
 use crate::{Out, Reader};
 
 /// The format's version, a snapshot's first byte.
-pub const VERSION: u8 = 3;
+pub const VERSION: u8 = 4;
 /// An unknown round trip.
 pub const UNKNOWN: u32 = u32::MAX;
 /// Each device's canvas color, by its place in a snapshot (cycling): cyan here, then yellow,
@@ -27,7 +29,8 @@ pub const UNKNOWN: u32 = u32::MAX;
 pub const TINTS: [u8; 6] = [6, 3, 5, 2, 1, 4];
 
 /// One snapshot: when, what pairing says (empty when nothing is pairing) and the code it shows,
-/// the devices and the job.
+/// the devices and the job; the model server this tab shares (empty: none) and what sharing
+/// says (empty when it is well), and the answer the pool's model is writing here or wrote last.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Snap {
     pub at: u32,
@@ -35,13 +38,17 @@ pub struct Snap {
     pub code: String,
     pub devices: Vec<Device>,
     pub job: Option<Job>,
+    pub serve: String,
+    pub serving: String,
+    pub answer: Option<Answer>,
 }
 
 /// A device of the pool: its name and kind, what it has (cores, RAM and storage the browser
 /// grants in MB, a GPU it can compute on), how long it has been linked (ms), whether its key was
 /// pinned before; its workers and how many are busy, the chunks it answered and their fuel; the
 /// link's round trip (ms), bytes sent to it and heard from it, and the throughput last measured
-/// each way (bytes a second). This tab's link figures are 0.
+/// each way (bytes a second); the model it shares (empty: none) and its speed, in tenths of a
+/// token a second (0: not measured). This tab's link figures are 0.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Device {
     pub name: String,
@@ -61,6 +68,8 @@ pub struct Device {
     pub rx: u64,
     pub up: u32,
     pub down: u32,
+    pub model: String,
+    pub tok: u32,
 }
 
 /// The job on the pool: the program, whether this tab started it, its chunks in all, answered and
@@ -86,6 +95,18 @@ pub struct Job {
     pub per: Vec<u32>,
 }
 
+/// An answer from the pool's model: the question, the device whose model answers, what it wrote
+/// so far, whether it is done, its speed (tenths of a token a second) and, if it failed, why.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Answer {
+    pub question: String,
+    pub by: String,
+    pub text: String,
+    pub done: bool,
+    pub tok: u32,
+    pub why: String,
+}
+
 impl Snap {
     pub fn encode(&self) -> Vec<u8> {
         let mut o = Out(Vec::new());
@@ -95,6 +116,7 @@ impl Snap {
             o.str(&d.name).str(&d.kind).u16(d.cores).u32(d.ram_mb).u32(d.quota_mb);
             o.u8(d.gpu.into()).u32(d.up_ms).u8(d.known.into()).u16(d.workers).u16(d.busy);
             o.u32(d.chunks).u64(d.units).u32(d.rtt).u64(d.tx).u64(d.rx).u32(d.up).u32(d.down);
+            o.str(&d.model).u32(d.tok);
         }
         o.u8(self.job.is_some().into());
         if let Some(j) = &self.job {
@@ -102,6 +124,10 @@ impl Snap {
             o.u32(j.steals).u32(j.requeued).u32(j.checked).u32(j.mismatched);
             o.u32(j.ms).u32(j.used).u32(j.busy);
             j.per.iter().fold(o.u16(j.per.len() as u16), |o, n| o.u32(*n));
+        }
+        o.str(&self.serve).str(&self.serving).u8(self.answer.is_some().into());
+        if let Some(a) = &self.answer {
+            o.str(&a.question).str(&a.by).str(&a.text).u8(a.done.into()).u32(a.tok).str(&a.why);
         }
         o.0
     }
@@ -131,6 +157,8 @@ impl Snap {
                 rx: r.u64()?,
                 up: r.u32()?,
                 down: r.u32()?,
+                model: r.str()?,
+                tok: r.u32()?,
             });
         }
         let job = match r.bool()? {
@@ -151,6 +179,19 @@ impl Snap {
                 per: (0..r.u16()?).map(|_| r.u32()).collect::<Option<_>>()?,
             }),
         };
-        r.0.is_empty().then_some(Snap { at, pairing, code, devices, job })
+        let (serve, serving) = (r.str()?, r.str()?);
+        let answer = match r.bool()? {
+            false => None,
+            true => Some(Answer {
+                question: r.str()?,
+                by: r.str()?,
+                text: r.str()?,
+                done: r.bool()?,
+                tok: r.u32()?,
+                why: r.str()?,
+            }),
+        };
+        let snap = Snap { at, pairing, code, devices, job, serve, serving, answer };
+        r.0.is_empty().then_some(snap)
     }
 }
