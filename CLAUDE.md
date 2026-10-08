@@ -5,12 +5,22 @@ what comes next.
 
 ## What this is
 
-compusophyOS: a computer in one browser tab. Rust → wasm, one canvas, a
-desktop anyone can write apps for, in applang. It runs in the tab (the only
-server code is `api/`). Floating windows as on Windows and Pop!_OS COSMIC;
-futuristic, ultra minimal, fast. AI-native: free AI for all, and our own
-model fine-tuned on applang (Opus teaches; `iq` must climb).
-Later: compute pooled across tabs, devices. Author handle: compusophy.
+compusophyOS: a computer in one browser tab, for serious technical people
+(devs, hackers, creators), never the mainstream. Rust → wasm, one canvas,
+floating windows; futuristic, ultra minimal, fast; apps in applang; the
+only server code is `api/`. Its heart is the mesh: models and devices as
+one mind. Two models hand in hand is the base case (a local fine-tune
+supporting the cloud model: repair, checks, selection); next, N models
+self-organizing (division of labor, the right-sized model per subtask)
+across desktop, laptop, phone and a public pool anyone joins, whose crowd
+compute also trains models. Score the combined system: success per unit of
+cost. Bar: far more useful than today's agents; real users, then paying
+ones. Author handle: compusophy.
+
+compusophy's latest words win over this file: when they change direction,
+update it in the same turn. Finished, verified work ships (merge, push,
+prod) without asking. Never stop work over a size. The night runs from
+"going to bed" until "I'm up": no clocks.
 
 ## Constitution (`scripts/caps.sh` holds the gates, gauges the sizes)
 
