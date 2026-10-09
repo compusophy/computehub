@@ -11,8 +11,9 @@ blocks that missed, nothing) and the program's problem before and after (0: it r
 A turn becomes a record {messages: [system, user, assistant], task, family, kind: "fix", by} when
 it took a program that did not run clean to one that does, on a task whose family is not held
 out (sft.py refuses those too). The assistant's message is the reply in the form the make loop
-reads: a diff's hunks rewritten as SEARCH/REPLACE blocks (team's own reading of them), else the
-reply as it came. A task's turn written twice (a rerun) counts once, its last writing.
+reads: a diff's hunks rewritten as SEARCH/REPLACE blocks (team's own reading of them), a block
+quoting part of a line rewritten whole (from the numbered program asked), else the reply as it
+came. A task's turn written twice (a rerun) counts once, its last writing.
 """
 import argparse
 import json
@@ -20,6 +21,13 @@ import json
 import sftdata
 
 FENCES = ("```diff", "```patch")
+
+
+def jsonl(path):
+    """Every JSON line of `path`. Not sftdata.read_lines: it cuts each line at a `#` (held.txt's
+    comments), and programs hold `#`."""
+    with open(path, encoding="utf-8") as f:
+        return [json.loads(l) for l in f if l.strip()]
 
 
 def header(line):
@@ -93,6 +101,40 @@ def blocks(reply):
     return "".join(out) or None
 
 
+def canonical(reply, asked):
+    """An in-line reply's one-line blocks (part of one line, team's Held::Inline) rewritten as the
+    whole-line blocks the make loop reads, from the numbered program in the ask; None if a block
+    is not one line, or its line is not found exactly once."""
+    program = []
+    for line in asked.split("\n"):
+        t = line.lstrip()
+        digits = len(t) - len(t.lstrip("0123456789"))
+        if digits and t[digits:digits + 1] == "|":
+            rest = t[digits + 1:]
+            program.append(rest[1:] if rest.startswith(" ") else rest)
+    out, cur, mode = [], None, 0
+    for line in reply.replace("\r", "").split("\n"):
+        s = line.strip()
+        if s.startswith("<<<<<<<"):
+            cur, mode = ([], []), 0
+        elif cur is not None and mode == 0 and len(s) >= 5 and set(s) == {"="}:
+            mode = 1
+        elif cur is not None and mode == 1 and s.startswith(">>>>>>>"):
+            find = [l.strip() for l in cur[0] if l.strip()]
+            put = [l.strip() for l in cur[1] if l.strip()]
+            if len(find) != 1 or len(put) != 1:
+                return None
+            hits = [l for l in program if find[0] in l]
+            if len(hits) != 1:
+                return None
+            out.append("<<<<<<< SEARCH\n%s\n=======\n%s\n>>>>>>> REPLACE\n"
+                       % (hits[0], hits[0].replace(find[0], put[0], 1)))
+            cur = None
+        elif cur is not None:
+            cur[mode].append(line)
+    return "".join(out) or None
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     p.add_argument("--traces", action="append", required=True)
@@ -104,15 +146,13 @@ def main():
     a = p.parse_args()
 
     family = {}
-    for line in sftdata.read_lines(a.suite):
-        t = json.loads(line)
+    for t in jsonl(a.suite):
         family[t["id"]] = t.get("family", "")
     held = {sftdata.root(l.strip()) for l in sftdata.read_lines(a.held) if l.strip() and not l.startswith("#")}
 
     turns = {}
     for path in a.traces:
-        for line in sftdata.read_lines(path):
-            t = json.loads(line)
+        for t in jsonl(path):
             turns[(t["task"], t["turn"])] = t
     counts = {"turns": len(turns), "held": 0, "no body": 0, "not fixed": 0, "kept": 0, "diff": 0}
     out = []
@@ -124,7 +164,7 @@ def main():
         if "body" not in t:
             counts["no body"] += 1
             continue
-        if t["after"] != 0 or t["before"] == 0 or t["held"] not in ("Program", "Edits", "Diff"):
+        if t["after"] != 0 or t["before"] == 0 or t["held"] not in ("Program", "Edits", "Diff", "Inline"):
             counts["not fixed"] += 1
             continue
         messages = [m for m in json.loads(t["body"])["messages"] if m.get("role") in ("system", "user", "assistant")]
@@ -132,6 +172,12 @@ def main():
         if t["held"] == "Diff":
             reply = blocks(reply) or reply
             counts["diff"] += 1
+        if t["held"] == "Inline":
+            reply = canonical(reply, t["asked"])
+            if reply is None:
+                counts["not fixed"] += 1
+                continue
+            counts["inline"] = counts.get("inline", 0) + 1
         messages.append({"role": "assistant", "content": reply})
         out.append({"messages": messages, "task": task, "family": fam, "kind": "fix",
                     "by": {"helper": a.helper, "night": a.night, "turn": turn, "held": t["held"],

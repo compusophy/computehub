@@ -121,3 +121,18 @@ fn a_whole_program_that_is_another_program_is_not_a_fix() {
     let f = done(r.reply(&["```app\n", COUNTER, "```"].concat(), false));
     assert!(f.clean && f.steps[0].held == Held::Program, "{f:?}");
 }
+
+#[test]
+fn a_one_line_block_quoting_part_of_one_line_edits_that_line() {
+    // The icon line quoted without its `// icon:`: applied within the line.
+    let draft = COUNTER.replace("line 12 5 12 19", "line 12 5 12 30");
+    let (mut r, _) = Repair::start("a counter", "", &draft, "base3b", 2);
+    let f = done(
+        r.reply(&edit("line 5 12 19 12 line 12 5 12 30", "line 5 12 19 12 line 12 5 12 19"), false),
+    );
+    assert_eq!(f.steps[0].held, Held::Inline, "{f:?}");
+    assert!(f.clean && f.src.trim_end() == COUNTER.trim_end(), "{f:?}");
+    // Part of two lines, or of none: still a miss.
+    let edits = [coder::edits::Edit { search: vec!["n".into()], replace: vec!["m".into()] }];
+    assert_eq!(inline(COUNTER, &edits), None);
+}
