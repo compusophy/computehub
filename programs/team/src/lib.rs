@@ -32,7 +32,7 @@ pub enum Held {
     Edits,
     Diff,
     /// One-line edit blocks quoting part of one line (most often the icon line without its
-    /// `// icon:`), applied in that line ([`inline`]).
+    /// `// icon:`), applied in that line.
     Inline,
     Missed,
     Nothing,
