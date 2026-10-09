@@ -118,7 +118,8 @@ for step in "$@"; do
       cat "$D"/refs-*.jsonl > "$T/refs.jsonl"
       tools || exit 1
       "$T/bin/eval.exe" mutants --suite "$W/iq.jsonl" --refs "$W/refs.jsonl" --held "$W/held.txt" \
-        --out "$W/fix-mutants.jsonl" --per "${MUTANTS_PER:-1}" 2>&1 | tee -a "$LOG" ;;
+        --out "$W/fix-mutants.jsonl" --per "${MUTANTS_PER:-1}" --max "${MUTANTS_MAX:-800}" 2>&1 \
+        | tee -a "$LOG" ;;
     fixdata)
       [ -s "$T/fix.jsonl" ] && continue
       (cd "$REPO" && "$PY" train/fixdata.py --traces "$W/traces-train-base3b.jsonl" \

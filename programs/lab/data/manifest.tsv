@@ -6,7 +6,7 @@
 # on; a tenth of the shapes, with every program of them. The corpus's id hashes each
 # line but its last column (where a program was found). Derived: `cargo run -p
 # compusophy-lab --release -- corpus` writes it; never edit it by hand.
-# 1100 programs: 110 found, 990 variants, 377 shapes; 722 run clean; 165 held out.
+# 1115 programs: 111 found, 1004 variants, 382 shapes; 737 run clean; 165 held out.
 hash	shape	bytes	lines	runs	split	of	how	from
 0212d8182e34d23f	79f9b33055c463c2	98	1	runs	train	-	-	programs/applang-syntax/src/tests.rs:323
 4e92d9889daf9ee5	79f9b33055c463c2	100	1	runs	train	0212d8182e34d23f	rename#1	-
@@ -939,6 +939,21 @@ cb9082a6d282c214	155cb5bd96fb3ad7	31	5	runs	train	-	-	crates/text/src/tests.rs:4
 ca2dc969edef79e3	e6bd44a065274a5e	31	5	runs	train	cb9082a6d282c214	numbers#8	-
 cd271f6145d7cab3	5b4891856a897746	50	1	runs	train	-	-	programs/applang-syntax/src/tests.rs:58
 3ad02e43105d530c	40886bf4186ceeff	50	1	runs	train	cd271f6145d7cab3	numbers#10	-
+cd320f0dffbfa953	e542ac353842e577	180	9	runs	train	-	-	programs/team/src/tests.rs:116
+a1dbe1f20444e63b	e542ac353842e577	188	9	runs	train	cd320f0dffbfa953	rename#1	-
+105e148e147ffb53	e542ac353842e577	184	9	runs	train	cd320f0dffbfa953	rename#2	-
+18bfd851a98955a3	e542ac353842e577	184	9	runs	train	cd320f0dffbfa953	rename#3	-
+e64ccf82380c9685	e542ac353842e577	184	9	runs	train	cd320f0dffbfa953	rename#4	-
+bc90f6bc11175c41	e542ac353842e577	188	9	runs	train	cd320f0dffbfa953	rename#5	-
+a313766e2023ea19	e542ac353842e577	188	9	runs	train	cd320f0dffbfa953	rename#6	-
+fee770ccf4b88565	e542ac353842e577	172	9	runs	train	cd320f0dffbfa953	rename#7	-
+57d45ac7be25868e	a6b0d24e0a82c3f2	172	9	runs	train	cd320f0dffbfa953	rename+numbers#8	-
+f1b6d3987735074c	e969206326daaf7f	164	8	runs	train	cd320f0dffbfa953	rename+drop#9	-
+7fbfeeda875f341d	4962b59854a546ad	192	9	runs	train	cd320f0dffbfa953	rename+numbers#10	-
+187a38e21ee3e809	e969206326daaf7f	152	8	runs	train	cd320f0dffbfa953	rename+drop#11	-
+d6a22bb45a2422c8	e16d4ea3c7a6c6c6	176	9	runs	train	cd320f0dffbfa953	rename+numbers#12	-
+f70660095e55ad6a	e969206326daaf7f	155	8	runs	train	cd320f0dffbfa953	rename+drop#13	-
+27c2ab54b40edbc6	a6b0d24e0a82c3f2	176	9	runs	train	cd320f0dffbfa953	rename+numbers#14	-
 cda31e3816b7c6b7	c7180011f0d1c60f	22	2	runs	train	-	-	crates/kernel/src/tests/snap.rs:29,programs/coder/src/tests.rs:425
 60813512b94e0f77	c7180011f0d1c60f	30	2	runs	train	cda31e3816b7c6b7	rename#1	-
 fbbc776a1132a6bf	c7180011f0d1c60f	22	2	runs	train	cda31e3816b7c6b7	rename#2	-

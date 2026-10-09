@@ -72,6 +72,19 @@ fn rank(f: &Option<Fault>) -> u8 {
     }
 }
 
+/// How many of `draft`'s distinct lines (trimmed, not blank) `src` still has, and how many it has.
+fn kept(draft: &str, src: &str) -> (usize, usize) {
+    let lines = |s: &str| {
+        let mut v: Vec<String> =
+            s.lines().map(str::trim).filter(|l| !l.is_empty()).map(String::from).collect();
+        v.sort_unstable();
+        v.dedup();
+        v
+    };
+    let (d, s) = (lines(draft), lines(src));
+    (d.iter().filter(|l| s.binary_search(l).is_ok()).count(), d.len())
+}
+
 /// The problem's code (0: none).
 fn code(f: &Option<Fault>) -> u16 {
     f.as_ref().map_or(0, |f| f.diag.code.unwrap_or(1))
@@ -169,9 +182,16 @@ impl Repair {
             },
             _ => (Held::Nothing, None, None),
         };
-        // A fix that drops more than a quarter of the lines is not a fix.
+        // A fix that drops more than a quarter of the lines is not a fix; nor is a whole program
+        // that is another program (tonight a 0.5B answered five of GLM's passing drafts, faulted
+        // only by their icons, with an example app from the prompt, which ran clean): it keeps at
+        // least half the draft's lines.
         let whole = |src: &String| edits::lines(src) * 4 >= edits::lines(&self.best) * 3;
-        if let Some(src) = candidate.filter(whole) {
+        let same = |src: &String| {
+            let (k, n) = kept(&self.best, src);
+            held != Held::Program || k * 2 >= n
+        };
+        if let Some(src) = candidate.filter(|s| whole(s) && same(s)) {
             let fault = ai::fault(&src, &self.kept, self.seeds);
             if rank(&fault) >= rank(&self.fault) {
                 (self.best, self.fault) = (src, fault);

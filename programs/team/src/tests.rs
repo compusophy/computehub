@@ -108,3 +108,16 @@ fn a_unified_diff_in_any_of_its_shapes_is_read_as_the_edit_blocks_it_means() {
     assert!(ask(&again).contains("SEARCH"), "{again:?}");
     assert_eq!(r.last().map(|s| s.held), Some(Held::Missed));
 }
+
+#[test]
+fn a_whole_program_that_is_another_program_is_not_a_fix() {
+    // An example app in place of the draft: it runs clean, and is refused all the same.
+    let other = "```app\n// Snake: eat and grow.\n// icon: ring 12 12 9\nstate len = 3;\nlabel \"Snake\";\nlabel \"Length \" + len;\nbutton \"Grow\" { len += 1; }\nbutton \"Reset\" { len = 3; }\nlabel \"Go\";\nlabel \"Eat\";\n```";
+    let (mut r, _) = Repair::start("a counter", "", &broken(), "base05", 1);
+    let f = done(r.reply(other, false));
+    assert!(!f.clean && f.src == broken(), "{f:?}");
+    // The draft rewritten whole but itself: kept.
+    let (mut r, _) = Repair::start("a counter", "", &broken(), "base05", 1);
+    let f = done(r.reply(&["```app\n", COUNTER, "```"].concat(), false));
+    assert!(f.clean && f.steps[0].held == Held::Program, "{f:?}");
+}
