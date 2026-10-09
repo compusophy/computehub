@@ -340,6 +340,16 @@ impl Pool {
     /// Tests this device at `now` ([`crate::test`]): never while a job runs or is helped; idle
     /// job workers end first, so the test's run alone.
     pub fn test(&mut self, now: u64) {
+        self.begin_test(now, false);
+    }
+
+    /// Measures all the memory this device can give before it swaps ([`crate::test::fill`]), as
+    /// [`Pool::test`] starts a test: never under a job, ending idle workers first.
+    pub fn test_memory(&mut self, now: u64) {
+        self.begin_test(now, true);
+    }
+
+    fn begin_test(&mut self, now: u64, all: bool) {
         let job = self.job.as_ref().is_some_and(|j| j.ended.is_none());
         let help = self.help.as_ref().is_some_and(|h| h.ended.is_none());
         if job || help || self.pending > 0 {
@@ -354,16 +364,27 @@ impl Pool {
             self.program.clear();
         }
         let cap = crate::test::cap(self.me.ram_mb, self.me.kind == "computer");
-        self.test = Some(Test::start(self.me.cores, cap, now, &mut self.out));
+        self.test = Some(match all {
+            true => Test::start_fill(self.me.cores, now, &mut self.out),
+            false => Test::start(self.me.cores, cap, now, &mut self.out),
+        });
     }
 
-    /// News from a test: the CPU measured (the memory not yet: none), then the memory too; this
-    /// tab's, told to every link (and kept by the hub).
+    /// News from a test: the CPU measured, then the memory too; this tab's, told to every link
+    /// (and kept by the hub). Measuring all memory measures no CPU: its figures stay. Until a
+    /// test's memory is in, and when it is a floor below a figure measured before (the quick
+    /// test's 2 GB under a full measure's 10), the memory known stays.
     fn tested(&mut self) {
         let Some(t) = self.test.as_mut().filter(|t| t.fresh) else { return };
         t.fresh = false;
-        let mem = if t.over { t.measured.mem } else { 0 };
-        self.me.measured = Measured { mem, tested: self.clock.max(1), ..t.measured };
+        let (prev, mut m) = (self.me.measured, t.measured);
+        if t.all {
+            (m.cpu1, m.cpun) = (prev.cpu1, prev.cpun);
+        }
+        if !t.over || (m.floor && prev.mem > m.mem) {
+            (m.mem, m.floor) = (prev.mem, prev.floor);
+        }
+        self.me.measured = Measured { tested: self.clock.max(1), ..m };
         let hello = self.hello();
         self.send_all(&hello);
     }

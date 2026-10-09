@@ -24,6 +24,8 @@
 //!
 //! What it measured goes into this tab's Hello, so every linked tab sees it.
 
+pub mod fill;
+
 use crate::pool::Act;
 
 /// Whether the memory half runs. Off for a while on 2026-10-08 (its ramp to 16 GiB took all of a
@@ -88,16 +90,19 @@ enum Phase {
     All,
     Rest,
     Memory,
+    /// Measuring all memory ([`fill`]).
+    Fill,
 }
 
 /// A worker: its pid, whether it reads lines yet, its output short of a line, the memory it
-/// holds (MiB).
+/// holds (MiB), whether it holds all it can.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct Bencher {
     pid: u32,
     ready: bool,
     buf: Vec<u8>,
     held: u32,
+    full: bool,
 }
 
 /// A test under way, or over: its phase, its workers and those still starting, the answers this
@@ -128,6 +133,9 @@ pub struct Test {
     pub over: bool,
     /// Whether its memory half runs ([`MEMORY`]; tests turn it on).
     pub memory: bool,
+    /// Whether it measures all memory instead ([`fill`]), and that measure under way.
+    pub all: bool,
+    fill: fill::Fill,
 }
 
 /// MiB as people say memory: `960 MB`, `9.4 GB`.
@@ -163,6 +171,8 @@ impl Test {
             note: "Testing: starting its workers".into(),
             over: false,
             memory: MEMORY,
+            all: false,
+            fill: fill::Fill::default(),
         }
     }
 
@@ -195,6 +205,10 @@ impl Test {
             }
             None if self.phase == Phase::Memory && self.pending == 0 && self.stalled => {
                 self.finish_memory("the most processes a tab may run", true, out)
+            }
+            None if self.phase == Phase::Fill && self.pending == 0 && self.stalled => {
+                let mem = self.measured.mem;
+                self.finish_fill("the most processes a tab may run", true, mem, out)
             }
             None => {}
         }
@@ -229,7 +243,12 @@ impl Test {
         if line == "ready" {
             self.workers[i].ready = true;
             let all = self.pending == 0 && self.workers.iter().all(|w| w.ready);
-            if self.phase == Phase::Starting && all {
+            if self.phase == Phase::Starting && all && self.all {
+                self.fill_begin(now, out);
+            } else if self.phase == Phase::Fill && self.stalled {
+                self.stalled = false;
+                self.round(now, out);
+            } else if self.phase == Phase::Starting && all {
                 // Warm up every worker, one at a time, before any is timed.
                 (self.phase, self.waiting) = (Phase::Warming, self.workers.len());
                 self.feed(0, &["cpu ", &WARM_MIB.to_string()].concat(), out);
@@ -290,6 +309,7 @@ impl Test {
                 let ms = own.unwrap_or_else(|| now.saturating_sub(self.t0));
                 self.stepped(result, ms, now, out);
             }
+            Phase::Fill => self.filled(i, result, own.unwrap_or(0), now, out),
             Phase::Starting | Phase::Rest | Phase::Memory => {}
         }
     }
@@ -375,6 +395,10 @@ impl Test {
             Phase::Rest | Phase::Memory => {
                 self.finish_memory("the browser ending a worker", false, out)
             }
+            Phase::Fill => {
+                let before = self.fill_before();
+                self.finish_fill("the browser ending a worker", false, before, out)
+            }
             _ => self.finish("A test worker ended: test again", out),
         }
     }
@@ -388,6 +412,7 @@ impl Test {
             Phase::Rest => self.t0,
             Phase::Memory if self.stepping => (self.t0 + self.limit + GRACE).min(end),
             Phase::Memory => end,
+            Phase::Fill => self.fill_due(),
             _ => self.last + PATIENCE,
         };
         Some(at)
@@ -411,6 +436,7 @@ impl Test {
             }
             Phase::Memory if now >= end => self.finish_memory("the test's time", true, out),
             Phase::Memory => {}
+            Phase::Fill => self.fill_tick(now, out),
             _ if now >= self.last + PATIENCE => {
                 self.finish("The test took too long: test again", out)
             }

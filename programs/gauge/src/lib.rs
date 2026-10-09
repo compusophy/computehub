@@ -97,10 +97,43 @@ impl Held {
     pub fn mib(&self) -> usize {
         self.blocks.iter().map(Vec::len).sum::<usize>() / WORDS
     }
+
+    /// Reads and writes back one word on each of `pages` pages (4 KiB) picked at random across
+    /// what is held, oldest first in the odds as in the blocks; the microseconds it took. Pages
+    /// written long ago are the first a system short of memory swaps out, and reaching one then
+    /// takes milliseconds, not the microseconds RAM takes: the first sign of swapping, before any
+    /// write slows.
+    pub fn touch(&mut self, pages: u32) -> u64 {
+        const PAGE: usize = 4096 / 8;
+        let total: usize = self.blocks.iter().map(Vec::len).sum::<usize>() / PAGE;
+        if total == 0 {
+            return 0;
+        }
+        let t0 = std::time::Instant::now();
+        let mut x = self.x | 1;
+        for _ in 0..pages {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            let mut page = (x % total as u64) as usize;
+            for b in &mut self.blocks {
+                let n = b.len() / PAGE;
+                if page < n {
+                    let w = &mut b[page * PAGE];
+                    *w = w.wrapping_add(1);
+                    break;
+                }
+                page -= n;
+            }
+        }
+        self.x = x;
+        t0.elapsed().as_micros().min(u128::from(u64::MAX)) as u64
+    }
 }
 
 /// The answer to one line: `<index> <mib> <hash> <result>` (for memory, the mebibytes held now,
-/// `-`, and `ok`, `no` or `slow`, with ms but for `no`); `None` for a line that is not a request.
+/// `-`, and `ok`, `no` or `slow`, with ms but for `no`; for a touch, `touch` and microseconds);
+/// `None` for a line that is not a request.
 pub fn answer(line: &str, held: &mut Held) -> Option<String> {
     let mut words = line.split_whitespace();
     let index: u32 = words.next()?.parse().ok()?;
@@ -121,6 +154,12 @@ pub fn answer(line: &str, held: &mut Held) -> Option<String> {
                 Took::Slow(ms) => [" - slow ", &ms.to_string()].concat(),
             };
             [&index.to_string(), " ", &held.mib().to_string(), &result].concat()
+        }
+        // `<index> touch <pages>`: the microseconds the pages took, `<index> <held> - touch <us>`.
+        "touch" => {
+            let us = held.touch(mib);
+            [&index.to_string(), " ", &held.mib().to_string(), " - touch ", &us.to_string()]
+                .concat()
         }
         _ => return None,
     })

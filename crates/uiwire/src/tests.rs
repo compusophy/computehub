@@ -144,6 +144,7 @@ fn every_kind_round_trips_and_nothing_else_decodes() {
         Request::Serve { url: "http://localhost:8080".into() },
         Request::Test,
         Request::Link { what: "unlink sha-256 AB:CD".into() },
+        Request::Memory,
     ];
     [pref, Request::Reset]
         .iter()

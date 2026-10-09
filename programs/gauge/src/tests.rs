@@ -48,3 +48,16 @@ fn memory_is_held_written_through_and_answered() {
         assert_eq!(answer(bad, &mut held), None, "{bad}");
     }
 }
+
+#[test]
+fn touching_old_pages_reads_and_writes_them_and_says_how_long() {
+    let mut held = Held::default();
+    assert_eq!(held.touch(64), 0, "nothing held, nothing touched");
+    assert!(held.take(8, 60_000) != Took::No);
+    let before: u64 = held.blocks.iter().flatten().fold(0, |s, w| s.wrapping_add(*w));
+    let a = answer("4 touch 64", &mut held).unwrap();
+    assert!(a.starts_with("4 8 - touch "), "{a}");
+    let after: u64 = held.blocks.iter().flatten().fold(0, |s, w| s.wrapping_add(*w));
+    assert_eq!(after.wrapping_sub(before), 64, "each page's word written back, one more");
+    assert!(a.rsplit(' ').next().unwrap().parse::<u64>().is_ok());
+}

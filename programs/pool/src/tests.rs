@@ -822,3 +822,104 @@ fn with_the_memory_half_off_a_test_measures_the_cpu_and_takes_no_memory() {
     let me = t.pool.me.measured;
     assert_eq!((me.cpu1, me.cpun, me.mem, me.tested), (160, 160, 0, 7));
 }
+
+/// A fill test on a two-core tab, its workers ready: (the tab, the time).
+fn filling(prev: crate::test::Measured) -> (Tab, u64) {
+    let mut t = tab("A", 2);
+    (t.pool.me.measured, t.pool.clock) = (prev, 9);
+    t.pool.test_memory(0);
+    t.pool.spawned(Some(201));
+    t.pool.spawned(Some(202));
+    says(&mut t, 201, "ready", 1);
+    says(&mut t, 202, "ready", 1);
+    (t, 1)
+}
+
+/// One round: each step fed answered ok in 40 ms, then the touch of the oldest pages in `us`.
+fn round(t: &mut Tab, now: &mut u64, us: u64) {
+    let (lines, _) = fed(t);
+    let steps: Vec<(u32, String)> = lines.into_iter().filter(|l| l.1.contains(" ram 128 ")).collect();
+    assert_eq!(steps.len(), 2, "both workers step at once");
+    for (pid, line) in steps {
+        *now += 40;
+        says(t, pid, &[&line[..1], " 128 - ok 40"].concat(), *now);
+    }
+    let (touch, _) = fed(t);
+    assert_eq!(touch, [(201, "0 touch 64".to_string())], "the oldest memory's pages");
+    *now += 1;
+    says(t, 201, &["0 128 - touch ", &us.to_string()].concat(), *now);
+}
+
+#[test]
+fn measuring_all_memory_fills_in_rounds_until_the_oldest_pages_slow() {
+    use crate::test::Measured;
+    let prev = Measured { cpu1: 200, cpun: 1600, mem: 2048, tested: 5, floor: true };
+    let (mut t, mut now) = filling(prev);
+    // Four clean rounds (the pages' usual 30 us), then one whose touch takes 5 ms: swapping.
+    for us in [30, 25, 35, 40] {
+        round(&mut t, &mut now, us);
+    }
+    assert_eq!(t.pool.test.as_ref().unwrap().measured.mem, 4 * 2 * 128);
+    round(&mut t, &mut now, 5000);
+    let test = t.pool.test.as_ref().unwrap();
+    assert!(test.over && test.note.contains("old pages slowing"), "{}", test.note);
+    assert!(test.note.contains("0.03 ms usually, 5.00 ms at most"), "{}", test.note);
+    // What was held before the round that showed it; the CPU's figures kept; a real figure, not
+    // a floor, so it replaces the quick test's floor though it is less.
+    let me = t.pool.me.measured;
+    assert_eq!((me.cpu1, me.cpun, me.mem, me.floor, me.tested), (200, 1600, 1024, false, 9));
+    assert!(t.pool.out.iter().any(|a| matches!(a, Act::Stop(p) if p.contains(&201))));
+}
+
+#[test]
+fn a_fill_that_runs_out_of_time_is_a_floor_and_a_touch_that_never_answers_is_cut_off() {
+    use crate::test::Measured;
+    use crate::test::fill::FILL_TIME;
+    // Rounds slow to come: at the test's time, at least what it holds.
+    let (mut t, mut now) = filling(Measured::default());
+    round(&mut t, &mut now, 30);
+    now += FILL_TIME;
+    round(&mut t, &mut now, 30);
+    let test = t.pool.test.as_ref().unwrap();
+    assert!(test.over && test.note.contains("at least 512 MB"), "{}", test.note);
+    assert_eq!((t.pool.me.measured.mem, t.pool.me.measured.floor), (512, true));
+    // A touch out and no answer: the pool's timer ends it at what was held before the round.
+    let (mut t, mut now) = filling(Measured::default());
+    round(&mut t, &mut now, 30);
+    let (lines, _) = fed(&mut t);
+    for (pid, line) in lines.into_iter().filter(|l| l.1.contains(" ram ")) {
+        now += 40;
+        says(&mut t, pid, &[&line[..1], " 256 - ok 40"].concat(), now);
+    }
+    let due = t.pool.due().unwrap();
+    t.pool.tick(due);
+    let test = t.pool.test.as_ref().unwrap();
+    assert!(test.over && test.note.contains("old pages not answering"), "{}", test.note);
+    assert_eq!(t.pool.me.measured.mem, 256);
+}
+
+#[test]
+fn a_quick_tests_floor_never_hides_a_full_measure() {
+    use crate::test::Measured;
+    let mut t = tab("A", 1);
+    t.pool.me.measured = Measured { cpu1: 1, cpun: 1, mem: 10_240, tested: 5, floor: false };
+    t.pool.clock = 9;
+    t.pool.test(0);
+    t.pool.test.as_mut().unwrap().memory = true;
+    t.pool.me.ram_mb = 1024;
+    t.pool.spawned(Some(201));
+    says(&mut t, 201, "ready", 1);
+    says(&mut t, 201, "0 4 h ok 2", 2);
+    says(&mut t, 201, "0 16 h ok 100", 100);
+    says(&mut t, 201, "0 16 h ok 100", 200);
+    t.pool.tick(200 + crate::test::REST);
+    let mut now = 200 + crate::test::REST;
+    // The quick test's cap (2 GB here) reached: a floor, below the 10 GB measured before.
+    while !t.pool.test.as_ref().unwrap().over {
+        now += 31;
+        let held = t.pool.test.as_ref().unwrap().measured.mem + 64;
+        says(&mut t, 201, &["0 ", &held.to_string(), " - ok 30"].concat(), now);
+    }
+    let me = t.pool.me.measured;
+    assert_eq!((me.cpu1, me.mem, me.floor, me.tested), (160, 10_240, false, 9));
+}

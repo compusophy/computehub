@@ -57,7 +57,7 @@ impl Relay {
 
     /// Process `pid` asked for `r`: Pair (from Activity's window alone) as its code, Measure,
     /// Job as its program's name, then its chunks, a line each; Ask its question, Serve its URL;
-    /// Test; Link what it asks.
+    /// Test; Link what it asks; Memory.
     pub fn ask(&mut self, pid: u32, r: &Request, now: f64) {
         let (kind, mut data) = match r {
             Request::Pair { code } => (1, code.clone()),
@@ -67,6 +67,7 @@ impl Relay {
             Request::Serve { url } => (5, url.clone()),
             Request::Test => (6, String::new()),
             Request::Link { what } => (7, what.clone()),
+            Request::Memory => (8, String::new()),
             _ => return,
         };
         if let Request::Job { chunks, .. } = r {

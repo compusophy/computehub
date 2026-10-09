@@ -240,6 +240,7 @@ impl Hub {
                     5 => Request::Serve { url: text },
                     6 => Request::Test,
                     7 => Request::Link { what: text },
+                    8 => Request::Memory,
                     _ => return,
                 };
                 self.ask(f.a, r);
@@ -357,6 +358,7 @@ impl Hub {
             }
             Request::Test => self.pool.test(now),
             Request::Link { what } => self.link_ask(&what),
+            Request::Memory => self.pool.test_memory(now),
             // A job whose one chunk is `@<url> <per>`: its chunks are the lines of that
             // same-origin file, `per` a chunk (tab-joined), fetched first.
             Request::Job { name, chunks } if chunks.len() == 1 && chunks[0].starts_with('@') => {

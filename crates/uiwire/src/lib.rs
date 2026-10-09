@@ -514,6 +514,9 @@ pub enum Request {
     /// Activity's window only: measure this device (its CPU, one core and all, and the memory a
     /// tab can hold), the results in the [`pool`] snapshots and told to every linked tab.
     Test,
+    /// Activity's window only: measure all the memory this device can give before it starts to
+    /// swap (the pool's workers fill it until its oldest pages slow, then free it all).
+    Memory,
     /// Activity's window only: a linked device ([`pool::Bond`]), named by its key: `reconnect
     /// <key>` tries to reach it now, `unlink <key>` forgets it here and asks it to forget this one;
     /// `open` (the Pool page shown) only starts the pool, so what it keeps shows.
@@ -931,6 +934,7 @@ impl Request {
             Self::Serve { url } => o.u8(23).str(url),
             Self::Test => o.u8(24),
             Self::Link { what } => o.u8(25).str(what),
+            Self::Memory => o.u8(26),
         }
     }
 
@@ -970,6 +974,7 @@ impl Request {
             23 => Self::Serve { url: r.str()? },
             24 => Self::Test,
             25 => Self::Link { what: r.str()? },
+            26 => Self::Memory,
             _ => return None,
         })
     }
@@ -977,7 +982,7 @@ impl Request {
 
 impl Request {
     /// Whether only the OS's own windows may ask it: Watch, End, Pref, Reset, Tty, Input, Pair,
-    /// Measure, Ask, Serve, Test and Link.
+    /// Measure, Ask, Serve, Test, Memory and Link.
     pub fn own(&self) -> bool {
         use Request::*;
         matches!(
@@ -993,6 +998,7 @@ impl Request {
                 | Ask { .. }
                 | Serve { .. }
                 | Test
+                | Memory
                 | Link { .. }
         )
     }

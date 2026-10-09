@@ -16,6 +16,8 @@ use super::{DASH, DOT, History, bytes, card, count, nice, text};
 /// Share, Ask; the devices' head (column `k` is `SORT + k`); the question field, `QUESTION` and
 /// one more for each question asked (a new field is an empty one, as a chat's is).
 pub const TEST: u32 = 38;
+/// Measure all memory.
+pub const FILL: u32 = 39;
 pub const SHOW: u32 = 40;
 pub const CODE: u32 = 41;
 pub const JOIN: u32 = 42;
@@ -106,6 +108,7 @@ impl PoolPage {
             },
             Event::Click { id: SHOW } => requests.push(Request::Pair { code: String::new() }),
             Event::Click { id: TEST } => requests.push(Request::Test),
+            Event::Click { id: FILL } => requests.push(Request::Memory),
             Event::Change { id: CODE, text, .. } => self.code.clone_from(text),
             Event::Click { id: JOIN } | Event::Submit { id: CODE } if !self.code.is_empty() => {
                 requests.push(Request::Pair { code: self.code.clone() })
@@ -607,11 +610,11 @@ fn testing(s: &Snap) -> Node {
     let said = match me {
         None if !s.testing.is_empty() => String::new(),
         Some(d) => [
-            "One core ",
-            &rate(d.cpu1),
-            DOT,
-            "all cores ",
-            &rate(d.cpun),
+            // A device measured for its memory alone says so for its CPU.
+            &match d.cpu1 {
+                0 => "CPU not measured".to_string(),
+                c => ["One core ", &rate(c), DOT, "all cores ", &rate(d.cpun)].concat(),
+            },
             DOT,
             "memory ",
             &match (d.mem, d.floor) {
@@ -636,8 +639,15 @@ fn testing(s: &Snap) -> Node {
                of memory starts to swap. Stopped by the test's own limit, the figure is a floor: \
                at least that much (2.0+ GB).";
     children.push(text(Style::Small, how));
+    let all = "Measure all memory fills this tab until the device shows the first sign of \
+               swapping (its oldest pages slowing down), then frees it all at once: the memory it \
+               can really give. Other apps may slow for a moment while it runs.";
+    children.push(text(Style::Small, all));
     let label = if me.is_some() { "Test again" } else { "Test this device" }.into();
-    children.push(Node::Button { id: TEST, variant: Variant::Normal, label });
+    let test = Node::Button { id: TEST, variant: Variant::Normal, label };
+    let fill =
+        Node::Button { id: FILL, variant: Variant::Normal, label: "Measure all memory".into() };
+    children.push(Node::Row { id: 0, gap: 8, children: vec![test, fill] });
     Node::Card { id: 0, children: vec![Node::Col { id: 0, gap: 6, children }] }
 }
 
