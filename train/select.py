@@ -8,8 +8,9 @@ answer a task (`report.py`'s FILE=1).
                          --out answers-q3-sel.jsonl [--summary FILE.json]
 
 It also says how good the model's checks are: how many read at all, how many a correct program
-(the task's own reference) passes (fairness), and the best a perfect chooser could do (any of the
-samples passes the real check).
+(the task's own reference) passes (fairness), how they judge the programs beside the real check
+(kept, falsely rejected, truly rejected, missed), and the best a perfect chooser could do (any of
+the samples passes the real check).
 """
 import argparse
 import json
@@ -92,8 +93,21 @@ def main():
     if own:
         refs = [{"task": t["id"], "model": "reference", "reply": "```app\n" + t["ref"].rstrip("\n") + "\n```"} for t in own]
         fair = sum(1 for g in score(a.iq, refs, own) if g.get("pass"))
+    # How the model's checks judge the programs, beside the real check: a check that keeps what
+    # passes and rejects what fails can choose among samples; one that rejects passing programs
+    # would throw working ones away.
+    agree = {"keep": 0, "false_reject": 0, "true_reject": 0, "miss": 0, "unread": 0}
+    for task, pg in by_real.items():
+        for (_, g), o in zip(pg, by_own.get(task, [])):
+            if o.get("stage") == "harness":
+                agree["unread"] += 1
+            elif g.get("pass"):
+                agree["keep" if o.get("pass") else "false_reject"] += 1
+            else:
+                agree["miss" if o.get("pass") else "true_reject"] += 1
     summary = {
         "tasks": len(by_real),
+        "agree": agree,
         "checks_read": len(own), "checks_written": sum(1 for c in checks.values() if c),
         "fair": fair,
         "chosen_by": how,
@@ -103,9 +117,9 @@ def main():
         "best_of_k": sum(1 for pg in by_real.values() if any(g.get("pass") for _, g in pg)),
     }
     print("select: %d tasks; the model's checks: %d written, %d read, %d fair to the reference; chosen by %s; "
-          "one shot %.1f%%, chosen %d, best of the samples %d" % (
+          "one shot %.1f%%, chosen %d, best of the samples %d; against the real check %s" % (
               summary["tasks"], summary["checks_written"], summary["checks_read"], fair, how,
-              100 * summary["one_shot"], summary["chosen"], summary["best_of_k"]))
+              100 * summary["one_shot"], summary["chosen"], summary["best_of_k"], agree))
     if a.summary:
         common.write_atomic(a.summary, json.dumps(summary, indent=1) + "\n")
 

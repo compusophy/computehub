@@ -21,7 +21,7 @@ use coder::prompt;
 
 /// A fix's room in output tokens and its temperature, as the make loop asks a fix.
 pub const ROOM: u32 = 4_096;
-const TEMPERATURE: &str = "0.2";
+pub const TEMPERATURE: &str = "0.2";
 
 /// What a helper's reply held: a whole program, edit blocks that applied, a unified diff read as
 /// edit blocks that applied ([`diff`]), edit blocks (or a diff) that did not (asked again with
@@ -123,6 +123,7 @@ pub struct Repair {
     ask: String,
     kept: String,
     model: String,
+    temperature: String,
     turns: u8,
     seeds: u8,
     system: String,
@@ -136,12 +137,26 @@ impl Repair {
     /// Repairs `draft`, written for `ask`, with the helper `model` in at most `turns` turns:
     /// the first request, or the end (it runs clean already, or no turns are allowed).
     pub fn start(ask: &str, kept: &str, draft: &str, model: &str, turns: u8) -> (Repair, Next) {
+        Repair::start_at(ask, kept, draft, model, turns, TEMPERATURE)
+    }
+
+    /// [`Repair::start`] at another sampling temperature (a decimal, as JSON has it): another
+    /// try at the same draft samples another repair.
+    pub fn start_at(
+        ask: &str,
+        kept: &str,
+        draft: &str,
+        model: &str,
+        turns: u8,
+        temperature: &str,
+    ) -> (Repair, Next) {
         let seeds = coder::Knobs::default().seeds;
         let fault = ai::fault(draft, kept, seeds);
         let mut r = Repair {
             ask: ask.into(),
             kept: kept.into(),
             model: model.into(),
+            temperature: temperature.into(),
             turns,
             seeds,
             system: prompt::system(),
@@ -171,7 +186,7 @@ impl Repair {
         let mut options = String::from(",\"max_tokens\":");
         ai::put_num(&mut options, ROOM.into());
         options += ",\"temperature\":";
-        options += TEMPERATURE;
+        options += &self.temperature;
         let body = ai::chat(&self.model, &options, &self.system, &msg);
         self.asked = msg;
         Next::Ask(body)

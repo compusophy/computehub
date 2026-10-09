@@ -60,6 +60,12 @@ fn a_helper_repairs_a_draft_with_edits_and_the_test_judges_it() {
 }
 
 #[test]
+fn another_try_samples_at_its_own_temperature() {
+    let (_, next) = Repair::start_at("A counter", "", &broken(), "q3", 3, "0.7");
+    assert!(ask(&next).contains("\"max_tokens\":4096,\"temperature\":0.7"));
+}
+
+#[test]
 fn edits_that_miss_are_asked_again_with_why_and_the_turns_run_out() {
     let (mut r, _) = Repair::start("A counter", "", &broken(), "q3", 2);
     let next = r.reply(&edit("state m = 9", "state m = 9;"), false);

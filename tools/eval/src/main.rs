@@ -13,6 +13,7 @@
 //!                         [--name N] [--jobs 1] [--ms MS] [--per-hour 110]
 //! cargo run -p eval -- team --suite S --answers A --helper-url U --out OUT [--held H]
 //!                           [--helper M] [--name N] [--turns 3] [--jobs 1] [--traces T]
+//!                           [--tries 1] [--temperature 0.7]
 //! cargo run -p eval -- mutants --suite S --refs R --held H --out OUT [--per 1] [--max N]
 //! ```
 //!
@@ -29,8 +30,10 @@
 //! `team` is the team's first move (DESIGN.md, "The team"): each answer in `--answers` (a lead's
 //! recorded replies, as `iq score` reads them) is a draft that a helper at `--helper-url` (a
 //! llama-server's chat completions, unpaced, `--jobs` at once) repairs when it does not run clean,
-//! in at most `--turns` turns ([`team::Repair`]), every answer judged by the make loop's test. An
-//! answer line a task goes to `--out` (the best program; how the repair went in `team`), so
+//! in at most `--turns` turns ([`team::Repair`]), every answer judged by the make loop's test;
+//! with `--tries K`, up to K repairs of the draft, the ones after the first sampled at
+//! `--temperature`, the first that runs clean kept (a selection by the smoke test alone, never
+//! the task's hidden check). An answer line a task goes to `--out` (the best program; how the repair went in `team`), so
 //! `iq score` scores the lead and helper together; tasks already there are skipped.
 //!
 //! `--dir D` reads and writes `D/results` and `D/replays` instead of the repo's `evals/`. Runs
@@ -532,6 +535,9 @@ fn team(args: &[String]) {
     let helper = arg(args, "--helper").unwrap_or_else(|| "helper".into());
     let name = arg(args, "--name").unwrap_or_else(|| ["team-", &helper].concat());
     let turns: u8 = arg(args, "--turns").and_then(|v| v.parse().ok()).unwrap_or(3);
+    // Repairs a draft may get, and the temperature of those after the first.
+    let tries: usize = arg(args, "--tries").and_then(|v| v.parse().ok()).unwrap_or(1).max(1);
+    let hot = arg(args, "--temperature").unwrap_or_else(|| "0.7".into());
     let jobs = arg(args, "--jobs").and_then(|v| v.parse().ok()).unwrap_or(1usize).max(1);
     let held = arg(args, "--held").map(|h| read(&h));
     // Each helper turn, for study and for training the helpers: the message, the reply, how it
@@ -568,49 +574,57 @@ fn team(args: &[String]) {
                     let t0 = Instant::now();
                     let draft = coder::edits::program(reply).map(|p| p.0.to_string());
                     let fixed = draft.map(|d| {
-                        let (mut r, mut step) = team::Repair::start(ask, "", &d, &helper, turns);
-                        let mut n = 0;
-                        loop {
-                            match step {
-                                team::Next::Done(f) => break Ok(f),
-                                team::Next::Ask(body) => {
-                                    n += 1;
-                                    match helper_reply(&mut wire, task, n, &body) {
-                                        Ok((said, cut)) => {
-                                            let asked = r.asked().to_string();
-                                            step = r.reply(&said, cut);
-                                            if let (Some(path), Some(s)) = (&traces, r.last()) {
-                                                // The whole request too (its system prompt and
-                                                // message): a turn to train on as it was asked.
-                                                let line = format!(
-                                                    "{{\"task\":{},\"turn\":{n},\"asked\":{},\"reply\":{},\"held\":{},\"before\":{},\"after\":{},\"body\":{}}}
-",
-                                                    quote(task),
-                                                    quote(&asked),
-                                                    quote(&said),
-                                                    quote(&format!("{:?}", s.held)),
-                                                    s.before,
-                                                    s.after,
-                                                    quote(&body)
-                                                );
-                                                let _one = file.lock();
-                                                append(path, &line);
-                                            }
+                        // Up to `tries` repairs of the draft, each from the draft itself: the
+                        // first as the make loop asks a fix, the others sampled hotter; the
+                        // first that runs clean is kept, else the first try's.
+                        let (mut n, mut first) = (0, None);
+                        for t in 0..tries {
+                            let temp = if t == 0 { team::TEMPERATURE } else { hot.as_str() };
+                            let (mut r, mut step) =
+                                team::Repair::start_at(ask, "", &d, &helper, turns, temp);
+                            let f = loop {
+                                match step {
+                                    team::Next::Done(f) => break f,
+                                    team::Next::Ask(body) => {
+                                        n += 1;
+                                        let (said, cut) =
+                                            helper_reply(&mut wire, task, n, &body)?;
+                                        let asked = r.asked().to_string();
+                                        step = r.reply(&said, cut);
+                                        if let (Some(path), Some(s)) = (&traces, r.last()) {
+                                            // The whole request too (its system prompt and
+                                            // message): a turn to train on as it was asked.
+                                            let line = format!(
+                                                "{{\"task\":{},\"try\":{t},\"turn\":{n},\"asked\":{},\"reply\":{},\"held\":{},\"before\":{},\"after\":{},\"body\":{}}}\n",
+                                                quote(task),
+                                                quote(&asked),
+                                                quote(&said),
+                                                quote(&format!("{:?}", s.held)),
+                                                s.before,
+                                                s.after,
+                                                quote(&body)
+                                            );
+                                            let _one = file.lock();
+                                            append(path, &line);
                                         }
-                                        Err(e) => break Err(e),
                                     }
                                 }
+                            };
+                            if f.clean {
+                                return Ok((f, t + 1));
                             }
+                            first.get_or_insert(f);
                         }
+                        first.map(|f| (f, tries)).ok_or_else(|| String::from("no try"))
                     });
-                    let f = match fixed {
-                        Some(Ok(f)) => Some(f),
+                    let (f, used) = match fixed {
+                        Some(Ok((f, used))) => (Some(f), used),
                         // The helper unreachable: not written, so a rerun repairs it.
                         Some(Err(e)) => {
                             eprintln!("{task:<28} helper failed: {e}");
                             continue;
                         }
-                        None => None,
+                        None => (None, 0),
                     };
                     let ms = t0.elapsed().as_millis();
                     let (reply, said) = match &f {
@@ -620,7 +634,7 @@ fn team(args: &[String]) {
                                 f.steps.iter().map(|s| format!("{:?}", s.held)).collect();
                             let first = f.steps.first().map_or(0, |s| s.before);
                             let said = format!(
-                                "{{\"lead\":{},\"helper\":{},\"turns\":{},\"held\":{},\"clean\":{},\"before\":{first},\"ms\":{ms}}}",
+                                "{{\"lead\":{},\"helper\":{},\"tries\":{used},\"turns\":{},\"held\":{},\"clean\":{},\"before\":{first},\"ms\":{ms}}}",
                                 quote(lead),
                                 quote(&helper),
                                 f.steps.len(),

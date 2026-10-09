@@ -29,6 +29,29 @@ its recorded answers. First night: n20261008 (`D/team-n20261008/`, `D/team-n2026
 
 What it measured on 2026-10-09 is in DESIGN.md; the solo night below stays for reference.
 
+**The second night (n20261009), from the first's lessons.** Name it at launch
+(`TEAM_NIGHT=n20261009`): the night's name flips at noon, and the first night's rounds, still
+running at 12:44, began the next night's folder. In order of what each is likely to add:
+
+```
+TEAM_NIGHT=n20261009 ROUND_FIRST=n20261009-m2 ROUND_TRIES=4 ROUND_EXTRA=fix-m2.jsonl \
+  bash train/team.sh from:n20261008 glm team:base3b-t4:base3b:4 train:m2:fix-m2.jsonl \
+  team:m2:m2 team:m2-t4:m2:4 checks:chk team:fix3b-t4:n20261008-fix3b:4 summary rounds summary
+```
+
+1. `team:base3b-t4`: up to 4 repairs of each draft, the first that runs clean kept. By day, on
+   16 drafts the base 3B could not make clean in one try, 4 tries made 7 clean and 3 passed the
+   hidden check (~30 min).
+2. `train:m2`: the first night's unfinished helper (GLM's own misses as mutants: functions
+   called and never written, locals never declared, lists too short), at batch 1 (it paged at
+   batch 2; ~2 h), then scored with 1 and 4 tries.
+3. `checks:chk`: the check writer again, on short checks only. Last night's: 216 of 246 never
+   closed; of the 30 that did, 2 passed the task's own reference and 16 of 17 passing programs
+   were rejected. Selection by self-written checks waits until most read, most are fair to the
+   reference, and false rejects are rare (`checkfit-chk.json`).
+4. `rounds` until "I'm up": train drafts repaired with 4 tries (more clean turns to learn from
+   than last night's 11 of 1,589), trained with the m2 data into the next helper.
+
 ## The solo night (before 2026-10-08)
 
 - **The GPU** (`train/night.sh --until-woken`, detached, started at once): baselines, tonight's fine-tunes

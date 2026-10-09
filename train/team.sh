@@ -9,18 +9,28 @@
 #
 # Steps, each skipped once its output is there (a rerun resumes), none begun while
 # <root>/iq/PAUSE exists, every model on llama-server at 8081 (the night's port):
+#   from:NIGHT     an earlier night's fix data and train drafts copied in (what is not here yet)
 #   glm            GLM alone on the held-out tasks (no GPU)
-#   team:NAME:SPEC  GLM's drafts repaired by a helper, NAME, served from SPEC (base3b, base05, a
-#                  run's name); held-out tasks; traces of every turn, never trained on
+#   team:NAME:SPEC[:TRIES]  GLM's drafts repaired by a helper, NAME, served from SPEC (base3b,
+#                  base05, a run of tonight's by its short name, any run's full name), up to TRIES
+#                  repairs a draft (1; those after the first sampled hotter, the first that runs
+#                  clean kept); held-out tasks; traces of every turn, never trained on
 #   drafts         the untuned 3B writes each train task once (the drafts to repair)
 #   train-traces   the untuned 3B repairs its own train drafts: the fix traces
 #   mutants        eval mutants: each train task's reference broken one way GLM breaks programs,
 #                  with the block that restores it (fix data at no cost, correct by construction)
 #   fixdata        train/fixdata.py: the turns that made a program run clean, as SFT records
 #   fix3b          a LoRA of the untuned 3B on those and the mutants (FIX_EPOCHS, 1 epoch)
+#   train:NAME:FILE[+FILE...]  a LoRA of the untuned 3B, <night>-NAME, on those files here
+#                  (TRAIN_EPOCHS 1, TRAIN_BATCH 1 x TRAIN_ACCUM 16: long records page at batch 2)
+#   checks:NAME    the check writer: the 3B trained (CHECK_EPOCHS, 2) on the train tasks' checks
+#                  no longer than CHECK_LINES (80) lines, made to write each held-out ask's check,
+#                  and those checks judged beside the real ones on GLM's programs (select.py):
+#                  read, fair to the reference, kept / falsely rejected / truly rejected / missed
 #   rounds         until PAUSE: ROUND_SLICE (300) more train tasks drafted, repaired by the newest
-#                  helper, every fix turn so far and the mutants trained into the next (fix3b-r2,
-#                  -r3, ...), scored as a team
+#                  helper (ROUND_FIRST first, <night>-fix3b; ROUND_TRIES tries, 1), every fix turn
+#                  so far and ROUND_EXTRA (fix-mutants.jsonl; +-joined) trained into the next
+#                  (fix3b-r2, -r3, ...), scored as a team
 #   summary        every score tonight, side by side
 # Its inputs are copied once into <root>/iq/team-<night>/ (the suite, GLM's answers, the held
 # families, the train prompts), and the tools (EVAL, IQ: this checkout's debug builds unless set)
@@ -64,7 +74,7 @@ spec() {  # spec NAME: export.py/serve.py's arguments for a helper
   case $1 in
     base3b) echo "--base-only --base $LARGE" ;;
     base05) echo "--base-only --base $SMALL" ;;
-    *) echo "--run $1" ;;
+    *) if [ -d "$ROOT/runs/$NIGHT-$1" ]; then echo "--run $NIGHT-$1"; else echo "--run $1"; fi ;;
   esac
 }
 serve() {  # serve SPEC: its GGUF made if need be, then on llama-server, 16 slots
@@ -78,29 +88,93 @@ score() {  # score ANSWERS OUT
   say "$2: $(grep -m1 ' pass ' "$T/$2" | sed 's/^ *//')"
 }
 
-team() {  # team NAME ANSWERS SPEC: ANSWERS' drafts repaired by the helper SPEC
-  local name=$1 answers=$2 sp=$3
+team() {  # team NAME ANSWERS SPEC [TRIES]: ANSWERS' drafts repaired by the helper SPEC
+  local name=$1 answers=$2 sp=$3 tries=${4:-1}
   [ -s "$T/score-$name.txt" ] && return 0
   paused "team $name" && return 1
-  say "team $name: $answers repaired by $sp"
+  say "team $name: $answers repaired by $sp, $tries tries"
   tools || return 1
   serve "$(spec "$sp")" || { say "serve failed: $sp"; unserve; return 1; }
   "$T/bin/eval.exe" team --suite "$W/iq.jsonl" --answers "$W/$answers" --helper-url "$URL" \
     --helper "$sp" --name "glm+$name" --out "$W/team-$name.jsonl" \
-    --traces "$W/traces-$name.jsonl" --jobs 16 >> "$LOG" 2>&1
+    --traces "$W/traces-$name.jsonl" --jobs 16 --tries "$tries" >> "$LOG" 2>&1
   local ok=$?
   unserve
   [ "$ok" = 0 ] || { say "team $name failed ($ok): rerun resumes it"; return 1; }
   score "team-$name.jsonl" "score-$name.txt"
 }
 
+train() {  # train RUN FILE...: a LoRA of the untuned 3B on FILEs (here), resumed if begun
+  local run=$1 f data=()
+  shift
+  grep -q '^  "status": "done"' "$ROOT/runs/$run/manifest.json" 2>/dev/null && return 0
+  paused "train $run" && return 1
+  for f in "$@"; do
+    [ -s "$T/$f" ] || { say "train $run: no $f"; return 1; }
+    data+=(--data "$W/$f")
+  done
+  say "train: $run on $(cd "$T" && cat "$@" | wc -l) records ($*)"
+  (cd "$REPO" && "$PY" train/sft.py --held "$W/held.txt" --tasks "$W/iq.jsonl" --base "$LARGE" \
+     --run "$run" "${data[@]}" --epochs "${TRAIN_EPOCHS:-1}" --batch "${TRAIN_BATCH:-1}" \
+     --accum "${TRAIN_ACCUM:-16}" --save-every 13) >> "$LOG" 2>&1 \
+     || { say "$run training failed: rerun resumes it"; return 1; }
+}
+
 for step in "$@"; do
   case $step in
+    from:*)
+      # An earlier night's fix data and drafts, so tonight need not make them again.
+      src=$D/team-${step#from:}
+      [ -d "$src" ] || { say "from: no $src"; exit 1; }
+      for f in fix.jsonl fix-mutants.jsonl fix-mutants2.jsonl fix-m2.jsonl refs.jsonl \
+               drafts-base3b.jsonl drafts-base3b.done traces-train-base3b.jsonl; do
+        [ -e "$src/$f" ] && [ ! -e "$T/$f" ] && cp "$src/$f" "$T/$f" && say "from ${step#from:}: $f"
+      done ;;
     glm)
       [ -s "$T/score-glm.txt" ] || { tools && score answers-glm.jsonl score-glm.txt; } ;;
     team:*)
-      IFS=: read -r _ name sp <<< "$step"
-      team "$name" answers-glm.jsonl "$sp" || exit 1 ;;
+      IFS=: read -r _ name sp tries <<< "$step"
+      team "$name" answers-glm.jsonl "$sp" "${tries:-1}" || exit 1 ;;
+    train:*)
+      IFS=: read -r _ name files <<< "$step"
+      IFS=+ read -ra fs <<< "$files"
+      train "$NIGHT-$name" "${fs[@]}" || exit 1 ;;
+    checks:*)
+      name=${step#checks:}
+      [ -s "$T/checkfit-$name.json" ] && continue
+      paused "checks $name" && exit 1
+      tools || exit 1
+      if [ ! -s "$T/checks-short.jsonl" ]; then
+        (cd "$REPO" && "$PY" train/checkdata.py --iq "$W/bin/iq.exe" --suite "$W/iq.jsonl" \
+           --held-prompts "$W/prompts-held.jsonl" --train-out "$W/checks.jsonl" \
+           --held-out "$W/prompts-held-checks.jsonl" --day "$(date +%F)") >> "$LOG" 2>&1 \
+           || { say "checkdata failed"; exit 1; }
+        # Short checks only: last night's writer ran out of room on most (216 of 246 unclosed).
+        "$PY" - "$W/checks.jsonl" "$W/checks-short.jsonl" "${CHECK_LINES:-80}" <<'EOF' | tee -a "$LOG"
+import json, sys
+src, out, most = sys.argv[1], sys.argv[2], int(sys.argv[3])
+rows = [json.loads(l) for l in open(src, encoding="utf-8") if l.strip()]
+short = [r for r in rows if r["messages"][-1]["content"].count("\n") <= most + 1]
+open(out, "w", encoding="utf-8").writelines(json.dumps(r, ensure_ascii=False) + "\n" for r in short)
+print("checks: %d of %d no longer than %d lines" % (len(short), len(rows), most))
+EOF
+        [ -s "$T/checks-short.jsonl" ] || { say "checks: none short enough"; exit 1; }
+      fi
+      TRAIN_EPOCHS=${CHECK_EPOCHS:-2} TRAIN_BATCH=2 TRAIN_ACCUM=8 train "$NIGHT-$name" checks-short.jsonl \
+        || exit 1
+      if [ ! -e "$T/answers-$name-checks.done" ]; then
+        paused "checks $name: writing" && exit 1
+        serve "$(spec "$name")" || { unserve; exit 1; }
+        (cd "$REPO" && "$PY" train/ask.py --prompts "$W/prompts-held-checks.jsonl" \
+           --out "$W/answers-$name-checks.jsonl" --name "$name-checks" --k 1 --jobs 16) >> "$LOG" 2>&1
+        ok=$?
+        unserve
+        [ "$ok" = 0 ] || { say "checks $name: writing failed ($ok)"; exit 1; }
+        touch "$T/answers-$name-checks.done"
+      fi
+      (cd "$REPO" && "$PY" train/select.py --iq "$W/bin/iq.exe" --suite "$W/iq.jsonl" \
+         --programs "$W/answers-glm.jsonl" --checks "$W/answers-$name-checks.jsonl" \
+         --out "$W/sel-$name.jsonl" --summary "$W/checkfit-$name.json") 2>&1 | tail -1 | tee -a "$LOG" ;;
     drafts)
       [ -e "$T/drafts-base3b.done" ] && continue
       paused drafts && exit 1
@@ -143,7 +217,7 @@ for step in "$@"; do
       # helper from the base, scored as a team on the held-out tasks: fix3b-r2, -r3, ...
       k=2
       while ! paused "round $k"; do
-        prev=$NIGHT-fix3b
+        prev=${ROUND_FIRST:-$NIGHT-fix3b}
         [ "$k" -gt 2 ] && prev=$NIGHT-fix3b-r$((k - 1))
         run=$NIGHT-fix3b-r$k
         if [ ! -e "$T/drafts-r$k.done" ]; then
@@ -170,7 +244,7 @@ PY
           [ "$ok" = 0 ] || { say "round $k drafts failed ($ok)"; exit 1; }
           touch "$T/drafts-r$k.done"
         fi
-        team "train-r$k" "drafts-r$k.jsonl" "$prev" || exit 1
+        team "train-r$k" "drafts-r$k.jsonl" "$prev" "${ROUND_TRIES:-1}" || exit 1
         if [ ! -s "$T/fix-r$k.jsonl" ]; then
           traces=()
           for f in "$T"/traces-train-*.jsonl; do traces+=(--traces "$(cygpath -m "$f" 2>/dev/null || echo "$f")"); done
@@ -178,16 +252,9 @@ PY
              --out "$W/fix-r$k.jsonl" --night "$NIGHT") >> "$LOG" 2>&1 \
              || { say "round $k fixdata failed"; exit 1; }
         fi
-        if ! grep -q '^  "status": "done"' "$ROOT/runs/$run/manifest.json" 2>/dev/null; then
-          paused "train $run" && exit 1
-          data=(--data "$W/fix-r$k.jsonl")
-          [ -s "$T/fix-mutants.jsonl" ] && data+=(--data "$W/fix-mutants.jsonl")
-          say "train: $run on $(cat "$T/fix-r$k.jsonl" "$T"/fix-mutants.jsonl 2>/dev/null | wc -l) fix records"
-          (cd "$REPO" && "$PY" train/sft.py --held "$W/held.txt" --tasks "$W/iq.jsonl" --base "$LARGE" \
-             --run "$run" "${data[@]}" --epochs "${FIX_EPOCHS:-1}" --batch 2 --accum 8 --save-every 13) \
-             >> "$LOG" 2>&1 || { say "$run training failed: rerun resumes it"; exit 1; }
-        fi
-        team "r$k" answers-glm.jsonl "$run" || exit 1
+        IFS=+ read -ra extra <<< "${ROUND_EXTRA:-fix-mutants.jsonl}"
+        train "$run" "fix-r$k.jsonl" "${extra[@]}" || exit 1
+        team "r$k" answers-glm.jsonl "$run" "${ROUND_TRIES:-1}" || exit 1
         k=$((k + 1))
       done ;;
     summary)
