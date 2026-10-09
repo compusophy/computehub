@@ -514,6 +514,9 @@ pub enum Request {
     /// Activity's window only: measure this device (its CPU, one core and all, and the memory a
     /// tab can hold), the results in the [`pool`] snapshots and told to every linked tab.
     Test,
+    /// Activity's window only: a linked device ([`pool::Bond`]), named by its key: `reconnect
+    /// <key>` tries to reach it now, `unlink <key>` forgets it here and asks it to forget this one.
+    Link { what: String },
     /// The overlay only: it steps aside for window `win`, which the person uses next (a game it
     /// started, an app it opened). That window takes the keys (raised while the overlay shows);
     /// `hide`, the overlay hides too, its task done, its answer waiting; else its pill stays,
@@ -926,6 +929,7 @@ impl Request {
             Self::Ask { text } => o.u8(22).str(text),
             Self::Serve { url } => o.u8(23).str(url),
             Self::Test => o.u8(24),
+            Self::Link { what } => o.u8(25).str(what),
         }
     }
 
@@ -964,6 +968,7 @@ impl Request {
             22 => Self::Ask { text: r.str()? },
             23 => Self::Serve { url: r.str()? },
             24 => Self::Test,
+            25 => Self::Link { what: r.str()? },
             _ => return None,
         })
     }
@@ -971,7 +976,7 @@ impl Request {
 
 impl Request {
     /// Whether only the OS's own windows may ask it: Watch, End, Pref, Reset, Tty, Input, Pair,
-    /// Measure, Ask, Serve and Test.
+    /// Measure, Ask, Serve, Test and Link.
     pub fn own(&self) -> bool {
         use Request::*;
         matches!(
@@ -987,6 +992,7 @@ impl Request {
                 | Ask { .. }
                 | Serve { .. }
                 | Test
+                | Link { .. }
         )
     }
 

@@ -143,6 +143,7 @@ fn every_kind_round_trips_and_nothing_else_decodes() {
         Request::Ask { text: "Why is the sky blue?".into() },
         Request::Serve { url: "http://localhost:8080".into() },
         Request::Test,
+        Request::Link { what: "unlink sha-256 AB:CD".into() },
     ];
     [pref, Request::Reset]
         .iter()
@@ -760,7 +761,7 @@ fn a_receipt_is_read_whole_from_the_end_of_a_stream() {
 
 #[test]
 fn the_meshs_snapshots_and_frames_come_back_whole() {
-    use crate::pool::{Answer, Device, Job, Snap, VERSION};
+    use crate::pool::{Answer, Bond, Device, Job, OFFLINE, Snap, VERSION};
     use crate::relay::{Frame, HEAD};
     let d = |name: &str| Device {
         name: name.into(),
@@ -802,6 +803,16 @@ fn the_meshs_snapshots_and_frames_come_back_whole() {
         serving: String::new(),
         answer: Some(answer),
         testing: "memory: 3.5 GB".into(),
+        bonds: vec![Bond {
+            name: "Linux, Firefox".into(),
+            kind: "computer".into(),
+            key: "sha-256 AB:CD".into(),
+            state: OFFLINE,
+            seen: 1_791_500_000,
+            cores: 8,
+            cpun: 403,
+            ..Bond::default()
+        }],
     };
     let bytes = snap.encode();
     assert_eq!((bytes[0], Snap::decode(&bytes)), (VERSION, Some(snap.clone())));

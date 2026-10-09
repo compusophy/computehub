@@ -103,3 +103,23 @@ fn the_pool_starts_when_needed_hears_frames_once_ready_and_its_asks_are_done() {
     assert!(k.runs(pool) && k.procs().iter().all(|p| p.0 == pool || workers.contains(&p.0)));
     let _ = OWNER;
 }
+
+#[test]
+fn a_profile_with_devices_linked_for_good_starts_the_pool_at_once() {
+    for (kept, starts) in
+        [("sha-256 AB", false), ("sha-256 AB\nbond h 00 0\tA\tc\tsha-256 AB", true)]
+    {
+        let (mut k, mut fs, mut ctl, mut r) =
+            (Kernel::new(), Vfs::new(), Ctl::default(), Relay::default());
+        k.set_isolated(true);
+        fs.mkdir_all("/bin").unwrap();
+        kernel::install(&mut fs, "pool", "pool").unwrap();
+        ctl.storage_set("me.pins", kept);
+        r.load("me");
+        r.pump(&mut ctl, &mut k, &fs, None);
+        assert_eq!(!k.procs().is_empty(), starts, "{kept}");
+        // Once: it is not looked for again until the next sign-in.
+        r.pump(&mut ctl, &mut k, &fs, None);
+        assert_eq!(k.procs().len(), usize::from(starts));
+    }
+}

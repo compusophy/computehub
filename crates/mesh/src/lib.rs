@@ -19,10 +19,13 @@ use vfs::Vfs;
 pub const OWNER: u32 = u32::MAX - 7;
 /// Stream ids from here up are the pool's posts.
 pub const FIRST: u32 = 0x6d65_0000;
+/// How a device linked for good starts its line in the kept pins (the pool's `hub`).
+pub const BOND: &str = "bond ";
 
 /// The relay: the pool's pid and whether it reads frames yet, frames waiting for it, its output
 /// short of a frame, posts and fetches in flight (their stream ids), the workers, the process watching,
-/// when the pool wants waking, and where this profile keeps the mesh.
+/// when the pool wants waking, where this profile keeps the mesh, and whether its links were looked
+/// for since it loaded.
 #[derive(Default)]
 pub struct Relay {
     pid: Option<u32>,
@@ -34,6 +37,7 @@ pub struct Relay {
     watcher: u32,
     wake: Option<f64>,
     prefix: String,
+    looked: bool,
 }
 
 impl Relay {
@@ -53,7 +57,7 @@ impl Relay {
 
     /// Process `pid` asked for `r`: Pair (from Activity's window alone) as its code, Measure,
     /// Job as its program's name, then its chunks, a line each; Ask its question, Serve its URL;
-    /// Test.
+    /// Test; Link what it asks.
     pub fn ask(&mut self, pid: u32, r: &Request, now: f64) {
         let (kind, mut data) = match r {
             Request::Pair { code } => (1, code.clone()),
@@ -62,6 +66,7 @@ impl Relay {
             Request::Ask { text } => (4, text.clone()),
             Request::Serve { url } => (5, url.clone()),
             Request::Test => (6, String::new()),
+            Request::Link { what } => (7, what.clone()),
             _ => return,
         };
         if let Request::Job { chunks, .. } = r {
@@ -109,6 +114,16 @@ impl Relay {
         if self.wake.is_some_and(|t| now >= t) {
             self.wake = None;
             self.tell(to_pool::TICK, 0, 0, vec![], now);
+        }
+        // A profile with devices linked for good starts the pool at once: they find each other
+        // again whenever both are open.
+        if !self.looked {
+            self.looked = true;
+            let kept = ctl.storage_get(&self.pins()).unwrap_or_default();
+            // Line by line: `str::contains` would ship a substring searcher in the boot.
+            if kept.split('\n').any(|l| l.starts_with(BOND)) {
+                self.tell(to_pool::TICK, 0, 0, vec![], now);
+            }
         }
         let watcher = watcher.unwrap_or(0);
         if self.pid.is_some() && watcher != self.watcher {

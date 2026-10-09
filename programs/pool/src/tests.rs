@@ -632,6 +632,7 @@ fn testing_this_device_times_the_cpu_keeps_it_then_takes_memory_until_a_step_slo
     let mut t = tab("A", 2);
     t.pool.clock = 1_791_500_000;
     t.pool.test(0);
+    t.pool.test.as_mut().unwrap().memory = true;
     assert!(matches!(&t.pool.out[..], [Act::Spawn(p, 2)] if p == "gauge"));
     assert_eq!(t.pool.test.as_ref().unwrap().cap, 2048, "a computer whose browser says nothing");
     t.pool.out.clear();
@@ -700,6 +701,7 @@ fn to_memory(ram_mb: u32) -> (Tab, u64) {
     let mut t = tab("A", 1);
     t.pool.me.ram_mb = ram_mb;
     t.pool.test(0);
+    t.pool.test.as_mut().unwrap().memory = true;
     t.pool.spawned(Some(201));
     says(&mut t, 201, "ready", 1);
     says(&mut t, 201, "0 4 h ok 2", 2);

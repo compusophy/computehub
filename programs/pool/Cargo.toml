@@ -17,4 +17,5 @@ path = "src/main.rs"
 
 [dependencies]
 compusophy-coder.workspace = true
+compusophy-sha.workspace = true
 compusophy-uiwire.workspace = true

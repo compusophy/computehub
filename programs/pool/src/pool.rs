@@ -605,6 +605,8 @@ impl Pool {
             Msg::Ask { ask, text } => self.write(link, ask, &text),
             Msg::Words { ask, text } => self.words(link, ask, &text),
             Msg::Answered { ask, tok, why } => self.finished(link, ask, tok, why),
+            // The hub's own (bonds).
+            Msg::Bond { .. } | Msg::Unbond => {}
             Msg::Stats { workers, busy, chunks, units } => p.stats = (workers, busy, chunks, units),
             Msg::Ping { t } => self.out.push(Act::Send(link, Msg::Pong { t })),
             Msg::Pong { t } => p.rtt = (now as u32).wrapping_sub(t),
@@ -837,7 +839,8 @@ impl Pool {
         let (serve, serving) = (self.shared.url.clone(), self.shared.note.clone());
         let answer = self.asking.as_ref().map(|a| a.answer.clone());
         let testing = self.test.as_ref().map_or(String::new(), |t| t.note.clone());
-        Snap { at: now as u32, pairing, code, devices, job, serve, serving, answer, testing }
+        let bonds = Vec::new();
+        Snap { at: now as u32, pairing, code, devices, job, serve, serving, answer, testing, bonds }
     }
 }
 

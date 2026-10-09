@@ -100,6 +100,13 @@ pub enum Msg {
         tok: u32,
         why: String,
     },
+    /// Sent once on a link just paired: the sender's nonce (64 hex digits), half of the secret
+    /// the two keep for meeting again ([`crate::hub::bond`]).
+    Bond {
+        nonce: String,
+    },
+    /// The sender unlinked this device: forget it too.
+    Unbond,
 }
 
 impl Msg {
@@ -143,6 +150,8 @@ impl Msg {
             Msg::Ask { ask, text } => o.u8(12).u32(*ask).str(text),
             Msg::Words { ask, text } => o.u8(13).u32(*ask).str(text),
             Msg::Answered { ask, tok, why } => o.u8(14).u32(*ask).u32(*tok).str(why),
+            Msg::Bond { nonce } => o.u8(15).str(nonce),
+            Msg::Unbond => o.u8(16),
         };
         o.0
     }
@@ -187,6 +196,8 @@ impl Msg {
             12 => Msg::Ask { ask: r.u32()?, text: r.str()? },
             13 => Msg::Words { ask: r.u32()?, text: r.str()? },
             14 => Msg::Answered { ask: r.u32()?, tok: r.u32()?, why: r.str()? },
+            15 => Msg::Bond { nonce: r.str()? },
+            16 => Msg::Unbond,
             _ => return None,
         };
         r.0.is_empty().then_some(m)

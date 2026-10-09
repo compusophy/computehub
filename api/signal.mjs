@@ -2,6 +2,9 @@
 // short code, then talk tab to tab; nothing else passes through. The body is lines of text:
 //
 //   host\n<offer>          keeps the offer under a new code; answers the code
+//   meet\n<box>\n<offer>   keeps the offer under a mailbox two linked devices name (24 hex
+//                          digits from a secret only they hold), replacing the last; the rest
+//                          below works with a mailbox as with a code
 //   join\n<code>           answers the offer kept under the code (404: none, or not here yet)
 //   answer\n<code>\n<sdp>  keeps the answer to the code's offer
 //   poll\n<code>           answers the answer, once (204: none yet; 404: no such code)
@@ -19,6 +22,7 @@ const PER_MINUTE = 120;
 // Code letters: no 0/O, 1/I/L, 2/Z, 5/S, 8/B.
 const ALPHABET = '34679ACDEFGHJKMNPQRTUVWXY';
 const CODE_LEN = 5;
+const MAILBOX = /^[0-9A-F]{24}$/;
 const codes = new Map();
 const hits = new Map();
 
@@ -98,6 +102,15 @@ export default async function handler(req, res) {
       codes.set(c, { t: now, offer: rest, answer: null });
       return send(res, 200, c);
     }
+    case 'meet': {
+      const box = code.trim().toUpperCase();
+      const sdp = more.join('\n');
+      if (!MAILBOX.test(box)) return send(res, 400, 'not a mailbox');
+      if (!description(sdp)) return send(res, 400, 'not a description');
+      if (!codes.has(box) && codes.size >= MAX_CODES) return send(res, 503, 'busy');
+      codes.set(box, { t: now, offer: sdp, answer: null });
+      return send(res, 200);
+    }
     case 'join':
       return entry && !entry.answer ? send(res, 200, entry.offer) : send(res, 404, 'no such code');
     case 'answer': {
@@ -113,6 +126,6 @@ export default async function handler(req, res) {
       codes.delete(code.trim().toUpperCase());
       return send(res, 200, entry.answer);
     default:
-      return send(res, 400, 'host, join, answer or poll');
+      return send(res, 400, 'host, meet, join, answer or poll');
   }
 }

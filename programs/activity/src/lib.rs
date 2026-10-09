@@ -189,7 +189,8 @@ pub struct Row {
 impl Activity {
     /// Handles one event; whether the window changed.
     pub fn event(&mut self, ev: &Event) -> bool {
-        self.pool.event(ev, &mut self.requests);
+        // The Pool page's own: never a process row too (its linked devices' ids are past ROW).
+        let pool = self.pool.event(ev, &mut self.requests);
         match ev {
             // From the first size; and again once wide, if a phone's focus had paused it.
             Event::Resize { w, .. } => {
@@ -229,7 +230,7 @@ impl Activity {
             Event::Click { id } if (SORT..SORT + 4).contains(id) => {
                 self.sort = Column((id - SORT) as u8)
             }
-            Event::Click { id } if *id >= ROW => self.page = Page::Of(id - ROW),
+            Event::Click { id } if *id >= ROW && !pool => self.page = Page::Of(id - ROW),
             _ => {}
         }
         // A page whose process is gone shows the table.

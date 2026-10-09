@@ -3,7 +3,7 @@
 //!
 //! ```text
 //! u8 VERSION | u32 at (page ms) | str pairing | str code | u16 n, n device | u8 has job, job
-//!         | str serve | str serving | u8 has answer, answer | str testing
+//!         | str serve | str serving | u8 has answer, answer | str testing | u16 m, m bond
 //! device: str name | str kind | u16 cores | u32 ram_mb | u32 quota_mb | u8 gpu | u32 up_ms
 //!         | u8 known | u16 workers | u16 busy | u32 chunks | u64 units | u32 rtt | u64 tx
 //!         | u64 rx | u32 up | u32 down | str model | u32 tok | u32 ctx | u32 cpu1 | u32 cpun
@@ -12,6 +12,8 @@
 //!         | u32 checked | u32 mismatched | u32 ms | u32 used | u32 busy | u16 m, m u32
 //!         (chunks by device)
 //! answer: str question | str by | str text | u8 done | u32 tok | str why
+//! bond:   str name | str kind | str key | u8 state | u32 seen | u16 cores | u32 cpu1 | u32 cpun
+//!         | u32 mem | u32 tested
 //! ```
 //!
 //! Device 0 is this tab, the rest each linked tab in the order it joined. Counts (`chunks`,
@@ -22,7 +24,12 @@
 use crate::{Out, Reader};
 
 /// The format's version, a snapshot's first byte.
-pub const VERSION: u8 = 6;
+pub const VERSION: u8 = 7;
+/// A linked device's [`Bond::state`]: not reached (its tab closed, or not found yet), being
+/// reached (the link opening), or here.
+pub const OFFLINE: u8 = 0;
+pub const CONNECTING: u8 = 1;
+pub const ONLINE: u8 = 2;
 /// An unknown round trip.
 pub const UNKNOWN: u32 = u32::MAX;
 /// Each device's canvas color, by its place in a snapshot (cycling): cyan here, then yellow,
@@ -44,6 +51,25 @@ pub struct Snap {
     pub serving: String,
     pub answer: Option<Answer>,
     pub testing: String,
+    pub bonds: Vec<Bond>,
+}
+
+/// A device linked for good (kept for the profile, reached again whenever both are open): its
+/// name and kind as it last said, its key (its pinned DTLS fingerprint), whether it is here
+/// ([`ONLINE`]), when it was last here (Unix seconds; 0 never), and what it last said it has:
+/// cores and what testing measured.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Bond {
+    pub name: String,
+    pub kind: String,
+    pub key: String,
+    pub state: u8,
+    pub seen: u32,
+    pub cores: u16,
+    pub cpu1: u32,
+    pub cpun: u32,
+    pub mem: u32,
+    pub tested: u32,
 }
 
 /// A device of the pool: its name and kind, what it has (cores, RAM and storage the browser
@@ -140,7 +166,11 @@ impl Snap {
         if let Some(a) = &self.answer {
             o.str(&a.question).str(&a.by).str(&a.text).u8(a.done.into()).u32(a.tok).str(&a.why);
         }
-        o.str(&self.testing);
+        o.str(&self.testing).u16(self.bonds.len() as u16);
+        for b in &self.bonds {
+            o.str(&b.name).str(&b.kind).str(&b.key).u8(b.state).u32(b.seen).u16(b.cores);
+            o.u32(b.cpu1).u32(b.cpun).u32(b.mem).u32(b.tested);
+        }
         o.0
     }
 
@@ -209,7 +239,22 @@ impl Snap {
             }),
         };
         let testing = r.str()?;
-        let snap = Snap { at, pairing, code, devices, job, serve, serving, answer, testing };
+        let mut bonds = Vec::new();
+        for _ in 0..r.u16()? {
+            bonds.push(Bond {
+                name: r.str()?,
+                kind: r.str()?,
+                key: r.str()?,
+                state: r.u8()?,
+                seen: r.u32()?,
+                cores: r.u16()?,
+                cpu1: r.u32()?,
+                cpun: r.u32()?,
+                mem: r.u32()?,
+                tested: r.u32()?,
+            });
+        }
+        let snap = Snap { at, pairing, code, devices, job, serve, serving, answer, testing, bonds };
         r.0.is_empty().then_some(snap)
     }
 }

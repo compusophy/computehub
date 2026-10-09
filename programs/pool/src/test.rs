@@ -26,10 +26,11 @@
 
 use crate::pool::Act;
 
-/// Whether the memory half runs. Off on 2026-10-08 (its ramp to 16 GiB took all of a Linux
+/// Whether the memory half runs. Off since 2026-10-08 (its ramp to 16 GiB took all of a Linux
 /// laptop's memory and swap in Firefox; no worker was refused and no step slowed before the
-/// device stalled); on again with the cap, the slow-step rule and the timers.
-pub const MEMORY: bool = true;
+/// device stalled); made safe since (the cap, the slow-step rule, the timers), and on again once
+/// that laptop has run it.
+pub const MEMORY: bool = false;
 /// The program the workers run, and the most of them.
 pub const PROGRAM: &str = "gauge";
 pub const MAX: u16 = 32;

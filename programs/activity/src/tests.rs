@@ -270,3 +270,30 @@ fn a_pool_snapshot_close_on_the_last_still_brings_each_devices_model_and_speed()
     let d = &page.cur.as_ref().unwrap().devices[0];
     assert_eq!((d.tok, d.units), (439, 1000), "its speed as it is now, its counter for the rates");
 }
+
+#[test]
+fn a_linked_devices_buttons_ask_the_pool_by_its_key_and_stay_on_the_pool_page() {
+    use uiwire::pool::{Bond, OFFLINE, ONLINE, Snap};
+    let mut a = Activity::default();
+    a.event(&Event::Click { id: NAV + 2 });
+    let bond =
+        |key: &str, state| Bond { name: "Linux".into(), key: key.into(), state, ..Bond::default() };
+    let bonds = vec![bond("sha-256 AA:BB:CC:DD", ONLINE), bond("sha-256 EE:FF", OFFLINE)];
+    a.event(&Event::Pool { data: Snap { at: 1, bonds, ..Snap::default() }.encode() });
+    // Reconnect only for one away; Unlink for each; the key said short.
+    let shown = format!("{:?}", a.nodes());
+    assert!(shown.contains("Linked devices") && shown.contains("key AA:BB:CC"), "{shown}");
+    assert_eq!(shown.matches("Reconnect").count(), 1);
+    a.frame();
+    a.event(&Event::Click { id: pool::BOND + 1 });
+    a.event(&Event::Click { id: pool::BOND + 2 });
+    let asked = a.frame().requests;
+    assert_eq!(
+        asked,
+        [
+            Request::Link { what: "unlink sha-256 AA:BB:CC:DD".into() },
+            Request::Link { what: "reconnect sha-256 EE:FF".into() },
+        ]
+    );
+    assert!(matches!(a.page, Page::Pool));
+}

@@ -1,5 +1,6 @@
-//! Activity's Pool page: the mesh, as the rest of Activity shows this tab. Pairing (show a code,
-//! or enter the other device's); the pool's size and how busy it is over the minute, how fast it
+//! Activity's Pool page: the mesh, as the rest of Activity shows this tab. The devices linked for
+//! good (here or not, Reconnect, Unlink) and linking a new one (show a code, or enter the other
+//! device's); the pool's size and how busy it is over the minute, how fast it
 //! answers chunks and steps; each device (sortable), its share of the work in its color; each
 //! link's round trip and traffic over the minute, both ways, and its throughput when measured;
 //! the job, if one runs; the model a device shares, asked from here, and this device's to share. The pool program sends a snapshot ([`Snap`]) at most once a second
@@ -31,13 +32,17 @@ pub const ASK: u32 = 49;
 pub const LOCAL: &str = "http://localhost:8080";
 pub const SORT: u32 = 50;
 pub const QUESTION: u32 = 1 << 30;
+/// A linked device's Reconnect, `BOND` + 2 its place, and Unlink, one more.
+pub const BOND: u32 = 1 << 24;
+/// An offline device's color in the table: grey.
+const AWAY: u32 = 0x6b7280;
 /// Each device's color as RGB, by [`pool::TINTS`]'s canvas colors (cyan, yellow, magenta, green,
 /// red, blue).
 const RGB: [u32; 6] = [0x22d3ee, 0xfacc15, 0xe879f9, 0x4ade80, 0xf87171, 0x60a5fa];
 const NOTE: &str = "Linked tabs share one job: every core of every device takes the next chunk \
 as it goes idle, so faster devices take more. Answers come back with the steps they took and a \
 hash of the result; some are replayed here to check them. Tabs talk directly, encrypted; only \
-pairing passes through the server, briefly.";
+their descriptions pass through the server, briefly, when they link or meet again.";
 
 /// The Pool page's state: the last two snapshots, the minute of utilization (per mille of the
 /// workers busy) and chunks a second, the steps a second last taken, each link's bytes a second
@@ -138,6 +143,13 @@ impl PoolPage {
                 (self.question, self.asked) = (String::new(), self.asked.wrapping_add(1));
             }
             Event::Click { id } if (SORT..SORT + 5).contains(id) => self.sort = (id - SORT) as u8,
+            Event::Click { id } if (BOND..BOND + 1024).contains(id) => {
+                let i = ((id - BOND) / 2) as usize;
+                let verb = if (id - BOND) % 2 == 0 { "reconnect " } else { "unlink " };
+                let bonds = self.cur.as_ref().map(|s| s.bonds.as_slice()).unwrap_or_default();
+                let Some(b) = bonds.get(i) else { return false };
+                requests.push(Request::Link { what: [verb, &b.key].concat() });
+            }
             _ => return false,
         }
         true
@@ -158,6 +170,7 @@ impl PoolPage {
                     }
                 }
                 (c.pairing, c.code, c.job, c.answer) = (s.pairing, s.code, s.job, s.answer);
+                (c.bonds, c.testing) = (s.bonds, s.testing);
                 (c.serve, c.serving, c.devices) = (s.serve, s.serving, devices);
             }
             return;
@@ -223,6 +236,7 @@ impl PoolPage {
             line += &[DOT, &storage(quota), " storage"].concat();
         }
         nodes.push(text(Style::Dim, &line));
+        nodes.extend(bonded(&s));
         nodes.push(self.pairing(&s));
         // Busy and speed over the minute.
         let util = &self.graphs[0];
@@ -346,14 +360,16 @@ impl PoolPage {
         Node::Card { id: 0, children: vec![Node::Col { id: 0, gap: 6, children }] }
     }
 
-    /// Pairing: the code shown, or what pairing says; Show a code, or enter the other's.
+    /// Linking a new device: the code shown, or what pairing says; Show a code, or enter the
+    /// other's.
     fn pairing(&self, s: &Snap) -> Node {
-        let mut children = vec![text(Style::Small, "Pair a device")];
+        let mut children = vec![text(Style::Small, "Link a new device")];
         if !s.code.is_empty() {
             children.push(text(Style::Title, &s.code));
         }
         let say = if s.pairing.is_empty() {
-            "Open computehub on the other device: show a code here and enter it there, or the other way."
+            "Open computehub on the other device: show a code here and enter it there, or the other \
+             way. Linked once, the two find each other again whenever both are open."
         } else {
             &s.pairing
         };
@@ -424,6 +440,20 @@ impl PoolPage {
                 detail: cells,
                 more: false,
             });
+        }
+        // The devices linked for good and away: greyed, with what they last said.
+        for b in s.bonds.iter().filter(|b| b.state != pool::ONLINE) {
+            let tested = b.tested != 0;
+            let cpu = if tested { rate(b.cpun) } else { DASH.into() };
+            let ram = if tested && b.mem > 0 { memory(b.mem) } else { DASH.into() };
+            let cells = match wide {
+                true => [cpu, ram, DASH.into(), DASH.into()].join("\t"),
+                false => [cpu, DASH.into()].join("\t"),
+            };
+            let name = if b.name.is_empty() { "A device" } else { &b.name };
+            let text = [name, "\n", &away(b)].concat();
+            let (glyph, hue) = (icons::Glyph::Mark as u8, AWAY);
+            nodes.push(Node::Entry { id: 0, glyph, hue, text, detail: cells, more: false });
         }
         // Each device's share in its color, in the table's order, named.
         nodes.push(text(Style::Small, "Share of the pool's work"));
@@ -591,10 +621,8 @@ fn testing(s: &Snap) -> Node {
             children.push(text(Style::Body, line));
         }
     }
-    let how = "Measured, not reported: SHA-256 on one core, then on all at once; then the memory \
-               this tab can really hold, never more than 2 GB (a quarter of the device's memory \
-               if the browser says it is less), stopping at once at a slow step, where a device \
-               short of memory starts to swap.";
+    let how = "Measured, not reported: SHA-256 on one core, then on all at once. The memory test \
+               is off until it has been checked on every kind of device.";
     children.push(text(Style::Small, how));
     let label = if me.is_some() { "Test again" } else { "Test this device" }.into();
     children.push(Node::Button { id: TEST, variant: Variant::Normal, label });
@@ -617,16 +645,64 @@ fn memory(mib: u32) -> String {
     }
 }
 
-/// How long ago Unix time `at` was, as people say it: `just now`, `5 min ago`, `3 h ago`.
+/// When testing measured, at Unix time `at`: `measured just now`, `measured 5 min ago`.
 fn ago(at: u32) -> String {
+    ["measured ", &since(at)].concat()
+}
+
+/// How long ago Unix time `at` was, as people say it: `just now`, `5 min ago`, `3 h ago`.
+fn since(at: u32) -> String {
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH);
     let secs = now.map_or(0, |d| d.as_secs()).saturating_sub(u64::from(at));
     match secs {
-        0..60 => "measured just now".into(),
-        s @ 60..3600 => ["measured ", &(s / 60).to_string(), " min ago"].concat(),
-        s @ 3600..172_800 => ["measured ", &(s / 3600).to_string(), " h ago"].concat(),
-        s => ["measured ", &(s / 86_400).to_string(), " days ago"].concat(),
+        0..60 => "just now".into(),
+        s @ 60..3600 => [&(s / 60).to_string(), " min ago"].concat(),
+        s @ 3600..172_800 => [&(s / 3600).to_string(), " h ago"].concat(),
+        s => [&(s / 86_400).to_string(), " days ago"].concat(),
     }
+}
+
+/// A linked device not here: `offline · last seen 5 min ago`, or `connecting`.
+fn away(b: &pool::Bond) -> String {
+    match (b.state, b.seen) {
+        (pool::CONNECTING, _) => "connecting".into(),
+        (_, 0) => "offline".into(),
+        (_, at) => ["offline", DOT, "last seen ", &since(at)].concat(),
+    }
+}
+
+/// A key said short: its first three bytes, `AB:CD:EF`.
+fn short(key: &str) -> &str {
+    let hex = key.strip_prefix("sha-256 ").unwrap_or(key);
+    hex.get(..8).unwrap_or(hex)
+}
+
+/// The devices linked for good: each one here or not (when last seen), what it last said it
+/// has, its key, Reconnect while it is away, and Unlink.
+fn bonded(s: &Snap) -> Vec<Node> {
+    if s.bonds.is_empty() {
+        return Vec::new();
+    }
+    let mut children = vec![text(Style::Small, "Linked devices")];
+    for (i, b) in s.bonds.iter().enumerate() {
+        let here = b.state == pool::ONLINE;
+        let state = if here { "online".into() } else { away(b) };
+        let figures = match b.tested {
+            0 => String::new(),
+            _ => [DOT, "all cores ", &rate(b.cpun)].concat(),
+        };
+        let line = [&state, &figures, DOT, "key ", short(&b.key)].concat();
+        let name = if b.name.is_empty() { "A device" } else { &b.name };
+        let about = vec![text(Style::Body, name), text(Style::Small, &line)];
+        let mut row = vec![Node::Col { id: 0, gap: 2, children: about }];
+        let id = BOND + 2 * i as u32;
+        if !here {
+            row.push(Node::Button { id, variant: Variant::Normal, label: "Reconnect".into() });
+        }
+        row.push(Node::Button { id: id + 1, variant: Variant::Normal, label: "Unlink".into() });
+        children.push(Node::Row { id: 0, gap: 8, children: row });
+    }
+    vec![Node::Card { id: 0, children: vec![Node::Col { id: 0, gap: 8, children }] }]
 }
 
 /// A model's speed from tenths of a token a second: `9.5 tok/s`; unmeasured, a dash.

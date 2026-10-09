@@ -770,6 +770,22 @@ written at 9.1 a second). A second question met the laptop's Stop sharing and ta
 words stopped while its server went on writing, and the asker waited out the link's 15 s of
 silence. Hence the rules above.
 
+Linked for good (2026-10-08, compusophy: "I shouldn't have to link them every single time ... the
+link should be different than connect/disconnect"). A link is trust and is kept; a connection is
+live and comes back by itself:
+- **Linking**, once, by code. The two tabs swap nonces over their first encrypted channel and keep
+  a bond: the other device's pinned DTLS fingerprint, a secret both build from the two nonces,
+  which side offers when they meet again, and what the device last said of itself.
+- **Starting.** A profile with bonds starts the pool at sign-in.
+- **Meeting again.** Each bond meets its device at a mailbox on `/api/signal`, named from the
+  secret, that no one else can name: one side keeps an offer there (`meet`), the other answers it.
+  Both check that the description carries the pinned key, so the server can at worst keep them
+  apart. Tries back off from 2 s to 15 s while the other is away; a reload reconnects in seconds.
+- **Activity.** It lists linked devices: online, connecting, or offline with when they were last
+  seen, plus their last figures, greyed in the table. Each has Reconnect and Unlink; Unlink makes
+  both sides forget.
+- **Older links** (pins from before bonds) are known but not kept: they link once more by code.
+
 A device measured, not reported (2026-10-08, compusophy: "there is no point if you can't show the
 real numbers"). The browser's figures are guesses: Firefox gives no memory, Chrome rounds it and
 caps it (this PC's 128 GB showed as 32). Activity's "Test this device" times real work on the

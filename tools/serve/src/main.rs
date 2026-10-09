@@ -130,7 +130,8 @@ fn handle(mut stream: TcpStream, root: &Path, extra: &str) -> io::Result<()> {
 }
 
 /// `/api/signal`'s answer to `body` (see api/signal.mjs): `host` keeps an offer under a new
-/// code, `join` gives it, `answer` keeps the answer, `poll` gives that once. Codes count up.
+/// code (`meet` under the mailbox named, the last replaced), `join` gives it, `answer` keeps the
+/// answer, `poll` gives that once. Codes count up.
 fn signal(body: &str) -> (&'static str, String) {
     let mut codes = CODES.lock().unwrap_or_else(|e| e.into_inner());
     let (op, rest) = body.split_once('\n').unwrap_or((body, ""));
@@ -141,6 +142,11 @@ fn signal(body: &str) -> (&'static str, String) {
             let code = format!("K{}", 7000 + codes.len());
             codes.push((code.clone(), rest.into(), None));
             ("200 OK", code)
+        }
+        ("meet", _) if code.len() == 24 && sdp.starts_with("v=0") => {
+            codes.retain(|c| c.0 != code);
+            codes.push((code.into(), sdp.into(), None));
+            ("200 OK", String::new())
         }
         ("join", Some(i)) if codes[i].2.is_none() => ("200 OK", codes[i].1.clone()),
         ("answer", Some(i)) => {

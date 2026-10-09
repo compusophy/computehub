@@ -8,8 +8,13 @@
 //! posts the answer (`answer`). Each body is lines of text: the op, then the code and the
 //! description as they apply. Once the channel opens the link joins the pool, its DTLS
 //! fingerprint (from the other tab's description) pinned for this profile: a device seen before
-//! is `known`. The model this tab shares, its server's URL, is kept with the pins, so sharing
+//! is `known`, and the two make a bond: linked for good, they meet again whenever both are open
+//! ([`bond`]). The model this tab shares, its server's URL, is kept with the pins, so sharing
 //! starts again with the pool.
+
+pub mod bond;
+#[cfg(test)]
+mod tests;
 
 use uiwire::relay::{Frame, to_desk, to_pool};
 use uiwire::{Event, Request};
@@ -45,6 +50,12 @@ enum Op {
     Model,
     /// What the model's server says of itself: gathered, then to the pool.
     Props,
+    /// A bond meeting its device again ([`bond`]): an offer kept at the mailbox for link `.0`,
+    /// the answer asked for, the offer asked for (the bond's fingerprint), the answer given.
+    Meet(u32),
+    Wait(u32),
+    Find(String),
+    Reply(u32),
 }
 
 /// Pairing under way: the link, the code (as typed or given), whether this tab shows it, the
@@ -60,10 +71,12 @@ struct Pairing {
 }
 
 /// The hub: the pool, what pairing says and is doing, the pinned fingerprints and those heard
-/// while pairing, posts in flight (each its id, what it is and its body so far), the last post
-/// and link ids, the process watching, the
-/// snapshot last sent and to whom, when the next may go and when a wake was last asked for, the
-/// clock (page ms), what testing measured as last kept, and the frames for the desktop.
+/// for each link, the devices linked for good, this tab's own fingerprint, the nonces sent on
+/// links just paired (link, nonce, whether this tab showed the code), links that said goodbye and
+/// when they close; posts in flight (each its id, what it is and its body so far), the last post
+/// and link ids, the process watching, the snapshot last sent and to whom, when the next may go
+/// and when a wake was last asked for, the clock (page ms), what testing measured as last kept,
+/// and the frames for the desktop.
 #[derive(Debug, Default)]
 pub struct Hub {
     pub pool: Pool,
@@ -71,6 +84,10 @@ pub struct Hub {
     pairing: Option<Pairing>,
     pub(crate) pins: Vec<String>,
     heard_fp: Vec<(u32, String)>,
+    pub bonds: Vec<bond::Bond>,
+    own_fp: String,
+    nonces: Vec<(u32, String, bool)>,
+    bye: Vec<(u32, u64)>,
     posts: Vec<(u32, Op, Vec<u8>)>,
     last_post: u32,
     last_link: u32,
@@ -133,9 +150,12 @@ impl Hub {
         self.post_to(SIGNAL, op, body);
     }
 
-    /// Keeps the pins and the model shared for this profile.
+    /// Keeps the pins, the bonds and the model shared for this profile.
     fn keep(&mut self) {
         let mut kept = self.pins.join("\n");
+        for b in &self.bonds {
+            kept = [&kept, "\n", &b.line()].concat();
+        }
         if !self.pool.shared.url.is_empty() {
             kept = [&kept, "\n", SERVE, &self.pool.shared.url].concat();
         }
@@ -176,9 +196,10 @@ impl Hub {
                 let cores = cores.min(1024) as u16;
                 let info = Info { name, kind, cores, ram_mb, gpu, ..Info::default() };
                 self.pool = Pool::new(info);
-                let (kept, pins): (Vec<&str>, _) =
-                    lines.partition(|l| l.starts_with(SERVE) || l.starts_with(TESTED));
+                let ours = |l: &&str| [SERVE, TESTED, bond::BOND].iter().any(|p| l.starts_with(p));
+                let (kept, pins): (Vec<&str>, _) = lines.partition(ours);
                 self.pins = pins.into_iter().map(String::from).collect();
+                self.bonds = kept.iter().filter_map(|l| bond::Bond::parse(l)).collect();
                 let tested = kept.iter().rev().find_map(|l| l.strip_prefix(TESTED));
                 let n: Vec<u32> = tested
                     .map_or(Vec::new(), |t| t.split(' ').filter_map(|w| w.parse().ok()).collect());
@@ -206,11 +227,20 @@ impl Hub {
                     4 => Request::Ask { text },
                     5 => Request::Serve { url: text },
                     6 => Request::Test,
+                    7 => Request::Link { what: text },
                     _ => return,
                 };
                 self.ask(f.a, r);
             }
             to_pool::SIGNAL => {
+                let sdp = text();
+                let fp = fingerprint(&sdp);
+                if !fp.is_empty() {
+                    self.own_fp = fp;
+                }
+                if self.meet_signal(f.a, &sdp) {
+                    return;
+                }
                 let Some(p) = self.pairing.as_ref().filter(|p| p.link == f.a) else { return };
                 let body = match p.host {
                     true => (Op::Host, ["host\n", &text()].concat()),
@@ -220,18 +250,22 @@ impl Hub {
             }
             to_pool::LINKED => self.linked(f.a),
             to_pool::DATA => {
-                // A message on the pairing link before its open was heard: it is open.
+                // A message on a link being made before its open was heard: it is open.
                 let pairing = self.pairing.as_ref().is_some_and(|p| p.link == f.a);
-                if pairing && self.pool.peers.iter().all(|p| p.link != f.a) {
+                let meeting = self.bonds.iter().any(|b| b.link == f.a);
+                if (pairing || meeting) && self.pool.peers.iter().all(|p| p.link != f.a) {
                     self.linked(f.a);
                 }
                 self.pool.count(f.a, 0, f.data.len());
                 if let Some(m) = Msg::decode(&f.data) {
-                    self.pool.heard(f.a, m, now);
+                    if !self.bond_heard(f.a, &m) {
+                        self.pool.heard(f.a, m, now);
+                    }
                 }
             }
             to_pool::UNLINKED => {
                 self.pool.unlinked(f.a, now);
+                self.bond_lost(f.a);
                 if self.pairing.as_ref().is_some_and(|p| p.link == f.a) {
                     self.stop("The link failed: try again, both devices on one network");
                 }
@@ -274,10 +308,12 @@ impl Hub {
             self.pins.push(fp);
             self.keep();
         }
-        if self.pairing.as_ref().is_some_and(|p| p.link == link) {
+        let paired = self.pairing.as_ref().filter(|p| p.link == link).map(|p| p.host);
+        if paired.is_some() {
             (self.pairing, self.note) = (None, String::new());
         }
         self.pool.linked(link, known, self.now);
+        self.bond_linked(link, paired);
     }
 
     /// Process `pid` asked for `r`: Pair, Measure, Ask, Serve and Test (from Activity's window
@@ -306,6 +342,7 @@ impl Hub {
                 self.keep();
             }
             Request::Test => self.pool.test(now),
+            Request::Link { what } => self.link_ask(&what),
             // A job whose one chunk is `@<url> <per>`: its chunks are the lines of that
             // same-origin file, `per` a chunk (tab-joined), fetched first.
             Request::Job { name, chunks } if chunks.len() == 1 && chunks[0].starts_with('@') => {
@@ -339,6 +376,9 @@ impl Hub {
 
     fn answered(&mut self, op: Op, status: u32, body: &str) {
         let now = self.now;
+        if matches!(op, Op::Meet(_) | Op::Wait(_) | Op::Find(_) | Op::Reply(_)) {
+            return self.met(op, status, body);
+        }
         if op == Op::Props {
             return self.pool.props(status, body);
         }
@@ -395,6 +435,8 @@ impl Hub {
                 self.post(op, &body);
             }
         }
+        self.meet(now);
+        self.goodbyes(now);
         self.pool.tick(now);
         self.acts();
         // What a test measured (the CPU's half, then the memory too) is kept for this profile.
@@ -404,7 +446,9 @@ impl Hub {
         let mut to: Vec<u32> = Some(self.watcher).filter(|w| *w != 0).into_iter().collect();
         to.extend(self.pool.job.as_ref().map(|j| j.window).filter(|w| !to.contains(w)));
         let code = self.pairing.as_ref().filter(|p| p.host).map_or("", |p| p.code.as_str());
-        let bytes = self.pool.snap(now, &self.note, code).encode();
+        let mut snap = self.pool.snap(now, &self.note, code);
+        snap.bonds = self.bonds.iter().map(bond::Bond::shown).collect();
+        let bytes = snap.encode();
         // `at` (bytes 1 to 4) changes every time: the rest says whether anything did. A change
         // goes at most once a second (four times while a model writes an answer here), unless it
         // is to someone new.
@@ -419,7 +463,9 @@ impl Hub {
                 later = Some(self.next_snap);
             }
         }
-        let due = [self.pool.due(), self.pairing.as_ref().map(|p| p.at.unwrap_or(p.until)), later];
+        let pairing = self.pairing.as_ref().map(|p| p.at.unwrap_or(p.until));
+        let bye = self.bye.iter().map(|b| b.1).min();
+        let due = [self.pool.due(), pairing, later, self.meet_due(), bye];
         if let Some(t) = due.into_iter().flatten().min().filter(|&t| self.woken != Some(t)) {
             self.woken = Some(t);
             self.send(to_desk::WAKE, t.saturating_sub(now).min(60_000) as u32, &[]);
@@ -443,7 +489,11 @@ impl Hub {
                     Act::Stop(pids) => {
                         pids.into_iter().for_each(|p| self.send(to_desk::KILL, p, &[]))
                     }
-                    Act::Unlink(link) => self.send(to_desk::UNLINK, link, &[]),
+                    // A link gone silent: the pool dropped it, and its bond tries again.
+                    Act::Unlink(link) => {
+                        self.send(to_desk::UNLINK, link, &[]);
+                        self.bond_lost(link);
+                    }
                     Act::Done { window, index, node, out } => {
                         let ev = Event::Done { index, node, out }.encode();
                         self.send(to_desk::TELL, window, &ev);
