@@ -1,6 +1,6 @@
 ---
 name: night
-description: The overnight loop, from when compusophy goes to bed (they say so, or type /night, ultracode on) until they say they are up. The GPU runs train/night.sh --until-woken; the night workflow's waves keep growing the IQ suite; "I'm up" stops both and ships; "pause" stops everything at once. Also how to smoke-test it by day.
+description: The overnight loop, from when compusophy goes to bed (they say so, or type /night, ultracode on) until they say they are up. Since 2026-10-08 the GPU runs train/team.sh (the two-models night - GLM's recorded drafts repaired by a local helper, a repair helper trained, scored as a team - no cloud call); the Opus data waves run only if compusophy agreed to their plan and token cost. "I'm up" stops it and ships; "pause" stops everything at once. Also the older solo night (train/night.sh) and how to smoke-test it by day.
 ---
 
 # The night
@@ -8,6 +8,28 @@ description: The overnight loop, from when compusophy goes to bed (they say so, 
 compusophy says when the night starts ("going to bed", or `/night`, the effort on ultracode)
 and when it ends ("I'm up", "I woke up"). Both are theirs: never start a night unasked, and
 never end one on a clock. Between the two, neither the GPU nor the agents sit idle.
+
+## The two-models night (the spine since 2026-10-08: run this one)
+
+compusophy: the local model SUPPORTS the cloud model's loop (repair, checks, selection); score
+the combined system. So the GPU half is `train/team.sh` (DESIGN.md, "The team"), not the solo
+climb below, and the data waves do NOT run unless compusophy has agreed to the plan and its
+token cost (a wave is about 9.5M Opus tokens). `team.sh` uses no cloud call: GLM's drafts are
+its recorded answers. First night: n20261008 (`D/team-n20261008/`, `D/team-n20261008.log`).
+
+1. Lift the pause (rename `D/PAUSE`), build this checkout's debug `eval` and `iq`
+   (`cargo build -p eval -p compusophy-iq`; team.sh copies them into the night's folder).
+2. Start it detached (as night.sh below, by `Start-Process` with the command quoted), e.g.
+   `bash train/team.sh glm team:base3b:base3b drafts mutants train-traces fixdata fix3b
+   team:fix3b:<night>-fix3b rounds summary`. Each step is skipped once its output is there, so a
+   rerun resumes; none begins while `D/PAUSE` exists.
+3. Watch its log by events (`score-`, `failed`, `train:`, `drafts:`), never by the clock.
+4. Pause: touch `D/PAUSE`, then stop team.sh's bash and its python (`train/ask.py`, `sft.py`,
+   `serve.py --stop`) by command line, as for night.sh below.
+
+What it measured on 2026-10-09 is in DESIGN.md; the solo night below stays for reference.
+
+## The solo night (before 2026-10-08)
 
 - **The GPU** (`train/night.sh --until-woken`, detached, started at once): baselines, tonight's fine-tunes
   (0.5B full, 3B LoRA, a self-taught round), scored on the held-out tasks; then rounds until
