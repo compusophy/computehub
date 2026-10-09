@@ -412,7 +412,7 @@ impl PoolPage {
             let pct = [&(share / 10).to_string(), "%"].concat();
             // Measured, never the browser's guess: a dash until the device is tested.
             let tested = d.tested != 0;
-            let cpu = if tested { rate(d.cpun) } else { DASH.into() };
+            let cpu = if tested && d.cpun > 0 { rate(d.cpun) } else { DASH.into() };
             let ram = if tested && d.mem > 0 { at_least(d.mem, d.floor) } else { DASH.into() };
             let quota = if d.quota_mb == 0 { DASH.into() } else { storage(d.quota_mb.into()) };
             let cells = match wide {
@@ -431,7 +431,7 @@ impl PoolPage {
                 "" => String::new(),
                 m => [DOT, m, " ", &speed(d.tok)].concat(),
             };
-            let one = match d.tested {
+            let one = match d.cpu1 {
                 0 => String::new(),
                 _ => [DOT, "one core ", &rate(d.cpu1)].concat(),
             };
@@ -452,7 +452,7 @@ impl PoolPage {
         // The devices linked for good and away: greyed, with what they last said.
         for b in s.bonds.iter().filter(|b| b.state != pool::ONLINE) {
             let tested = b.tested != 0;
-            let cpu = if tested { rate(b.cpun) } else { DASH.into() };
+            let cpu = if tested && b.cpun > 0 { rate(b.cpun) } else { DASH.into() };
             let ram = if tested && b.mem > 0 { at_least(b.mem, b.floor) } else { DASH.into() };
             let cells = match wide {
                 true => [cpu, ram, DASH.into(), DASH.into()].join("\t"),

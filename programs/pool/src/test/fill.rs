@@ -13,20 +13,27 @@
 //! process holds at most a gibibyte; more workers start as needed, up to [`super::MAX`]). It
 //! stops, every worker ending and its memory with it:
 //! - at the first sign of swapping: the old pages' time past [`TOUCH_X`] times its usual (the
-//!   median of the first three) and at least [`TOUCH_MIN`] us, or past [`TOUCH_MAX`] us at all;
-//! - at a step slower than one and a half times the usual step (at least [`super::FLOOR`] ms),
+//!   median of the first three) and at least [`TOUCH_MIN`] us, or past [`TOUCH_MAX`] us at all,
+//!   and still so in the middle of three touches (swapping persists; a thread put aside for a
+//!   moment, or a pause, does not: one 0.8 ms touch on a 128 GB desktop at 13.5 GB was that);
+//! - at a step past [`STEP_X`] times the usual step and at least [`STEP_MIN`] ms (a stall, as
+//!   reclaim makes one: four steps at once, with workers starting, vary by half and more),
 //!   or refused on a fresh worker, or not answered by its limit and [`super::GRACE`];
 //! - at its own limits, its figure then a floor: [`FILL_MOST`] MiB, [`FILL_TIME`] ms, the most
 //!   workers.
 //!
 //! When the device stopped it, the figure is what was held before the round that showed it.
 
-use super::{BASE, FIRST, FLOOR, GRACE, MAX, PROGRAM, Phase, Test, said};
+use super::{BASE, FIRST, GRACE, MAX, PROGRAM, Phase, Test, said};
 use crate::pool::Act;
 
 /// Mebibytes a step takes, and how many steps a round gives at once.
 pub const FILL_STEP: u32 = 128;
 pub const PAR: usize = 4;
+/// A step's limit once the usual step is known: `STEP_X` times it, at least `STEP_MIN` ms. (At one
+/// and a half times, 150 ms at least, a 128 GB desktop stopped at 3 GB, its old pages at 0.1 ms.)
+pub const STEP_X: u64 = 3;
+pub const STEP_MIN: u64 = 500;
 /// The most it takes (MiB) and the longest it runs (ms).
 pub const FILL_MOST: u32 = 96 * 1024;
 pub const FILL_TIME: u64 = 30_000;
@@ -34,13 +41,13 @@ pub const FILL_TIME: u64 = 30_000;
 /// least `TOUCH_MIN` us, or past `TOUCH_MAX` us; how long a touch may take to answer (ms).
 pub const PAGES: u32 = 64;
 pub const TOUCH_X: u64 = 10;
-pub const TOUCH_MIN: u64 = 500;
+pub const TOUCH_MIN: u64 = 1000;
 pub const TOUCH_MAX: u64 = 2000;
 const TOUCH_WAIT: u64 = 2000;
 
 /// The fill under way: the workers with a step out, the memory held when the round began and
-/// when it began, whether a touch is out and since when, each touch's microseconds, the usual
-/// touch (0 until three), the slowest.
+/// when it began, whether a touch is out and since when, each clean touch's microseconds, the
+/// usual touch (0 until three), the slowest, and the touches confirming one past the line.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Fill {
     out: Vec<usize>,
@@ -50,12 +57,12 @@ pub struct Fill {
     touches: Vec<u64>,
     usual: u64,
     peak: u64,
+    confirm: Vec<u64>,
 }
 
-/// Microseconds as milliseconds, two places: `0.02 ms`, `3.10 ms`.
+/// Microseconds as milliseconds, three places: `0.004 ms`, `3.100 ms`.
 fn ms(us: u64) -> String {
-    let h = us / 10;
-    [&(h / 100).to_string(), ".", &format!("{:02}", h % 100), " ms"].concat()
+    [&(us / 1000).to_string(), ".", &format!("{:03}", us % 1000), " ms"].concat()
 }
 
 impl Test {
@@ -102,7 +109,7 @@ impl Test {
         } else {
             let mut s = self.steps.clone();
             s.sort_unstable();
-            FLOOR.max(s[s.len() / 2] * 3 / 2)
+            STEP_MIN.max(s[s.len() / 2] * STEP_X)
         };
         let chosen: Vec<usize> = free.into_iter().take(PAR).collect();
         let what = ["ram ", &FILL_STEP.to_string(), " ", &limit.to_string()].concat();
@@ -148,6 +155,12 @@ impl Test {
             return;
         }
         // The round is in: the oldest memory's pages, timed.
+        self.touch(now, out);
+    }
+
+    /// The oldest memory's pages touched and timed (by the first worker holding some), or the
+    /// next round if none holds any.
+    fn touch(&mut self, now: u64, out: &mut Vec<Act>) {
         match (0..self.workers.len()).find(|&w| self.workers[w].held > 0) {
             Some(w) => {
                 self.feed(w, &["touch ", &PAGES.to_string()].concat(), out);
@@ -164,25 +177,31 @@ impl Test {
             return;
         }
         let f = &mut self.fill;
-        f.touches.push(us);
         f.peak = f.peak.max(us);
-        if f.touches.len() == 3 {
-            let mut s = f.touches.clone();
-            s.sort_unstable();
-            f.usual = s[1].max(1);
-        }
         let limit = match f.usual {
             0 => TOUCH_MAX,
             u => TOUCH_MAX.min(TOUCH_MIN.max(u * TOUCH_X)),
         };
-        if us > limit {
-            let before = f.before;
-            return self.finish_fill(
-                "old pages slowing (the device starting to swap)",
-                false,
-                before,
-                out,
-            );
+        // Past the line: two more touches of fresh pages, and the middle of the three decides.
+        if us > limit || !f.confirm.is_empty() {
+            f.confirm.push(us);
+            if f.confirm.len() < 3 {
+                return self.touch(now, out);
+            }
+            let mut c = std::mem::take(&mut f.confirm);
+            c.sort_unstable();
+            if c[1] > limit {
+                let before = f.before;
+                let why = "old pages slowing (the device starting to swap)";
+                return self.finish_fill(why, false, before, out);
+            }
+        } else {
+            f.touches.push(us);
+            if f.touches.len() == 3 {
+                let mut s = f.touches.clone();
+                s.sort_unstable();
+                f.usual = s[1].max(1);
+            }
         }
         self.round(now, out);
     }

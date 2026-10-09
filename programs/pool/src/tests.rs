@@ -838,7 +838,8 @@ fn filling(prev: crate::test::Measured) -> (Tab, u64) {
 /// One round: each step fed answered ok in 40 ms, then the touch of the oldest pages in `us`.
 fn round(t: &mut Tab, now: &mut u64, us: u64) {
     let (lines, _) = fed(t);
-    let steps: Vec<(u32, String)> = lines.into_iter().filter(|l| l.1.contains(" ram 128 ")).collect();
+    let steps: Vec<(u32, String)> =
+        lines.into_iter().filter(|l| l.1.contains(" ram 128 ")).collect();
     assert_eq!(steps.len(), 2, "both workers step at once");
     for (pid, line) in steps {
         *now += 40;
@@ -860,14 +861,28 @@ fn measuring_all_memory_fills_in_rounds_until_the_oldest_pages_slow() {
         round(&mut t, &mut now, us);
     }
     assert_eq!(t.pool.test.as_ref().unwrap().measured.mem, 4 * 2 * 128);
+    // A touch past the line, then two more of fresh pages: their middle decides. Once a spike.
+    round(&mut t, &mut now, 1500);
+    for us in [20, 25] {
+        let (again, _) = fed(&mut t);
+        assert_eq!(again, [(201, "0 touch 64".to_string())]);
+        says(&mut t, 201, &["0 128 - touch ", &us.to_string()].concat(), now);
+    }
+    assert!(!t.pool.test.as_ref().unwrap().over, "a spike is not swapping");
+    // Then for good: 5 ms, 4 ms, 6 ms.
     round(&mut t, &mut now, 5000);
+    for us in [4000, 6000] {
+        let (again, _) = fed(&mut t);
+        assert_eq!(again, [(201, "0 touch 64".to_string())]);
+        says(&mut t, 201, &["0 128 - touch ", &us.to_string()].concat(), now);
+    }
     let test = t.pool.test.as_ref().unwrap();
     assert!(test.over && test.note.contains("old pages slowing"), "{}", test.note);
-    assert!(test.note.contains("0.03 ms usually, 5.00 ms at most"), "{}", test.note);
+    assert!(test.note.contains("0.030 ms usually, 6.000 ms at most"), "{}", test.note);
     // What was held before the round that showed it; the CPU's figures kept; a real figure, not
     // a floor, so it replaces the quick test's floor though it is less.
     let me = t.pool.me.measured;
-    assert_eq!((me.cpu1, me.cpun, me.mem, me.floor, me.tested), (200, 1600, 1024, false, 9));
+    assert_eq!((me.cpu1, me.cpun, me.mem, me.floor, me.tested), (200, 1600, 1280, false, 9));
     assert!(t.pool.out.iter().any(|a| matches!(a, Act::Stop(p) if p.contains(&201))));
 }
 
