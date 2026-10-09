@@ -66,6 +66,82 @@ fn another_try_samples_at_its_own_temperature() {
 }
 
 #[test]
+fn start_at_asks_as_it_always_did() {
+    // The fixture: the body as the make loop's fix was asked before Opts, its room and its
+    // temperature and nothing more, for the first turn and for a missed edit's re-ask.
+    let draft = broken();
+    let account = ai::fault(&draft, "", coder::Knobs::default().seeds).expect("a fault").account;
+    let fix = prompt::fix("A counter", &draft, &account);
+    let body = |msg: &str| {
+        ai::chat("q3", ",\"max_tokens\":4096,\"temperature\":0.7", &prompt::system(), msg)
+    };
+    let (mut r, next) = Repair::start_at("A counter", "", &draft, "q3", 3, "0.7");
+    assert_eq!(ask(&next), body(&fix));
+    let miss = edit("state m = 9", "state m = 9;");
+    let Reply::Edits(e) = edits::read(&miss, false) else { panic!("edit blocks") };
+    let why = edits::apply(&draft, &e).expect_err("a miss");
+    assert_eq!(ask(&r.reply(&miss, false)), body(&prompt::missed(&fix, &why)));
+}
+
+#[test]
+fn a_seeded_pinned_repair_names_its_seed_and_samplers_and_the_seed_moves_each_turn() {
+    let opts = Opts { seed: Some(7), pin: true, ..Opts::default() };
+    let (mut r, next) = Repair::start_with("A counter", "", &broken(), "q3", 3, &opts);
+    let body = ask(&next);
+    let samplers = "\"temperature\":0.2,\"top_k\":20,\"top_p\":0.8,\"min_p\":0.05,\"seed\":7,";
+    assert!(body.contains(samplers), "{body}");
+    assert_eq!(r.seed(), Some(7));
+    let next = r.reply(&edit("state m = 9", "state m = 9;"), false);
+    assert!(ask(&next).contains(",\"seed\":8,") && !ask(&next).contains("\"seed\":7"));
+    assert_eq!(r.seed(), Some(8));
+    // Unseeded and unpinned: neither is named.
+    let (r, next) = Repair::start("A counter", "", &broken(), "q3", 3);
+    assert!(
+        !ask(&next).contains("\"seed\"") && !ask(&next).contains("top_k") && r.seed().is_none()
+    );
+}
+
+#[test]
+fn a_turns_seed_is_under_two_to_the_31_never_llama_cpps_any_seed() {
+    for (seed, turn) in [(u32::MAX, 0), (u32::MAX - 1, 1), (0x7FFF_FFFF, 0), (0xFFFF_FFF0, 15)] {
+        let s = turn_seed(seed, turn);
+        assert!(s != 0xFFFF_FFFF && s <= 0x7FFF_FFFF, "{seed} {turn}: {s}");
+    }
+    assert_eq!((turn_seed(7, 0), turn_seed(7, 2), turn_seed(u32::MAX, 1)), (7, 9, 0));
+}
+
+#[test]
+fn whole_asks_for_a_whole_program_once_in_a_fix_and_a_missed_reask_is_as_ever() {
+    let opts = Opts { whole: true, ..Opts::default() };
+    let (mut r, next) = Repair::start_with("A counter", "", &broken(), "q3", 3, &opts);
+    let said = "Reply with the whole corrected program in one app block, and nothing else.";
+    assert_eq!(ask(&next).matches(said).count(), 1);
+    assert!(r.asked().ends_with(WHOLE));
+    // The re-ask repeats the message asked (WHOLE in it once) and adds only why the edits missed.
+    let asked = r.asked().to_string();
+    let next = r.reply(&edit("state m = 9", "state m = 9;"), false);
+    assert_eq!(ask(&next).matches(said).count(), 1);
+    assert!(r.asked().starts_with(&asked) && r.asked().contains("Your edits did not apply"));
+    assert!(!r.asked().ends_with(WHOLE));
+    // A whole program in reply repairs it.
+    let f = done(r.reply(&["```app\n", COUNTER, "```"].concat(), false));
+    assert!(f.clean && f.steps[1].held == Held::Program, "{f:?}");
+    // Not asked for: never said.
+    let (_, next) = Repair::start("A counter", "", &broken(), "q3", 3);
+    assert!(!ask(&next).contains(said));
+}
+
+#[test]
+fn rank_of_ranks_as_a_repair_does_and_kept_counts_the_drafts_lines() {
+    assert_eq!(rank_of(COUNTER, ""), 3);
+    assert_eq!(rank_of(&broken(), ""), 0);
+    let no_icon = COUNTER.replace("line 12 5 12 19", "line 12 5 12 30");
+    assert_eq!(rank_of(&no_icon, ""), 2);
+    assert_eq!(kept(COUNTER, COUNTER), (9, 9));
+    assert_eq!(kept(COUNTER, "label n;\n"), (1, 9));
+}
+
+#[test]
 fn edits_that_miss_are_asked_again_with_why_and_the_turns_run_out() {
     let (mut r, _) = Repair::start("A counter", "", &broken(), "q3", 2);
     let next = r.reply(&edit("state m = 9", "state m = 9;"), false);

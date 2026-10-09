@@ -22,6 +22,36 @@ use coder::prompt;
 /// A fix's room in output tokens and its temperature, as the make loop asks a fix.
 pub const ROOM: u32 = 4_096;
 pub const TEMPERATURE: &str = "0.2";
+/// The samplers a pinned request names, Qwen's own (the 3B's GGUF carries them; the 7B's does
+/// not, so llama-server's top_k 40 and top_p 0.95 sample it), so helpers of every size sample
+/// alike.
+pub const PIN: &str = ",\"top_k\":20,\"top_p\":0.8,\"min_p\":0.05";
+/// What a fix asks besides when the helper is to reply with whole programs.
+pub const WHOLE: &str =
+    "\n\nReply with the whole corrected program in one app block, and nothing else.";
+
+/// How a repair asks, past the make loop's fix: its temperature (a decimal, as JSON has it), a
+/// seed (each turn's request seeded with it plus the turns taken, so a run replays), the samplers
+/// pinned ([`PIN`]), whole programs asked for ([`WHOLE`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Opts {
+    pub temperature: String,
+    pub seed: Option<u32>,
+    pub pin: bool,
+    pub whole: bool,
+}
+
+impl Default for Opts {
+    fn default() -> Opts {
+        Opts { temperature: TEMPERATURE.into(), seed: None, pin: false, whole: false }
+    }
+}
+
+/// The seed of a repair's `turn` (from 0): its `seed` plus the turn, under 2^31, so it is never
+/// llama.cpp's "any seed" (0xFFFFFFFF) and reads the same signed or not.
+pub fn turn_seed(seed: u32, turn: usize) -> u32 {
+    seed.wrapping_add(turn as u32) & 0x7FFF_FFFF
+}
 
 /// What a helper's reply held: a whole program, edit blocks that applied, a unified diff read as
 /// edit blocks that applied ([`diff`]), edit blocks (or a diff) that did not (asked again with
@@ -97,8 +127,14 @@ fn inline(src: &str, edits: &[coder::edits::Edit]) -> Option<String> {
     Some(lines.join("\n") + "\n")
 }
 
+/// The rank of `src` as a repair ranks it (0 it does not compile, 1 it faults, 2 only its icon
+/// is wrong, 3 it runs clean), run from the saved states `kept` by the make loop's test.
+pub fn rank_of(src: &str, kept: &str) -> u8 {
+    rank(&ai::fault(src, kept, coder::Knobs::default().seeds))
+}
+
 /// How many of `draft`'s distinct lines (trimmed, not blank) `src` still has, and how many it has.
-fn kept(draft: &str, src: &str) -> (usize, usize) {
+pub fn kept(draft: &str, src: &str) -> (usize, usize) {
     let lines = |s: &str| {
         let mut v: Vec<String> =
             s.lines().map(str::trim).filter(|l| !l.is_empty()).map(String::from).collect();
@@ -116,20 +152,21 @@ fn code(f: &Option<Fault>) -> u16 {
 }
 
 /// A helper repairing a draft: the ask, the saved states it must run from, the helper's model
-/// name, the turns it may take and the smoke test's seeds; the best program so far and what is
-/// wrong with it; the last message asked; the turns taken.
+/// name, how it is asked, the turns it may take and the smoke test's seeds; the best program so
+/// far and what is wrong with it; the last message asked and its seed; the turns taken.
 #[derive(Debug)]
 pub struct Repair {
     ask: String,
     kept: String,
     model: String,
-    temperature: String,
+    opts: Opts,
     turns: u8,
     seeds: u8,
     system: String,
     best: String,
     fault: Option<Fault>,
     asked: String,
+    seed: Option<u32>,
     steps: Vec<Step>,
 }
 
@@ -150,19 +187,34 @@ impl Repair {
         turns: u8,
         temperature: &str,
     ) -> (Repair, Next) {
+        let opts = Opts { temperature: temperature.into(), ..Opts::default() };
+        Repair::start_with(ask, kept, draft, model, turns, &opts)
+    }
+
+    /// [`Repair::start`] asked as `opts` says: seeded, its samplers pinned, whole programs asked
+    /// for. With only a temperature, asked as [`Repair::start_at`] asks.
+    pub fn start_with(
+        ask: &str,
+        kept: &str,
+        draft: &str,
+        model: &str,
+        turns: u8,
+        opts: &Opts,
+    ) -> (Repair, Next) {
         let seeds = coder::Knobs::default().seeds;
         let fault = ai::fault(draft, kept, seeds);
         let mut r = Repair {
             ask: ask.into(),
             kept: kept.into(),
             model: model.into(),
-            temperature: temperature.into(),
+            opts: opts.clone(),
             turns,
             seeds,
             system: prompt::system(),
             best: draft.into(),
             fault,
             asked: String::new(),
+            seed: None,
             steps: Vec::new(),
         };
         let next = r.next(None);
@@ -179,14 +231,24 @@ impl Repair {
                 return Next::Done(Fixed { src, clean, steps: self.steps.clone() });
             }
         };
+        // A re-ask after a miss repeats the message asked: WHOLE once, if it was asked.
         let msg = match missed {
             Some(why) => prompt::missed(&self.asked, &why),
+            None if self.opts.whole => prompt::fix(&self.ask, &self.best, &account) + WHOLE,
             None => prompt::fix(&self.ask, &self.best, &account),
         };
         let mut options = String::from(",\"max_tokens\":");
         ai::put_num(&mut options, ROOM.into());
         options += ",\"temperature\":";
-        options += &self.temperature;
+        options += &self.opts.temperature;
+        if self.opts.pin {
+            options += PIN;
+        }
+        self.seed = self.opts.seed.map(|s| turn_seed(s, self.steps.len()));
+        if let Some(seed) = self.seed {
+            options += ",\"seed\":";
+            ai::put_num(&mut options, seed.into());
+        }
         let body = ai::chat(&self.model, &options, &self.system, &msg);
         self.asked = msg;
         Next::Ask(body)
@@ -200,6 +262,11 @@ impl Repair {
     /// The message the request in flight asked (a trace's prompt).
     pub fn asked(&self) -> &str {
         &self.asked
+    }
+
+    /// The seed the request in flight named, if it is seeded.
+    pub fn seed(&self) -> Option<u32> {
+        self.seed
     }
 
     /// The helper's whole reply (`cut`: it ran out of room): judged, kept if it is no worse than

@@ -13,8 +13,10 @@
 //!                         [--name N] [--jobs 1] [--ms MS] [--per-hour 110]
 //! cargo run -p eval -- team --suite S --answers A --helper-url U --out OUT [--held H]
 //!                           [--helper M] [--name N] [--turns 3] [--jobs 1] [--traces T]
-//!                           [--tries 1] [--temperature 0.7]
+//!                           [--tries 1] [--temperature 0.7] [--seed S] [--pin] [--whole]
+//!                           [--all-tries] [--tries-out F] [--skip-icon]
 //! cargo run -p eval -- mutants --suite S --refs R --held H --out OUT [--per 1] [--max N]
+//! cargo run -p eval -- features
 //! ```
 //!
 //! `iq` makes the IQ suite's tasks (the families `--held` lists, or `--tasks`, else all) as
@@ -33,8 +35,22 @@
 //! in at most `--turns` turns ([`team::Repair`]), every answer judged by the make loop's test;
 //! with `--tries K`, up to K repairs of the draft, the ones after the first sampled at
 //! `--temperature`, the first that runs clean kept (a selection by the smoke test alone, never
-//! the task's hidden check). An answer line a task goes to `--out` (the best program; how the repair went in `team`), so
-//! `iq score` scores the lead and helper together; tasks already there are skipped.
+//! the task's hidden check); else the try that ranks highest above the draft (it compiles where
+//! the draft did not, say), the earliest of a tie; else the draft as the lead wrote it, so a team
+//! never scores below its lead. An answer line a task goes to `--out` (that program; how the
+//! repair went in `team`: the tries, those clean, the one kept or -1, the draft's rank and the
+//! kept one's, requests and tokens), so `iq score` scores the lead and helper together; tasks
+//! already there are skipped.
+//!
+//! `--seed S` seeds every request (try t of a task from the task's FNV-1a, S and t; each turn the
+//! next number), so a run replays; `--pin` names Qwen's samplers (`team::PIN`), which not every
+//! GGUF carries; `--whole` asks for whole programs; `--all-tries` runs every try, clean or not,
+//! and `--tries-out F` writes a line a try (its seed, rank, turns, cost and program), so the
+//! results at 1, 2, 4 .. tries come from one run; `--skip-icon` writes a draft whose only fault
+//! is its icon line as it is, asking nothing. A helper's "exceeds the available context" ends that
+//! draft's repair, written (`"error":"context"`); any other failure leaves the draft unwritten, for
+//! a rerun, and the run exits 3 (`unwritten N`). A flag `team` does not know stops it (exit 2);
+//! `features` lists what this build's `team` does, for a script to check first.
 //!
 //! `--dir D` reads and writes `D/results` and `D/replays` instead of the repo's `evals/`. Runs
 //! and replays need a debug build (as above): a checker that panics fails its app only where
@@ -46,6 +62,7 @@ use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::Mutex;
+use std::sync::atomic::Ordering::Relaxed;
 use std::sync::mpsc::{RecvTimeoutError, channel};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -438,7 +455,10 @@ fn main() {
         Some("iq") => iq(&args),
         Some("team") => team(&args),
         Some("mutants") => mutants::mutants(&args),
-        _ => eprintln!("usage: eval run|replay|summary|list|iq|team (see tools/eval/src/main.rs)"),
+        Some("features") => println!("{FEATURES}"),
+        _ => eprintln!(
+            "usage: eval run|replay|summary|list|iq|team|mutants|features (see tools/eval/src/main.rs)"
+        ),
     }
 }
 
@@ -511,9 +531,19 @@ fn iq(args: &[String]) {
     });
 }
 
-/// The helper's whole reply to `body` over `wire` (for task `task`, its `n`th request), and
-/// whether it ran out of room; or why there was none.
-fn helper_reply(wire: &mut Curl, task: &str, n: u32, body: &str) -> Result<(String, bool), String> {
+/// A helper's reply: its text, whether it ran out of room, its tokens in and out (as its usage
+/// chunk said; none said, 0) and its time.
+struct Said {
+    text: String,
+    cut: bool,
+    input: u32,
+    output: u32,
+    ms: u64,
+}
+
+/// The helper's whole reply to `body` over `wire` (for task `task`, its `n`th request); or why
+/// there was none.
+fn helper_reply(wire: &mut Curl, task: &str, n: u32, body: &str) -> Result<Said, String> {
     let (mut stream, mut text) = (coder::json::Stream::default(), String::new());
     let at = At { task, trial: 1, n, hash: 0 };
     let answer = wire.post(&at, body, &mut |bytes, _| {
@@ -522,30 +552,219 @@ fn helper_reply(wire: &mut Curl, task: &str, n: u32, body: &str) -> Result<(Stri
     });
     stream.end(&mut text, usize::MAX);
     match answer.status {
-        200..=299 if stream.error.is_empty() => Ok((text, stream.finish == "length")),
+        200..=299 if stream.error.is_empty() => {
+            let usage = stream.usage.unwrap_or_default();
+            let cut = stream.finish == "length";
+            Ok(Said { text, cut, input: usage.input, output: usage.output, ms: answer.ms })
+        }
         status => Err(format!("HTTP {status} {} {}", answer.error, stream.error)),
     }
 }
 
+/// The flags `team` reads with a value after each, and those that stand alone: any other
+/// `--flag` stops it before a request (exit 2), so no run goes on without a flag it was given.
+const TEAM_VALUES: [&str; 15] = [
+    "--suite",
+    "--answers",
+    "--helper-url",
+    "--out",
+    "--held",
+    "--helper",
+    "--name",
+    "--turns",
+    "--jobs",
+    "--traces",
+    "--tries",
+    "--temperature",
+    "--seed",
+    "--tries-out",
+    "--dir",
+];
+const TEAM_FLAGS: [&str; 4] = ["--pin", "--whole", "--all-tries", "--skip-icon"];
+
+/// What `eval features` prints: what this build's `team` does past the first team night's, for a
+/// script to check before it relies on any of it.
+const FEATURES: &str = "team: seed pin whole all-tries tries-out skip-icon exit3 context-records";
+
+/// What a helper's server says of a request longer than its context: no later request of the
+/// draft is shorter, so the repair ends there and is written (no rerun would go further).
+const CONTEXT: &str = "exceeds the available context";
+
+/// Whether every `--flag` in `args` (past the command) is one of `values`, with a value after it,
+/// or of `flags`; else why not.
+fn strict(args: &[String], values: &[&str], flags: &[&str]) -> Result<(), String> {
+    let mut i = 1;
+    while let Some(a) = args.get(i) {
+        if values.contains(&a.as_str()) {
+            if args.get(i + 1).is_none() {
+                return Err(format!("{a} needs a value"));
+            }
+            i += 2;
+        } else if flags.contains(&a.as_str()) || !a.starts_with("--") {
+            i += 1;
+        } else {
+            return Err(format!("unknown flag {a}"));
+        }
+    }
+    Ok(())
+}
+
+/// Stops `team` before any request: a flag it does not know, or a value that does not read.
+fn refuse(why: &str) -> ! {
+    eprintln!("eval team: {why}");
+    std::process::exit(2)
+}
+
+/// The value of `--name` in `args` read as a `T`, else `or`; one that does not read refuses.
+fn value<T: std::str::FromStr>(args: &[String], name: &str, or: T) -> T {
+    match arg(args, name) {
+        None => or,
+        Some(v) => v.parse().unwrap_or_else(|_| refuse(&format!("{name} {v} does not read"))),
+    }
+}
+
+/// Whether `s` is a decimal as JSON writes one (`0.7`, `1`): a temperature put in a body as it is.
+fn decimal(s: &str) -> bool {
+    let (whole, part) = s.split_once('.').unwrap_or((s, "0"));
+    let digits = |d: &str| !d.is_empty() && d.bytes().all(|b| b.is_ascii_digit());
+    digits(whole) && digits(part) && (whole == "0" || !whole.starts_with('0'))
+}
+
+/// FNV-1a, 32 bits: a task's part in its tries' seeds.
+fn fnv1a32(s: &str) -> u32 {
+    s.bytes().fold(0x811c_9dc5, |h, b| (h ^ u32::from(b)).wrapping_mul(0x0100_0193))
+}
+
+/// The seed of try `t` (from 0) of `task`'s draft in a run seeded `s`: tasks and runs apart, and
+/// 16 turns' seeds between one try's and the next's (`team::turn_seed` adds the turn).
+fn try_seed(task: &str, s: u32, t: usize) -> u32 {
+    (fnv1a32(task) ^ s.wrapping_mul(0x9E37_79B1)).wrapping_add(16u32.wrapping_mul(t as u32))
+}
+
+/// Which try a draft is written as, of tries ranked `ranks` (3: it ran clean) at a draft ranked
+/// `draft`: the first that ran clean, else the earliest of the highest rank above the draft's;
+/// none if no try ranks above it, and the draft is written unchanged (never worse than it was).
+fn choose(ranks: &[u8], draft: u8) -> Option<usize> {
+    ranks.iter().position(|&r| r == 3).or_else(|| {
+        let best = ranks.iter().copied().max().filter(|&b| b > draft)?;
+        ranks.iter().position(|&r| r == best)
+    })
+}
+
+/// `src` in an app block, as an answer line has its program.
+fn fenced(src: &str) -> String {
+    ["```app\n", src.trim_end_matches('\n'), "\n```"].concat()
+}
+
+/// A seed as JSON: the number, or null.
+fn seed_json(seed: Option<u32>) -> String {
+    seed.map_or_else(|| "null".into(), |s| s.to_string())
+}
+
+/// Ends the file at `path` with a newline if its last line was cut short (a run stopped while
+/// writing it), so that the next line appended is a line of its own.
+fn end_line(path: &str) {
+    use std::io::{Seek, SeekFrom};
+    let Ok(mut f) = std::fs::File::open(path) else { return };
+    let mut last = [b'\n'];
+    if f.seek(SeekFrom::End(-1)).is_ok() && f.read_exact(&mut last).is_ok() && last[0] != b'\n' {
+        append(path, "\n");
+    }
+}
+
+/// What a draft's tries came to, for its answer line: the tries begun, those that ran clean, the
+/// one written (none: the draft, unchanged), the draft's rank and the written one's, and what it
+/// cost.
+struct Tally {
+    tries: usize,
+    clean: usize,
+    kept: Option<usize>,
+    draft_rank: u8,
+    best_rank: u8,
+    calls: u32,
+    input: u64,
+    output: u64,
+}
+
+/// A draft's `team` member: `lead` and `helper`, `extra` members (each with a trailing comma),
+/// then the try `shown` (the one written, else the first; none, no turn), `clean`, the draft's
+/// time and its tally.
+fn said(
+    lead: &str,
+    helper: &str,
+    extra: &str,
+    shown: Option<&team::Fixed>,
+    clean: bool,
+    ms: u128,
+    t: &Tally,
+) -> String {
+    let steps = shown.map_or(&[][..], |f| &f.steps[..]);
+    let held: Vec<String> = steps.iter().map(|s| format!("{:?}", s.held)).collect();
+    let kept = t.kept.map_or(-1, |k| k as i64);
+    format!(
+        "{{\"lead\":{},\"helper\":{},{extra}\"tries\":{},\"turns\":{},\"held\":{},\"clean\":{clean},\"before\":{},\"ms\":{ms},\"clean_tries\":{},\"kept_try\":{kept},\"draft_rank\":{},\"best_rank\":{},\"calls\":{},\"in\":{},\"out\":{}}}",
+        quote(lead),
+        quote(helper),
+        t.tries,
+        steps.len(),
+        quote(&held.join(" ")),
+        steps.first().map_or(0, |s| s.before),
+        t.clean,
+        t.draft_rank,
+        t.best_rank,
+        t.calls,
+        t.input,
+        t.output
+    )
+}
+
 /// `team`: see the crate docs.
 fn team(args: &[String]) {
-    let need = |name: &str| arg(args, name).unwrap_or_else(|| panic!("{name} is needed"));
+    if let Err(why) = strict(args, &TEAM_VALUES, &TEAM_FLAGS) {
+        refuse(&why);
+    }
+    let need = |name: &str| arg(args, name).unwrap_or_else(|| refuse(&format!("{name} is needed")));
     let (suite, answers, out) = (need("--suite"), need("--answers"), need("--out"));
     let url = need("--helper-url");
     let helper = arg(args, "--helper").unwrap_or_else(|| "helper".into());
     let name = arg(args, "--name").unwrap_or_else(|| ["team-", &helper].concat());
-    let turns: u8 = arg(args, "--turns").and_then(|v| v.parse().ok()).unwrap_or(3);
+    let turns: u8 = value(args, "--turns", 3);
     // Repairs a draft may get, and the temperature of those after the first.
-    let tries: usize = arg(args, "--tries").and_then(|v| v.parse().ok()).unwrap_or(1).max(1);
+    let tries: usize = value(args, "--tries", 1usize).max(1);
     let hot = arg(args, "--temperature").unwrap_or_else(|| "0.7".into());
-    let jobs = arg(args, "--jobs").and_then(|v| v.parse().ok()).unwrap_or(1usize).max(1);
+    if !decimal(&hot) {
+        refuse(&format!("--temperature {hot} is not a decimal"));
+    }
+    let jobs = value(args, "--jobs", 1usize).max(1);
     let held = arg(args, "--held").map(|h| read(&h));
+    // How the helper is asked: seeded (each try its own seed), its samplers pinned, whole
+    // programs asked for; every try run, not only those up to the first clean one.
+    let seed: Option<u32> = arg(args, "--seed").map(|_| value(args, "--seed", 0));
+    let (pin, whole, all) = (flag(args, "--pin"), flag(args, "--whole"), flag(args, "--all-tries"));
+    // Drafts whose only fault is the icon line, left as they are (no turn spent on them).
+    let skip_icon = flag(args, "--skip-icon");
     // Each helper turn, for study and for training the helpers: the message, the reply, how it
-    // was judged.
-    let traces = arg(args, "--traces");
+    // was judged. Each try, for the curves at 1, 2, 4 .. tries from one run: its program, how it
+    // ranks, what it cost.
+    let (traces, tries_out) = (arg(args, "--traces"), arg(args, "--tries-out"));
     let text = |j: &Json, key: &str| j.get(key).and_then(Json::text).unwrap_or("").to_string();
+    for path in [Some(&out), traces.as_ref(), tries_out.as_ref()].into_iter().flatten() {
+        end_line(path);
+    }
     let had: Vec<String> =
         read(&out).lines().filter_map(Json::parse).map(|j| text(&j, "task")).collect();
+    // A draft's tries are written with its answer line: those of a draft not written (a run
+    // stopped between the two) go, as it will be repaired again.
+    if let Some(path) = &tries_out {
+        let was = read(path);
+        let done = |l: &&str| Json::parse(l).is_some_and(|j| had.contains(&text(&j, "task")));
+        let kept: String = was.lines().filter(done).flat_map(|l| [l, "\n"]).collect();
+        if kept != was {
+            let part = [path, ".part"].concat();
+            std::fs::write(&part, kept).unwrap_or_else(|e| panic!("{part}: {e}"));
+            std::fs::rename(&part, path).unwrap_or_else(|e| panic!("{path}: {e}"));
+        }
+    }
     // The suite's asks, by task, for the families asked for.
     let asks: Vec<(String, String)> = read(&suite)
         .lines()
@@ -564,99 +783,237 @@ fn team(args: &[String]) {
     }
     eprintln!("{} drafts to repair, {} done already", work.len(), had.len());
     let (next, file) = (Mutex::new(work.iter()), Mutex::new(()));
+    let unwritten = std::sync::atomic::AtomicUsize::new(0);
     std::thread::scope(|s| {
         for _ in 0..jobs {
             s.spawn(|| {
                 let mut wire = Curl::new(usize::MAX, &url);
-                while let Some((task, ask, lead, reply)) =
+                'drafts: while let Some((task, ask, lead, reply)) =
                     next.lock().ok().and_then(|mut it| it.next())
                 {
                     let t0 = Instant::now();
-                    let draft = coder::edits::program(reply).map(|p| p.0.to_string());
-                    let fixed = draft.map(|d| {
-                        // Up to `tries` repairs of the draft, each from the draft itself: the
-                        // first as the make loop asks a fix, the others sampled hotter; the
-                        // first that runs clean is kept, else the first try's.
-                        let (mut n, mut first) = (0, None);
-                        for t in 0..tries {
-                            let temp = if t == 0 { team::TEMPERATURE } else { hot.as_str() };
-                            let (mut r, mut step) =
-                                team::Repair::start_at(ask, "", &d, &helper, turns, temp);
-                            let f = loop {
-                                match step {
-                                    team::Next::Done(f) => break f,
-                                    team::Next::Ask(body) => {
-                                        n += 1;
-                                        let (said, cut) =
-                                            helper_reply(&mut wire, task, n, &body)?;
-                                        let asked = r.asked().to_string();
-                                        step = r.reply(&said, cut);
-                                        if let (Some(path), Some(s)) = (&traces, r.last()) {
-                                            // The whole request too (its system prompt and
-                                            // message): a turn to train on as it was asked.
-                                            let line = format!(
-                                                "{{\"task\":{},\"try\":{t},\"turn\":{n},\"asked\":{},\"reply\":{},\"held\":{},\"before\":{},\"after\":{},\"body\":{}}}\n",
-                                                quote(task),
-                                                quote(&asked),
-                                                quote(&said),
-                                                quote(&format!("{:?}", s.held)),
-                                                s.before,
-                                                s.after,
-                                                quote(&body)
-                                            );
-                                            let _one = file.lock();
-                                            append(path, &line);
+                    let elapsed = || t0.elapsed().as_millis();
+                    let write = |reply: &str, said: &str, tried: &[String]| {
+                        eprintln!("{task:<28} {said}");
+                        let line = format!(
+                            "{{\"task\":{},\"model\":{},\"reply\":{},\"team\":{said}}}\n",
+                            quote(task),
+                            quote(&name),
+                            quote(reply)
+                        );
+                        let _one = file.lock();
+                        if let Some(path) = &tries_out {
+                            append(path, &tried.concat());
+                        }
+                        append(&out, &line);
+                    };
+                    let mut tally = Tally {
+                        tries: 0,
+                        clean: 0,
+                        kept: None,
+                        draft_rank: 0,
+                        best_rank: 0,
+                        calls: 0,
+                        input: 0,
+                        output: 0,
+                    };
+                    // No program in the lead's reply: nothing to repair.
+                    let Some(d) = coder::edits::program(reply).map(|p| p.0.to_string()) else {
+                        let said = said(lead, &helper, "", None, false, elapsed(), &tally);
+                        write(reply, &said, &[]);
+                        continue;
+                    };
+                    tally.draft_rank = team::rank_of(&d, "");
+                    tally.best_rank = tally.draft_rank;
+                    if skip_icon && tally.draft_rank == 2 {
+                        let icon = "\"icon\":true,";
+                        let said = said(lead, &helper, icon, None, false, elapsed(), &tally);
+                        write(reply, &said, &[]);
+                        continue;
+                    }
+                    // Up to `tries` repairs of the draft, each from the draft itself: the first as
+                    // the make loop asks a fix, the others sampled hotter; until the first that
+                    // runs clean, or all of them. A draft that runs clean takes one, asking nothing.
+                    let clean_draft = tally.draft_rank == 3;
+                    // Each try ended (its program and rank), each try's line, the requests.
+                    let mut done: Vec<(team::Fixed, u8)> = Vec::new();
+                    let (mut tried, mut n, mut overflow) = (Vec::new(), 0, false);
+                    for t in 0..if clean_draft { 1 } else { tries } {
+                        let temp = if t == 0 { team::TEMPERATURE } else { hot.as_str() };
+                        let opts = team::Opts {
+                            temperature: temp.into(),
+                            seed: seed.map(|s| try_seed(task, s, t)),
+                            pin,
+                            whole,
+                        };
+                        let (mut r, mut step) =
+                            team::Repair::start_with(ask, "", &d, &helper, turns, &opts);
+                        tally.tries += 1;
+                        // This try's requests answered, tokens in and out, and their ms.
+                        let (mut calls, mut input, mut output, mut ms) = (0u32, 0u64, 0u64, 0u64);
+                        let ended = loop {
+                            match step {
+                                team::Next::Done(f) => break Some(f),
+                                team::Next::Ask(body) => {
+                                    n += 1;
+                                    let (asked, at) = (r.asked().to_string(), r.seed());
+                                    let said = match helper_reply(&mut wire, task, n, &body) {
+                                        Ok(said) => said,
+                                        // Longer than the helper's context: the draft's repair
+                                        // ends with the tries it has, and is written.
+                                        Err(e) if e.contains(CONTEXT) => {
+                                            eprintln!("{task:<28} helper's context: {e}");
+                                            break None;
                                         }
+                                        // The helper unreachable: not written, so a rerun
+                                        // repairs it.
+                                        Err(e) => {
+                                            eprintln!("{task:<28} helper failed: {e}");
+                                            unwritten.fetch_add(1, Relaxed);
+                                            continue 'drafts;
+                                        }
+                                    };
+                                    calls += 1;
+                                    input += u64::from(said.input);
+                                    output += u64::from(said.output);
+                                    ms += said.ms;
+                                    step = r.reply(&said.text, said.cut);
+                                    if let (Some(path), Some(s)) = (&traces, r.last()) {
+                                        // The whole request too (its system prompt and
+                                        // message): a turn to train on as it was asked.
+                                        let line = format!(
+                                            "{{\"task\":{},\"try\":{t},\"turn\":{n},\"asked\":{},\"reply\":{},\"held\":{},\"before\":{},\"after\":{},\"seed\":{},\"ms\":{},\"in\":{},\"out\":{},\"body\":{}}}\n",
+                                            quote(task),
+                                            quote(&asked),
+                                            quote(&said.text),
+                                            quote(&format!("{:?}", s.held)),
+                                            s.before,
+                                            s.after,
+                                            seed_json(at),
+                                            said.ms,
+                                            said.input,
+                                            said.output,
+                                            quote(&body)
+                                        );
+                                        let _one = file.lock();
+                                        append(path, &line);
                                     }
                                 }
-                            };
-                            if f.clean {
-                                return Ok((f, t + 1));
                             }
-                            first.get_or_insert(f);
-                        }
-                        first.map(|f| (f, tries)).ok_or_else(|| String::from("no try"))
-                    });
-                    let (f, used) = match fixed {
-                        Some(Ok((f, used))) => (Some(f), used),
-                        // The helper unreachable: not written, so a rerun repairs it.
-                        Some(Err(e)) => {
-                            eprintln!("{task:<28} helper failed: {e}");
-                            continue;
-                        }
-                        None => (None, 0),
-                    };
-                    let ms = t0.elapsed().as_millis();
-                    let (reply, said) = match &f {
-                        Some(f) => {
-                            let program = ["```app\n", f.src.trim_end_matches('\n'), "\n```"];
+                        };
+                        (tally.calls, tally.input, tally.output) =
+                            (tally.calls + calls, tally.input + input, tally.output + output);
+                        let seed = seed_json(opts.seed);
+                        let Some(f) = ended else {
+                            // The try's line says so; the draft is written with the tries before.
+                            tried.push(format!(
+                                "{{\"task\":{},\"try\":{t},\"temp\":{temp},\"seed\":{seed},\"error\":\"context\",\"clean\":false,\"rank\":{},\"turns\":{calls},\"held\":\"\",\"ms\":{ms},\"in\":{input},\"out\":{output},\"reply\":{}}}\n",
+                                quote(task),
+                                tally.draft_rank,
+                                quote(&fenced(&d))
+                            ));
+                            overflow = true;
+                            break;
+                        };
+                        let rank = if f.clean { 3 } else { team::rank_of(&f.src, "") };
+                        if !clean_draft {
                             let held: Vec<String> =
                                 f.steps.iter().map(|s| format!("{:?}", s.held)).collect();
-                            let first = f.steps.first().map_or(0, |s| s.before);
-                            let said = format!(
-                                "{{\"lead\":{},\"helper\":{},\"tries\":{used},\"turns\":{},\"held\":{},\"clean\":{},\"before\":{first},\"ms\":{ms}}}",
-                                quote(lead),
-                                quote(&helper),
+                            let before = f.steps.first().map_or(0, |s| s.before);
+                            let (k, of) = team::kept(&d, &f.src);
+                            tried.push(format!(
+                                "{{\"task\":{},\"try\":{t},\"temp\":{temp},\"seed\":{seed},\"clean\":{},\"rank\":{rank},\"before\":{before},\"after\":{},\"turns\":{},\"held\":{},\"kept\":[{k},{of}],\"ms\":{ms},\"in\":{input},\"out\":{output},\"reply\":{}}}\n",
+                                quote(task),
+                                f.clean,
+                                f.steps.last().map_or(before, |s| s.after),
                                 f.steps.len(),
                                 quote(&held.join(" ")),
-                                f.clean
-                            );
-                            (program.concat(), said)
+                                quote(&fenced(&f.src))
+                            ));
                         }
-                        // No program in the lead's reply: nothing to repair.
-                        None => (reply.clone(), format!("{{\"lead\":{},\"helper\":{},\"turns\":0,\"held\":\"\",\"clean\":false,\"before\":0,\"ms\":{ms}}}", quote(lead), quote(&helper))),
-                    };
-                    eprintln!("{task:<28} {said}");
-                    let line = format!(
-                        "{{\"task\":{},\"model\":{},\"reply\":{},\"team\":{said}}}\n",
-                        quote(task),
-                        quote(&name),
-                        quote(&reply)
-                    );
-                    let _one = file.lock();
-                    append(&out, &line);
+                        let clean = f.clean;
+                        done.push((f, rank));
+                        if clean && !all {
+                            break;
+                        }
+                    }
+                    let ranks: Vec<u8> = done.iter().map(|x| x.1).collect();
+                    tally.clean = ranks.iter().filter(|&&r| r == 3).count();
+                    tally.kept = choose(&ranks, tally.draft_rank);
+                    let chosen = tally.kept.map(|k| &done[k]);
+                    tally.best_rank = chosen.map_or(tally.draft_rank, |x| x.1);
+                    // The try written, else the draft as the lead wrote it: graded as it was.
+                    let reply = chosen.map_or_else(|| reply.clone(), |x| fenced(&x.0.src));
+                    let shown = chosen.or(done.first()).map(|x| &x.0);
+                    let clean = chosen.is_some_and(|x| x.0.clean);
+                    let extra = if overflow { "\"error\":\"context\"," } else { "" };
+                    let said = said(lead, &helper, extra, shown, clean, elapsed(), &tally);
+                    write(&reply, &said, &tried);
                 }
             });
         }
     });
+    let n = unwritten.into_inner();
+    if n > 0 {
+        eprintln!("unwritten {n}: the helper failed on these drafts; a rerun repairs them");
+        std::process::exit(3);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fnv1a32_has_its_known_values() {
+        assert_eq!(fnv1a32(""), 0x811c_9dc5);
+        assert_eq!(fnv1a32("a"), 0xe40c_292c);
+        assert_eq!(fnv1a32("foobar"), 0xbf9c_f968);
+    }
+
+    #[test]
+    fn a_tries_seed_parts_tasks_runs_and_tries() {
+        let s = |task, run, t| try_seed(task, run, t);
+        assert_eq!(s("counter", 1, 0), fnv1a32("counter") ^ 0x9E37_79B1);
+        assert_eq!(s("counter", 1, 2), s("counter", 1, 0).wrapping_add(32));
+        assert!(s("counter", 1, 0) != s("counter", 2, 0) && s("counter", 1, 0) != s("clock", 1, 0));
+    }
+
+    #[test]
+    fn the_written_try_is_the_first_clean_else_one_above_the_draft_else_the_draft() {
+        // The first that ran clean, though a later one did too.
+        assert_eq!(choose(&[1, 3, 3], 0), Some(1));
+        // None clean: the highest rank above the draft's, the earliest of a tie.
+        assert_eq!(choose(&[1, 2, 2, 0], 0), Some(1));
+        assert_eq!(choose(&[0, 1], 0), Some(1));
+        // None above the draft: the draft, unchanged, though a try ties it.
+        assert_eq!(choose(&[1, 1, 0], 1), None);
+        assert_eq!(choose(&[], 0), None);
+        // A draft that runs clean: its one try, which ran clean asking nothing.
+        assert_eq!(choose(&[3], 3), Some(0));
+    }
+
+    #[test]
+    fn team_refuses_a_flag_it_does_not_know_and_a_flag_without_its_value() {
+        let args = |s: &str| s.split(' ').map(String::from).collect::<Vec<_>>();
+        let ok =
+            args("team --suite s --out o --seed 3 --pin --all-tries --tries-out t --skip-icon");
+        assert_eq!(strict(&ok, &TEAM_VALUES, &TEAM_FLAGS), Ok(()));
+        let bad = args("team --suite s --each-try --tries 4");
+        assert_eq!(strict(&bad, &TEAM_VALUES, &TEAM_FLAGS), Err("unknown flag --each-try".into()));
+        // A flag's value is not a flag; a flag with no value after it is refused.
+        assert_eq!(strict(&args("team --name x-y --tries 2"), &TEAM_VALUES, &TEAM_FLAGS), Ok(()));
+        let none = strict(&args("team --suite s --seed"), &TEAM_VALUES, &TEAM_FLAGS);
+        assert_eq!(none, Err("--seed needs a value".into()));
+    }
+
+    #[test]
+    fn a_temperature_is_a_json_decimal() {
+        for good in ["0.7", "1", "0", "1.25", "10.0"] {
+            assert!(decimal(good), "{good}");
+        }
+        for bad in ["", ".7", "7.", "-1", "1e3", "07", "0.7.1", "nan", "0,7"] {
+            assert!(!decimal(bad), "{bad}");
+        }
+    }
 }

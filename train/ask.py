@@ -14,7 +14,11 @@ Each reply streams in and is closed where Studio stops reading (blocks.block_end
 closed app block that begins with a comment); the server stops a request whose client is gone,
 so a slot never drafts past a program. Every answer records how it was made ("gen", with the
 engine), and answers in --out made the same way are kept and their tasks skipped, so a run cut
-off by a freeze resumes. --out is rewritten after every 8 answers.
+off by a freeze resumes. --out is rewritten after every 8 answers. A prompt beyond the server's
+context ("exceeds the available context") is said and left out: no rerun would answer it. Any
+other request that fails (the server gone, an error, a timeout) is counted and left out; when any
+did, ask.py exits with 3 after writing the rest, so a caller never reads a short file as a whole
+one.
 """
 import argparse
 import json
@@ -22,6 +26,7 @@ import os
 import sys
 import threading
 import time
+import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 
@@ -29,6 +34,11 @@ import common
 from blocks import block_end
 
 ENGINE = "llama.cpp"
+CONTEXT = "exceeds the available context"
+
+
+class TooLong(Exception):
+    """The server's context cannot hold the prompt: no rerun answers it either."""
 
 
 def parse_args():
@@ -59,7 +69,13 @@ def ask(url, r, seed, grammar=None):
     req = urllib.request.Request(url + "/v1/chat/completions", data=json.dumps(body).encode("utf-8"),
                                  headers={"content-type": "application/json"})
     text = ""
-    with urllib.request.urlopen(req, timeout=3600) as resp:
+    try:
+        resp = urllib.request.urlopen(req, timeout=3600)
+    except urllib.error.HTTPError as e:
+        if CONTEXT in e.read().decode("utf-8", "replace"):
+            raise TooLong(r["task"])
+        raise
+    with resp:
         for raw in resp:
             line = raw.decode("utf-8", "replace").strip()
             if not line.startswith("data:"):
@@ -67,7 +83,9 @@ def ask(url, r, seed, grammar=None):
             data = line[5:].strip()
             if data == "[DONE]":
                 break
-            delta = json.loads(data)["choices"][0].get("delta", {}).get("content") or ""
+            # A chunk without choices (a usage chunk, as OpenAI's include_usage sends) adds nothing.
+            choices = json.loads(data).get("choices") or [{}]
+            delta = choices[0].get("delta", {}).get("content") or ""
             text += delta
             if "```" in delta or text.count("```") >= 2:
                 end = block_end(text)
@@ -118,14 +136,23 @@ def main():
                 common.write_atomic(a.out, "\n".join(sorted(out)) + "\n")
                 print("%d/%d answers, %.0fs" % (n, len(jobs), time.time() - t0), flush=True)
 
+    failed, long = 0, set()
     with ThreadPoolExecutor(max_workers=a.jobs) as pool:
         for f in [pool.submit(one, j) for j in jobs]:
             try:
                 f.result()
-            except Exception as e:  # one request's failure (the server gone, a timeout) is reported, not fatal
+            except TooLong as e:  # permanent: said, not failed
+                long.add(e.args[0])
+            except Exception as e:  # one request's failure (the server gone, a timeout) is counted, not fatal
+                failed += 1
                 print("error: %s" % e, file=sys.stderr)
     common.write_atomic(a.out, "\n".join(sorted(out)) + "\n")
     print("%d answers in %s; this run %.0fs" % (len(out), a.out, time.time() - t0))
+    if long:
+        print("beyond the server's context, left out: %s" % " ".join(sorted(long)))
+    if failed:
+        print("%d of %d requests failed: a rerun asks them again" % (failed, len(jobs)), file=sys.stderr)
+        sys.exit(3)
 
 
 if __name__ == "__main__":

@@ -18,7 +18,8 @@ token cost (a wave is about 9.5M Opus tokens). `team.sh` uses no cloud call: GLM
 its recorded answers. First night: n20261008 (`D/team-n20261008/`, `D/team-n20261008.log`).
 
 1. Lift the pause (rename `D/PAUSE`), build this checkout's debug `eval` and `iq`
-   (`cargo build -p eval -p compusophy-iq`; team.sh copies them into the night's folder).
+   (`cargo build -p eval -p compusophy-iq`; team.sh pins them in the night's folder at its first
+   launch).
 2. Start it detached (as night.sh below, by `Start-Process` with the command quoted), e.g.
    `bash train/team.sh glm team:base3b:base3b drafts mutants train-traces fixdata fix3b
    team:fix3b:<night>-fix3b rounds summary`. Each step is skipped once its output is there, so a
@@ -51,6 +52,60 @@ TEAM_NIGHT=n20261009 ROUND_FIRST=n20261009-m2 ROUND_TRIES=4 ROUND_EXTRA=fix-m2.j
    reference, and false rejects are rare (`checkfit-chk.json`).
 4. `rounds` until "I'm up": train drafts repaired with 4 tries (more clean turns to learn from
    than last night's 11 of 1,589), trained with the m2 data into the next helper.
+
+**The third night (n20261009): team.sh cannot die silently.** Launch it from the worktree on
+branch `night3` (`.claude/worktrees/mesh`), not from main. Before bed:
+
+1. Build there, into its own target (`cargo build -p eval -p compusophy-iq`), and run the gates.
+2. Write `D/team-n20261009/predictions.jsonl` and `decisions.json` (the plan's "expected").
+3. Preflight: `TEAM_NIGHT=n20261009 bash train/team.sh --check`, a PASS or FAIL a line (PAUSE,
+   the lock, port 8081, VRAM under 3,000 MiB, 30 GB of disk, the checkout's `eval features`, every
+   input: pre's sha, pool-dev, the judge sets, the q3 samples, the 7B, 3B and 0.5B GGUFs; the
+   night's name). All must PASS apart from PAUSE; any FAIL exits 1.
+4. At "going to bed", rename `D/PAUSE` (`PAUSE.off-<yyyymmddHHMM>`): a launch with PAUSE there is
+   refused ("failed: PAUSE exists at launch; the GPU is idle").
+5. Launch it detached, as night.sh below (Start-Process, the command quoted), into `D/team.out`:
+   ```
+   TEAM_NIGHT=n20261009 bash train/team.sh inputs pre glm \
+     team:b3:base3b:8:answers-pre.jsonl team:dev3:base3b:2:answers-dev.jsonl \
+     team:b7:base7b:4:answers-pre.jsonl finish:fin7:base7b:4 team:fin7r:base7b:2:answers-fin7.jsonl \
+     team:dev7:base7b:1:answers-dev.jsonl judge:j7:base7b \
+     team:b3w:base3b:8:answers-pre.jsonl:whole team:dev3w:base3b:2:answers-dev.jsonl:whole judge:j3:base3b \
+     team:b05:base05:8:answers-pre.jsonl team:dev05:base05:1:answers-dev.jsonl summary \
+     train:j1:judge-train-s.jsonl:2:4:4 judge:j1:j1 summary \
+     team:b3raw:base3b:8:answers-glm.jsonl summary checks:chk summary replicates
+   ```
+   A misspelt step is refused before anything begins ("unknown step"). The first launch copies the
+   tools and pins them (`bin/pinned`; `EVAL_REFRESH=1` copies them again) and writes the night's
+   name to `D/team-night`, so a later launch and the summary by hand find it without TEAM_NIGHT.
+6. A `Monitor` on its log, re-armed when it expires:
+   `tail -F D/team-n20261009.log | grep --line-buffered -E 'failed|STALL|PAUSE|the GPU is idle|unknown step|Traceback|WARNING|degraded' | grep --line-buffered -v 'exceeds the available context'`
+
+Reading it:
+
+- **A `failed` line no longer means the script ended.** A failed step is retried once at once
+  (the server stopped first), then the night goes on; a step whose input is not there says
+  `skip: needs F`; each failed or skipped step runs once more after the list (before `replicates`,
+  which fills the night until PAUSE). Only `the GPU is idle: team.sh ended (why)` says it ended;
+  every exit writes it but a hard kill (`taskkill /F`).
+- **Never relaunch while `D/team.pid`'s process lives** (team.sh refuses: "failed: team.sh
+  already runs"); `ended` in it means none runs. A relaunch resumes: a step whose output is there
+  is skipped, and a line cut by a kill is ended first ("repaired: ...").
+- `STALL: nothing written for 40 min during STEP`: look (the log, `nvidia-smi`, the step's
+  process); it only logs, and a 7B step can be slow. `gpu: U% M MiB` comes every 15 minutes.
+- `degraded: eval lacks ...`: the pinned eval is older than the plan's; every step runs but the
+  whole-program arms (`skip: ... needs eval --whole`), with no try logs and no seeds.
+- `failed: VRAM held by others (N MiB)`: another program held the GPU for 10 minutes; nothing
+  was served.
+
+Wrap-up at "I'm up": touch `D/PAUSE`; stop the tree by command line (team.sh's bash, `eval.exe`,
+the python of `ask`, `sft`, `judge` and `export`, then `python train/serve.py --stop`; as Pause
+below says, with `train/team.sh` for `train/night.sh`); then run `bash train/team.sh summary` by
+hand: it needs no GPU, so PAUSE does not stop it, and it takes the night's name from
+`D/team-night`. Read `report.md` (the composed headline, the curves, each decision's verdict, also
+in the log) and `paired.md`, then ship (merge night3, push). A run the wrap-up stopped, or a step
+left for the morning, is named under "did not finish" and left out of every table and verdict (a
+rule that rests on it says "not decided"): rerun that step, then the summary, for it to count.
 
 ## The solo night (before 2026-10-08)
 
@@ -152,9 +207,11 @@ Everything stops, at once, and stays stopped. In PowerShell:
    Get-CimInstance Win32_Process -Filter "Name='bash.exe'" | Where-Object { $_.CommandLine -like '*train/night.sh*' } | ForEach-Object { taskkill /T /F /PID $_.ProcessId }
    ```
 3. Stop the GPU's processes: `python train/serve.py --stop`, then every python whose command line
-   matches `train[\\/](sft|generate|ask|export|serve)\.py`:
+   matches `train[\\/](sft|generate|ask|export|serve|judge)\.py`, and (team.sh) every `eval.exe`
+   whose command line holds `--helper-url`:
    ```powershell
-   Get-CimInstance Win32_Process -Filter "Name='python.exe'" | Where-Object { $_.CommandLine -match 'train[\\/](sft|generate|ask|export|serve)\.py' } | ForEach-Object { taskkill /T /F /PID $_.ProcessId }
+   Get-CimInstance Win32_Process -Filter "Name='python.exe'" | Where-Object { $_.CommandLine -match 'train[\\/](sft|generate|ask|export|serve|judge)\.py' } | ForEach-Object { taskkill /T /F /PID $_.ProcessId }
+   Get-CimInstance Win32_Process -Filter "Name='eval.exe'" | Where-Object { $_.CommandLine -like '*--helper-url*' } | ForEach-Object { taskkill /T /F /PID $_.ProcessId }
    ```
 4. Stop the workflow and the monitor (`TaskStop` on each).
 5. A minute later, check that nothing restarted: `nvidia-smi`, and the two queries above empty.
