@@ -79,7 +79,7 @@ pub struct Hub {
     next_snap: u64,
     woken: Option<u64>,
     pub now: u64,
-    kept_test: u32,
+    kept_test: crate::test::Measured,
     pub out: Vec<u8>,
 }
 
@@ -144,7 +144,7 @@ impl Hub {
             let n = [m.cpu1, m.cpun, m.mem, m.tested].map(|n| n.to_string()).join(" ");
             kept = [&kept, "\n", TESTED, &n].concat();
         }
-        self.kept_test = m.tested;
+        self.kept_test = m;
         self.send(to_desk::PINS, 0, kept.trim_start_matches('\n').as_bytes());
     }
 
@@ -184,7 +184,7 @@ impl Hub {
                     .map_or(Vec::new(), |t| t.split(' ').filter_map(|w| w.parse().ok()).collect());
                 if let [cpu1, cpun, mem, tested] = n[..] {
                     self.pool.me.measured = crate::test::Measured { cpu1, cpun, mem, tested };
-                    self.kept_test = tested;
+                    self.kept_test = self.pool.me.measured;
                 }
                 let served: Vec<&str> = kept.into_iter().filter(|l| l.starts_with(SERVE)).collect();
                 if let Some(url) = served.last().and_then(|l| l.strip_prefix(SERVE)) {
@@ -397,8 +397,8 @@ impl Hub {
         }
         self.pool.tick(now);
         self.acts();
-        // A test just over: what it measured is kept for this profile.
-        if self.pool.me.measured.tested != self.kept_test {
+        // What a test measured (the CPU's half, then the memory too) is kept for this profile.
+        if self.pool.me.measured != self.kept_test {
             self.keep();
         }
         let mut to: Vec<u32> = Some(self.watcher).filter(|w| *w != 0).into_iter().collect();

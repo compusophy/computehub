@@ -7,14 +7,15 @@
 //!   can check the answer, and nothing large allocated (big buffers copied every round scaled
 //!   badly across workers). Its speed is mebibytes' worth of blocks hashed a second (16,384 a
 //!   mebibyte), on one core, then on all at once.
-//! - **Memory**: mebibytes taken in steps and written through, every byte, so they are really
-//!   held ([`Held::take`]), until a step fails; the pool steps across workers, times each step
-//!   and stops at a failure, a step that slows as a swapping device's does, or its ceiling.
+//! - **Memory**: mebibytes taken in steps and written through, every byte, with bytes no memory
+//!   compressor can shrink, so they are really held ([`Held::take`]); a step past its limit stops
+//!   writing at once. The pool steps across workers, never past its cap, and stops at a refusal,
+//!   a slow step (a device short of memory swaps, and swapping shows as time), or its timers.
 //!
-//! A worker reads lines `<index> cpu <mib>`, `<index> ram <mib>` and answers each with one line
-//! `<index> <mib> <hash> <result>` ([`answer`]), as a pool worker answers a chunk; a CPU answer's
-//! result is `ok` and the milliseconds the work took, timed by the worker itself, so no delay in
-//! carrying lines counts.
+//! A worker reads lines `<index> cpu <mib>`, `<index> ram <mib> <limit ms>` and answers each with
+//! one line `<index> <mib> <hash> <result>` ([`answer`]), as a pool worker answers a chunk; the
+//! result is `ok` (`no`, `slow`) and the milliseconds the work took, timed by the worker itself,
+//! so no delay in carrying lines counts.
 
 #![forbid(unsafe_code)]
 
@@ -43,34 +44,63 @@ pub fn cpu(index: u32, mib: u32) -> String {
     sha::hex(&block[..32])
 }
 
-/// Memory taken and written through, in blocks.
+/// Words of eight bytes in a mebibyte.
+const WORDS: usize = MIB / 8;
+
+/// How a step of memory went: taken, in ms; refused; or stopped past its limit, at ms.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Took {
+    Ok(u64),
+    No,
+    Slow(u64),
+}
+
+/// Memory taken and written through, in blocks, and the xorshift state its bytes come from.
 #[derive(Debug, Default)]
 pub struct Held {
-    blocks: Vec<Vec<u8>>,
+    blocks: Vec<Vec<u64>>,
+    x: u64,
 }
 
 impl Held {
-    /// Takes `mib` more mebibytes and writes every byte; whether it could (it never aborts: a
-    /// failed reservation is a refusal, not a crash).
-    pub fn take(&mut self, mib: u32) -> bool {
-        let n = mib as usize * MIB;
-        let mut block: Vec<u8> = Vec::new();
-        if block.try_reserve_exact(n).is_err() {
-            return false;
+    /// Takes `mib` more mebibytes and writes every byte, a mebibyte at a time, with xorshift
+    /// words (a page of one repeated byte, compressed or deduplicated by the system, would not
+    /// be held at all); stops writing once `limit` ms have passed (what it wrote stays held
+    /// until the worker ends). It never aborts: a failed reservation is a refusal, not a crash.
+    pub fn take(&mut self, mib: u32, limit: u64) -> Took {
+        let t0 = std::time::Instant::now();
+        let mut block: Vec<u64> = Vec::new();
+        if block.try_reserve_exact(mib as usize * WORDS).is_err() {
+            return Took::No;
         }
-        block.resize(n, 0xA5);
+        let mut x = self.x | 1;
+        let mut took = Took::Ok(0);
+        for _ in 0..mib {
+            for _ in 0..WORDS {
+                x ^= x << 13;
+                x ^= x >> 7;
+                x ^= x << 17;
+                block.push(x);
+            }
+            let ms = t0.elapsed().as_millis() as u64;
+            took = if ms >= limit { Took::Slow(ms) } else { Took::Ok(ms) };
+            if ms >= limit {
+                break;
+            }
+        }
+        self.x = x;
         self.blocks.push(block);
-        true
+        took
     }
 
     /// Mebibytes held.
     pub fn mib(&self) -> usize {
-        self.blocks.iter().map(Vec::len).sum::<usize>() / MIB
+        self.blocks.iter().map(Vec::len).sum::<usize>() / WORDS
     }
 }
 
 /// The answer to one line: `<index> <mib> <hash> <result>` (for memory, the mebibytes held now,
-/// `-`, and `ok` or `no`); `None` for a line that is not a request.
+/// `-`, and `ok`, `no` or `slow`, with ms but for `no`); `None` for a line that is not a request.
 pub fn answer(line: &str, held: &mut Held) -> Option<String> {
     let mut words = line.split_whitespace();
     let index: u32 = words.next()?.parse().ok()?;
@@ -84,9 +114,13 @@ pub fn answer(line: &str, held: &mut Held) -> Option<String> {
             [&index.to_string(), " ", &mib.to_string(), " ", &hash, " ok ", &ms].concat()
         }
         "ram" => {
-            let took = held.take(mib);
-            let result = if took { " - ok" } else { " - no" };
-            [&index.to_string(), " ", &held.mib().to_string(), result].concat()
+            let limit = words.next().and_then(|w| w.parse().ok()).unwrap_or(u64::MAX);
+            let result = match held.take(mib, limit) {
+                Took::Ok(ms) => [" - ok ", &ms.max(1).to_string()].concat(),
+                Took::No => " - no".into(),
+                Took::Slow(ms) => [" - slow ", &ms.to_string()].concat(),
+            };
+            [&index.to_string(), " ", &held.mib().to_string(), &result].concat()
         }
         _ => return None,
     })

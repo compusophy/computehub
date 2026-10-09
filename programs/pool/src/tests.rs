@@ -627,13 +627,13 @@ fn says(t: &mut Tab, pid: u32, line: &str, now: u64) {
 }
 
 #[test]
-fn testing_this_device_times_one_core_then_all_then_memory_until_a_step_slows() {
-    use crate::test::{CPU_MIB, STEP};
+fn testing_this_device_times_the_cpu_keeps_it_then_takes_memory_until_a_step_slows() {
+    use crate::test::{CPU_MIB, REST};
     let mut t = tab("A", 2);
     t.pool.clock = 1_791_500_000;
     t.pool.test(0);
-    t.pool.test.as_mut().unwrap().memory = true;
     assert!(matches!(&t.pool.out[..], [Act::Spawn(p, 2)] if p == "gauge"));
+    assert_eq!(t.pool.test.as_ref().unwrap().cap, 2048, "a computer whose browser says nothing");
     t.pool.out.clear();
     t.pool.spawned(Some(201));
     t.pool.spawned(Some(202));
@@ -653,57 +653,121 @@ fn testing_this_device_times_one_core_then_all_then_memory_until_a_step_slows() 
     assert_eq!(all.len(), 2);
     says(&mut t, 202, "1 16 h ok 100", 200);
     says(&mut t, 201, "0 16 h ok 200", 412);
-    let m = t.pool.test.as_ref().unwrap().measured;
-    assert_eq!((m.cpu1, m.cpun), (160, 240));
-    // Memory: steps on the first worker until it is full, then the next, until one slows.
-    let mut now = 412;
+    // The CPU's figures are this tab's, told and kept, before any memory is taken.
+    let me = t.pool.me.measured;
+    assert_eq!((me.cpu1, me.cpun, me.mem, me.tested), (160, 240, 0, 1_791_500_000));
+    assert!(fed(&mut t).0.is_empty());
+    assert_eq!(t.pool.due(), Some(412 + REST));
+    t.pool.tick(411 + REST);
+    assert!(fed(&mut t).0.is_empty());
+    t.pool.tick(412 + REST);
+    // Memory: steps on the first worker until it is full, then the next. The first steps' limit
+    // is a second; then twice the usual step, at least 150 ms. The worker times each step.
+    let mut now = 412 + REST;
     let mut take = |t: &mut Tab, answer: &str, ms: u64| {
         let (lines, _) = fed(t);
         let (pid, line) = lines.last().cloned().unwrap();
-        assert!(line.ends_with(&["ram ", &STEP.to_string()].concat()), "{line}");
         now += ms;
         says(t, pid, &[&line[..1], " ", answer].concat(), now);
-        pid
+        (pid, line.get(2..).unwrap_or("").to_string())
     };
-    assert_eq!(take(&mut t, "64 - ok", 40), 201);
-    assert_eq!(take(&mut t, "128 - ok", 40), 201);
-    assert_eq!(take(&mut t, "128 - no", 5), 201, "full: the next worker takes over");
-    assert_eq!(take(&mut t, "64 - ok", 40), 202);
-    assert_eq!(take(&mut t, "128 - ok", 45), 202);
-    take(&mut t, "192 - ok", 900);
+    assert_eq!(take(&mut t, "64 - ok 40", 41), (201, "ram 64 1000".into()));
+    assert_eq!(take(&mut t, "128 - ok 40", 41), (201, "ram 64 1000".into()));
+    assert_eq!(take(&mut t, "128 - no", 5), (201, "ram 64 1000".into()), "full: the next");
+    assert_eq!(take(&mut t, "64 - ok 50", 51), (202, "ram 64 1000".into()));
+    assert_eq!(take(&mut t, "128 - ok 60", 61), (202, "ram 64 1000".into()));
+    // The usual step is 50 ms: the limit is 150.
+    assert_eq!(take(&mut t, "192 - ok 100", 101), (202, "ram 64 150".into()));
+    assert_eq!(take(&mut t, "200 - slow 151", 152), (202, "ram 64 150".into()));
     let test = t.pool.test.as_ref().unwrap();
-    assert!(test.over && test.note.contains("swapping"), "{}", test.note);
+    assert!(test.over && test.note.contains("a slow step"), "{}", test.note);
     // The slow step is not counted; every worker ends, its memory freed.
-    assert_eq!(test.measured.mem, 4 * STEP);
+    assert_eq!(test.measured.mem, 320);
     assert!(t.pool.out.iter().any(|a| matches!(a, Act::Stop(p) if p.len() == 2)));
     let me = t.pool.me.measured;
-    assert_eq!((me.cpu1, me.cpun, me.mem, me.tested), (160, 240, 256, 1_791_500_000));
+    assert_eq!((me.cpu1, me.cpun, me.mem, me.tested), (160, 240, 320, 1_791_500_000));
     let hello = t.pool.hello();
-    assert!(matches!(hello, Msg::Hello { cpu1: 160, mem: 256, tested: 1_791_500_000, .. }));
+    assert!(matches!(hello, Msg::Hello { cpu1: 160, mem: 320, tested: 1_791_500_000, .. }));
     let snap = t.pool.snap(now, "", "");
-    assert_eq!((snap.devices[0].cpun, snap.devices[0].mem), (240, 256));
-    assert!(snap.testing.starts_with("Tested: memory 256 MB"));
+    assert_eq!((snap.devices[0].cpun, snap.devices[0].mem), (240, 320));
+    assert!(snap.testing.starts_with("Tested: 320 MB of memory usable"), "{}", snap.testing);
+    assert_eq!(t.pool.due(), None);
+}
+
+/// A one-core test through its CPU half (160 MiB/s) and its rest, on a computer whose browser
+/// says `ram_mb`: the first memory step fed, at the time returned.
+fn to_memory(ram_mb: u32) -> (Tab, u64) {
+    let mut t = tab("A", 1);
+    t.pool.me.ram_mb = ram_mb;
+    t.pool.test(0);
+    t.pool.spawned(Some(201));
+    says(&mut t, 201, "ready", 1);
+    says(&mut t, 201, "0 4 h ok 2", 2);
+    says(&mut t, 201, "0 16 h ok 100", 100);
+    says(&mut t, 201, "0 16 h ok 100", 200);
+    let now = 200 + crate::test::REST;
+    t.pool.tick(now);
+    assert!(fed(&mut t).0.last().is_some_and(|l| l.1.starts_with("0 ram 64 ")));
+    (t, now)
 }
 
 #[test]
 fn a_fresh_worker_refused_memory_is_the_browsers_limit_and_a_job_waits_for_no_test() {
-    let mut t = tab("A", 1);
-    t.pool.test(0);
-    t.pool.test.as_mut().unwrap().memory = true;
-    t.pool.spawned(Some(201));
-    says(&mut t, 201, "ready", 1);
-    says(&mut t, 201, "0 2 h ok", 2);
-    says(&mut t, 201, "0 128 h ok", 100);
-    says(&mut t, 201, "0 128 h ok", 200);
-    says(&mut t, 201, "0 0 - no", 210);
+    let (mut t, now) = to_memory(0);
+    says(&mut t, 201, "0 0 - no", now + 10);
     let test = t.pool.test.as_ref().unwrap();
     assert!(test.over && test.note.contains("browser's limit"), "{}", test.note);
-    assert_eq!(t.pool.me.measured.mem, 0);
+    assert!(test.note.starts_with("Tested the CPU; memory not measured"), "{}", test.note);
+    assert_eq!((t.pool.me.measured.cpu1, t.pool.me.measured.mem), (160, 0));
     // A job runs: no test until it ends.
     let mut b = tab("B", 1);
     b.pool.start(7, "fractal", lines(3), 0);
     b.pool.test(1);
     assert!(b.pool.test.as_ref().unwrap().note.starts_with("Busy with a job"));
+}
+
+#[test]
+fn memory_stops_at_the_cap_and_the_pools_own_timers_end_a_step_that_hangs() {
+    use crate::test::{FIRST, GRACE, MOST, SMALL, TIME, cap};
+    // A quarter of what the browser says, at most 2 GB, in whole steps; when it says nothing,
+    // 2 GB on a computer, 512 MB on a phone or tablet.
+    assert_eq!((cap(0, true), cap(0, false)), (MOST, SMALL));
+    assert_eq!(
+        [cap(32_768, true), cap(4096, false), cap(1000, true), cap(100, true)],
+        [2048, 1024, 192, 64]
+    );
+    // At the cap: a gigabyte said, 256 MB taken.
+    let (mut t, mut now) = to_memory(1024);
+    for held in [64, 128, 192, 256] {
+        now += 31;
+        says(&mut t, 201, &["0 ", &held.to_string(), " - ok 30"].concat(), now);
+    }
+    let test = t.pool.test.as_ref().unwrap();
+    let note = "Tested: 256 MB of memory usable, stopped by the test's cap (it takes no more)";
+    assert_eq!((test.over, test.note.as_str(), t.pool.me.measured.mem), (true, note, 256));
+    assert!(t.pool.out.iter().any(|a| matches!(a, Act::Stop(p) if p == &[201])));
+    // A step that never answers: the pool's timer ends it, a second past its limit.
+    let (mut t, now) = to_memory(0);
+    assert_eq!(t.pool.due(), Some(now + FIRST + GRACE));
+    t.pool.tick(now + FIRST + GRACE - 1);
+    assert!(!t.pool.test.as_ref().unwrap().over);
+    t.pool.tick(now + FIRST + GRACE);
+    let test = t.pool.test.as_ref().unwrap();
+    assert!(test.over && test.note.contains("did not answer in time"), "{}", test.note);
+    assert!(fed(&mut t).1.iter().any(|a| matches!(a, Act::Stop(p) if p == &[201])));
+    says(&mut t, 201, "0 64 - ok 2400", now + 2400);
+    assert_eq!((t.pool.me.measured.cpu1, t.pool.me.measured.mem), (160, 0), "late: not counted");
+    // Quick steps slowly carried: the memory half ends at its time.
+    let (mut t, start) = to_memory(0);
+    let mut now = start;
+    while !t.pool.test.as_ref().unwrap().over {
+        now += 1000;
+        let held = t.pool.test.as_ref().unwrap().measured.mem + 64;
+        says(&mut t, 201, &["0 ", &held.to_string(), " - ok 30"].concat(), now);
+    }
+    let test = t.pool.test.as_ref().unwrap();
+    assert!(test.note.ends_with("stopped by the test's time"), "{}", test.note);
+    assert_eq!((now - start, test.measured.mem), (TIME, 8 * 64));
 }
 
 #[test]
@@ -727,6 +791,7 @@ fn with_the_memory_half_off_a_test_measures_the_cpu_and_takes_no_memory() {
     let mut t = tab("A", 1);
     t.pool.clock = 7;
     t.pool.test(0);
+    t.pool.test.as_mut().unwrap().memory = false;
     t.pool.spawned(Some(201));
     says(&mut t, 201, "ready", 1);
     says(&mut t, 201, "0 4 h ok 10", 2);

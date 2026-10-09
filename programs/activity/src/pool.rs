@@ -389,12 +389,7 @@ impl PoolPage {
             // Measured, never the browser's guess: a dash until the device is tested.
             let tested = d.tested != 0;
             let cpu = if tested { rate(d.cpun) } else { DASH.into() };
-            let ram = match (tested && d.mem > 0, d.mem >= pool::CEILING) {
-                (false, _) => DASH.into(),
-                // The table's column is narrow: the test's ceiling, said short.
-                (true, true) => [&(pool::CEILING / 1024).to_string(), "+ GB"].concat(),
-                (true, false) => memory(d.mem),
-            };
+            let ram = if tested && d.mem > 0 { memory(d.mem) } else { DASH.into() };
             let quota = if d.quota_mb == 0 { DASH.into() } else { storage(d.quota_mb.into()) };
             let cells = match wide {
                 true => [cpu, ram, quota, pct].join("\t"),
@@ -569,14 +564,13 @@ fn storage(mb: u64) -> String {
     }
 }
 
-/// This device's test: what it says while it runs, else what it measured and when; Test.
+/// This device's test: what it measured and when (the CPU's half kept while the memory's runs),
+/// then what the test says (under way, or what stopped it); Test.
 fn testing(s: &Snap) -> Node {
     let mut children = vec![text(Style::Small, "Test this device")];
     let me = s.devices.first().filter(|d| d.tested != 0);
     let said = match me {
-        _ if !s.testing.is_empty() && me.is_none_or(|_| !s.testing.starts_with("Tested")) => {
-            s.testing.clone()
-        }
+        None if !s.testing.is_empty() => String::new(),
         Some(d) => [
             "One core ",
             &rate(d.cpu1),
@@ -585,16 +579,22 @@ fn testing(s: &Snap) -> Node {
             &rate(d.cpun),
             DOT,
             "memory ",
-            &if d.mem == 0 { "not measured".into() } else { memory(d.mem) },
+            &if d.mem == 0 { "not measured".into() } else { [&memory(d.mem), " usable"].concat() },
             DOT,
             &ago(d.tested),
         ]
         .concat(),
         None => "Not tested yet.".into(),
     };
-    children.push(text(Style::Body, &said));
-    let how = "Measured, not reported: SHA-256 on one core, then on all at once. The memory test \
-               is off while it is made safe for every device.";
+    for line in [&said, &s.testing] {
+        if !line.is_empty() {
+            children.push(text(Style::Body, line));
+        }
+    }
+    let how = "Measured, not reported: SHA-256 on one core, then on all at once; then the memory \
+               this tab can really hold, never more than 2 GB (a quarter of the device's memory \
+               if the browser says it is less), stopping at once at a slow step, where a device \
+               short of memory starts to swap.";
     children.push(text(Style::Small, how));
     let label = if me.is_some() { "Test again" } else { "Test this device" }.into();
     children.push(Node::Button { id: TEST, variant: Variant::Normal, label });
@@ -609,13 +609,12 @@ fn rate(mib: u32) -> String {
     }
 }
 
-/// Memory in MiB, as people say it: `960 MB`, `9.4 GB`, and at the test's ceiling `16 GB or more`.
+/// Memory in MiB, as people say it: `960 MB`, `9.4 GB`.
 fn memory(mib: u32) -> String {
-    let said = match mib {
+    match mib {
         0..1024 => [&mib.to_string(), " MB"].concat(),
         m => [&(m / 1024).to_string(), ".", &(m % 1024 * 10 / 1024).to_string(), " GB"].concat(),
-    };
-    if mib >= pool::CEILING { [&said, " or more"].concat() } else { said }
+    }
 }
 
 /// How long ago Unix time `at` was, as people say it: `just now`, `5 min ago`, `3 h ago`.

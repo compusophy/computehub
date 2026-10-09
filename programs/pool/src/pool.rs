@@ -352,17 +352,19 @@ impl Pool {
             self.out.push(Act::Stop(self.workers.drain(..).map(|w| w.pid).collect()));
             self.program.clear();
         }
-        self.test = Some(Test::start(self.me.cores, now, &mut self.out));
+        let cap = crate::test::cap(self.me.ram_mb, self.me.kind == "computer");
+        self.test = Some(Test::start(self.me.cores, cap, now, &mut self.out));
     }
 
-    /// A test just over: what it measured is this tab's, told to every link.
+    /// News from a test: the CPU measured (the memory not yet: none), then the memory too; this
+    /// tab's, told to every link (and kept by the hub).
     fn tested(&mut self) {
-        let Some(t) = self.test.as_ref().filter(|t| t.over && t.measured.cpu1 > 0) else { return };
-        if self.me.measured.tested == 0 || t.measured.cpu1 != self.me.measured.cpu1 {
-            self.me.measured = Measured { tested: self.clock.max(1), ..t.measured };
-            let hello = self.hello();
-            self.send_all(&hello);
-        }
+        let Some(t) = self.test.as_mut().filter(|t| t.fresh) else { return };
+        t.fresh = false;
+        let mem = if t.over { t.measured.mem } else { 0 };
+        self.me.measured = Measured { mem, tested: self.clock.max(1), ..t.measured };
+        let hello = self.hello();
+        self.send_all(&hello);
     }
 
     /// The desktop started worker `pid` (`None`: could not).
@@ -691,20 +693,23 @@ impl Pool {
 
     /// When [`Pool::tick`] is next due: never with no link and no worker.
     pub fn due(&self) -> Option<u64> {
-        (!self.peers.is_empty() || !self.workers.is_empty()).then_some(self.next_tick)
+        let tick = (!self.peers.is_empty() || !self.workers.is_empty()).then_some(self.next_tick);
+        let test = self.test.as_ref().and_then(Test::due);
+        tick.into_iter().chain(test).min()
     }
 
     /// Each second: stats to the links, a ping every other, an ask, and idle workers' end.
     pub fn tick(&mut self, now: u64) {
+        // A test's timers first, to the millisecond.
+        if let Some(t) = self.test.as_mut() {
+            t.tick(now, &mut self.out);
+            self.tested();
+        }
         if now < self.next_tick {
             return;
         }
         self.next_tick = now + TICK;
         self.quiet(now);
-        if let Some(t) = self.test.as_mut() {
-            t.tick(now, &mut self.out);
-            self.tested();
-        }
         let silent: Vec<u32> =
             self.peers.iter().filter(|p| now >= p.last + SILENT).map(|p| p.link).collect();
         for link in silent {

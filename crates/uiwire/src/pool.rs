@@ -23,8 +23,6 @@ use crate::{Out, Reader};
 
 /// The format's version, a snapshot's first byte.
 pub const VERSION: u8 = 6;
-/// The most memory a device's test takes (MiB): a figure there is "at least".
-pub const CEILING: u32 = 16 * 1024;
 /// An unknown round trip.
 pub const UNKNOWN: u32 = u32::MAX;
 /// Each device's canvas color, by its place in a snapshot (cycling): cyan here, then yellow,
