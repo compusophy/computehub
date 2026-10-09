@@ -13,6 +13,7 @@
 //!                         [--name N] [--jobs 1] [--ms MS] [--per-hour 110]
 //! cargo run -p eval -- team --suite S --answers A --helper-url U --out OUT [--held H]
 //!                           [--helper M] [--name N] [--turns 3] [--jobs 1] [--traces T]
+//! cargo run -p eval -- mutants --suite S --refs R --held H --out OUT [--per 1] [--max N]
 //! ```
 //!
 //! `iq` makes the IQ suite's tasks (the families `--held` lists, or `--tasks`, else all) as
@@ -44,6 +45,8 @@ use std::process::{Command, Stdio};
 use std::sync::Mutex;
 use std::sync::mpsc::{RecvTimeoutError, channel};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+mod mutants;
 
 use coder::json::{Json, quote};
 use evals::record::{Meta, Record, load};
@@ -431,6 +434,7 @@ fn main() {
         Some("list") => print!("{}", makes::listing()),
         Some("iq") => iq(&args),
         Some("team") => team(&args),
+        Some("mutants") => mutants::mutants(&args),
         _ => eprintln!("usage: eval run|replay|summary|list|iq|team (see tools/eval/src/main.rs)"),
     }
 }
@@ -576,15 +580,18 @@ fn team(args: &[String]) {
                                             let asked = r.asked().to_string();
                                             step = r.reply(&said, cut);
                                             if let (Some(path), Some(s)) = (&traces, r.last()) {
+                                                // The whole request too (its system prompt and
+                                                // message): a turn to train on as it was asked.
                                                 let line = format!(
-                                                    "{{\"task\":{},\"turn\":{n},\"asked\":{},\"reply\":{},\"held\":{},\"before\":{},\"after\":{}}}
+                                                    "{{\"task\":{},\"turn\":{n},\"asked\":{},\"reply\":{},\"held\":{},\"before\":{},\"after\":{},\"body\":{}}}
 ",
                                                     quote(task),
                                                     quote(&asked),
                                                     quote(&said),
                                                     quote(&format!("{:?}", s.held)),
                                                     s.before,
-                                                    s.after
+                                                    s.after,
+                                                    quote(&body)
                                                 );
                                                 let _one = file.lock();
                                                 append(path, &line);

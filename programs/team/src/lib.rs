@@ -13,6 +13,8 @@
 
 #![forbid(unsafe_code)]
 
+pub mod diff;
+
 use coder::ai::{self, Fault};
 use coder::edits::{self, Reply};
 use coder::prompt;
@@ -21,12 +23,14 @@ use coder::prompt;
 pub const ROOM: u32 = 4_096;
 const TEMPERATURE: &str = "0.2";
 
-/// What a helper's reply held: a whole program, edit blocks that applied, edit blocks that did
-/// not (asked again with why), or neither.
+/// What a helper's reply held: a whole program, edit blocks that applied, a unified diff read as
+/// edit blocks that applied ([`diff`]), edit blocks (or a diff) that did not (asked again with
+/// why), or neither.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Held {
     Program,
     Edits,
+    Diff,
     Missed,
     Nothing,
 }
@@ -149,10 +153,18 @@ impl Repair {
     /// the best (the newer wins a tie, as in the make loop), then the next request or the end.
     pub fn reply(&mut self, text: &str, cut: bool) -> Next {
         let before = code(&self.fault);
-        let (held, candidate, missed) = match edits::read(text, cut) {
-            Reply::Program(src) => (Held::Program, Some(src), None),
-            Reply::Edits(e) => match edits::apply(&self.best, &e) {
-                Ok(src) => (Held::Edits, Some(src), None),
+        // A reply with nothing the make loop reads, but a unified diff: its hunks as edit blocks.
+        let read = match edits::read(text, cut) {
+            Reply::Nothing | Reply::Unclosed(_) => match diff::blocks(text) {
+                Some(blocks) => (edits::read(&blocks, false), Held::Diff),
+                None => (Reply::Nothing, Held::Nothing),
+            },
+            r => (r, Held::Edits),
+        };
+        let (held, candidate, missed) = match read {
+            (Reply::Program(src), _) => (Held::Program, Some(src), None),
+            (Reply::Edits(e), applied) => match edits::apply(&self.best, &e) {
+                Ok(src) => (applied, Some(src), None),
                 Err(why) => (Held::Missed, None, Some(why)),
             },
             _ => (Held::Nothing, None, None),

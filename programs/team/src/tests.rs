@@ -83,3 +83,28 @@ fn a_whole_program_counts_but_one_that_drops_most_of_the_draft_does_not() {
     assert!(f.clean && f.src.trim_end() == COUNTER.trim_end(), "{f:?}");
     assert_eq!(f.steps[1].held, Held::Program);
 }
+
+#[test]
+fn a_unified_diff_in_any_of_its_shapes_is_read_as_the_edit_blocks_it_means() {
+    // Bare lines, a git diff's headers and hunk, and a hunk with the program's line numbers.
+    let bare = "```diff\n- state n = 0\n+ state n = 0;\n```";
+    let git = "```diff\ndiff --git a/app b/app\nindex 1..2 100644\n--- a/app\n+++ b/app\n\
+               @@ -1,3 +1,3 @@ fn x\n // icon: line 5 12 19 12 line 12 5 12 19\n-state n = 0\n\
+               +state n = 0;\n \n```";
+    let numbered = "```diff\n@@ -3,1 +3,1 @@\n 2| // icon: line 5 12 19 12 line 12 5 12 19\n 3|-state n = 0\n 3|+state n = 0;\n```";
+    for reply in [bare, git, numbered] {
+        let (mut r, _) = Repair::start("a counter", "", &broken(), "base3b", 3);
+        let f = done(r.reply(reply, false));
+        assert!(f.clean, "{reply}: {f:?}");
+        assert_eq!(f.steps[0].held, Held::Diff, "{reply}");
+        assert_eq!(f.src.trim_end(), COUNTER.trim_end());
+    }
+    // No diff fence, or a hunk with nothing to find: nothing held.
+    assert_eq!(diff::blocks("just words"), None);
+    assert_eq!(diff::blocks("```diff\n+ only an added line\n```"), None);
+    // A diff whose lines are not in the program: asked again with why.
+    let (mut r, _) = Repair::start("a counter", "", &broken(), "base3b", 3);
+    let again = r.reply("```diff\n- state m = 9\n+ state m = 9;\n```", false);
+    assert!(ask(&again).contains("SEARCH"), "{again:?}");
+    assert_eq!(r.last().map(|s| s.held), Some(Held::Missed));
+}
