@@ -10,7 +10,7 @@
 //! suite splits them) are never used.
 //!
 //!   eval mutants --suite S --refs R.jsonl[,R2.jsonl] --held H.txt --out fix-mutants.jsonl
-//!                [--per 1] [--max N]
+//!                [--per 1] [--max N] [--kinds fn,decl,size]
 
 use coder::edits::{self, Edit};
 use coder::json::{Json, quote};
@@ -20,7 +20,8 @@ use crate::{arg, read};
 
 /// The kinds of break, in the order a task tries them (rotated by the task, so each kind gets its
 /// share): its name, and the program broken that way at its `n`th chance, if it can be.
-const KINDS: [&str; 6] = ["clear", "icon", "name", "semicolon", "brace", "paren"];
+const KINDS: [&str; 9] =
+    ["clear", "icon", "name", "semicolon", "brace", "paren", "fn", "decl", "size"];
 
 /// A family's root: its name before the first '-', `level` joined with `platformer` (iq::root).
 fn root(family: &str) -> &str {
@@ -55,8 +56,60 @@ fn names(lines: &[&str]) -> Vec<String> {
     out
 }
 
+/// `lines` broken the way `kind` says, at the `n`th place it can be: lines `a..b` put as `new`
+/// (none: removed), or `None`. The last three are GLM's own misses on held-out tasks (2026-10-09):
+/// a function it calls but never wrote, a local it uses but never declared, a list too short for
+/// what it indexes.
+fn broken(kind: &str, lines: &[&str], n: u64) -> Option<(usize, usize, Vec<String>)> {
+    let pick = |cands: Vec<usize>| -> Option<usize> {
+        (!cands.is_empty()).then(|| cands[(n % cands.len() as u64) as usize])
+    };
+    match kind {
+        // A top-level function gone, its calls left.
+        "fn" => {
+            let s = pick((0..lines.len()).filter(|&i| lines[i].starts_with("fn ")).collect())?;
+            let (mut depth, mut seen) = (0i32, false);
+            for (e, l) in lines.iter().enumerate().skip(s) {
+                depth += l.matches('{').count() as i32 - l.matches('}').count() as i32;
+                seen |= l.contains('{');
+                if seen && depth <= 0 {
+                    return Some((s, e + 1, Vec::new()));
+                }
+            }
+            None
+        }
+        // A one-line local declaration gone, its uses left.
+        "decl" => {
+            let i = pick(
+                (0..lines.len())
+                    .filter(|&i| {
+                        lines[i].trim_start().starts_with("let ")
+                            && lines[i].trim_end().ends_with(';')
+                    })
+                    .collect(),
+            )?;
+            Some((i, i + 1, Vec::new()))
+        }
+        // A list made a tenth shorter than what it is indexed for.
+        "size" => {
+            let i = pick(
+                (0..lines.len())
+                    .filter(|&i| lines[i].contains("; ") && lines[i].contains(']'))
+                    .collect(),
+            )?;
+            let at = lines[i].find("; ")? + 2;
+            let digits: String = lines[i][at..].chars().take_while(char::is_ascii_digit).collect();
+            let size: u32 = digits.parse().ok().filter(|&v| v >= 4)?;
+            let shorter = (size - (size / 10).max(1)).to_string();
+            let new = [&lines[i][..at], &shorter, &lines[i][at + digits.len()..]].concat();
+            Some((i, i + 1, vec![new]))
+        }
+        _ => one(kind, lines, n).map(|(i, line)| (i, i + 1, vec![line])),
+    }
+}
+
 /// Line `i` of `lines` broken the way `kind` says, at the `n`th place it can be, or `None`.
-fn broken(kind: &str, lines: &[&str], n: u64) -> Option<(usize, String)> {
+fn one(kind: &str, lines: &[&str], n: u64) -> Option<(usize, String)> {
     let code = |l: &str| !l.trim_start().starts_with("//");
     let pick = |cands: Vec<usize>| -> Option<usize> {
         (!cands.is_empty()).then(|| cands[(n % cands.len() as u64) as usize])
@@ -140,14 +193,22 @@ fn broken(kind: &str, lines: &[&str], n: u64) -> Option<(usize, String)> {
     }
 }
 
-/// The block that restores `orig` from `mutant` (line `i` changed): the changed line and as much
-/// context either side as makes it match one place, checked to apply and give `orig` back.
-fn restore(orig: &[&str], mutant: &[String], i: usize, want: &str) -> Option<Edit> {
+/// The block that restores `orig` from `mutant` (`orig`'s lines `a..b` put as `m` lines there):
+/// those lines and as much context either side as makes it match one place, checked to apply and
+/// give `orig` back.
+fn restore(
+    orig: &[&str],
+    mutant: &[String],
+    at: (usize, usize, usize),
+    want: &str,
+) -> Option<Edit> {
+    let (a, b, m) = at;
     let joined = mutant.join("\n");
     for k in 0..4 {
-        let (a, b) = (i.saturating_sub(k), (i + k + 1).min(mutant.len()));
-        let search: Vec<String> = mutant[a..b].to_vec();
-        let replace: Vec<String> = orig[a..b].iter().map(|s| s.to_string()).collect();
+        let lo = a.saturating_sub(k);
+        let (hi_m, hi_o) = ((a + m + k).min(mutant.len()), (b + k).min(orig.len()));
+        let search: Vec<String> = mutant[lo..hi_m].to_vec();
+        let replace: Vec<String> = orig[lo..hi_o].iter().map(|s| s.to_string()).collect();
         if search.iter().all(|l| l.trim().is_empty()) {
             continue;
         }
@@ -181,6 +242,13 @@ pub fn mutants(args: &[String]) {
     let (suite, refs, held, out) = (need("--suite"), need("--refs"), need("--held"), need("--out"));
     let per: usize = arg(args, "--per").and_then(|v| v.parse().ok()).unwrap_or(1);
     let max: usize = arg(args, "--max").and_then(|v| v.parse().ok()).unwrap_or(usize::MAX);
+    // The kinds to make: all unless named (comma-separated).
+    let named = arg(args, "--kinds").unwrap_or_default();
+    let kinds: Vec<&str> = KINDS
+        .iter()
+        .copied()
+        .filter(|k| named.is_empty() || named.split(',').any(|n| n == *k))
+        .collect();
     let text = |j: &Json, k: &str| j.get(k).and_then(Json::text).unwrap_or("").to_string();
     let held: Vec<String> = read(&held)
         .lines()
@@ -223,12 +291,17 @@ pub fn mutants(args: &[String]) {
                     break;
                 }
                 let k = ((h as usize) + r) % KINDS.len();
-                let Some((i, line)) = broken(KINDS[k], &orig, h >> 8) else { continue };
-                let mut mutant: Vec<String> = orig.iter().map(|s| s.to_string()).collect();
-                mutant[i] = line;
+                if !kinds.contains(&KINDS[k]) {
+                    continue;
+                }
+                let Some((a, b, new)) = broken(KINDS[k], &orig, h >> 8) else { continue };
+                let m = new.len();
+                let mut mutant: Vec<String> = orig[..a].iter().map(|s| s.to_string()).collect();
+                mutant.extend(new);
+                mutant.extend(orig[b..].iter().map(|s| s.to_string()));
                 let mutated = mutant.join("\n") + "\n";
                 let Some(f) = ai::fault(&mutated, "", seeds) else { continue };
-                let Some(edit) = restore(&orig, &mutant, i, &src) else { continue };
+                let Some(edit) = restore(&orig, &mutant, (a, b, m), &src) else { continue };
                 let user = prompt::fix(ask, &mutated, &f.account);
                 let code = f.diag.code.unwrap_or(1);
                 lines_out += &format!(
