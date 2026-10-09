@@ -12,7 +12,8 @@
 #   from:NIGHT     an earlier night's fix data and train drafts copied in (what is not here yet)
 #   glm            GLM alone on the held-out tasks (no GPU)
 #   team:NAME:SPEC[:TRIES]  GLM's drafts repaired by a helper, NAME, served from SPEC (base3b,
-#                  base05, a run of tonight's by its short name, any run's full name), up to TRIES
+#                  base05, base7b: Qwen's own q8_0 GGUF in <root>/models, a run of tonight's by its
+#                  short name, any run's full name), up to TRIES
 #                  repairs a draft (1; those after the first sampled hotter, the first that runs
 #                  clean kept); held-out tasks; traces of every turn, never trained on
 #   drafts         the untuned 3B writes each train task once (the drafts to repair)
@@ -70,17 +71,27 @@ if [ ! -s "$T/inputs.sha256" ]; then
 fi
 
 tools() { cp "$EVAL" "$T/bin/eval.exe" && cp "$IQ" "$T/bin/iq.exe"; }
+# The 7B, a GGUF as Qwen publish it (no training, so no export): <root>/models/<name>/.
+SEVEN=$(cygpath -m "$ROOT/models/qwen2.5-coder-7b-instruct" 2>/dev/null || echo "$ROOT/models/qwen2.5-coder-7b-instruct")
 spec() {  # spec NAME: export.py/serve.py's arguments for a helper
   case $1 in
     base3b) echo "--base-only --base $LARGE" ;;
     base05) echo "--base-only --base $SMALL" ;;
+    base7b) echo "--gguf $SEVEN/qwen2.5-coder-7b-instruct-q8_0.gguf --tokenizer $SEVEN" ;;
     *) if [ -d "$ROOT/runs/$NIGHT-$1" ]; then echo "--run $NIGHT-$1"; else echo "--run $1"; fi ;;
   esac
 }
-serve() {  # serve SPEC: its GGUF made if need be, then on llama-server, 16 slots
+slots() {  # slots SPEC: requests at once; the 7B's weights (8.1 GB) leave room for 8 contexts
+  case $1 in *7b*) echo 8 ;; *) echo 16 ;; esac
+}
+serve() {  # serve SPEC: its GGUF made if need be, then on llama-server, slots SPEC's slots
   # shellcheck disable=SC2046
-  (cd "$REPO" && "$PY" train/export.py $1 --quant q8_0 \
-     && "$PY" train/serve.py $1 --quant q8_0 --parallel 16 --ctx 16384) >> "$LOG" 2>&1
+  if [ "${1#--gguf}" != "$1" ]; then
+    (cd "$REPO" && "$PY" train/serve.py $1 --parallel "$(slots "$1")" --ctx 16384) >> "$LOG" 2>&1
+  else
+    (cd "$REPO" && "$PY" train/export.py $1 --quant q8_0 \
+       && "$PY" train/serve.py $1 --quant q8_0 --parallel "$(slots "$1")" --ctx 16384) >> "$LOG" 2>&1
+  fi
 }
 unserve() { (cd "$REPO" && "$PY" train/serve.py --stop) >> "$LOG" 2>&1; }
 score() {  # score ANSWERS OUT
@@ -97,7 +108,7 @@ team() {  # team NAME ANSWERS SPEC [TRIES]: ANSWERS' drafts repaired by the help
   serve "$(spec "$sp")" || { say "serve failed: $sp"; unserve; return 1; }
   "$T/bin/eval.exe" team --suite "$W/iq.jsonl" --answers "$W/$answers" --helper-url "$URL" \
     --helper "$sp" --name "glm+$name" --out "$W/team-$name.jsonl" \
-    --traces "$W/traces-$name.jsonl" --jobs 16 --tries "$tries" >> "$LOG" 2>&1
+    --traces "$W/traces-$name.jsonl" --jobs "$(slots "$(spec "$sp")")" --tries "$tries" >> "$LOG" 2>&1
   local ok=$?
   unserve
   [ "$ok" = 0 ] || { say "team $name failed ($ok): rerun resumes it"; return 1; }
