@@ -632,6 +632,7 @@ fn testing_this_device_times_one_core_then_all_then_memory_until_a_step_slows() 
     let mut t = tab("A", 2);
     t.pool.clock = 1_791_500_000;
     t.pool.test(0);
+    t.pool.test.as_mut().unwrap().memory = true;
     assert!(matches!(&t.pool.out[..], [Act::Spawn(p, 2)] if p == "gauge"));
     t.pool.out.clear();
     t.pool.spawned(Some(201));
@@ -688,6 +689,7 @@ fn testing_this_device_times_one_core_then_all_then_memory_until_a_step_slows() 
 fn a_fresh_worker_refused_memory_is_the_browsers_limit_and_a_job_waits_for_no_test() {
     let mut t = tab("A", 1);
     t.pool.test(0);
+    t.pool.test.as_mut().unwrap().memory = true;
     t.pool.spawned(Some(201));
     says(&mut t, 201, "ready", 1);
     says(&mut t, 201, "0 2 h ok", 2);
@@ -718,4 +720,23 @@ fn what_testing_measured_is_kept_with_the_pins_and_comes_back() {
     let kept = asked(&mut h);
     let line = "sha-256 OLD\ntested 250 900 8192 1791600000";
     assert!(kept.iter().any(|s| s.0 == d::PINS && s.2 == line), "{kept:?}");
+}
+
+#[test]
+fn with_the_memory_half_off_a_test_measures_the_cpu_and_takes_no_memory() {
+    let mut t = tab("A", 1);
+    t.pool.clock = 7;
+    t.pool.test(0);
+    t.pool.spawned(Some(201));
+    says(&mut t, 201, "ready", 1);
+    says(&mut t, 201, "0 4 h ok 10", 2);
+    says(&mut t, 201, "0 16 h ok 100", 120);
+    says(&mut t, 201, "0 16 h ok 100", 240);
+    let (lines, acts) = fed(&mut t);
+    assert!(lines.iter().all(|l| !l.1.contains("ram")), "{lines:?}");
+    assert!(acts.iter().any(|a| matches!(a, Act::Stop(p) if p == &[201])));
+    let test = t.pool.test.as_ref().unwrap();
+    assert!(test.over && test.note.starts_with("Tested the CPU"), "{}", test.note);
+    let me = t.pool.me.measured;
+    assert_eq!((me.cpu1, me.cpun, me.mem, me.tested), (160, 160, 0, 7));
 }

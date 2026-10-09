@@ -18,6 +18,10 @@
 
 use crate::pool::Act;
 
+/// Whether the memory half runs. Off (2026-10-08): on a Linux laptop in Firefox (16 GB, 2 GB of
+/// swap) it took all free memory and all swap, no worker was ever refused and no step slowed
+/// before the device stalled, and a watchdog had to kill the tab. Off until it cannot do that.
+pub const MEMORY: bool = false;
 /// The program the workers run, and the most of them.
 pub const PROGRAM: &str = "gauge";
 pub const MAX: u16 = 32;
@@ -80,6 +84,8 @@ pub struct Test {
     pub measured: Measured,
     pub note: String,
     pub over: bool,
+    /// Whether its memory half runs ([`MEMORY`]; tests turn it on).
+    pub memory: bool,
 }
 
 /// MiB as people say memory: `960 MB`, `9.4 GB`.
@@ -108,6 +114,7 @@ impl Test {
             measured: Measured::default(),
             note: "Testing: starting its workers".into(),
             over: false,
+            memory: MEMORY,
         }
     }
 
@@ -219,6 +226,9 @@ impl Test {
                 // Every worker's rate while all ran at once, summed: the device's throughput.
                 self.waiting -= 1;
                 self.measured.cpun += rate;
+                if self.waiting == 0 && !self.memory {
+                    return self.finish("Tested the CPU (memory: its test is off for now)", out);
+                }
                 if self.waiting == 0 {
                     self.phase = Phase::Memory;
                     self.step(now, out);

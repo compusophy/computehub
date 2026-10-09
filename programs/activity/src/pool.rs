@@ -210,7 +210,10 @@ impl PoolPage {
         if !tested.is_empty() {
             let cpu: u32 = tested.iter().map(|d| d.cpun).sum();
             let mem: u32 = tested.iter().map(|d| d.mem).sum();
-            line += &[DOT, &rate(cpu), " CPU", DOT, &memory(mem), " usable RAM"].concat();
+            line += &[DOT, &rate(cpu), " CPU"].concat();
+            if mem > 0 {
+                line += &[DOT, &memory(mem), " usable RAM"].concat();
+            }
             let untested = devices.len() - tested.len();
             if untested > 0 {
                 line += &[" (", &untested.to_string(), " untested)"].concat();
@@ -386,7 +389,7 @@ impl PoolPage {
             // Measured, never the browser's guess: a dash until the device is tested.
             let tested = d.tested != 0;
             let cpu = if tested { rate(d.cpun) } else { DASH.into() };
-            let ram = match (tested, d.mem >= pool::CEILING) {
+            let ram = match (tested && d.mem > 0, d.mem >= pool::CEILING) {
                 (false, _) => DASH.into(),
                 // The table's column is narrow: the test's ceiling, said short.
                 (true, true) => [&(pool::CEILING / 1024).to_string(), "+ GB"].concat(),
@@ -582,7 +585,7 @@ fn testing(s: &Snap) -> Node {
             &rate(d.cpun),
             DOT,
             "memory ",
-            &memory(d.mem),
+            &if d.mem == 0 { "not measured".into() } else { memory(d.mem) },
             DOT,
             &ago(d.tested),
         ]
@@ -590,9 +593,8 @@ fn testing(s: &Snap) -> Node {
         None => "Not tested yet.".into(),
     };
     children.push(text(Style::Body, &said));
-    let how = "Measured, not reported: SHA-256 on one core, then on all at once, and the memory \
-               this browser tab could really hold (what a tab may use, not the device's total). A \
-               few seconds; it stops at once if the device starts to swap.";
+    let how = "Measured, not reported: SHA-256 on one core, then on all at once. The memory test \
+               is off while it is made safe for every device.";
     children.push(text(Style::Small, how));
     let label = if me.is_some() { "Test again" } else { "Test this device" }.into();
     children.push(Node::Button { id: TEST, variant: Variant::Normal, label });
