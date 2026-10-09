@@ -23,6 +23,13 @@ import sftdata
 FENCES = ("```diff", "```patch")
 
 
+def jsonl(path):
+    """Every JSON line of `path`. Not sftdata.read_lines: it cuts each line at a `#` (held.txt's
+    comments), and programs hold `#`."""
+    with open(path, encoding="utf-8") as f:
+        return [json.loads(l) for l in f if l.strip()]
+
+
 def header(line):
     return line.startswith(("diff --git", "index ", "--- ", "+++ "))
 
@@ -139,15 +146,13 @@ def main():
     a = p.parse_args()
 
     family = {}
-    for line in sftdata.read_lines(a.suite):
-        t = json.loads(line)
+    for t in jsonl(a.suite):
         family[t["id"]] = t.get("family", "")
     held = {sftdata.root(l.strip()) for l in sftdata.read_lines(a.held) if l.strip() and not l.startswith("#")}
 
     turns = {}
     for path in a.traces:
-        for line in sftdata.read_lines(path):
-            t = json.loads(line)
+        for t in jsonl(path):
             turns[(t["task"], t["turn"])] = t
     counts = {"turns": len(turns), "held": 0, "no body": 0, "not fixed": 0, "kept": 0, "diff": 0}
     out = []

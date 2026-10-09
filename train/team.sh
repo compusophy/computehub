@@ -126,7 +126,8 @@ for step in "$@"; do
     fixdata)
       [ -s "$T/fix.jsonl" ] && continue
       (cd "$REPO" && "$PY" train/fixdata.py --traces "$W/traces-train-base3b.jsonl" \
-         --held "$W/held.txt" --suite "$W/iq.jsonl" --out "$W/fix.jsonl") 2>&1 | tee -a "$LOG" ;;
+         --held "$W/held.txt" --suite "$W/iq.jsonl" --out "$W/fix.jsonl" --night "$NIGHT") \
+         >> "$LOG" 2>&1 || { say "fixdata failed"; exit 1; } ;;
     fix3b)
       grep -q '^  "status": "done"' "$ROOT/runs/$NIGHT-fix3b/manifest.json" 2>/dev/null && continue
       paused fix3b && exit 1
@@ -174,7 +175,8 @@ PY
           traces=()
           for f in "$T"/traces-train-*.jsonl; do traces+=(--traces "$(cygpath -m "$f" 2>/dev/null || echo "$f")"); done
           (cd "$REPO" && "$PY" train/fixdata.py "${traces[@]}" --held "$W/held.txt" --suite "$W/iq.jsonl" \
-             --out "$W/fix-r$k.jsonl" --night "$NIGHT") 2>&1 | tee -a "$LOG"
+             --out "$W/fix-r$k.jsonl" --night "$NIGHT") >> "$LOG" 2>&1 \
+             || { say "round $k fixdata failed"; exit 1; }
         fi
         if ! grep -q '^  "status": "done"' "$ROOT/runs/$run/manifest.json" 2>/dev/null; then
           paused "train $run" && exit 1
