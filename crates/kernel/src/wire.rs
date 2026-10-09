@@ -22,7 +22,9 @@ macro_rules! consts {
 consts! {
     u8: VERSION = 2;
     usize: MAX_PAYLOAD = 65_536, MAX_START = 65_536, MAX_PROCS = 48, MAX_PIPE = 65_536;
-    u32: HOME_PID = 1, MEM_PAGES = 4_096;
+    // A process's memory, at most a gibibyte (wasm32's own limit is four): room for a real program
+    // and for a device's test, short of letting one program take a tab.
+    u32: HOME_PID = 1, MEM_PAGES = 16_384;
     u32: SAB_BYTES = 64 + 65_536 + 65_536, PAYLOAD_AT = 64, RING_AT = 65_600, RING_BYTES = 65_536;
     u32: STATE = 0, ERRNO = 1, LEN = 2, COLS = 3, ROWS = 4, INPUT = 5, SLEEP = 6, HEAD = 7;
     u32: TAIL = 8, BELL = 9, RUN = 10, BUSY = 11, SINCE = 12, PAGES = 13;

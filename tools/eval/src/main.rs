@@ -11,6 +11,8 @@
 //! cargo run -p eval -- list
 //! cargo run -p eval -- iq --suite S --model M --out OUT [--held H | --tasks a,b] [--url U]
 //!                         [--name N] [--jobs 1] [--ms MS] [--per-hour 110]
+//! cargo run -p eval -- team --suite S --answers A --helper-url U --out OUT [--held H]
+//!                           [--helper M] [--name N] [--turns 3] [--jobs 1] [--traces T]
 //! ```
 //!
 //! `iq` makes the IQ suite's tasks (the families `--held` lists, or `--tasks`, else all) as
@@ -22,6 +24,13 @@
 //! an app block; no reply if it installed none, and how the make went) is appended to `--out` as
 //! it ends; tasks already there are skipped, so a run cut off resumes, and a make the AI failed
 //! (E0901 to E0905: busy, unreachable) is not written, so a rerun makes it again.
+//!
+//! `team` is the team's first move (DESIGN.md, "The team"): each answer in `--answers` (a lead's
+//! recorded replies, as `iq score` reads them) is a draft that a helper at `--helper-url` (a
+//! llama-server's chat completions, unpaced, `--jobs` at once) repairs when it does not run clean,
+//! in at most `--turns` turns ([`team::Repair`]), every answer judged by the make loop's test. An
+//! answer line a task goes to `--out` (the best program; how the repair went in `team`), so
+//! `iq score` scores the lead and helper together; tasks already there are skipped.
 //!
 //! `--dir D` reads and writes `D/results` and `D/replays` instead of the repo's `evals/`. Runs
 //! and replays need a debug build (as above): a checker that panics fails its app only where
@@ -421,7 +430,8 @@ fn main() {
         }
         Some("list") => print!("{}", makes::listing()),
         Some("iq") => iq(&args),
-        _ => eprintln!("usage: eval run|replay|summary|list|iq (see tools/eval/src/main.rs)"),
+        Some("team") => team(&args),
+        _ => eprintln!("usage: eval run|replay|summary|list|iq|team (see tools/eval/src/main.rs)"),
     }
 }
 
@@ -485,6 +495,142 @@ fn iq(args: &[String]) {
                         quote(&turns.join(" ")),
                         d.code,
                         d.receipt.ms
+                    );
+                    let _one = file.lock();
+                    append(&out, &line);
+                }
+            });
+        }
+    });
+}
+
+/// The helper's whole reply to `body` over `wire` (for task `task`, its `n`th request), and
+/// whether it ran out of room; or why there was none.
+fn helper_reply(wire: &mut Curl, task: &str, n: u32, body: &str) -> Result<(String, bool), String> {
+    let (mut stream, mut text) = (coder::json::Stream::default(), String::new());
+    let at = At { task, trial: 1, n, hash: 0 };
+    let answer = wire.post(&at, body, &mut |bytes, _| {
+        stream.feed(bytes, &mut text, usize::MAX);
+        Feed::More
+    });
+    stream.end(&mut text, usize::MAX);
+    match answer.status {
+        200..=299 if stream.error.is_empty() => Ok((text, stream.finish == "length")),
+        status => Err(format!("HTTP {status} {} {}", answer.error, stream.error)),
+    }
+}
+
+/// `team`: see the crate docs.
+fn team(args: &[String]) {
+    let need = |name: &str| arg(args, name).unwrap_or_else(|| panic!("{name} is needed"));
+    let (suite, answers, out) = (need("--suite"), need("--answers"), need("--out"));
+    let url = need("--helper-url");
+    let helper = arg(args, "--helper").unwrap_or_else(|| "helper".into());
+    let name = arg(args, "--name").unwrap_or_else(|| ["team-", &helper].concat());
+    let turns: u8 = arg(args, "--turns").and_then(|v| v.parse().ok()).unwrap_or(3);
+    let jobs = arg(args, "--jobs").and_then(|v| v.parse().ok()).unwrap_or(1usize).max(1);
+    let held = arg(args, "--held").map(|h| read(&h));
+    // Each helper turn, for study and for training the helpers: the message, the reply, how it
+    // was judged.
+    let traces = arg(args, "--traces");
+    let text = |j: &Json, key: &str| j.get(key).and_then(Json::text).unwrap_or("").to_string();
+    let had: Vec<String> =
+        read(&out).lines().filter_map(Json::parse).map(|j| text(&j, "task")).collect();
+    // The suite's asks, by task, for the families asked for.
+    let asks: Vec<(String, String)> = read(&suite)
+        .lines()
+        .filter_map(Json::parse)
+        .filter(|j| held.as_ref().is_none_or(|h| h.lines().any(|f| f.trim() == text(j, "family"))))
+        .map(|j| (text(&j, "id"), text(&j, "ask")))
+        .collect();
+    // The lead's first answer to each of those tasks, not done already.
+    let mut work: Vec<(String, String, String, String)> = Vec::new();
+    for j in read(&answers).lines().filter_map(Json::parse) {
+        let (task, lead, reply) = (text(&j, "task"), text(&j, "model"), text(&j, "reply"));
+        let Some((_, ask)) = asks.iter().find(|a| a.0 == task) else { continue };
+        if !had.contains(&task) && !work.iter().any(|w| w.0 == task) {
+            work.push((task, ask.clone(), lead, reply));
+        }
+    }
+    eprintln!("{} drafts to repair, {} done already", work.len(), had.len());
+    let (next, file) = (Mutex::new(work.iter()), Mutex::new(()));
+    std::thread::scope(|s| {
+        for _ in 0..jobs {
+            s.spawn(|| {
+                let mut wire = Curl::new(usize::MAX, &url);
+                while let Some((task, ask, lead, reply)) =
+                    next.lock().ok().and_then(|mut it| it.next())
+                {
+                    let t0 = Instant::now();
+                    let draft = coder::edits::program(reply).map(|p| p.0.to_string());
+                    let fixed = draft.map(|d| {
+                        let (mut r, mut step) = team::Repair::start(ask, "", &d, &helper, turns);
+                        let mut n = 0;
+                        loop {
+                            match step {
+                                team::Next::Done(f) => break Ok(f),
+                                team::Next::Ask(body) => {
+                                    n += 1;
+                                    match helper_reply(&mut wire, task, n, &body) {
+                                        Ok((said, cut)) => {
+                                            let asked = r.asked().to_string();
+                                            step = r.reply(&said, cut);
+                                            if let (Some(path), Some(s)) = (&traces, r.last()) {
+                                                let line = format!(
+                                                    "{{\"task\":{},\"turn\":{n},\"asked\":{},\"reply\":{},\"held\":{},\"before\":{},\"after\":{}}}
+",
+                                                    quote(task),
+                                                    quote(&asked),
+                                                    quote(&said),
+                                                    quote(&format!("{:?}", s.held)),
+                                                    s.before,
+                                                    s.after
+                                                );
+                                                let _one = file.lock();
+                                                append(path, &line);
+                                            }
+                                        }
+                                        Err(e) => break Err(e),
+                                    }
+                                }
+                            }
+                        }
+                    });
+                    let f = match fixed {
+                        Some(Ok(f)) => Some(f),
+                        // The helper unreachable: not written, so a rerun repairs it.
+                        Some(Err(e)) => {
+                            eprintln!("{task:<28} helper failed: {e}");
+                            continue;
+                        }
+                        None => None,
+                    };
+                    let ms = t0.elapsed().as_millis();
+                    let (reply, said) = match &f {
+                        Some(f) => {
+                            let program = ["```app\n", f.src.trim_end_matches('\n'), "\n```"];
+                            let held: Vec<String> =
+                                f.steps.iter().map(|s| format!("{:?}", s.held)).collect();
+                            let first = f.steps.first().map_or(0, |s| s.before);
+                            let said = format!(
+                                "{{\"lead\":{},\"helper\":{},\"turns\":{},\"held\":{},\"clean\":{},\"before\":{first},\"ms\":{ms}}}",
+                                quote(lead),
+                                quote(&helper),
+                                f.steps.len(),
+                                quote(&held.join(" ")),
+                                f.clean
+                            );
+                            (program.concat(), said)
+                        }
+                        // No program in the lead's reply: nothing to repair.
+                        None => (reply.clone(), format!("{{\"lead\":{},\"helper\":{},\"turns\":0,\"held\":\"\",\"clean\":false,\"before\":0,\"ms\":{ms}}}", quote(lead), quote(&helper))),
+                    };
+                    eprintln!("{task:<28} {said}");
+                    let line = format!(
+                        "{{\"task\":{},\"model\":{},\"reply\":{},\"team\":{said}}}\n",
+                        quote(task),
+                        quote(&name),
+                        quote(&reply)
                     );
                     let _one = file.lock();
                     append(&out, &line);

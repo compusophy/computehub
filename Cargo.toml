@@ -41,6 +41,8 @@ members = [
     "programs/pool",
     "programs/fractal",
     "programs/sha",
+    "programs/team",
+    "programs/gauge",
     "programs/sh",
     "programs/agent",
     "programs/vt",
@@ -109,6 +111,8 @@ compusophy-activity = { path = "programs/activity", version = "0.1.0" }
 compusophy-pool = { path = "programs/pool", version = "0.1.0" }
 compusophy-fractal = { path = "programs/fractal", version = "0.1.0" }
 compusophy-sha = { path = "programs/sha", version = "0.1.0" }
+compusophy-team = { path = "programs/team", version = "0.1.0" }
+compusophy-gauge = { path = "programs/gauge", version = "0.1.0" }
 compusophy-sh = { path = "programs/sh", version = "0.1.0" }
 compusophy-evals = { path = "programs/evals", version = "0.1.0" }
 compusophy-makes = { path = "programs/makes", version = "0.1.0" }
@@ -131,6 +135,13 @@ web-sys = "0.3"
 opt-level = 3
 
 [profile.release.package.compusophy-tiny]
+opt-level = 3
+
+# The device's test measures speed, so its work is built for speed, not size.
+[profile.release.package.compusophy-gauge]
+opt-level = 3
+
+[profile.release.package.compusophy-sha]
 opt-level = 3
 
 # applang's interpreter and what drives it (its front end and budgets, the probe, the smoke

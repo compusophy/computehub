@@ -6,7 +6,7 @@
 # on; a tenth of the shapes, with every program of them. The corpus's id hashes each
 # line but its last column (where a program was found). Derived: `cargo run -p
 # compusophy-lab --release -- corpus` writes it; never edit it by hand.
-# 1074 programs: 108 found, 966 variants, 374 shapes; 696 run clean; 165 held out.
+# 1100 programs: 110 found, 990 variants, 377 shapes; 722 run clean; 165 held out.
 hash	shape	bytes	lines	runs	split	of	how	from
 0212d8182e34d23f	79f9b33055c463c2	98	1	runs	train	-	-	programs/applang-syntax/src/tests.rs:323
 4e92d9889daf9ee5	79f9b33055c463c2	100	1	runs	train	0212d8182e34d23f	rename#1	-
@@ -66,6 +66,20 @@ bb5279faf30c1e6f	cbeab40556625379	202	3	runs	train	07f0cfb0c9b0880a	rename+drop#
 a42fd8789d8ecca6	3ab9c648280b7cd0	221	4	runs	train	07f0cfb0c9b0880a	rename+numbers#10	-
 66927027069a7660	b28eaebae6150555	207	4	runs	train	07f0cfb0c9b0880a	rename+numbers#12	-
 2027edffceef91d7	6702a80abcaaa3d6	221	4	runs	train	07f0cfb0c9b0880a	rename+numbers#14	-
+084dd1809285bde2	8bbf71116b0041d6	194	10	runs	train	-	-	programs/team/src/tests.rs:4
+f423f85267f9e23e	8bbf71116b0041d6	198	10	runs	train	084dd1809285bde2	rename#1	-
+b57a7bbc853e0352	8bbf71116b0041d6	206	10	runs	train	084dd1809285bde2	rename#2	-
+d886a6e1b1d0bee2	8bbf71116b0041d6	210	10	runs	train	084dd1809285bde2	rename#3	-
+c0d98d17c847326a	8bbf71116b0041d6	202	10	runs	train	084dd1809285bde2	rename#4	-
+33352670a93594ca	8bbf71116b0041d6	194	10	runs	train	084dd1809285bde2	rename#5	-
+d9127ed72d220402	8bbf71116b0041d6	198	10	runs	train	084dd1809285bde2	rename#6	-
+545dd27cef17f47a	8bbf71116b0041d6	206	10	runs	train	084dd1809285bde2	rename#7	-
+5058fe773a5f9c8a	8bbf71116b0041d6	194	10	runs	train	084dd1809285bde2	rename#8	-
+68be08c42f419fb8	24aad7edecf2d2f2	175	9	runs	train	084dd1809285bde2	rename+drop#9	-
+7fbc5fb5e64a3c56	8bbf71116b0041d6	198	10	runs	train	084dd1809285bde2	rename#10	-
+4e0e4aedf269b769	70a4242fe22acc5b	181	9	runs	train	084dd1809285bde2	rename+drop#11	-
+100f83d7d705b816	8bbf71116b0041d6	194	10	runs	train	084dd1809285bde2	rename#12	-
+e582ffb507d3fe52	8bbf71116b0041d6	206	10	runs	train	084dd1809285bde2	rename#14	-
 09e3bcb8b3426833	73e7dca784b9c121	39	2	runs	train	-	-	programs/studio/src/tests.rs:605
 1af1b82904e47b17	73e7dca784b9c121	35	2	runs	train	09e3bcb8b3426833	rename#1	-
 3364faf2b7d4d243	73e7dca784b9c121	37	2	runs	train	09e3bcb8b3426833	rename#2	-
@@ -178,6 +192,18 @@ f7c156cdb5ec7764	8ad490f2f75d3217	112	2	runs	train	19bb87780f3ee70d	rename+numbe
 9d110ad21b23c574	074e8cd724a6cf93	51	1	runs	train	19bb87780f3ee70d	rename+drop#11	-
 4e10d6c95a1cc4c4	3711a75b6c85ef8c	104	2	runs	train	19bb87780f3ee70d	rename+numbers#12	-
 0d64ec8c85a2af80	f37121e10ecfccb6	105	2	runs	train	19bb87780f3ee70d	rename+numbers#14	-
+1b2d43da2e6ce22d	c7180011f0d1c60f	34	3	runs	train	-	-	programs/team/src/tests.rs:79
+e834241e6f705ec9	c7180011f0d1c60f	40	3	runs	train	1b2d43da2e6ce22d	rename#1	-
+057581613948f515	c7180011f0d1c60f	36	3	runs	train	1b2d43da2e6ce22d	rename#2	-
+95635293d9f295af	c7180011f0d1c60f	42	3	runs	train	1b2d43da2e6ce22d	rename#3	-
+e1c37381260efe8d	c7180011f0d1c60f	40	3	runs	train	1b2d43da2e6ce22d	rename#4	-
+ca834dcf03c3a585	c7180011f0d1c60f	36	3	runs	train	1b2d43da2e6ce22d	rename#5	-
+2e54128cc6e4a8fd	c7180011f0d1c60f	40	3	runs	train	1b2d43da2e6ce22d	rename#6	-
+0b2ced39509582c1	c7180011f0d1c60f	40	3	runs	train	1b2d43da2e6ce22d	rename#7	-
+c288dbbf8ebdd82d	c7180011f0d1c60f	34	3	runs	train	1b2d43da2e6ce22d	rename#8	-
+f01af14e618fc707	c7180011f0d1c60f	34	3	runs	train	1b2d43da2e6ce22d	rename#10	-
+72df15b55fdfcf25	c7180011f0d1c60f	40	3	runs	train	1b2d43da2e6ce22d	rename#12	-
+de39f13bda6f65ad	c7180011f0d1c60f	36	3	runs	train	1b2d43da2e6ce22d	rename#14	-
 1b4241e19d6baee4	0166586d6c0430bb	73	1	faults	train	-	-	programs/applang-syntax/src/tests.rs:387
 d05c2e3744973433	0166586d6c0430bb	89	1	faults	train	1b4241e19d6baee4	rename#1	-
 341b6eae2071dde4	0166586d6c0430bb	83	1	faults	train	1b4241e19d6baee4	rename#2	-

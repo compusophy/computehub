@@ -128,7 +128,7 @@ fn random_bytes_never_panic() {
 #[test]
 fn layout_errnos_and_fnv64_hold() {
     assert_eq!((PAYLOAD_AT as usize + MAX_PAYLOAD) as u32, RING_AT);
-    assert_eq!((RING_AT + RING_BYTES, MEM_PAGES * 65_536), (SAB_BYTES, 256 << 20));
+    assert_eq!((RING_AT + RING_BYTES, MEM_PAGES * 65_536), (SAB_BYTES, 1 << 30));
     use vfs::VfsError::*;
     let all = [NotFound, NotADir, IsADir, Exists, NotEmpty, InvalidPath, NoSpace];
     assert_eq!(all.map(errno), [44, 54, 31, 20, 55, 28, 51]);

@@ -511,6 +511,9 @@ pub enum Request {
     /// Activity's window only: share this device's model with the linked tabs, the local
     /// OpenAI-compatible server at `url` (`http://localhost:8080`, as llama-server); empty stops.
     Serve { url: String },
+    /// Activity's window only: measure this device (its CPU, one core and all, and the memory a
+    /// tab can hold), the results in the [`pool`] snapshots and told to every linked tab.
+    Test,
     /// The overlay only: it steps aside for window `win`, which the person uses next (a game it
     /// started, an app it opened). That window takes the keys (raised while the overlay shows);
     /// `hide`, the overlay hides too, its task done, its answer waiting; else its pill stays,
@@ -922,6 +925,7 @@ impl Request {
             }
             Self::Ask { text } => o.u8(22).str(text),
             Self::Serve { url } => o.u8(23).str(url),
+            Self::Test => o.u8(24),
         }
     }
 
@@ -959,6 +963,7 @@ impl Request {
             }
             22 => Self::Ask { text: r.str()? },
             23 => Self::Serve { url: r.str()? },
+            24 => Self::Test,
             _ => return None,
         })
     }
@@ -966,7 +971,7 @@ impl Request {
 
 impl Request {
     /// Whether only the OS's own windows may ask it: Watch, End, Pref, Reset, Tty, Input, Pair,
-    /// Measure, Ask and Serve.
+    /// Measure, Ask, Serve and Test.
     pub fn own(&self) -> bool {
         use Request::*;
         matches!(
@@ -981,6 +986,7 @@ impl Request {
                 | Measure
                 | Ask { .. }
                 | Serve { .. }
+                | Test
         )
     }
 

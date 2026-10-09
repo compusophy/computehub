@@ -21,6 +21,7 @@ use uiwire::pool::{self, Snap};
 
 use crate::model::{Asking, Shared};
 use crate::msg::Msg;
+use crate::test::{Measured, Test};
 
 /// Every this many chunks, one another tab answered is replayed here.
 pub const CHECK: u32 = 8;
@@ -72,6 +73,7 @@ pub struct Info {
     pub model: String,
     pub tok: u32,
     pub ctx: u32,
+    pub measured: Measured,
 }
 
 /// A linked tab: what it has and says (workers, busy, chunks, units), when it linked and was last
@@ -190,6 +192,9 @@ pub struct Pool {
     pub shared: Shared,
     pub asking: Option<Asking>,
     pub last_ask: u32,
+    /// The device's test, under way or over, and the Unix time as the hub last read it.
+    pub test: Option<Test>,
+    pub clock: u32,
     pub out: Vec<Act>,
 }
 
@@ -234,6 +239,10 @@ impl Pool {
             model,
             tok: i.tok,
             ctx: i.ctx,
+            cpu1: i.measured.cpu1,
+            cpun: i.measured.cpun,
+            mem: i.measured.mem,
+            tested: i.measured.tested,
         }
     }
 
@@ -277,8 +286,12 @@ impl Pool {
         }
     }
 
-    /// The window `window` starts a job of `/bin/<name>` on `inputs`, ending the last.
+    /// The window `window` starts a job of `/bin/<name>` on `inputs`, ending the last (and a test
+    /// under way).
     pub fn start(&mut self, window: u32, name: &str, inputs: Vec<String>, now: u64) {
+        if let Some(t) = self.test.as_mut().filter(|t| !t.over) {
+            t.finish("A job started: test again", &mut self.out);
+        }
         if let Some(old) = self.job.take().filter(|j| j.ended.is_none()) {
             self.end(&old);
         }
@@ -323,8 +336,41 @@ impl Pool {
         }
     }
 
+    /// Tests this device at `now` ([`crate::test`]): never while a job runs or is helped; idle
+    /// job workers end first, so the test's run alone.
+    pub fn test(&mut self, now: u64) {
+        let job = self.job.as_ref().is_some_and(|j| j.ended.is_none());
+        let help = self.help.as_ref().is_some_and(|h| h.ended.is_none());
+        if job || help || self.pending > 0 {
+            self.test = Some(Test::refused("Busy with a job: test when it ends"));
+            return;
+        }
+        if self.test.as_ref().is_some_and(|t| !t.over) {
+            return;
+        }
+        if !self.workers.is_empty() {
+            self.out.push(Act::Stop(self.workers.drain(..).map(|w| w.pid).collect()));
+            self.program.clear();
+        }
+        self.test = Some(Test::start(self.me.cores, now, &mut self.out));
+    }
+
+    /// A test just over: what it measured is this tab's, told to every link.
+    fn tested(&mut self) {
+        let Some(t) = self.test.as_ref().filter(|t| t.over && t.measured.cpu1 > 0) else { return };
+        if self.me.measured.tested == 0 || t.measured.cpu1 != self.me.measured.cpu1 {
+            self.me.measured = Measured { tested: self.clock.max(1), ..t.measured };
+            let hello = self.hello();
+            self.send_all(&hello);
+        }
+    }
+
     /// The desktop started worker `pid` (`None`: could not).
     pub fn spawned(&mut self, pid: Option<u32>) {
+        if let Some(t) = self.test.as_mut().filter(|t| t.starting()) {
+            t.spawned(pid, &mut self.out);
+            return self.tested();
+        }
         self.pending = self.pending.saturating_sub(1);
         let (task, input, buf) = (None, String::new(), Vec::new());
         if let Some(pid) = pid {
@@ -334,6 +380,10 @@ impl Pool {
 
     /// Worker `pid` ended: its chunk goes back.
     pub fn ended(&mut self, pid: u32, now: u64) {
+        if let Some(t) = self.test.as_mut().filter(|t| t.has(pid)) {
+            t.ended(pid, &mut self.out);
+            return self.tested();
+        }
         let Some(i) = self.workers.iter().position(|w| w.pid == pid) else { return };
         let w = self.workers.remove(i);
         if let Some(t) = w.task {
@@ -356,6 +406,10 @@ impl Pool {
 
     /// Output of worker `pid`: each whole line is its answer.
     pub fn output(&mut self, pid: u32, bytes: &[u8], now: u64) {
+        if let Some(t) = self.test.as_mut().filter(|t| t.has(pid)) {
+            t.output(pid, bytes, now, &mut self.out);
+            return self.tested();
+        }
         let Some(w) = self.workers.iter_mut().find(|w| w.pid == pid) else { return };
         w.buf.extend_from_slice(bytes);
         let mut lines = Vec::new();
@@ -527,8 +581,24 @@ impl Pool {
         let p = &mut self.peers[k];
         p.last = now;
         match m {
-            Msg::Hello { name, kind, cores, ram_mb, quota_mb, gpu, model, tok, ctx } => {
-                p.info = Info { name, kind, cores, ram_mb, quota_mb, gpu, model, tok, ctx }
+            Msg::Hello {
+                name,
+                kind,
+                cores,
+                ram_mb,
+                quota_mb,
+                gpu,
+                model,
+                tok,
+                ctx,
+                cpu1,
+                cpun,
+                mem,
+                tested,
+            } => {
+                let measured = Measured { cpu1, cpun, mem, tested };
+                p.info =
+                    Info { name, kind, cores, ram_mb, quota_mb, gpu, model, tok, ctx, measured }
             }
             Msg::Ask { ask, text } => self.write(link, ask, &text),
             Msg::Words { ask, text } => self.words(link, ask, &text),
@@ -631,6 +701,10 @@ impl Pool {
         }
         self.next_tick = now + TICK;
         self.quiet(now);
+        if let Some(t) = self.test.as_mut() {
+            t.tick(now, &mut self.out);
+            self.tested();
+        }
         let silent: Vec<u32> =
             self.peers.iter().filter(|p| now >= p.last + SILENT).map(|p| p.link).collect();
         for link in silent {
@@ -680,6 +754,10 @@ impl Pool {
             model: i.model.clone(),
             tok: i.tok,
             ctx: i.ctx,
+            cpu1: i.measured.cpu1,
+            cpun: i.measured.cpun,
+            mem: i.measured.mem,
+            tested: i.measured.tested,
             ..pool::Device::default()
         }];
         for p in &self.peers {
@@ -705,6 +783,10 @@ impl Pool {
                 model: i.model.clone(),
                 tok: i.tok,
                 ctx: i.ctx,
+                cpu1: i.measured.cpu1,
+                cpun: i.measured.cpun,
+                mem: i.measured.mem,
+                tested: i.measured.tested,
             });
         }
         // A job helped now, else this tab's own, else the last helped (its record).
@@ -749,7 +831,8 @@ impl Pool {
         let (pairing, code) = (pairing.into(), code.into());
         let (serve, serving) = (self.shared.url.clone(), self.shared.note.clone());
         let answer = self.asking.as_ref().map(|a| a.answer.clone());
-        Snap { at: now as u32, pairing, code, devices, job, serve, serving, answer }
+        let testing = self.test.as_ref().map_or(String::new(), |t| t.note.clone());
+        Snap { at: now as u32, pairing, code, devices, job, serve, serving, answer, testing }
     }
 }
 

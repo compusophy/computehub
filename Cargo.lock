@@ -160,6 +160,13 @@ name = "compusophy-fuel"
 version = "0.1.0"
 
 [[package]]
+name = "compusophy-gauge"
+version = "0.1.0"
+dependencies = [
+ "compusophy-sha",
+]
+
+[[package]]
 name = "compusophy-gfx"
 version = "0.1.0"
 
@@ -360,6 +367,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "compusophy-team"
+version = "0.1.0"
+dependencies = [
+ "compusophy-coder",
+]
+
+[[package]]
 name = "compusophy-term"
 version = "0.1.0"
 dependencies = [
@@ -445,6 +459,7 @@ dependencies = [
  "compusophy-coder",
  "compusophy-evals",
  "compusophy-makes",
+ "compusophy-team",
  "compusophy-uiwire",
 ]
 

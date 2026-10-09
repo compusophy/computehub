@@ -162,14 +162,17 @@ cp web/worker.js dist/cpu/
 # The programs, each fetched when it first runs: std binaries for WASI, the
 # Terminal (terminal.wasm), its shell (sh.wasm) and coding agent (agent.wasm), the test programs (toolbox.wasm), Studio
 # (studio.wasm), the Assistant (assistant.wasm), the system apps (system.wasm), the mesh's pool
-# (pool.wasm), Fractal (fractal.wasm) and the IQ verifier, a mesh worker (iq.wasm), in one cargo
-# run.
+# (pool.wasm), Fractal (fractal.wasm), the IQ verifier, a mesh worker (iq.wasm), and the
+# device's test (gauge.wasm), in one cargo run.
 rustup target list --installed 2>/dev/null | tr -d '\r' | grep -qx wasm32-wasip1 || { echo "ERROR: run: rustup target add wasm32-wasip1" >&2; exit 1; }
-cargo build -p compusophy-terminal -p compusophy-sh -p compusophy-agent -p compusophy-toolbox -p compusophy-studio -p compusophy-assistant -p compusophy-system -p compusophy-pool -p compusophy-fractal -p compusophy-iq --bins --release --target wasm32-wasip1
+cargo build -p compusophy-terminal -p compusophy-sh -p compusophy-agent -p compusophy-toolbox -p compusophy-studio -p compusophy-assistant -p compusophy-system -p compusophy-pool -p compusophy-fractal -p compusophy-iq -p compusophy-gauge --bins --release --target wasm32-wasip1
 mkdir -p dist/bin
-for p in terminal sh agent toolbox studio assistant system pool fractal iq; do
+for p in terminal sh agent toolbox studio assistant system pool fractal iq gauge; do
   cp "$target_dir/wasm32-wasip1/release/$p.wasm" dist/bin/
-  optimize "dist/bin/$p.wasm"
+  # Not the device's test: wasm-opt inlines its hashing into the one long call that loops over
+  # it, and a browser never moves a running call to its optimized code, so all cores at once
+  # measured the slow first code (16 MB/s against 1.7 GB/s).
+  if [ "$p" != gauge ]; then optimize "dist/bin/$p.wasm"; fi
 done
 
 # dist/ is what visitors download, so it gets scripts/caps.sh's privacy check

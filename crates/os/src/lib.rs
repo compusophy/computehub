@@ -65,11 +65,12 @@ pub const ALL: &str = "compusophy.";
 pub const PREFS: [&str; 7] =
     [ui::AI_MODEL, "dock", "seen", "reports", "home.order", ui::GRAIN, "folders"];
 /// The `/bin` markers' programs ([`kernel::install`]), each named as its wasm: the shell, the
-/// coding agent, the Terminal, Studio, the Assistant, the mesh's pool, Fractal and the IQ suite's
-/// verifier (a mesh worker); then the
+/// coding agent, the Terminal, Studio, the Assistant, the mesh's pool, Fractal, the IQ suite's
+/// verifier (a mesh worker) and the device's test (`gauge`); then the
 /// applets, which share
 /// `bin/toolbox.wasm` (as the windows of [`remote::SYSTEM`] share `bin/system.wasm`).
-const BIN: [&str; 8] = ["sh", "agent", "terminal", "studio", "assistant", "pool", "fractal", "iq"];
+const BIN: [&str; 9] =
+    ["sh", "agent", "terminal", "studio", "assistant", "pool", "fractal", "iq", "gauge"];
 const APPLETS: [&str; 9] =
     ["hello", "rev", "wc", "spin", "nap", "fstest", "keys", "bench", "selftest"];
 

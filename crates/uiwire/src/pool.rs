@@ -3,10 +3,11 @@
 //!
 //! ```text
 //! u8 VERSION | u32 at (page ms) | str pairing | str code | u16 n, n device | u8 has job, job
-//!         | str serve | str serving | u8 has answer, answer
+//!         | str serve | str serving | u8 has answer, answer | str testing
 //! device: str name | str kind | u16 cores | u32 ram_mb | u32 quota_mb | u8 gpu | u32 up_ms
 //!         | u8 known | u16 workers | u16 busy | u32 chunks | u64 units | u32 rtt | u64 tx
-//!         | u64 rx | u32 up | u32 down | str model | u32 tok | u32 ctx
+//!         | u64 rx | u32 up | u32 down | str model | u32 tok | u32 ctx | u32 cpu1 | u32 cpun
+//!         | u32 mem | u32 tested
 //! job:    str name | u8 mine | u32 total | u32 done | u32 queued | u32 steals | u32 requeued
 //!         | u32 checked | u32 mismatched | u32 ms | u32 used | u32 busy | u16 m, m u32
 //!         (chunks by device)
@@ -21,7 +22,9 @@
 use crate::{Out, Reader};
 
 /// The format's version, a snapshot's first byte.
-pub const VERSION: u8 = 5;
+pub const VERSION: u8 = 6;
+/// The most memory a device's test takes (MiB): a figure there is "at least".
+pub const CEILING: u32 = 16 * 1024;
 /// An unknown round trip.
 pub const UNKNOWN: u32 = u32::MAX;
 /// Each device's canvas color, by its place in a snapshot (cycling): cyan here, then yellow,
@@ -30,7 +33,8 @@ pub const TINTS: [u8; 6] = [6, 3, 5, 2, 1, 4];
 
 /// One snapshot: when, what pairing says (empty when nothing is pairing) and the code it shows,
 /// the devices and the job; the model server this tab shares (empty: none) and what sharing
-/// says (empty when it is well), and the answer the pool's model is writing here or wrote last.
+/// says (empty when it is well), the answer the pool's model is writing here or wrote last, and
+/// what testing this device says (empty when no test runs).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Snap {
     pub at: u32,
@@ -41,6 +45,7 @@ pub struct Snap {
     pub serve: String,
     pub serving: String,
     pub answer: Option<Answer>,
+    pub testing: String,
 }
 
 /// A device of the pool: its name and kind, what it has (cores, RAM and storage the browser
@@ -48,8 +53,10 @@ pub struct Snap {
 /// pinned before; its workers and how many are busy, the chunks it answered and their fuel; the
 /// link's round trip (ms), bytes sent to it and heard from it, and the throughput last measured
 /// each way (bytes a second); the model it shares (empty: none), its speed in tenths of a token
-/// a second (0: not measured) and its context in tokens (0: unknown). This tab's link figures
-/// are 0.
+/// a second (0: not measured) and its context in tokens (0: unknown); what testing it measured,
+/// none of it until then: its CPU's speed on one core and on all at once (mebibytes of SHA-256 a
+/// second), the memory a tab could hold (MiB) and when (Unix seconds; 0: never tested). This
+/// tab's link figures are 0.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Device {
     pub name: String,
@@ -72,6 +79,10 @@ pub struct Device {
     pub model: String,
     pub tok: u32,
     pub ctx: u32,
+    pub cpu1: u32,
+    pub cpun: u32,
+    pub mem: u32,
+    pub tested: u32,
 }
 
 /// The job on the pool: the program, whether this tab started it, its chunks in all, answered and
@@ -118,7 +129,7 @@ impl Snap {
             o.str(&d.name).str(&d.kind).u16(d.cores).u32(d.ram_mb).u32(d.quota_mb);
             o.u8(d.gpu.into()).u32(d.up_ms).u8(d.known.into()).u16(d.workers).u16(d.busy);
             o.u32(d.chunks).u64(d.units).u32(d.rtt).u64(d.tx).u64(d.rx).u32(d.up).u32(d.down);
-            o.str(&d.model).u32(d.tok).u32(d.ctx);
+            o.str(&d.model).u32(d.tok).u32(d.ctx).u32(d.cpu1).u32(d.cpun).u32(d.mem).u32(d.tested);
         }
         o.u8(self.job.is_some().into());
         if let Some(j) = &self.job {
@@ -131,6 +142,7 @@ impl Snap {
         if let Some(a) = &self.answer {
             o.str(&a.question).str(&a.by).str(&a.text).u8(a.done.into()).u32(a.tok).str(&a.why);
         }
+        o.str(&self.testing);
         o.0
     }
 
@@ -162,6 +174,10 @@ impl Snap {
                 model: r.str()?,
                 tok: r.u32()?,
                 ctx: r.u32()?,
+                cpu1: r.u32()?,
+                cpun: r.u32()?,
+                mem: r.u32()?,
+                tested: r.u32()?,
             });
         }
         let job = match r.bool()? {
@@ -194,7 +210,8 @@ impl Snap {
                 why: r.str()?,
             }),
         };
-        let snap = Snap { at, pairing, code, devices, job, serve, serving, answer };
+        let testing = r.str()?;
+        let snap = Snap { at, pairing, code, devices, job, serve, serving, answer, testing };
         r.0.is_empty().then_some(snap)
     }
 }

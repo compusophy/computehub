@@ -28,8 +28,10 @@ pub const LINE: usize = 4096;
 pub const CHUNKS: usize = 1 << 16;
 /// The same-origin endpoint pairing posts to.
 pub const SIGNAL: &str = "/api/signal";
-/// The line kept with the pins that says the model this tab shares.
+/// The line kept with the pins that says the model this tab shares, and the one that says what
+/// testing this device measured (`tested <cpu1> <cpun> <mem> <when>`).
 const SERVE: &str = "serve ";
+const TESTED: &str = "tested ";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Op {
@@ -61,13 +63,13 @@ struct Pairing {
 /// while pairing, posts in flight (each its id, what it is and its body so far), the last post
 /// and link ids, the process watching, the
 /// snapshot last sent and to whom, when the next may go and when a wake was last asked for, the
-/// clock (page ms), and the frames for the desktop.
+/// clock (page ms), what testing measured as last kept, and the frames for the desktop.
 #[derive(Debug, Default)]
 pub struct Hub {
     pub pool: Pool,
     pub note: String,
     pairing: Option<Pairing>,
-    pins: Vec<String>,
+    pub(crate) pins: Vec<String>,
     heard_fp: Vec<(u32, String)>,
     posts: Vec<(u32, Op, Vec<u8>)>,
     last_post: u32,
@@ -77,7 +79,14 @@ pub struct Hub {
     next_snap: u64,
     woken: Option<u64>,
     pub now: u64,
+    kept_test: u32,
     pub out: Vec<u8>,
+}
+
+/// The Unix time now (WASI's realtime clock), seconds; 0 if none.
+fn wall() -> u32 {
+    let since = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH);
+    since.map_or(0, |d| d.as_secs().min(u64::from(u32::MAX)) as u32)
 }
 
 /// A browser's agent as a device's name and kind: `Windows · Chrome`, `computer`.
@@ -130,6 +139,12 @@ impl Hub {
         if !self.pool.shared.url.is_empty() {
             kept = [&kept, "\n", SERVE, &self.pool.shared.url].concat();
         }
+        let m = self.pool.me.measured;
+        if m.tested != 0 {
+            let n = [m.cpu1, m.cpun, m.mem, m.tested].map(|n| n.to_string()).join(" ");
+            kept = [&kept, "\n", TESTED, &n].concat();
+        }
+        self.kept_test = m.tested;
         self.send(to_desk::PINS, 0, kept.trim_start_matches('\n').as_bytes());
     }
 
@@ -146,6 +161,7 @@ impl Hub {
     /// One frame from the desktop.
     pub fn frame(&mut self, f: Frame) {
         self.now += u64::from(f.now.wrapping_sub(self.now as u32));
+        self.pool.clock = wall();
         let now = self.now;
         let text = || String::from_utf8_lossy(&f.data).into_owned();
         match f.op {
@@ -160,8 +176,17 @@ impl Hub {
                 let cores = cores.min(1024) as u16;
                 let info = Info { name, kind, cores, ram_mb, gpu, ..Info::default() };
                 self.pool = Pool::new(info);
-                let (served, pins): (Vec<&str>, _) = lines.partition(|l| l.starts_with(SERVE));
+                let (kept, pins): (Vec<&str>, _) =
+                    lines.partition(|l| l.starts_with(SERVE) || l.starts_with(TESTED));
                 self.pins = pins.into_iter().map(String::from).collect();
+                let tested = kept.iter().rev().find_map(|l| l.strip_prefix(TESTED));
+                let n: Vec<u32> = tested
+                    .map_or(Vec::new(), |t| t.split(' ').filter_map(|w| w.parse().ok()).collect());
+                if let [cpu1, cpun, mem, tested] = n[..] {
+                    self.pool.me.measured = crate::test::Measured { cpu1, cpun, mem, tested };
+                    self.kept_test = tested;
+                }
+                let served: Vec<&str> = kept.into_iter().filter(|l| l.starts_with(SERVE)).collect();
                 if let Some(url) = served.last().and_then(|l| l.strip_prefix(SERVE)) {
                     self.pool.serve(url);
                 }
@@ -180,6 +205,7 @@ impl Hub {
                     }
                     4 => Request::Ask { text },
                     5 => Request::Serve { url: text },
+                    6 => Request::Test,
                     _ => return,
                 };
                 self.ask(f.a, r);
@@ -254,8 +280,8 @@ impl Hub {
         self.pool.linked(link, known, self.now);
     }
 
-    /// Process `pid` asked for `r`: Pair, Measure, Ask and Serve (from Activity's window alone),
-    /// Job.
+    /// Process `pid` asked for `r`: Pair, Measure, Ask, Serve and Test (from Activity's window
+    /// alone), Job.
     pub fn ask(&mut self, pid: u32, r: Request) {
         let now = self.now;
         match r {
@@ -279,6 +305,7 @@ impl Hub {
                 self.pool.serve(&url);
                 self.keep();
             }
+            Request::Test => self.pool.test(now),
             // A job whose one chunk is `@<url> <per>`: its chunks are the lines of that
             // same-origin file, `per` a chunk (tab-joined), fetched first.
             Request::Job { name, chunks } if chunks.len() == 1 && chunks[0].starts_with('@') => {
@@ -370,6 +397,10 @@ impl Hub {
         }
         self.pool.tick(now);
         self.acts();
+        // A test just over: what it measured is kept for this profile.
+        if self.pool.me.measured.tested != self.kept_test {
+            self.keep();
+        }
         let mut to: Vec<u32> = Some(self.watcher).filter(|w| *w != 0).into_iter().collect();
         to.extend(self.pool.job.as_ref().map(|j| j.window).filter(|w| !to.contains(w)));
         let code = self.pairing.as_ref().filter(|p| p.host).map_or("", |p| p.code.as_str());

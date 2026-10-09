@@ -1,0 +1,15 @@
+[package]
+name = "compusophy-team"
+description = "compusophyOS's team: models working as one on a make. A helper (a small model on a device) repairs the lead's (a cloud model's) draft as Studio asks a fix, every answer judged by applang's test; sans-IO, the host carries the requests."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[lib]
+name = "team"
+
+[dependencies]
+compusophy-coder.workspace = true

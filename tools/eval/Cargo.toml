@@ -13,4 +13,5 @@ repository.workspace = true
 compusophy-coder.workspace = true
 compusophy-evals.workspace = true
 compusophy-makes.workspace = true
+compusophy-team.workspace = true
 compusophy-uiwire.workspace = true

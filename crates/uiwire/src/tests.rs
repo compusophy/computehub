@@ -142,6 +142,7 @@ fn every_kind_round_trips_and_nothing_else_decodes() {
         Request::Job { name: "fractal".into(), chunks: vec!["0 0 -0.6 0 3".into(), String::new()] },
         Request::Ask { text: "Why is the sky blue?".into() },
         Request::Serve { url: "http://localhost:8080".into() },
+        Request::Test,
     ];
     [pref, Request::Reset]
         .iter()
@@ -769,6 +770,10 @@ fn the_meshs_snapshots_and_frames_come_back_whole() {
         model: name.into(),
         tok: 95,
         ctx: 4096,
+        cpu1: 210,
+        cpun: 2900,
+        mem: 9_600,
+        tested: 1_791_500_000,
         ..Device::default()
     };
     let job = Job {
@@ -796,6 +801,7 @@ fn the_meshs_snapshots_and_frames_come_back_whole() {
         serve: "http://localhost:8080".into(),
         serving: String::new(),
         answer: Some(answer),
+        testing: "memory: 3.5 GB".into(),
     };
     let bytes = snap.encode();
     assert_eq!((bytes[0], Snap::decode(&bytes)), (VERSION, Some(snap.clone())));

@@ -13,7 +13,8 @@ pub const MAX: usize = 64 << 10;
 pub enum Msg {
     /// What the tab has to lend (sent once linked): its name and kind, cores, RAM and storage in
     /// MB (0 when unknown), whether it has a GPU to compute on, and the model it shares (empty:
-    /// none), its speed (tenths of a token a second) and its context (tokens; 0 unknown).
+    /// none), its speed (tenths of a token a second) and its context (tokens; 0 unknown); and
+    /// what testing measured ([`crate::test::Measured`]: all 0 until it is tested).
     Hello {
         name: String,
         kind: String,
@@ -24,6 +25,10 @@ pub enum Msg {
         model: String,
         tok: u32,
         ctx: u32,
+        cpu1: u32,
+        cpun: u32,
+        mem: u32,
+        tested: u32,
     },
     /// Its workers and how many are busy, the chunks it answered and their fuel (cumulative):
     /// each second while linked.
@@ -101,9 +106,24 @@ impl Msg {
     pub fn encode(&self) -> Vec<u8> {
         let mut o = Out(Vec::new());
         match self {
-            Msg::Hello { name, kind, cores, ram_mb, quota_mb, gpu, model, tok, ctx } => {
+            Msg::Hello {
+                name,
+                kind,
+                cores,
+                ram_mb,
+                quota_mb,
+                gpu,
+                model,
+                tok,
+                ctx,
+                cpu1,
+                cpun,
+                mem,
+                tested,
+            } => {
                 o.u8(1).str(name).str(kind).u16(*cores).u32(*ram_mb).u32(*quota_mb);
-                o.u8((*gpu).into()).str(model).u32(*tok).u32(*ctx)
+                o.u8((*gpu).into()).str(model).u32(*tok).u32(*ctx);
+                o.u32(*cpu1).u32(*cpun).u32(*mem).u32(*tested)
             }
             Msg::Stats { workers, busy, chunks, units } => {
                 o.u8(2).u16(*workers).u16(*busy).u32(*chunks).u64(*units)
@@ -141,6 +161,10 @@ impl Msg {
                 model: r.str()?,
                 tok: r.u32()?,
                 ctx: r.u32()?,
+                cpu1: r.u32()?,
+                cpun: r.u32()?,
+                mem: r.u32()?,
+                tested: r.u32()?,
             },
             2 => {
                 Msg::Stats { workers: r.u16()?, busy: r.u16()?, chunks: r.u32()?, units: r.u64()? }

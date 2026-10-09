@@ -770,6 +770,27 @@ written at 9.1 a second). A second question met the laptop's Stop sharing and ta
 words stopped while its server went on writing, and the asker waited out the link's 15 s of
 silence. Hence the rules above.
 
+A device measured, not reported (2026-10-08, compusophy: "there is no point if you can't show the
+real numbers"). The browser's figures are guesses: Firefox gives no memory, Chrome rounds it and
+caps it (this PC's 128 GB showed as 32). Activity's "Test this device" times real work on the
+pool's own workers, `/bin/gauge work`: SHA-256, one block at a time, each block's hash feeding
+the next (deterministic, so any peer can check the answer), warmed up one worker at a time, then
+on one core, then on all at once, each worker timing itself; then memory, 64 MiB at a time
+across workers, every byte written, until a fresh worker is refused, a step takes four times the
+usual (the device swapping), or 16 GiB. Every figure rides in the Hello, the devices table shows
+them (a dash until tested), the Pool's totals sum them, and they are kept for the profile. This
+PC in Chrome: one core 202 MB/s, all cores 1.7 GB/s, memory 16 GB or more, in about 15 s. A
+process may now hold a gibibyte (it was 256 MiB: the kernel's `MEM_PAGES`).
+
+What it taught (it holds for every compute program): a browser runs a wasm call from start to
+end in the code it entered with and never moves a running call to its optimized tier. Built for
+size and linked whole (`opt-level = "z"`, LTO, then wasm-opt), the hashing loop was one long call:
+alone it ran 55 MB/s, and sixteen at once ran 16 MB/s in all, their optimized code never arriving
+while every core was busy. Built for speed with the hashing a function of its own
+(`#[inline(never)]`, and no wasm-opt for `gauge`, which inlines a function called once), the
+optimized code takes over at the next call: 202 MB/s, and 1.7 GB/s on all cores. Other long loops
+(fractal, the verifier) may be leaving the same speed on the table: measure them before tuning.
+
 Not yet: a queue for a busy model, a conversation
 (each question stands alone), and the public origin: there a page reaching `localhost` meets
 Chrome's local-network permission prompt, so sharing stays a person's act, never automatic.
@@ -899,6 +920,15 @@ Milestones, each a measurement compusophy sees before the next costs anything:
 5. **The crowd.** A public pool; every team make's trace (draft, account, fix, outcome) is a
    labeled example for the helpers, with consent; fine-tuning spread over the crowd's GPUs
    (adapters per node, merged), each model through the gate (Evolution, below).
+
+Milestone 1, measured (2026-10-08): the night's GLM answers to 222 held-out tasks (101 pass, 45%),
+each that does not run clean repaired by a local helper in at most three turns (`team` in
+`tools/eval`, the 3090 serving it; no cloud call added). With the night's 3B fine-tune: 102 of
+222, 16 of the 76 drafts repaired to run clean. With the untuned base 3B: 104 of 222 (47%), 19
+made clean. The fine-tune is the worse fixer (trained on whole apps only, it lost the edit
+format), and most repaired programs then run but fail the hidden check. So a helper's repair is
+needed but not enough: next, helpers trained on fix traces (every repair turn is kept,
+`--traces`), helpers that write checks, and escalation to the lead (milestone 2).
 
 ## Evolution: prediction, lineage, selection
 

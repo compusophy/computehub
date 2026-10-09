@@ -10,9 +10,11 @@ use uiwire::{Event, Node, Request, Style, Variant};
 
 use super::{DASH, DOT, History, bytes, card, count, nice, text};
 
-/// Node ids: Show a code, the code field, Link, Measure, Fractal, Verify; the server field and
+/// Node ids: Test this device; Show a code, the code field, Link, Measure, Fractal, Verify; the
+/// server field and
 /// Share, Ask; the devices' head (column `k` is `SORT + k`); the question field, `QUESTION` and
 /// one more for each question asked (a new field is an empty one, as a chat's is).
+pub const TEST: u32 = 38;
 pub const SHOW: u32 = 40;
 pub const CODE: u32 = 41;
 pub const JOIN: u32 = 42;
@@ -98,6 +100,7 @@ impl PoolPage {
                 None => return false,
             },
             Event::Click { id: SHOW } => requests.push(Request::Pair { code: String::new() }),
+            Event::Click { id: TEST } => requests.push(Request::Test),
             Event::Change { id: CODE, text, .. } => self.code.clone_from(text),
             Event::Click { id: JOIN } | Event::Submit { id: CODE } if !self.code.is_empty() => {
                 requests.push(Request::Pair { code: self.code.clone() })
@@ -197,14 +200,21 @@ impl PoolPage {
         let s = self.cur.clone().unwrap_or_default();
         let devices = &s.devices;
         let cores: u32 = devices.iter().map(|d| u32::from(d.cores)).sum();
-        let ram: u32 = devices.iter().map(|d| d.ram_mb).sum();
         let quota: u64 = devices.iter().map(|d| u64::from(d.quota_mb)).sum();
         let mut line = count(devices.len().max(1), "device", "devices");
         if cores > 0 {
             line += &[DOT, &cores.to_string(), " cores"].concat();
         }
-        if ram > 0 {
-            line += &[DOT, &ram_gb(ram), " RAM"].concat();
+        // The pool's real compute and memory: what testing measured, summed.
+        let tested: Vec<&pool::Device> = devices.iter().filter(|d| d.tested != 0).collect();
+        if !tested.is_empty() {
+            let cpu: u32 = tested.iter().map(|d| d.cpun).sum();
+            let mem: u32 = tested.iter().map(|d| d.mem).sum();
+            line += &[DOT, &rate(cpu), " CPU", DOT, &memory(mem), " usable RAM"].concat();
+            let untested = devices.len() - tested.len();
+            if untested > 0 {
+                line += &[" (", &untested.to_string(), " untested)"].concat();
+            }
         }
         if quota > 0 {
             line += &[DOT, &storage(quota), " storage"].concat();
@@ -231,6 +241,7 @@ impl PoolPage {
             nodes.extend([util, speed]);
         }
         nodes.extend(self.devices(&s, wide));
+        nodes.push(testing(&s));
         nodes.push(self.asking(&s));
         nodes.push(self.sharing(&s));
         nodes.extend(self.linked(&s));
@@ -356,8 +367,8 @@ impl PoolPage {
         let mut rows: Vec<(usize, &pool::Device)> = s.devices.iter().enumerate().collect();
         let total: u64 = s.devices.iter().map(|d| u64::from(d.chunks)).sum();
         let key = |d: &pool::Device| match self.sort {
-            1 => u64::from(d.cores),
-            2 => u64::from(d.ram_mb),
+            1 => u64::from(d.cpun),
+            2 => u64::from(d.mem),
             3 => u64::from(d.quota_mb),
             _ => u64::from(d.chunks),
         };
@@ -366,18 +377,20 @@ impl PoolPage {
         } else {
             rows.sort_by_key(|r| std::cmp::Reverse(key(r.1)));
         }
-        let labels =
-            if wide { "Device\tCores\tRAM\tStorage\tShare" } else { "Device\tCores\tShare" };
+        let labels = if wide { "Device\tCPU\tRAM\tStorage\tShare" } else { "Device\tCPU\tShare" };
         let on = if wide || matches!(self.sort, 0 | 1 | 4) { self.sort + 1 } else { 0 };
         let mut nodes = vec![Node::Columns { id: SORT, on, labels: labels.into() }];
         for (i, d) in &rows {
             let share = (u64::from(d.chunks) * 1000).checked_div(total).unwrap_or(0);
             let pct = [&(share / 10).to_string(), "%"].concat();
-            let ram = if d.ram_mb == 0 { DASH.into() } else { ram_gb(d.ram_mb) };
+            // Measured, never the browser's guess: a dash until the device is tested.
+            let tested = d.tested != 0;
+            let cpu = if tested { rate(d.cpun) } else { DASH.into() };
+            let ram = if tested { memory(d.mem) } else { DASH.into() };
             let quota = if d.quota_mb == 0 { DASH.into() } else { storage(d.quota_mb.into()) };
             let cells = match wide {
-                true => [d.cores.to_string(), ram, quota, pct].join("\t"),
-                false => [d.cores.to_string(), pct].join("\t"),
+                true => [cpu, ram, quota, pct].join("\t"),
+                false => [cpu, pct].join("\t"),
             };
             // What tells devices apart first (a row's second line is cut to fit): this tab, or
             // whether its key was pinned before and how long it is linked; then its GPU and kind.
@@ -391,7 +404,12 @@ impl PoolPage {
                 "" => String::new(),
                 m => [DOT, m, " ", &speed(d.tok)].concat(),
             };
-            let about = [&first, &model, DOT, gpu, DOT, &d.kind].concat();
+            let one = match d.tested {
+                0 => String::new(),
+                _ => [DOT, "one core ", &rate(d.cpu1)].concat(),
+            };
+            let cores = [DOT, &d.cores.to_string(), " cores"].concat();
+            let about = [&first, &model, &one, &cores, DOT, gpu, DOT, &d.kind].concat();
             let name = if d.name.is_empty() { "A device" } else { &d.name };
             let text = [name, "\n", &about].concat();
             let hue = RGB[i % RGB.len()];
@@ -532,14 +550,6 @@ fn job(s: &Snap) -> Vec<Node> {
     vec![Node::Card { id: 0, children: vec![Node::Col { id: 0, gap: 6, children }] }]
 }
 
-/// RAM as the browser gives it (whole GiB, or fractions under one) in GB: `8 GB`, `0.5 GB`.
-fn ram_gb(mb: u32) -> String {
-    match mb {
-        0..1024 => ["0.", &(mb * 10 / 1024).to_string(), " GB"].concat(),
-        _ => [&(mb / 1024).to_string(), " GB"].concat(),
-    }
-}
-
 /// MB of storage in decimal units: `740 MB`, `25.7 GB`, `1.2 TB`.
 fn storage(mb: u64) -> String {
     let tenths =
@@ -548,6 +558,68 @@ fn storage(mb: u64) -> String {
         0..1000 => [&mb.to_string(), " MB"].concat(),
         1000..1_000_000 => tenths(mb / 100, " GB"),
         _ => tenths(mb / 100_000, " TB"),
+    }
+}
+
+/// This device's test: what it says while it runs, else what it measured and when; Test.
+fn testing(s: &Snap) -> Node {
+    let mut children = vec![text(Style::Small, "Test this device")];
+    let me = s.devices.first().filter(|d| d.tested != 0);
+    let said = match me {
+        _ if !s.testing.is_empty() && me.is_none_or(|_| !s.testing.starts_with("Tested")) => {
+            s.testing.clone()
+        }
+        Some(d) => [
+            "One core ",
+            &rate(d.cpu1),
+            DOT,
+            "all cores ",
+            &rate(d.cpun),
+            DOT,
+            "memory ",
+            &memory(d.mem),
+            DOT,
+            &ago(d.tested),
+        ]
+        .concat(),
+        None => "Not tested yet.".into(),
+    };
+    children.push(text(Style::Body, &said));
+    let how = "Measured, not reported: SHA-256 on one core, then on all at once, and the memory \
+               this browser tab could really hold (what a tab may use, not the device's total). A \
+               few seconds; it stops at once if the device starts to swap.";
+    children.push(text(Style::Small, how));
+    let label = if me.is_some() { "Test again" } else { "Test this device" }.into();
+    children.push(Node::Button { id: TEST, variant: Variant::Normal, label });
+    Node::Card { id: 0, children: vec![Node::Col { id: 0, gap: 6, children }] }
+}
+
+/// A speed in MiB a second, as people say it: `256 MB/s`, `3.1 GB/s`.
+fn rate(mib: u32) -> String {
+    match mib {
+        0..1024 => [&mib.to_string(), " MB/s"].concat(),
+        m => [&(m / 1024).to_string(), ".", &(m % 1024 * 10 / 1024).to_string(), " GB/s"].concat(),
+    }
+}
+
+/// Memory in MiB, as people say it: `960 MB`, `9.4 GB`, and at the test's ceiling `16 GB or more`.
+fn memory(mib: u32) -> String {
+    let said = match mib {
+        0..1024 => [&mib.to_string(), " MB"].concat(),
+        m => [&(m / 1024).to_string(), ".", &(m % 1024 * 10 / 1024).to_string(), " GB"].concat(),
+    };
+    if mib >= pool::CEILING { [&said, " or more"].concat() } else { said }
+}
+
+/// How long ago Unix time `at` was, as people say it: `just now`, `5 min ago`, `3 h ago`.
+fn ago(at: u32) -> String {
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH);
+    let secs = now.map_or(0, |d| d.as_secs()).saturating_sub(u64::from(at));
+    match secs {
+        0..60 => "measured just now".into(),
+        s @ 60..3600 => ["measured ", &(s / 60).to_string(), " min ago"].concat(),
+        s @ 3600..172_800 => ["measured ", &(s / 3600).to_string(), " h ago"].concat(),
+        s => ["measured ", &(s / 86_400).to_string(), " days ago"].concat(),
     }
 }
 

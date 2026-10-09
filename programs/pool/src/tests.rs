@@ -95,6 +95,10 @@ fn every_message_comes_back_whole_and_nothing_malformed_does() {
             model: "qwen2.5-3b-instruct".into(),
             tok: 95,
             ctx: 4096,
+            cpu1: 250,
+            cpun: 900,
+            mem: 8192,
+            tested: 1_791_500_000,
         },
         Msg::Stats { workers: 8, busy: 3, chunks: 40, units: 1 << 40 },
         Msg::Ping { t: 7 },
@@ -605,4 +609,113 @@ fn the_model_shared_is_kept_with_the_pins_and_shared_again_when_the_pool_starts(
     // Stopping forgets it.
     h.frame(frame(p::ASK, 9, 5, 4, ""));
     assert!(asked(&mut h).contains(&(d::PINS, 0, "sha-256 OLD".into())));
+}
+
+/// Every line fed to the test's workers since the last call, as (pid, line), and the acts.
+fn fed(t: &mut Tab) -> (Vec<(u32, String)>, Vec<Act>) {
+    let out = std::mem::take(&mut t.pool.out);
+    let lines = out.iter().filter_map(|a| match a {
+        Act::Feed(pid, l) => Some((*pid, l.clone())),
+        _ => None,
+    });
+    (lines.collect(), out)
+}
+
+/// Worker `pid` answers `line` at `now`.
+fn says(t: &mut Tab, pid: u32, line: &str, now: u64) {
+    t.pool.output(pid, [line, "\n"].concat().as_bytes(), now);
+}
+
+#[test]
+fn testing_this_device_times_one_core_then_all_then_memory_until_a_step_slows() {
+    use crate::test::{CPU_MIB, STEP};
+    let mut t = tab("A", 2);
+    t.pool.clock = 1_791_500_000;
+    t.pool.test(0);
+    assert!(matches!(&t.pool.out[..], [Act::Spawn(p, 2)] if p == "gauge"));
+    t.pool.out.clear();
+    t.pool.spawned(Some(201));
+    t.pool.spawned(Some(202));
+    says(&mut t, 201, "ready", 1);
+    says(&mut t, 202, "ready", 1);
+    // Warm-up on each in turn, then one core alone.
+    assert_eq!(fed(&mut t).0, [(201, "0 cpu 4".into())]);
+    says(&mut t, 201, "0 4 h ok", 10);
+    assert_eq!(fed(&mut t).0, [(202, "1 cpu 4".into())]);
+    says(&mut t, 202, "1 4 h ok", 12);
+    let (one, _) = fed(&mut t);
+    assert_eq!(one, [(201, ["0 cpu ", &CPU_MIB.to_string()].concat())]);
+    says(&mut t, 201, "0 16 h ok 100", 112);
+    // 16 MiB in 100 ms, as the worker timed it: 160 MiB/s on one core. Then both at once, each
+    // timing itself: 160 and 80 MiB/s, 240 in all.
+    let (all, _) = fed(&mut t);
+    assert_eq!(all.len(), 2);
+    says(&mut t, 202, "1 16 h ok 100", 200);
+    says(&mut t, 201, "0 16 h ok 200", 412);
+    let m = t.pool.test.as_ref().unwrap().measured;
+    assert_eq!((m.cpu1, m.cpun), (160, 240));
+    // Memory: steps on the first worker until it is full, then the next, until one slows.
+    let mut now = 412;
+    let mut take = |t: &mut Tab, answer: &str, ms: u64| {
+        let (lines, _) = fed(t);
+        let (pid, line) = lines.last().cloned().unwrap();
+        assert!(line.ends_with(&["ram ", &STEP.to_string()].concat()), "{line}");
+        now += ms;
+        says(t, pid, &[&line[..1], " ", answer].concat(), now);
+        pid
+    };
+    assert_eq!(take(&mut t, "64 - ok", 40), 201);
+    assert_eq!(take(&mut t, "128 - ok", 40), 201);
+    assert_eq!(take(&mut t, "128 - no", 5), 201, "full: the next worker takes over");
+    assert_eq!(take(&mut t, "64 - ok", 40), 202);
+    assert_eq!(take(&mut t, "128 - ok", 45), 202);
+    take(&mut t, "192 - ok", 900);
+    let test = t.pool.test.as_ref().unwrap();
+    assert!(test.over && test.note.contains("swapping"), "{}", test.note);
+    // The slow step is not counted; every worker ends, its memory freed.
+    assert_eq!(test.measured.mem, 4 * STEP);
+    assert!(t.pool.out.iter().any(|a| matches!(a, Act::Stop(p) if p.len() == 2)));
+    let me = t.pool.me.measured;
+    assert_eq!((me.cpu1, me.cpun, me.mem, me.tested), (160, 240, 256, 1_791_500_000));
+    let hello = t.pool.hello();
+    assert!(matches!(hello, Msg::Hello { cpu1: 160, mem: 256, tested: 1_791_500_000, .. }));
+    let snap = t.pool.snap(now, "", "");
+    assert_eq!((snap.devices[0].cpun, snap.devices[0].mem), (240, 256));
+    assert!(snap.testing.starts_with("Tested: memory 256 MB"));
+}
+
+#[test]
+fn a_fresh_worker_refused_memory_is_the_browsers_limit_and_a_job_waits_for_no_test() {
+    let mut t = tab("A", 1);
+    t.pool.test(0);
+    t.pool.spawned(Some(201));
+    says(&mut t, 201, "ready", 1);
+    says(&mut t, 201, "0 2 h ok", 2);
+    says(&mut t, 201, "0 128 h ok", 100);
+    says(&mut t, 201, "0 128 h ok", 200);
+    says(&mut t, 201, "0 0 - no", 210);
+    let test = t.pool.test.as_ref().unwrap();
+    assert!(test.over && test.note.contains("browser's limit"), "{}", test.note);
+    assert_eq!(t.pool.me.measured.mem, 0);
+    // A job runs: no test until it ends.
+    let mut b = tab("B", 1);
+    b.pool.start(7, "fractal", lines(3), 0);
+    b.pool.test(1);
+    assert!(b.pool.test.as_ref().unwrap().note.starts_with("Busy with a job"));
+}
+
+#[test]
+fn what_testing_measured_is_kept_with_the_pins_and_comes_back() {
+    use uiwire::relay::{to_desk as d, to_pool as p};
+    let mut h = crate::Hub::default();
+    h.frame(frame(p::INFO, 0, 0, 0, "2 0 0 0\nagent\nsha-256 OLD\ntested 250 900 8192 1791500000"));
+    let m = h.pool.me.measured;
+    assert_eq!((m.cpu1, m.cpun, m.mem, m.tested), (250, 900, 8192, 1_791_500_000));
+    assert_eq!(h.pins, ["sha-256 OLD"]);
+    // A new test's figures are kept once it ends.
+    h.pool.me.measured.tested = 1_791_600_000;
+    h.pump();
+    let kept = asked(&mut h);
+    let line = "sha-256 OLD\ntested 250 900 8192 1791600000";
+    assert!(kept.iter().any(|s| s.0 == d::PINS && s.2 == line), "{kept:?}");
 }

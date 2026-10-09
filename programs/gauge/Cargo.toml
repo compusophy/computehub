@@ -1,0 +1,19 @@
+[package]
+name = "compusophy-gauge"
+description = "compusophyOS's gauge: a device measured, not reported. The work the pool's \"Test this device\" gives its workers: SHA-256 over mebibytes for the CPU (one core, then all), memory taken and written through for what a tab can really hold; a wasm32-wasip1 program. Built into dist/bin/, never committed."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[lib]
+name = "gauge"
+
+[[bin]]
+name = "gauge"
+path = "src/main.rs"
+
+[dependencies]
+compusophy-sha.workspace = true

@@ -13,6 +13,7 @@ pub mod hub;
 pub mod model;
 pub mod msg;
 pub mod pool;
+pub mod test;
 #[cfg(test)]
 mod tests;
 
