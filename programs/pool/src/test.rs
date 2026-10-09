@@ -26,11 +26,11 @@
 
 use crate::pool::Act;
 
-/// Whether the memory half runs. Off since 2026-10-08 (its ramp to 16 GiB took all of a Linux
-/// laptop's memory and swap in Firefox; no worker was refused and no step slowed before the
-/// device stalled); made safe since (the cap, the slow-step rule, the timers), and on again once
-/// that laptop has run it.
-pub const MEMORY: bool = false;
+/// Whether the memory half runs. Off for a while on 2026-10-08 (its ramp to 16 GiB took all of a
+/// Linux laptop's memory and swap in Firefox; no worker was refused and no step slowed before the
+/// device stalled); on again with the cap, the slow-step rule and the timers, once that laptop
+/// ran it: 2.0 GB held, no swap, no stall.
+pub const MEMORY: bool = true;
 /// The program the workers run, and the most of them.
 pub const PROGRAM: &str = "gauge";
 pub const MAX: u16 = 32;
@@ -69,13 +69,15 @@ pub fn cap(ram_mb: u32, computer: bool) -> u32 {
 }
 
 /// What testing measured: the CPU's speed on one core and on all at once (MiB of SHA-256 a
-/// second), the memory a tab could hold (MiB) and when (Unix seconds; 0: never).
+/// second), the memory a tab could hold (MiB) and when (Unix seconds; 0: never); and whether that
+/// memory is a floor (the test's own limit stopped it, not the device: "at least").
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Measured {
     pub cpu1: u32,
     pub cpun: u32,
     pub mem: u32,
     pub tested: u32,
+    pub floor: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -192,7 +194,7 @@ impl Test {
                 self.finish("Could not start the test's workers", out)
             }
             None if self.phase == Phase::Memory && self.pending == 0 && self.stalled => {
-                self.finish_memory("the most processes a tab may run", out)
+                self.finish_memory("the most processes a tab may run", true, out)
             }
             None => {}
         }
@@ -295,14 +297,14 @@ impl Test {
     /// The next memory step, on the worker taking memory: or the end.
     fn step(&mut self, now: u64, out: &mut Vec<Act>) {
         if self.measured.mem + STEP > self.cap {
-            return self.finish_memory("the test's cap (it takes no more)", out);
+            return self.finish_memory("the test's cap (it takes no more)", true, out);
         }
         if now >= self.began + TIME {
-            return self.finish_memory("the test's time", out);
+            return self.finish_memory("the test's time", true, out);
         }
         if self.cur >= self.workers.len() {
             if self.workers.len() + usize::from(self.pending) >= usize::from(MAX) {
-                return self.finish_memory("the test's most workers", out);
+                return self.finish_memory("the test's most workers", true, out);
             }
             let more = (MAX - self.workers.len() as u16).min(8);
             self.pending += more;
@@ -327,7 +329,7 @@ impl Test {
             // A fresh process refused memory: the browser's or the device's limit. A process
             // that holds some is full: the next takes over.
             "no" if self.workers[self.cur].held == 0 => {
-                return self.finish_memory("the browser's limit", out);
+                return self.finish_memory("the browser's limit", false, out);
             }
             "no" => {
                 self.cur += 1;
@@ -335,7 +337,7 @@ impl Test {
             }
             "ok" if ms <= self.limit => {}
             // Not counted: the device short of memory swaps, and swapping shows as time.
-            _ => return self.finish_memory("a slow step (the device short of memory)", out),
+            _ => return self.finish_memory("a slow step (the device short of memory)", false, out),
         }
         self.steps.push(ms);
         if self.steps.len() == BASE {
@@ -349,12 +351,14 @@ impl Test {
         self.step(now, out);
     }
 
-    /// The memory's end, at what stopped it: what it held is news to tell.
-    fn finish_memory(&mut self, why: &str, out: &mut Vec<Act>) {
-        self.fresh = true;
+    /// The memory's end, at what stopped it, and whether that was the test's own limit (what it
+    /// held is then a floor: "at least"): what it held is news to tell.
+    fn finish_memory(&mut self, why: &str, floor: bool, out: &mut Vec<Act>) {
+        (self.fresh, self.measured.floor) = (true, floor && self.measured.mem > 0);
+        let least = if self.measured.floor { "at least " } else { "" };
         let note = match self.measured.mem {
             0 => ["Tested the CPU; memory not measured, stopped by ", why].concat(),
-            m => ["Tested: ", &said(m), " of memory usable, stopped by ", why].concat(),
+            m => ["Tested: ", least, &said(m), " of memory usable, stopped by ", why].concat(),
         };
         self.finish(&note, out);
     }
@@ -368,7 +372,9 @@ impl Test {
             return;
         }
         match self.phase {
-            Phase::Rest | Phase::Memory => self.finish_memory("the browser ending a worker", out),
+            Phase::Rest | Phase::Memory => {
+                self.finish_memory("the browser ending a worker", false, out)
+            }
             _ => self.finish("A test worker ended: test again", out),
         }
     }
@@ -401,9 +407,9 @@ impl Test {
             }
             Phase::Rest => {}
             Phase::Memory if self.stepping && now >= self.t0 + self.limit + GRACE => {
-                self.finish_memory("a step that did not answer in time", out)
+                self.finish_memory("a step that did not answer in time", false, out)
             }
-            Phase::Memory if now >= end => self.finish_memory("the test's time", out),
+            Phase::Memory if now >= end => self.finish_memory("the test's time", true, out),
             Phase::Memory => {}
             _ if now >= self.last + PATIENCE => {
                 self.finish("The test took too long: test again", out)

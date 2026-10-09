@@ -99,6 +99,7 @@ fn every_message_comes_back_whole_and_nothing_malformed_does() {
             cpun: 900,
             mem: 8192,
             tested: 1_791_500_000,
+            floor: true,
         },
         Msg::Stats { workers: 8, busy: 3, chunks: 40, units: 1 << 40 },
         Msg::Ping { t: 7 },
@@ -113,12 +114,19 @@ fn every_message_comes_back_whole_and_nothing_malformed_does() {
         Msg::Ask { ask: 2, text: "Why is the sky blue?".into() },
         Msg::Words { ask: 2, text: "Rayleigh".into() },
         Msg::Answered { ask: 2, tok: 95, why: String::new() },
+        Msg::Bond { nonce: "ab".repeat(32) },
+        Msg::Unbond,
     ];
     for m in &all {
         let b = m.encode();
         assert_eq!(Msg::decode(&b).as_ref(), Some(m));
         assert_eq!(Msg::decode(&[&b[..], &[0]].concat()), None, "trailing");
-        assert_eq!(Msg::decode(&b[..b.len() - 1]), None, "cut short");
+        // A Hello without its last byte is one from before `floor` was said: none.
+        let short = Msg::decode(&b[..b.len() - 1]);
+        match m {
+            Msg::Hello { .. } => assert!(matches!(short, Some(Msg::Hello { floor: false, .. }))),
+            _ => assert_eq!(short, None, "cut short"),
+        }
     }
     // An unknown kind, a count past the bytes, a message over the cap.
     assert_eq!(Msg::decode(&[99]), None);
@@ -334,8 +342,11 @@ fn pairing_shows_a_code_polls_for_the_answer_and_pins_the_device_once_linked() {
     h.pump();
     let made = asked(&mut h);
     assert_eq!(made[0], (d::LINK, 1, String::new()));
-    h.frame(frame(p::SIGNAL, 1, 0, 20, "v=0\r\na=fingerprint:sha-256 NEW\r\n"));
-    assert_eq!(asked(&mut h)[0].0, d::POST);
+    // This tab's own key, heard in its description, is kept; then the offer is posted.
+    h.frame(frame(p::SIGNAL, 1, 0, 20, "v=0\r\na=fingerprint:sha-256 MINE\r\n"));
+    let posted = asked(&mut h);
+    assert_eq!(posted[0], (d::PINS, 0, "sha-256 OLD\nkey sha-256 MINE".into()));
+    assert_eq!(posted[1].0, d::POST);
     h.frame(frame(p::HTTP, 1, 200, 30, "K7000"));
     h.pump();
     let said = asked(&mut h);
@@ -359,7 +370,8 @@ fn pairing_shows_a_code_polls_for_the_answer_and_pins_the_device_once_linked() {
     // Linked: the new key pinned with the old, the device in the pool, pairing done.
     h.frame(frame(p::LINKED, 1, 0, 3300, ""));
     let pins = asked(&mut h);
-    assert!(pins.iter().any(|s| s.0 == d::PINS && s.2 == "sha-256 OLD\nsha-256 NEW"), "{pins:?}");
+    let kept = "sha-256 OLD\nsha-256 NEW\nkey sha-256 MINE";
+    assert!(pins.iter().any(|s| s.0 == d::PINS && s.2 == kept), "{pins:?}");
     assert!(h.note.is_empty() && h.pool.peers.len() == 1 && !h.pool.peers[0].known);
 }
 
@@ -745,8 +757,11 @@ fn memory_stops_at_the_cap_and_the_pools_own_timers_end_a_step_that_hangs() {
         says(&mut t, 201, &["0 ", &held.to_string(), " - ok 30"].concat(), now);
     }
     let test = t.pool.test.as_ref().unwrap();
-    let note = "Tested: 256 MB of memory usable, stopped by the test's cap (it takes no more)";
+    // The test's own limit stopped it: a floor, told as one.
+    let note =
+        "Tested: at least 256 MB of memory usable, stopped by the test's cap (it takes no more)";
     assert_eq!((test.over, test.note.as_str(), t.pool.me.measured.mem), (true, note, 256));
+    assert!(t.pool.me.measured.floor && matches!(t.pool.hello(), Msg::Hello { floor: true, .. }));
     assert!(t.pool.out.iter().any(|a| matches!(a, Act::Stop(p) if p == &[201])));
     // A step that never answers: the pool's timer ends it, a second past its limit.
     let (mut t, now) = to_memory(0);
@@ -784,7 +799,7 @@ fn what_testing_measured_is_kept_with_the_pins_and_comes_back() {
     h.pool.me.measured.tested = 1_791_600_000;
     h.pump();
     let kept = asked(&mut h);
-    let line = "sha-256 OLD\ntested 250 900 8192 1791600000";
+    let line = "sha-256 OLD\ntested 250 900 8192 1791600000 0";
     assert!(kept.iter().any(|s| s.0 == d::PINS && s.2 == line), "{kept:?}");
 }
 

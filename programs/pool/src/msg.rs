@@ -14,7 +14,8 @@ pub enum Msg {
     /// What the tab has to lend (sent once linked): its name and kind, cores, RAM and storage in
     /// MB (0 when unknown), whether it has a GPU to compute on, and the model it shares (empty:
     /// none), its speed (tenths of a token a second) and its context (tokens; 0 unknown); and
-    /// what testing measured ([`crate::test::Measured`]: all 0 until it is tested).
+    /// what testing measured ([`crate::test::Measured`]: all 0 until it is tested; `floor`, its
+    /// memory is "at least").
     Hello {
         name: String,
         kind: String,
@@ -29,6 +30,7 @@ pub enum Msg {
         cpun: u32,
         mem: u32,
         tested: u32,
+        floor: bool,
     },
     /// Its workers and how many are busy, the chunks it answered and their fuel (cumulative):
     /// each second while linked.
@@ -127,10 +129,11 @@ impl Msg {
                 cpun,
                 mem,
                 tested,
+                floor,
             } => {
                 o.u8(1).str(name).str(kind).u16(*cores).u32(*ram_mb).u32(*quota_mb);
                 o.u8((*gpu).into()).str(model).u32(*tok).u32(*ctx);
-                o.u32(*cpu1).u32(*cpun).u32(*mem).u32(*tested)
+                o.u32(*cpu1).u32(*cpun).u32(*mem).u32(*tested).u8((*floor).into())
             }
             Msg::Stats { workers, busy, chunks, units } => {
                 o.u8(2).u16(*workers).u16(*busy).u32(*chunks).u64(*units)
@@ -174,6 +177,11 @@ impl Msg {
                 cpun: r.u32()?,
                 mem: r.u32()?,
                 tested: r.u32()?,
+                // A tab from before it was said: no floor.
+                floor: match r.0.is_empty() {
+                    true => false,
+                    false => r.bool()?,
+                },
             },
             2 => {
                 Msg::Stats { workers: r.u16()?, busy: r.u16()?, chunks: r.u32()?, units: r.u64()? }

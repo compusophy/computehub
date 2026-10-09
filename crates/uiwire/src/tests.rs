@@ -813,6 +813,7 @@ fn the_meshs_snapshots_and_frames_come_back_whole() {
             cpun: 403,
             ..Bond::default()
         }],
+        key: "sha-256 4F:C0:35".into(),
     };
     let bytes = snap.encode();
     assert_eq!((bytes[0], Snap::decode(&bytes)), (VERSION, Some(snap.clone())));

@@ -170,7 +170,7 @@ impl PoolPage {
                     }
                 }
                 (c.pairing, c.code, c.job, c.answer) = (s.pairing, s.code, s.job, s.answer);
-                (c.bonds, c.testing) = (s.bonds, s.testing);
+                (c.bonds, c.testing, c.key) = (s.bonds, s.testing, s.key);
                 (c.serve, c.serving, c.devices) = (s.serve, s.serving, devices);
             }
             return;
@@ -223,9 +223,10 @@ impl PoolPage {
         if !tested.is_empty() {
             let cpu: u32 = tested.iter().map(|d| d.cpun).sum();
             let mem: u32 = tested.iter().map(|d| d.mem).sum();
+            let floor = tested.iter().any(|d| d.floor);
             line += &[DOT, &rate(cpu), " CPU"].concat();
             if mem > 0 {
-                line += &[DOT, &memory(mem), " usable RAM"].concat();
+                line += &[DOT, &at_least(mem, floor), " usable RAM"].concat();
             }
             let untested = devices.len() - tested.len();
             if untested > 0 {
@@ -374,6 +375,10 @@ impl PoolPage {
             &s.pairing
         };
         children.push(text(Style::Small, say));
+        // This device's key, as the other device shows it among its linked devices.
+        if !s.key.is_empty() {
+            children.push(text(Style::Small, &["This device's key ", short(&s.key)].concat()));
+        }
         let show = Node::Button { id: SHOW, variant: Variant::Normal, label: "Show a code".into() };
         let field = Node::Input { id: CODE, value: self.code.clone(), placeholder: "Code".into() };
         let join = Node::Button { id: JOIN, variant: Variant::Primary, label: "Link".into() };
@@ -405,7 +410,7 @@ impl PoolPage {
             // Measured, never the browser's guess: a dash until the device is tested.
             let tested = d.tested != 0;
             let cpu = if tested { rate(d.cpun) } else { DASH.into() };
-            let ram = if tested && d.mem > 0 { memory(d.mem) } else { DASH.into() };
+            let ram = if tested && d.mem > 0 { at_least(d.mem, d.floor) } else { DASH.into() };
             let quota = if d.quota_mb == 0 { DASH.into() } else { storage(d.quota_mb.into()) };
             let cells = match wide {
                 true => [cpu, ram, quota, pct].join("\t"),
@@ -445,7 +450,7 @@ impl PoolPage {
         for b in s.bonds.iter().filter(|b| b.state != pool::ONLINE) {
             let tested = b.tested != 0;
             let cpu = if tested { rate(b.cpun) } else { DASH.into() };
-            let ram = if tested && b.mem > 0 { memory(b.mem) } else { DASH.into() };
+            let ram = if tested && b.mem > 0 { at_least(b.mem, b.floor) } else { DASH.into() };
             let cells = match wide {
                 true => [cpu, ram, DASH.into(), DASH.into()].join("\t"),
                 false => [cpu, DASH.into()].join("\t"),
@@ -609,7 +614,10 @@ fn testing(s: &Snap) -> Node {
             &rate(d.cpun),
             DOT,
             "memory ",
-            &if d.mem == 0 { "not measured".into() } else { [&memory(d.mem), " usable"].concat() },
+            &match d.mem {
+                0 => "not measured".into(),
+                m => [&at_least(m, d.floor), " usable"].concat(),
+            },
             DOT,
             &ago(d.tested),
         ]
@@ -621,8 +629,11 @@ fn testing(s: &Snap) -> Node {
             children.push(text(Style::Body, line));
         }
     }
-    let how = "Measured, not reported: SHA-256 on one core, then on all at once. The memory test \
-               is off until it has been checked on every kind of device.";
+    let how = "Measured, not reported: SHA-256 on one core, then on all at once; then the memory \
+               this tab can really hold, never more than 2 GB (a quarter of the device's memory if \
+               the browser says it is less), stopping at once at a slow step, where a device short \
+               of memory starts to swap. Stopped by the test's own limit, the figure is a floor: \
+               \u{2265}, at least.";
     children.push(text(Style::Small, how));
     let label = if me.is_some() { "Test again" } else { "Test this device" }.into();
     children.push(Node::Button { id: TEST, variant: Variant::Normal, label });
@@ -635,6 +646,11 @@ fn rate(mib: u32) -> String {
         0..1024 => [&mib.to_string(), " MB/s"].concat(),
         m => [&(m / 1024).to_string(), ".", &(m % 1024 * 10 / 1024).to_string(), " GB/s"].concat(),
     }
+}
+
+/// Memory in MiB, a floor said as one: `\u{2265} 2.0 GB` (the test stopped before the device did).
+fn at_least(mib: u32, floor: bool) -> String {
+    if floor { ["\u{2265} ", &memory(mib)].concat() } else { memory(mib) }
 }
 
 /// Memory in MiB, as people say it: `960 MB`, `9.4 GB`.

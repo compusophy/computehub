@@ -71,11 +71,11 @@ pub struct Bond {
 }
 
 impl Bond {
-    /// As kept: `bond <h|j> <secret> <seen> <cpu1> <cpun> <mem> <tested> <cores>`, then its name,
-    /// kind and fingerprint, each after a tab.
+    /// As kept: `bond <h|j> <secret> <seen> <cpu1> <cpun> <mem> <tested> <cores> <floor>`, then
+    /// its name, kind and fingerprint, each after a tab.
     pub fn line(&self) -> String {
         let m = self.measured;
-        let n = [self.seen, m.cpu1, m.cpun, m.mem, m.tested, self.cores.into()];
+        let n = [self.seen, m.cpu1, m.cpun, m.mem, m.tested, self.cores.into(), m.floor.into()];
         let n = n.map(|n| n.to_string()).join(" ");
         let role = if self.host { "h " } else { "j " };
         [BOND, role, &self.secret, " ", &n, "\t", &self.name, "\t", &self.kind, "\t", &self.fp]
@@ -89,7 +89,9 @@ impl Bond {
         let (name, kind, fp) = (parts.next()?, parts.next()?, parts.next()?);
         let [role, secret, n @ ..] = &head[..] else { return None };
         let n: Vec<u32> = n.iter().map(|w| w.parse().ok()).collect::<Option<_>>()?;
-        let [seen, cpu1, cpun, mem, tested, cores] = n[..] else { return None };
+        // Kept before `floor` was: none.
+        let [seen, cpu1, cpun, mem, tested, cores, ..] = n[..] else { return None };
+        let floor = n.get(6) == Some(&1);
         let ok = secret.len() == 64 && fp.starts_with("sha-256 ") && matches!(*role, "h" | "j");
         ok.then(|| Bond {
             fp: fp.into(),
@@ -98,7 +100,7 @@ impl Bond {
             name: name.into(),
             kind: kind.into(),
             cores: cores.min(1024) as u16,
-            measured: Measured { cpu1, cpun, mem, tested },
+            measured: Measured { cpu1, cpun, mem, tested, floor },
             seen,
             wait: FIRST,
             ..Bond::default()
@@ -124,6 +126,7 @@ impl Bond {
             cpun: m.cpun,
             mem: m.mem,
             tested: m.tested,
+            floor: m.floor,
         }
     }
 }
@@ -398,9 +401,10 @@ impl Hub {
                 self.close(link);
                 true
             }
-            Msg::Hello { name, kind, cores, cpu1, cpun, mem, tested, .. } => {
+            Msg::Hello { name, kind, cores, cpu1, cpun, mem, tested, floor, .. } => {
                 let clock = self.pool.clock;
-                let measured = Measured { cpu1: *cpu1, cpun: *cpun, mem: *mem, tested: *tested };
+                let (cpu1, cpun, mem, tested, floor) = (*cpu1, *cpun, *mem, *tested, *floor);
+                let measured = Measured { cpu1, cpun, mem, tested, floor };
                 let Some(b) = self.bonds.iter_mut().find(|b| b.fp == fp && !fp.is_empty()) else {
                     return false;
                 };

@@ -243,6 +243,7 @@ impl Pool {
             cpun: i.measured.cpun,
             mem: i.measured.mem,
             tested: i.measured.tested,
+            floor: i.measured.floor,
         }
     }
 
@@ -597,8 +598,9 @@ impl Pool {
                 cpun,
                 mem,
                 tested,
+                floor,
             } => {
-                let measured = Measured { cpu1, cpun, mem, tested };
+                let measured = Measured { cpu1, cpun, mem, tested, floor };
                 p.info =
                     Info { name, kind, cores, ram_mb, quota_mb, gpu, model, tok, ctx, measured }
             }
@@ -765,6 +767,7 @@ impl Pool {
             cpun: i.measured.cpun,
             mem: i.measured.mem,
             tested: i.measured.tested,
+            floor: i.measured.floor,
             ..pool::Device::default()
         }];
         for p in &self.peers {
@@ -794,6 +797,7 @@ impl Pool {
                 cpun: i.measured.cpun,
                 mem: i.measured.mem,
                 tested: i.measured.tested,
+                floor: i.measured.floor,
             });
         }
         // A job helped now, else this tab's own, else the last helped (its record).
@@ -839,8 +843,9 @@ impl Pool {
         let (serve, serving) = (self.shared.url.clone(), self.shared.note.clone());
         let answer = self.asking.as_ref().map(|a| a.answer.clone());
         let testing = self.test.as_ref().map_or(String::new(), |t| t.note.clone());
-        let bonds = Vec::new();
-        Snap { at: now as u32, pairing, code, devices, job, serve, serving, answer, testing, bonds }
+        let (bonds, key) = (Vec::new(), String::new());
+        let at = now as u32;
+        Snap { at, pairing, code, devices, job, serve, serving, answer, testing, bonds, key }
     }
 }
 

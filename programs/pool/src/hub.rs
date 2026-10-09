@@ -34,9 +34,12 @@ pub const CHUNKS: usize = 1 << 16;
 /// The same-origin endpoint pairing posts to.
 pub const SIGNAL: &str = "/api/signal";
 /// The line kept with the pins that says the model this tab shares, and the one that says what
-/// testing this device measured (`tested <cpu1> <cpun> <mem> <when>`).
+/// testing this device measured (`tested <cpu1> <cpun> <mem> <when> <floor>`, the last 1 when its
+/// memory is "at least"; absent in what older tabs kept).
 const SERVE: &str = "serve ";
 const TESTED: &str = "tested ";
+/// The line that keeps this profile's own key, once a description has said it.
+const KEY: &str = "key ";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Op {
@@ -153,6 +156,9 @@ impl Hub {
     /// Keeps the pins, the bonds and the model shared for this profile.
     fn keep(&mut self) {
         let mut kept = self.pins.join("\n");
+        if !self.own_fp.is_empty() {
+            kept = [&kept, "\n", KEY, &self.own_fp].concat();
+        }
         for b in &self.bonds {
             kept = [&kept, "\n", &b.line()].concat();
         }
@@ -161,7 +167,8 @@ impl Hub {
         }
         let m = self.pool.me.measured;
         if m.tested != 0 {
-            let n = [m.cpu1, m.cpun, m.mem, m.tested].map(|n| n.to_string()).join(" ");
+            let n = [m.cpu1, m.cpun, m.mem, m.tested, m.floor.into()];
+            let n = n.map(|n| n.to_string()).join(" ");
             kept = [&kept, "\n", TESTED, &n].concat();
         }
         self.kept_test = m;
@@ -196,15 +203,20 @@ impl Hub {
                 let cores = cores.min(1024) as u16;
                 let info = Info { name, kind, cores, ram_mb, gpu, ..Info::default() };
                 self.pool = Pool::new(info);
-                let ours = |l: &&str| [SERVE, TESTED, bond::BOND].iter().any(|p| l.starts_with(p));
+                let ours =
+                    |l: &&str| [SERVE, TESTED, KEY, bond::BOND].iter().any(|p| l.starts_with(p));
                 let (kept, pins): (Vec<&str>, _) = lines.partition(ours);
                 self.pins = pins.into_iter().map(String::from).collect();
                 self.bonds = kept.iter().filter_map(|l| bond::Bond::parse(l)).collect();
+                let key = kept.iter().find_map(|l| l.strip_prefix(KEY));
+                self.own_fp = key.unwrap_or("").into();
                 let tested = kept.iter().rev().find_map(|l| l.strip_prefix(TESTED));
                 let n: Vec<u32> = tested
                     .map_or(Vec::new(), |t| t.split(' ').filter_map(|w| w.parse().ok()).collect());
-                if let [cpu1, cpun, mem, tested] = n[..] {
-                    self.pool.me.measured = crate::test::Measured { cpu1, cpun, mem, tested };
+                if let [cpu1, cpun, mem, tested, ..] = n[..] {
+                    let floor = n.get(4) == Some(&1);
+                    self.pool.me.measured =
+                        crate::test::Measured { cpu1, cpun, mem, tested, floor };
                     self.kept_test = self.pool.me.measured;
                 }
                 let served: Vec<&str> = kept.into_iter().filter(|l| l.starts_with(SERVE)).collect();
@@ -234,9 +246,11 @@ impl Hub {
             }
             to_pool::SIGNAL => {
                 let sdp = text();
+                // This tab's own key: kept the first time it is heard (or if it changed).
                 let fp = fingerprint(&sdp);
-                if !fp.is_empty() {
+                if !fp.is_empty() && fp != self.own_fp {
                     self.own_fp = fp;
+                    self.keep();
                 }
                 if self.meet_signal(f.a, &sdp) {
                     return;
@@ -448,6 +462,7 @@ impl Hub {
         let code = self.pairing.as_ref().filter(|p| p.host).map_or("", |p| p.code.as_str());
         let mut snap = self.pool.snap(now, &self.note, code);
         snap.bonds = self.bonds.iter().map(bond::Bond::shown).collect();
+        snap.key.clone_from(&self.own_fp);
         let bytes = snap.encode();
         // `at` (bytes 1 to 4) changes every time: the rest says whether anything did. A change
         // goes at most once a second (four times while a model writes an answer here), unless it

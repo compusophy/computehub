@@ -240,11 +240,12 @@ fn unlinking_forgets_the_device_on_both_sides_and_a_link_gone_is_tried_again() {
     net.tell(0, p::ASK, 9, 7, ["unlink ", &key].concat().into_bytes());
     net.run(3000);
     assert!(net.hubs.iter().all(|h| h.bonds.is_empty() && h.pool.peers.is_empty()));
-    assert!(
-        net.kept.iter().all(|k| !k.contains(bond::BOND) && !k.contains("sha-256")),
-        "{:?}",
-        net.kept
-    );
+    // Neither the bond nor the pin is kept; each still keeps its own key.
+    for (h, kept) in net.kept.iter().enumerate() {
+        let lines: Vec<&str> = kept.lines().collect();
+        assert_eq!(lines, [["key ", KEYS[h]].concat()], "{kept:?}");
+        assert_eq!(net.hubs[h].own_fp, KEYS[h]);
+    }
     let posts = net.posted.len();
     net.run(30_000);
     assert_eq!(net.posted.len(), posts);

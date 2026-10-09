@@ -4,16 +4,17 @@
 //! ```text
 //! u8 VERSION | u32 at (page ms) | str pairing | str code | u16 n, n device | u8 has job, job
 //!         | str serve | str serving | u8 has answer, answer | str testing | u16 m, m bond
+//!         | str key
 //! device: str name | str kind | u16 cores | u32 ram_mb | u32 quota_mb | u8 gpu | u32 up_ms
 //!         | u8 known | u16 workers | u16 busy | u32 chunks | u64 units | u32 rtt | u64 tx
 //!         | u64 rx | u32 up | u32 down | str model | u32 tok | u32 ctx | u32 cpu1 | u32 cpun
-//!         | u32 mem | u32 tested
+//!         | u32 mem | u32 tested | u8 floor
 //! job:    str name | u8 mine | u32 total | u32 done | u32 queued | u32 steals | u32 requeued
 //!         | u32 checked | u32 mismatched | u32 ms | u32 used | u32 busy | u16 m, m u32
 //!         (chunks by device)
 //! answer: str question | str by | str text | u8 done | u32 tok | str why
 //! bond:   str name | str kind | str key | u8 state | u32 seen | u16 cores | u32 cpu1 | u32 cpun
-//!         | u32 mem | u32 tested
+//!         | u32 mem | u32 tested | u8 floor
 //! ```
 //!
 //! Device 0 is this tab, the rest each linked tab in the order it joined. Counts (`chunks`,
@@ -24,7 +25,7 @@
 use crate::{Out, Reader};
 
 /// The format's version, a snapshot's first byte.
-pub const VERSION: u8 = 7;
+pub const VERSION: u8 = 8;
 /// A linked device's [`Bond::state`]: not reached (its tab closed, or not found yet), being
 /// reached (the link opening), or here.
 pub const OFFLINE: u8 = 0;
@@ -52,6 +53,9 @@ pub struct Snap {
     pub answer: Option<Answer>,
     pub testing: String,
     pub bonds: Vec<Bond>,
+    /// This device's own key (its DTLS fingerprint, the one its linked devices pinned; empty
+    /// until a link has said it), so the two ends of a link can be compared.
+    pub key: String,
 }
 
 /// A device linked for good (kept for the profile, reached again whenever both are open): its
@@ -70,6 +74,7 @@ pub struct Bond {
     pub cpun: u32,
     pub mem: u32,
     pub tested: u32,
+    pub floor: bool,
 }
 
 /// A device of the pool: its name and kind, what it has (cores, RAM and storage the browser
@@ -79,8 +84,9 @@ pub struct Bond {
 /// each way (bytes a second); the model it shares (empty: none), its speed in tenths of a token
 /// a second (0: not measured) and its context in tokens (0: unknown); what testing it measured,
 /// none of it until then: its CPU's speed on one core and on all at once (mebibytes of SHA-256 a
-/// second), the memory a tab could hold (MiB) and when (Unix seconds; 0: never tested). This
-/// tab's link figures are 0.
+/// second), the memory a tab could hold (MiB) and when (Unix seconds; 0: never tested), and
+/// whether that memory is a floor (the test's own limit stopped it: "at least"). This tab's link
+/// figures are 0.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Device {
     pub name: String,
@@ -107,6 +113,7 @@ pub struct Device {
     pub cpun: u32,
     pub mem: u32,
     pub tested: u32,
+    pub floor: bool,
 }
 
 /// The job on the pool: the program, whether this tab started it, its chunks in all, answered and
@@ -154,6 +161,7 @@ impl Snap {
             o.u8(d.gpu.into()).u32(d.up_ms).u8(d.known.into()).u16(d.workers).u16(d.busy);
             o.u32(d.chunks).u64(d.units).u32(d.rtt).u64(d.tx).u64(d.rx).u32(d.up).u32(d.down);
             o.str(&d.model).u32(d.tok).u32(d.ctx).u32(d.cpu1).u32(d.cpun).u32(d.mem).u32(d.tested);
+            o.u8(d.floor.into());
         }
         o.u8(self.job.is_some().into());
         if let Some(j) = &self.job {
@@ -169,8 +177,9 @@ impl Snap {
         o.str(&self.testing).u16(self.bonds.len() as u16);
         for b in &self.bonds {
             o.str(&b.name).str(&b.kind).str(&b.key).u8(b.state).u32(b.seen).u16(b.cores);
-            o.u32(b.cpu1).u32(b.cpun).u32(b.mem).u32(b.tested);
+            o.u32(b.cpu1).u32(b.cpun).u32(b.mem).u32(b.tested).u8(b.floor.into());
         }
+        o.str(&self.key);
         o.0
     }
 
@@ -206,6 +215,7 @@ impl Snap {
                 cpun: r.u32()?,
                 mem: r.u32()?,
                 tested: r.u32()?,
+                floor: r.bool()?,
             });
         }
         let job = match r.bool()? {
@@ -252,9 +262,12 @@ impl Snap {
                 cpun: r.u32()?,
                 mem: r.u32()?,
                 tested: r.u32()?,
+                floor: r.bool()?,
             });
         }
-        let snap = Snap { at, pairing, code, devices, job, serve, serving, answer, testing, bonds };
+        let key = r.str()?;
+        let snap =
+            Snap { at, pairing, code, devices, job, serve, serving, answer, testing, bonds, key };
         r.0.is_empty().then_some(snap)
     }
 }
