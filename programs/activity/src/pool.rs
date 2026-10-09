@@ -386,7 +386,12 @@ impl PoolPage {
             // Measured, never the browser's guess: a dash until the device is tested.
             let tested = d.tested != 0;
             let cpu = if tested { rate(d.cpun) } else { DASH.into() };
-            let ram = if tested { memory(d.mem) } else { DASH.into() };
+            let ram = match (tested, d.mem >= pool::CEILING) {
+                (false, _) => DASH.into(),
+                // The table's column is narrow: the test's ceiling, said short.
+                (true, true) => [&(pool::CEILING / 1024).to_string(), "+ GB"].concat(),
+                (true, false) => memory(d.mem),
+            };
             let quota = if d.quota_mb == 0 { DASH.into() } else { storage(d.quota_mb.into()) };
             let cells = match wide {
                 true => [cpu, ram, quota, pct].join("\t"),
