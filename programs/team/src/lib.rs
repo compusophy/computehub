@@ -31,6 +31,9 @@ pub enum Held {
     Program,
     Edits,
     Diff,
+    /// One-line edit blocks quoting part of one line (most often the icon line without its
+    /// `// icon:`), applied in that line ([`inline`]).
+    Inline,
     Missed,
     Nothing,
 }
@@ -70,6 +73,28 @@ fn rank(f: &Option<Fault>) -> u8 {
         Some(f) if f.compiles => 1,
         Some(_) => 0,
     }
+}
+
+/// `edits` that the make loop could not apply, applied as one-line edits within a line: each
+/// block one line to find and one to put, the first found in exactly one line of `src` (not as
+/// that whole line, which the make loop would have matched) and replaced there. Of the base 3B's
+/// 37 one-line blocks that missed (2026-10-09), 32 quoted part of exactly one line, nearly all
+/// an icon line without its `// icon:`.
+fn inline(src: &str, edits: &[coder::edits::Edit]) -> Option<String> {
+    let mut lines: Vec<String> = src.lines().map(String::from).collect();
+    for e in edits {
+        let find: Vec<&String> = e.search.iter().filter(|l| !l.trim().is_empty()).collect();
+        let put: Vec<&String> = e.replace.iter().filter(|l| !l.trim().is_empty()).collect();
+        let ([find], [put]) = (&find[..], &put[..]) else { return None };
+        let (find, put) = (find.trim(), put.trim());
+        let hits: Vec<usize> = (0..lines.len()).filter(|&i| lines[i].contains(find)).collect();
+        let [i] = hits[..] else { return None };
+        if lines[i].trim() == find || find.is_empty() {
+            return None;
+        }
+        lines[i] = lines[i].replacen(find, put, 1);
+    }
+    Some(lines.join("\n") + "\n")
 }
 
 /// How many of `draft`'s distinct lines (trimmed, not blank) `src` still has, and how many it has.
@@ -178,7 +203,10 @@ impl Repair {
             (Reply::Program(src), _) => (Held::Program, Some(src), None),
             (Reply::Edits(e), applied) => match edits::apply(&self.best, &e) {
                 Ok(src) => (applied, Some(src), None),
-                Err(why) => (Held::Missed, None, Some(why)),
+                Err(why) => match inline(&self.best, &e) {
+                    Some(src) => (Held::Inline, Some(src), None),
+                    None => (Held::Missed, None, Some(why)),
+                },
             },
             _ => (Held::Nothing, None, None),
         };
