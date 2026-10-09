@@ -97,8 +97,11 @@ impl Test {
             self.pending += more;
             out.push(Act::Spawn(PROGRAM.into(), more));
         }
+        // None free: wait for those starting (a worker spawned is not ready yet: taking them for
+        // none stopped a 128 GB desktop at 14.8 GB, its first 16 workers full); all full, the end.
         if free.is_empty() {
-            if self.pending == 0 {
+            let starting = self.pending > 0 || self.workers.iter().any(|w| !w.ready);
+            if !starting {
                 return self.finish_fill("the test's most workers", true, self.measured.mem, out);
             }
             self.stalled = true;

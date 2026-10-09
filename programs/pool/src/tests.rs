@@ -938,3 +938,26 @@ fn a_quick_tests_floor_never_hides_a_full_measure() {
     let me = t.pool.me.measured;
     assert_eq!((me.cpu1, me.mem, me.floor, me.tested), (160, 10_240, false, 9));
 }
+
+#[test]
+fn a_fill_waits_for_the_workers_it_started_before_saying_it_ran_out() {
+    use crate::test::Measured;
+    let (mut t, mut now) = filling(Measured::default());
+    // Both first workers full (refused once they hold some): more were asked for at once.
+    round(&mut t, &mut now, 30);
+    let (lines, _) = fed(&mut t);
+    for (pid, line) in lines.into_iter().filter(|l| l.1.contains(" ram ")) {
+        now += 5;
+        says(&mut t, pid, &[&line[..1], " 128 - no"].concat(), now);
+    }
+    // The round is in: its touch answered, none is free and the new ones are still starting.
+    let (touch, _) = fed(&mut t);
+    assert_eq!(touch, [(201, "0 touch 64".to_string())]);
+    says(&mut t, 201, "0 128 - touch 30", now + 1);
+    assert!(!t.pool.test.as_ref().unwrap().over, "workers still starting: wait for them");
+    t.pool.spawned(Some(203));
+    assert!(!t.pool.test.as_ref().unwrap().over, "a worker spawned, not ready yet: wait");
+    says(&mut t, 203, "ready", now + 50);
+    let (lines, _) = fed(&mut t);
+    assert!(lines.iter().any(|l| l.0 == 203 && l.1.contains(" ram 128 ")), "{lines:?}");
+}
