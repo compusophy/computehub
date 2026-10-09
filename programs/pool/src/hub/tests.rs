@@ -250,3 +250,27 @@ fn unlinking_forgets_the_device_on_both_sides_and_a_link_gone_is_tried_again() {
     net.run(30_000);
     assert_eq!(net.posted.len(), posts);
 }
+
+#[test]
+fn disconnect_ends_the_connection_and_keeps_the_link_and_connect_brings_it_back() {
+    let mut net = paired();
+    let key = net.hubs[0].bonds[0].fp.clone();
+    // Disconnect on the first: the connection ends, the link stays (kept as such), none is tried.
+    net.tell(0, p::ASK, 9, 7, ["disconnect ", &key].concat().into_bytes());
+    net.run(3000);
+    assert!(net.open.is_empty() && net.hubs[0].pool.peers.is_empty());
+    let b = &net.hubs[0].bonds[0];
+    assert!(b.off && b.shown().state == uiwire::pool::OFF && b.secret.len() == 64);
+    let kept = net.kept[0].lines().find(|l| l.starts_with(bond::BOND)).unwrap().to_string();
+    assert!(bond::Bond::parse(&kept).is_some_and(|b| b.off), "{kept}");
+    // A reload keeps it disconnected: nothing it posts in a while, nor any link made.
+    let mut net = Net::new([&net.kept[0], &net.kept[1]]);
+    net.run(20_000);
+    assert!(net.open.is_empty());
+    assert!(net.hubs[0].bonds[0].off);
+    // Connect: they meet again with no code.
+    net.tell(0, p::ASK, 9, 7, ["connect ", &key].concat().into_bytes());
+    net.run(20_000);
+    assert!(net.linked(), "{:?}", net.posted.iter().rev().take(4).collect::<Vec<_>>());
+    assert!(!net.hubs[0].bonds[0].off);
+}

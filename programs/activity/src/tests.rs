@@ -273,26 +273,37 @@ fn a_pool_snapshot_close_on_the_last_still_brings_each_devices_model_and_speed()
 
 #[test]
 fn a_linked_devices_buttons_ask_the_pool_by_its_key_and_stay_on_the_pool_page() {
-    use uiwire::pool::{Bond, OFFLINE, ONLINE, Snap};
+    use uiwire::pool::{Bond, OFF, OFFLINE, ONLINE, Snap};
     let mut a = Activity::default();
     a.event(&Event::Click { id: NAV + 2 });
     let bond =
         |key: &str, state| Bond { name: "Linux".into(), key: key.into(), state, ..Bond::default() };
-    let bonds = vec![bond("sha-256 AA:BB:CC:DD", ONLINE), bond("sha-256 EE:FF", OFFLINE)];
+    let bonds = vec![
+        bond("sha-256 AA:BB:CC:DD", ONLINE),
+        bond("sha-256 EE:FF", OFFLINE),
+        bond("sha-256 GG:HH", OFF),
+    ];
     a.event(&Event::Pool { data: Snap { at: 1, bonds, ..Snap::default() }.encode() });
-    // Reconnect only for one away; Unlink for each; the key said short.
+    // Connected: Disconnect. Away: Try now, Disconnect. Disconnected (kept): Connect. Each:
+    // Unlink. The key said short.
     let shown = format!("{:?}", a.nodes());
     assert!(shown.contains("Linked devices") && shown.contains("key AA:BB:CC"), "{shown}");
-    assert_eq!(shown.matches("Reconnect").count(), 1);
+    assert!(shown.contains("connected") && shown.contains("disconnected \u{b7} link kept"));
+    let count = |label: &str| shown.matches(&format!("label: \"{label}\"")).count();
+    let counts = [count("Disconnect"), count("Try now"), count("Connect"), count("Unlink")];
+    assert_eq!(counts, [2, 1, 1, 3], "{shown}");
     a.frame();
-    a.event(&Event::Click { id: pool::BOND + 1 });
-    a.event(&Event::Click { id: pool::BOND + 2 });
+    for id in [1, 2, 3, 6] {
+        a.event(&Event::Click { id: pool::BOND + id });
+    }
     let asked = a.frame().requests;
     assert_eq!(
         asked,
         [
             Request::Link { what: "unlink sha-256 AA:BB:CC:DD".into() },
-            Request::Link { what: "reconnect sha-256 EE:FF".into() },
+            Request::Link { what: "disconnect sha-256 AA:BB:CC:DD".into() },
+            Request::Link { what: "connect sha-256 EE:FF".into() },
+            Request::Link { what: "connect sha-256 GG:HH".into() },
         ]
     );
     assert!(matches!(a.page, Page::Pool));

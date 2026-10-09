@@ -34,7 +34,8 @@ pub const ASK: u32 = 49;
 pub const LOCAL: &str = "http://localhost:8080";
 pub const SORT: u32 = 50;
 pub const QUESTION: u32 = 1 << 30;
-/// A linked device's Reconnect, `BOND` + 2 its place, and Unlink, one more.
+/// A linked device's Connect (Try now while away), `BOND` + 3 its place; Unlink, one more;
+/// Disconnect, two more.
 pub const BOND: u32 = 1 << 24;
 /// An offline device's color in the table: grey.
 const AWAY: u32 = 0x6b7280;
@@ -146,9 +147,9 @@ impl PoolPage {
                 (self.question, self.asked) = (String::new(), self.asked.wrapping_add(1));
             }
             Event::Click { id } if (SORT..SORT + 5).contains(id) => self.sort = (id - SORT) as u8,
-            Event::Click { id } if (BOND..BOND + 1024).contains(id) => {
-                let i = ((id - BOND) / 2) as usize;
-                let verb = if (id - BOND) % 2 == 0 { "reconnect " } else { "unlink " };
+            Event::Click { id } if (BOND..BOND + 1536).contains(id) => {
+                let i = ((id - BOND) / 3) as usize;
+                let verb = ["connect ", "unlink ", "disconnect "][((id - BOND) % 3) as usize];
                 let bonds = self.cur.as_ref().map(|s| s.bonds.as_slice()).unwrap_or_default();
                 let Some(b) = bonds.get(i) else { return false };
                 requests.push(Request::Link { what: [verb, &b.key].concat() });
@@ -696,10 +697,12 @@ fn since(at: u32) -> String {
 
 /// A linked device not here: `offline · last seen 5 min ago`, or `connecting`.
 fn away(b: &pool::Bond) -> String {
-    match (b.state, b.seen) {
-        (pool::CONNECTING, _) => "connecting".into(),
-        (_, 0) => "offline".into(),
-        (_, at) => ["offline", DOT, "last seen ", &since(at)].concat(),
+    let seen =
+        if b.seen == 0 { String::new() } else { [DOT, "last seen ", &since(b.seen)].concat() };
+    match b.state {
+        pool::CONNECTING => "connecting".into(),
+        pool::OFF => ["disconnected", DOT, "link kept", &seen].concat(),
+        _ => ["offline", &seen, DOT, "trying"].concat(),
     }
 }
 
@@ -718,7 +721,7 @@ fn bonded(s: &Snap) -> Vec<Node> {
     let mut children = vec![text(Style::Small, "Linked devices")];
     for (i, b) in s.bonds.iter().enumerate() {
         let here = b.state == pool::ONLINE;
-        let state = if here { "online".into() } else { away(b) };
+        let state = if here { "connected".into() } else { away(b) };
         let figures = match b.tested {
             0 => String::new(),
             _ => [DOT, "all cores ", &rate(b.cpun)].concat(),
@@ -727,11 +730,19 @@ fn bonded(s: &Snap) -> Vec<Node> {
         let name = if b.name.is_empty() { "A device" } else { &b.name };
         let about = vec![text(Style::Body, name), text(Style::Small, &line)];
         let mut row = vec![Node::Col { id: 0, gap: 2, children: about }];
-        let id = BOND + 2 * i as u32;
-        if !here {
-            row.push(Node::Button { id, variant: Variant::Normal, label: "Reconnect".into() });
+        // Connect (or Try now while it is away), Disconnect (the link kept), Unlink (forgotten).
+        let id = BOND + 3 * i as u32;
+        let button =
+            |id, label: &str| Node::Button { id, variant: Variant::Normal, label: label.into() };
+        match b.state {
+            pool::OFF => row.push(button(id, "Connect")),
+            pool::OFFLINE => {
+                row.push(button(id, "Try now"));
+                row.push(button(id + 2, "Disconnect"));
+            }
+            _ => row.push(button(id + 2, "Disconnect")),
         }
-        row.push(Node::Button { id: id + 1, variant: Variant::Normal, label: "Unlink".into() });
+        row.push(button(id + 1, "Unlink"));
         children.push(Node::Row { id: 0, gap: 8, children: row });
     }
     vec![Node::Card { id: 0, children: vec![Node::Col { id: 0, gap: 8, children }] }]

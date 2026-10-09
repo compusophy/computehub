@@ -51,8 +51,9 @@ pub enum Step {
 
 /// A device linked for good: its pinned fingerprint, whether this side offers, the secret the two
 /// share (hex), what it last said (name, kind, cores, what testing measured) and when it was last
-/// here (Unix seconds); then, live, where meeting it stands, the link trying or open, when the
-/// next try or poll is due, the wait between tries now, and the step's deadline.
+/// here (Unix seconds), whether it is disconnected (the link kept, no connection tried until
+/// Connect); then, live, where meeting it stands, the link trying or open, when the next try or
+/// poll is due, the wait between tries now, and the step's deadline.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Bond {
     pub fp: String,
@@ -63,6 +64,7 @@ pub struct Bond {
     pub cores: u16,
     pub measured: Measured,
     pub seen: u32,
+    pub off: bool,
     pub step: Step,
     pub link: u32,
     pub at: u64,
@@ -71,11 +73,20 @@ pub struct Bond {
 }
 
 impl Bond {
-    /// As kept: `bond <h|j> <secret> <seen> <cpu1> <cpun> <mem> <tested> <cores> <floor>`, then
-    /// its name, kind and fingerprint, each after a tab.
+    /// As kept: `bond <h|j> <secret> <seen> <cpu1> <cpun> <mem> <tested> <cores> <floor> <off>`,
+    /// then its name, kind and fingerprint, each after a tab.
     pub fn line(&self) -> String {
         let m = self.measured;
-        let n = [self.seen, m.cpu1, m.cpun, m.mem, m.tested, self.cores.into(), m.floor.into()];
+        let n = [
+            self.seen,
+            m.cpu1,
+            m.cpun,
+            m.mem,
+            m.tested,
+            self.cores.into(),
+            m.floor.into(),
+            self.off.into(),
+        ];
         let n = n.map(|n| n.to_string()).join(" ");
         let role = if self.host { "h " } else { "j " };
         [BOND, role, &self.secret, " ", &n, "\t", &self.name, "\t", &self.kind, "\t", &self.fp]
@@ -91,7 +102,7 @@ impl Bond {
         let n: Vec<u32> = n.iter().map(|w| w.parse().ok()).collect::<Option<_>>()?;
         // Kept before `floor` was: none.
         let [seen, cpu1, cpun, mem, tested, cores, ..] = n[..] else { return None };
-        let floor = n.get(6) == Some(&1);
+        let (floor, off) = (n.get(6) == Some(&1), n.get(7) == Some(&1));
         let ok = secret.len() == 64 && fp.starts_with("sha-256 ") && matches!(*role, "h" | "j");
         ok.then(|| Bond {
             fp: fp.into(),
@@ -102,6 +113,7 @@ impl Bond {
             cores: cores.min(1024) as u16,
             measured: Measured { cpu1, cpun, mem, tested, floor },
             seen,
+            off,
             wait: FIRST,
             ..Bond::default()
         })
@@ -110,6 +122,7 @@ impl Bond {
     /// What Activity shows of it.
     pub fn shown(&self) -> pool::Bond {
         let state = match self.step {
+            _ if self.off => pool::OFF,
             Step::Open => pool::ONLINE,
             Step::Opening => pool::CONNECTING,
             _ => pool::OFFLINE,
@@ -184,6 +197,10 @@ impl Hub {
     pub(super) fn meet(&mut self, now: u64) {
         for i in 0..self.bonds.len() {
             let b = &self.bonds[i];
+            // Disconnected here: the link kept, no connection tried.
+            if b.off {
+                continue;
+            }
             let (step, at, until, host, fp) = (b.step, b.at, b.until, b.host, b.fp.clone());
             let mb = mailbox(&b.secret);
             if !matches!(step, Step::Idle | Step::Open) && now >= until {
@@ -439,9 +456,23 @@ impl Hub {
         let (verb, key) = what.split_once(' ').unwrap_or((what, ""));
         let Some(i) = self.bonds.iter().position(|b| b.fp == key) else { return };
         match verb {
-            "reconnect" if self.bonds[i].step != Step::Open => {
+            // Connect (or try again now): a disconnected link tried again, from the first wait.
+            "connect" | "reconnect" if self.bonds[i].step != Step::Open => {
                 self.abandon(i, now);
-                self.bonds[i].wait = FIRST;
+                (self.bonds[i].wait, self.bonds[i].off) = (FIRST, false);
+                self.keep();
+            }
+            // Disconnect: the connection ends and none is tried until Connect; the link, its key,
+            // its secret and what the device last said are kept (unlike Unlink).
+            "disconnect" => {
+                self.bonds[i].off = true;
+                let link = self.bonds[i].link;
+                if self.bonds[i].step == Step::Open && link != 0 {
+                    self.close(link);
+                } else {
+                    self.abandon(i, now);
+                }
+                self.keep();
             }
             "unlink" => {
                 let b = self.bonds.remove(i);

@@ -27,10 +27,13 @@ use crate::{Out, Reader};
 /// The format's version, a snapshot's first byte.
 pub const VERSION: u8 = 8;
 /// A linked device's [`Bond::state`]: not reached (its tab closed, or not found yet), being
-/// reached (the link opening), or here.
+/// reached (the link opening), here, or disconnected by this device (the link kept).
 pub const OFFLINE: u8 = 0;
 pub const CONNECTING: u8 = 1;
 pub const ONLINE: u8 = 2;
+/// Disconnected here: the link kept (key, secret, what the device last said), no connection
+/// tried until Connect.
+pub const OFF: u8 = 3;
 /// An unknown round trip.
 pub const UNKNOWN: u32 = u32::MAX;
 /// Each device's canvas color, by its place in a snapshot (cycling): cyan here, then yellow,
