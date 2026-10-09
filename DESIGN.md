@@ -775,12 +775,26 @@ real numbers"). The browser's figures are guesses: Firefox gives no memory, Chro
 caps it (this PC's 128 GB showed as 32). Activity's "Test this device" times real work on the
 pool's own workers, `/bin/gauge work`: SHA-256, one block at a time, each block's hash feeding
 the next (deterministic, so any peer can check the answer), warmed up one worker at a time, then
-on one core, then on all at once, each worker timing itself; then memory, 64 MiB at a time
-across workers, every byte written, until a fresh worker is refused, a step takes four times the
-usual (the device swapping), or 16 GiB. Every figure rides in the Hello, the devices table shows
-them (a dash until tested), the Pool's totals sum them, and they are kept for the profile. This
-PC in Chrome: one core 202 MB/s, all cores 1.7 GB/s, memory 16 GB or more, in about 15 s. A
-process may now hold a gibibyte (it was 256 MiB: the kernel's `MEM_PAGES`).
+on one core, then on all at once, each worker timing itself. Every figure rides in the Hello, the
+devices table shows them (a dash until tested), the Pool's totals sum them, and they are kept for
+the profile. A process may now hold a gibibyte (it was 256 MiB: the kernel's `MEM_PAGES`).
+
+Memory is the dangerous half. Its first version ramped 64 MiB at a time toward 16 GiB, until a
+worker was refused or a step took four times the usual. On a Linux laptop in Firefox (16 GB, 2 GB
+of swap) nothing was refused and no step was ever timed slow: the device ran out of memory and
+swap and stalled, and a watchdog killed the tab. A browser does not refuse memory; the device
+swaps, and swapping shows as time, not refusal, often in a stall too deep for the page to time
+anything. So the test now never goes near the device's limit:
+- it takes at most a quarter of what the browser reports, at most 2 GB (2 GB where the browser
+  says nothing, 512 MB on such a phone or tablet);
+- it writes bytes no compressor can shrink;
+- each step has a limit: 1 s for the first four, then twice their median but at least 150 ms. The
+  worker stops writing past the limit, and the pool's own timer ends every worker a second later
+  whatever they do;
+- the whole memory half gets 8 s.
+The CPU's figures are told and kept before memory starts, so a lost tab keeps them. The figure is
+"usable": what the test held and why it stopped, never "or more". This PC in Chrome: one core
+202 MB/s, all cores 1.6 GB/s, 2.0 GB usable (the cap), steps of 25 to 32 ms.
 
 What it taught (it holds for every compute program): a browser runs a wasm call from start to
 end in the code it entered with and never moves a running call to its optimized tier. Built for
