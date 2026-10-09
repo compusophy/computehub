@@ -18,6 +18,9 @@
 #                  with the block that restores it (fix data at no cost, correct by construction)
 #   fixdata        train/fixdata.py: the turns that made a program run clean, as SFT records
 #   fix3b          a LoRA of the untuned 3B on those and the mutants (FIX_EPOCHS, 1 epoch)
+#   rounds         until PAUSE: ROUND_SLICE (300) more train tasks drafted, repaired by the newest
+#                  helper, every fix turn so far and the mutants trained into the next (fix3b-r2,
+#                  -r3, ...), scored as a team
 #   summary        every score tonight, side by side
 # Its inputs are copied once into <root>/iq/team-<night>/ (the suite, GLM's answers, the held
 # families, the train prompts), and the tools (EVAL, IQ: this checkout's debug builds unless set)
@@ -133,6 +136,58 @@ for step in "$@"; do
       (cd "$REPO" && "$PY" train/sft.py --held "$W/held.txt" --tasks "$W/iq.jsonl" --base "$LARGE" \
          --run "$NIGHT-fix3b" "${data[@]}" --epochs "${FIX_EPOCHS:-1}" --batch 2 --accum 8 \
          --save-every 13) >> "$LOG" 2>&1 || { say "fix3b training failed: rerun resumes it"; exit 1; } ;;
+    rounds)
+      # Until PAUSE: the train tasks not drafted yet drafted by the untuned 3B (a slice a round),
+      # repaired by the newest helper, every fix turn so far and the mutants trained into a new
+      # helper from the base, scored as a team on the held-out tasks: fix3b-r2, -r3, ...
+      k=2
+      while ! paused "round $k"; do
+        prev=$NIGHT-fix3b
+        [ "$k" -gt 2 ] && prev=$NIGHT-fix3b-r$((k - 1))
+        run=$NIGHT-fix3b-r$k
+        if [ ! -e "$T/drafts-r$k.done" ]; then
+          "$PY" - "$W/prompts-train.jsonl" "$W" "$W/prompts-r$k.jsonl" "${ROUND_SLICE:-300}" <<'PY'
+import glob, json, os, sys
+prompts, w, out, n = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4])
+done = set()
+for f in glob.glob(os.path.join(w, "drafts-*.jsonl")):
+    for line in open(f, encoding="utf-8"):
+        try:
+            done.add(json.loads(line)["task"])
+        except Exception:
+            pass
+left = [l for l in open(prompts, encoding="utf-8") if json.loads(l)["task"] not in done]
+open(out, "w", encoding="utf-8").writelines(left[:n])
+print("round prompts: %d of %d left" % (min(n, len(left)), len(left)))
+PY
+          [ -s "$T/prompts-r$k.jsonl" ] || { say "rounds: every train task drafted"; break; }
+          serve "$(spec base3b)" || { unserve; exit 1; }
+          (cd "$REPO" && "$PY" train/ask.py --prompts "$W/prompts-r$k.jsonl" \
+             --out "$W/drafts-r$k.jsonl" --name base3b --k 1 --jobs 16) >> "$LOG" 2>&1
+          ok=$?
+          unserve
+          [ "$ok" = 0 ] || { say "round $k drafts failed ($ok)"; exit 1; }
+          touch "$T/drafts-r$k.done"
+        fi
+        team "train-r$k" "drafts-r$k.jsonl" "$prev" || exit 1
+        if [ ! -s "$T/fix-r$k.jsonl" ]; then
+          traces=()
+          for f in "$T"/traces-train-*.jsonl; do traces+=(--traces "$(cygpath -m "$f" 2>/dev/null || echo "$f")"); done
+          (cd "$REPO" && "$PY" train/fixdata.py "${traces[@]}" --held "$W/held.txt" --suite "$W/iq.jsonl" \
+             --out "$W/fix-r$k.jsonl" --night "$NIGHT") 2>&1 | tee -a "$LOG"
+        fi
+        if ! grep -q '^  "status": "done"' "$ROOT/runs/$run/manifest.json" 2>/dev/null; then
+          paused "train $run" && exit 1
+          data=(--data "$W/fix-r$k.jsonl")
+          [ -s "$T/fix-mutants.jsonl" ] && data+=(--data "$W/fix-mutants.jsonl")
+          say "train: $run on $(cat "$T/fix-r$k.jsonl" "$T"/fix-mutants.jsonl 2>/dev/null | wc -l) fix records"
+          (cd "$REPO" && "$PY" train/sft.py --held "$W/held.txt" --tasks "$W/iq.jsonl" --base "$LARGE" \
+             --run "$run" "${data[@]}" --epochs "${FIX_EPOCHS:-1}" --batch 2 --accum 8 --save-every 13) \
+             >> "$LOG" 2>&1 || { say "$run training failed: rerun resumes it"; exit 1; }
+        fi
+        team "r$k" answers-glm.jsonl "$run" || exit 1
+        k=$((k + 1))
+      done ;;
     summary)
       say "summary:"
       for f in "$T"/score-*.txt; do
