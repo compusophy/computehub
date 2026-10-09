@@ -960,6 +960,44 @@ format), and most repaired programs then run but fail the hidden check. So a hel
 needed but not enough: next, helpers trained on fix traces (every repair turn is kept,
 `--traces`), helpers that write checks, and escalation to the lead (milestone 2).
 
+The first team night (n20261008, run on 2026-10-09 while compusophy slept, no cloud call, by
+`train/team.sh`, resumable and pausable on the night's port). On all 347 held-out tasks:
+- GLM's recorded answers alone: 152 (43.8%).
+- Paired with a helper, as the harness was: the untuned 3B 155, the night's whole-app fine-tune
+  153, the untuned 0.5B 147.
+- **The harness, not the model, was the first lever.**
+  - 196 of the 3B's 320 turns were ```diff replies the reader could not read; team now reads a
+    diff's hunks as edit blocks (`diff.rs`).
+  - Of its 37 one-line blocks that missed, 32 quoted part of one line (an icon line without its
+    `// icon:`); team now applies those within the line.
+  - With both readers, the same untuned 3B made 46 drafts run clean instead of 20: 158 (45.5%),
+    +6 over GLM alone, no training.
+- **The 0.5B made the pair worse.** It replaced five of GLM's *passing* drafts, faulted only by
+  their icons, with an example app from the prompt. A whole program a helper writes must now keep
+  half the draft's lines.
+- **The ceiling is semantic.** Programs made clean mostly fail the task's hidden check (check
+  failures rose from 74 to 96). The 3B's own checks can't guide repair yet: of 164 written for
+  GLM's running programs, 141 did not read (cut off) and 18 of the other 23 failed programs that
+  pass.
+- **Fix data.** Repair traces of the untuned 3B on its own drafts gave 11 clean fixes from 1,589
+  turns: its drafts are too broken (1.6% pass). `eval mutants` gave 800 instead, at no cost and
+  correct by construction: each train task's reference broken one of the ways GLM's drafts break
+  (an icon off the grid, a misspelled name, a dropped semicolon, brace or parenthesis, the clear
+  trap), with the block that restores it.
+- **Trained on those, a helper learns the format, not the fix.** The first fix-trained 3B
+  answered in clean edit blocks (291 of 311 turns), yet made 24 drafts run clean against the
+  untuned 3B's 46: 157. One-line restorations teach the shape of a repair.
+- **GLM's misses are misconceptions.** After repair, what still fails is an index outside a list
+  at run time (17), a name that does not exist (14: functions it calls but never wrote, locals
+  never declared) and syntax applang lacks (10: `as` casts, `..` ranges, statements outside any
+  handler). The clear trap is solved (17 to 0). So the mutants gained GLM's own kinds: a function
+  removed with its calls left (the fix writes it back from how it is used and what was asked), a
+  local's declaration removed, a list made short. A helper trained on 700 of those was stopped
+  unscored at wake-up: its longer records (up to 9.3k tokens) filled the card at two sequences a
+  micro-batch and it paged; it wants one.
+- **Next:** that helper, rerun at one sequence a micro-batch; a check writer that writes short,
+  closed checks (milestone 3); escalation to the lead for what the helper can't fix (milestone 2).
+
 ## Evolution: prediction, lineage, selection
 
 Designed 2026-10-06 and checked against the code the same day; none of it is built beyond the
