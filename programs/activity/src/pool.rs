@@ -614,9 +614,10 @@ fn testing(s: &Snap) -> Node {
             &rate(d.cpun),
             DOT,
             "memory ",
-            &match d.mem {
-                0 => "not measured".into(),
-                m => [&at_least(m, d.floor), " usable"].concat(),
+            &match (d.mem, d.floor) {
+                (0, _) => "not measured".into(),
+                (m, true) => ["at least ", &memory(m), " usable"].concat(),
+                (m, false) => [&memory(m), " usable"].concat(),
             },
             DOT,
             &ago(d.tested),
@@ -633,7 +634,7 @@ fn testing(s: &Snap) -> Node {
                this tab can really hold, never more than 2 GB (a quarter of the device's memory if \
                the browser says it is less), stopping at once at a slow step, where a device short \
                of memory starts to swap. Stopped by the test's own limit, the figure is a floor: \
-               \u{2265}, at least.";
+               at least that much (2.0+ GB).";
     children.push(text(Style::Small, how));
     let label = if me.is_some() { "Test again" } else { "Test this device" }.into();
     children.push(Node::Button { id: TEST, variant: Variant::Normal, label });
@@ -648,9 +649,14 @@ fn rate(mib: u32) -> String {
     }
 }
 
-/// Memory in MiB, a floor said as one: `\u{2265} 2.0 GB` (the test stopped before the device did).
+/// Memory in MiB, a floor said as one, short: `2.0+ GB` (the test stopped before the device did).
+/// In words, not `≥`: the desktop's fonts are subset, and that sign is not in them.
 fn at_least(mib: u32, floor: bool) -> String {
-    if floor { ["\u{2265} ", &memory(mib)].concat() } else { memory(mib) }
+    let said = memory(mib);
+    match said.rsplit_once(' ') {
+        Some((n, unit)) if floor => [n, "+ ", unit].concat(),
+        _ => said,
+    }
 }
 
 /// Memory in MiB, as people say it: `960 MB`, `9.4 GB`.

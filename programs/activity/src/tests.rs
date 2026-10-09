@@ -297,3 +297,24 @@ fn a_linked_devices_buttons_ask_the_pool_by_its_key_and_stay_on_the_pool_page() 
     );
     assert!(matches!(a.page, Page::Pool));
 }
+
+#[test]
+fn a_memory_floor_is_said_in_words_the_desktops_fonts_have() {
+    use uiwire::pool::{Device, Snap};
+    let mut a = Activity::default();
+    a.event(&Event::Click { id: NAV + 2 });
+    let d = |name: &str, floor| Device {
+        name: name.into(),
+        tested: 1,
+        cpun: 100,
+        mem: 2048,
+        floor,
+        ..Device::default()
+    };
+    let snap = Snap { at: 1, devices: vec![d("A", true), d("B", false)], ..Snap::default() };
+    a.event(&Event::Pool { data: snap.encode() });
+    let shown = format!("{:?}", a.nodes());
+    assert!(!shown.contains('\u{2265}'), "no sign the fonts lack");
+    assert!(shown.contains("2.0+ GB") && shown.contains("at least 2.0 GB usable"), "{shown}");
+    assert!(shown.contains("4.0+ GB usable RAM"), "a total with a floor in it is one too");
+}
