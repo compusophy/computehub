@@ -515,7 +515,8 @@ pub enum Request {
     /// tab can hold), the results in the [`pool`] snapshots and told to every linked tab.
     Test,
     /// Activity's window only: a linked device ([`pool::Bond`]), named by its key: `reconnect
-    /// <key>` tries to reach it now, `unlink <key>` forgets it here and asks it to forget this one.
+    /// <key>` tries to reach it now, `unlink <key>` forgets it here and asks it to forget this one;
+    /// `open` (the Pool page shown) only starts the pool, so what it keeps shows.
     Link { what: String },
     /// The overlay only: it steps aside for window `win`, which the person uses next (a game it
     /// started, an app it opened). That window takes the keys (raised while the overlay shows);

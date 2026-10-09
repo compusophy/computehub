@@ -226,7 +226,12 @@ impl Activity {
             Event::Click { id: OWN } => self.page = Page::Of(OWN_KEY),
             Event::Click { id } if *id == NAV => self.page = Page::Performance,
             Event::Click { id } if *id == NAV + 1 => self.page = Page::Processes,
-            Event::Click { id } if *id == NAV + 2 => self.page = Page::Pool,
+            // The Pool page shown: the pool starts if it is not running, so the links and
+            // figures this profile keeps show at once.
+            Event::Click { id } if *id == NAV + 2 => {
+                self.page = Page::Pool;
+                self.requests.push(Request::Link { what: "open".into() });
+            }
             Event::Click { id } if (SORT..SORT + 4).contains(id) => {
                 self.sort = Column((id - SORT) as u8)
             }

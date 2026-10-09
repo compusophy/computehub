@@ -318,3 +318,12 @@ fn a_memory_floor_is_said_in_words_the_desktops_fonts_have() {
     assert!(shown.contains("2.0+ GB") && shown.contains("at least 2.0 GB usable"), "{shown}");
     assert!(shown.contains("4.0+ GB usable RAM"), "a total with a floor in it is one too");
 }
+
+#[test]
+fn showing_the_pool_page_starts_the_pool_so_what_it_keeps_shows() {
+    let mut a = Activity::default();
+    a.frame();
+    a.event(&Event::Click { id: NAV + 2 });
+    let asked = a.frame().requests;
+    assert!(asked.contains(&Request::Link { what: "open".into() }), "{asked:?}");
+}
