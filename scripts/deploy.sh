@@ -4,9 +4,8 @@
 # to the Vercel project (`vercel link`).
 #   bash scripts/deploy.sh          preview deployment
 #   bash scripts/deploy.sh prod     production deployment (main's pushed tip only)
-# CI (.github/workflows/ci.yml) deploys each push to main: VERCEL_TOKEN in the
-# environment, .vercel/project.json written from VERCEL_ORG_ID and
-# VERCEL_PROJECT_ID, and BUILT=1, dist/ being this commit's checked build.
+# Each push to main is deployed anyway, by Vercel itself (vercel.json,
+# scripts/vercel-build.sh); this deploys a build made here at once.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -19,17 +18,12 @@ if ! grep -Eq '"projectName": *"computehub"' .vercel/project.json 2>/dev/null; t
   exit 1
 fi
 
-# Production is main's pushed tip, whoever deploys (this PC, a cloud session,
-# CI): a branch, or changes not committed, would put on prod what main does
-# not hold, and the next deploy from main would take it away again. In CI, a
-# commit main has moved past leaves prod to the newer one's run.
+# Production is main's pushed tip, whoever deploys: a branch, or changes not
+# committed, would put on prod what main does not hold, and the next deploy
+# from main would take it away again.
 if [ "${1:-}" = "prod" ]; then
   git fetch -q origin main
   if [ "$(git rev-parse HEAD)" != "$(git rev-parse FETCH_HEAD)" ]; then
-    if [ -n "${GITHUB_ACTIONS:-}" ]; then
-      echo "::notice::main moved past this commit; its own run deploys"
-      exit 0
-    fi
     echo "refusing to deploy prod: HEAD is not origin/main's tip (push it to main first)" >&2
     exit 1
   fi
@@ -39,20 +33,14 @@ if [ "${1:-}" = "prod" ]; then
   fi
 fi
 
-if [ "${BUILT:-}" != 1 ]; then
-  bash scripts/build-web.sh
-fi
+bash scripts/build-web.sh
 # The sizes, as a gauge: printed for the record, never a reason to refuse.
 bash scripts/budget.sh
 
 bash scripts/output.sh
 
-token=()
-if [ -n "${VERCEL_TOKEN:-}" ]; then
-  token=(--token "$VERCEL_TOKEN")
-fi
 if [ "${1:-}" = "prod" ]; then
-  vercel deploy --prebuilt --prod --yes "${token[@]}"
+  vercel deploy --prebuilt --prod --yes
 else
-  vercel deploy --prebuilt --yes "${token[@]}"
+  vercel deploy --prebuilt --yes
 fi

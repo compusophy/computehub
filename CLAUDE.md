@@ -111,7 +111,7 @@ train/         dev: fine-tuning on the 3090 (Python)
 web/index.html the page: <canvas id="os"> + a one-line bootstrap
 web/worker.js  the program worker's one-line bootstrap
 scripts/       caps.sh, budget.sh, build-web.sh, deploy.sh (`prod`: main's
-             tip only; CI deploys each push to main)
+             tip only); Vercel builds each push to main (vercel.json)
 ```
 
 Forks: litelite 0.2.0, `4f5e056`. Packages are `compusophy-<x>`; code uses
@@ -149,7 +149,7 @@ opens); subsets and OFL texts: `assets/fonts/README.md`.
 - Never delete with `rm -r`/`rm -rf`, `find -delete`, `Remove-Item -Recurse`
   or `del /s`, and never `rm` a path built from a variable, a wildcard or an
   absolute path. Leave scratch files where they are; overwrite outputs in
-  place. Only `scripts/deploy.sh` clears a folder, behind a fixed-path guard.
+  place. Only `scripts/output.sh` clears a folder, behind a fixed-path guard.
 - No `git reset --hard`, `git clean`, `git checkout -- <file>` or
   history rewriting. If a command would need the owner's approval, find
   another way or stop and report.
