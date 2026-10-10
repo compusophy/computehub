@@ -15,7 +15,11 @@ self-organizing (division of labor, the right-sized model per subtask)
 across desktop, laptop, phone and a public pool anyone joins, whose crowd
 compute also trains models. Score the combined system: success per unit of
 cost. Bar: far more useful than today's agents; real users, then paying
-ones. Author handle: compusophy.
+ones. One rule, the fractal: everything composes at any scale, never in
+an iframe. An app hosts apps unmodified (each believes its rect is the
+screen, as localharness's cartridges do), and the OS itself embeds as the
+computer inside other worlds (secretspace's desk sim) and inside itself.
+Author handle: compusophy.
 
 compusophy's latest words win over this file: when they change direction,
 update it in the same turn. Finished, verified work ships (merge, push,
