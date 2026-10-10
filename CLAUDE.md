@@ -110,7 +110,8 @@ tools/eval/    dev-only eval runner (the free AI)
 train/         dev: fine-tuning on the 3090 (Python)
 web/index.html the page: <canvas id="os"> + a one-line bootstrap
 web/worker.js  the program worker's one-line bootstrap
-scripts/       caps.sh, budget.sh, build-web.sh, deploy.sh (`prod`)
+scripts/       caps.sh, budget.sh, build-web.sh, deploy.sh (`prod`: main's
+             tip only; CI deploys each push to main)
 ```
 
 Forks: litelite 0.2.0, `4f5e056`. Packages are `compusophy-<x>`; code uses
