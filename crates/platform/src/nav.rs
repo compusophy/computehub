@@ -58,5 +58,6 @@ pub fn beacon(url: &str, body: &str) -> bool {
     }
     let (nav, send) = navigator("sendBeacon");
     let send = send.dyn_into::<Function>().ok();
+    let url = crate::mount::api(url);
     send.and_then(|f| f.call2(&nav, &url.into(), &body.into()).ok()).is_some_and(|v| v.is_truthy())
 }

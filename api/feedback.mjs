@@ -96,10 +96,46 @@ async function file(kind, title, sig, body, host) {
   }
 }
 
-export default async function handler(req, res) {
-  if (req.method !== 'POST') return reply(res, 405, { error: 'POST only' });
+// The pages the OS is mounted in as a cartridge (os::cartridge: secretspace's Battlestation),
+// whose OS calls this function from their own origin: compusophy's own sites, nothing else.
+// Each api/*.mjs ships alone, so each holds this list and the two functions below.
+const FRIENDS = [
+  'https://compusophy.com',
+  'https://secretspace.compusophy.com',
+  'https://secretspace-seven.vercel.app',
+];
+
+// Whether the caller may: this site's own page (Origin, and Sec-Fetch-Site when a browser sends
+// it), or a friend's, whose browser is then told it may read the answer (CORS).
+function caller(req, res) {
   const host = req.headers['x-forwarded-host'] || req.headers.host;
-  if (req.headers.origin !== `https://${host}`) return reply(res, 403, { error: 'same origin only' });
+  const origin = req.headers.origin;
+  const site = req.headers['sec-fetch-site'];
+  if (origin === `https://${host}`) return site === undefined || site === 'same-origin';
+  if (!FRIENDS.includes(origin)) return false;
+  res.setHeader('access-control-allow-origin', origin);
+  res.setHeader('vary', 'origin');
+  return true;
+}
+
+// A friend's browser asks first (a preflight) before a POST it would not send unasked.
+function preflight(req, res) {
+  const ok = caller(req, res);
+  if (ok) {
+    res.setHeader('access-control-allow-methods', 'POST');
+    res.setHeader('access-control-allow-headers', 'content-type');
+    res.setHeader('access-control-max-age', '86400');
+  }
+  res.statusCode = ok ? 204 : 403;
+  res.end();
+}
+
+export default async function handler(req, res) {
+  if (req.method === 'OPTIONS') return preflight(req, res);
+  if (req.method !== 'POST') return reply(res, 405, { error: 'POST only' });
+  if (!caller(req, res)) return reply(res, 403, { error: 'this site and its friends only' });
+  // The page it came from (a friend's, for an OS mounted there), for the issue's footer.
+  const host = String(req.headers.origin).replace('https://', '');
   const now = Date.now();
   const ip = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim() || 'unknown';
   if (!allow(ip, PER_IP, now) || !allow('*', PER_INSTANCE, now)) {

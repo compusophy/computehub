@@ -276,8 +276,12 @@ fn a_mount_keeps_its_files_and_keys_under_its_own() {
         (mount::based("cpu/worker.js"), mount::keyed("compusophy.last")),
         ("cpu/worker.js".to_string(), "compusophy.last".to_string())
     );
-    mount::place("/battlestation/os/".into(), "monitor.".into());
+    assert_eq!(mount::api("/api/ai"), "/api/ai");
+    mount::place(Some(("/battlestation/os/".into(), "monitor.".into())));
     assert_eq!(mount::based("cpu/worker.js"), "/battlestation/os/cpu/worker.js");
     assert_eq!(mount::keyed("compusophy.last"), "monitor.compusophy.last");
-    mount::place(String::new(), String::new());
+    // Its `/api/*` at the OS's own site, which answers the pages it is mounted in.
+    assert_eq!(mount::api("/api/ai"), "https://compusophy.com/api/ai");
+    assert_eq!(mount::api("fonts/x.ttf"), "fonts/x.ttf");
+    mount::place(None);
 }

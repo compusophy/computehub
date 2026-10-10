@@ -325,7 +325,8 @@ fn stream(s: &Rc<Shared>, id: u32, url: &str, headers: Vec<(&str, String)>, body
     }
     set(&init, "signal", &Reflect::get(&abort, &"signal".into()).unwrap_or_default());
     let cb = ManuallyDrop::new(callback(s, id, on_stream));
-    let _ = s.window.fetch_with_str_and_init(url, init.unchecked_ref()).then2(&cb, &cb);
+    let url = crate::mount::api(url);
+    let _ = s.window.fetch_with_str_and_init(&url, init.unchecked_ref()).then2(&cb, &cb);
     s.streams.borrow_mut().push(Stream { id, abort, status: 0, reader: None, cb });
 }
 

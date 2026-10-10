@@ -5,7 +5,8 @@
 // this project's own credentials (its OIDC token, or AI_GATEWAY_API_KEY when set), and streams
 // the answer back, so no visitor needs a key and the browser never holds one.
 //
-// Guards, all best effort: same origin (Origin, and Sec-Fetch-Site when a browser sends it);
+// Guards, all best effort: this site's own pages (Origin, and Sec-Fetch-Site when a browser sends
+// it) or a friend's, a page the OS is mounted in (FRIENDS, told so by CORS), all under the limits;
 // request windows per client (an IPv4 address or an IPv6 /64) and per instance; and a day's
 // spend per instance, of which one client may use a share, counted from the usage the gateway
 // reports. A script can forge Origin and leave out Sec-Fetch-Site, and an instance shares no
@@ -170,13 +171,44 @@ async function readBody(req, max) {
   return Buffer.concat(parts).toString('utf8');
 }
 
-export default async function handler(req, res) {
-  if (req.method !== 'POST') return fail(res, 405, 'POST only');
+// The pages the OS is mounted in as a cartridge (os::cartridge: secretspace's Battlestation),
+// whose OS calls this function from their own origin: compusophy's own sites, nothing else.
+// Each api/*.mjs ships alone, so each holds this list and the two functions below.
+const FRIENDS = [
+  'https://compusophy.com',
+  'https://secretspace.compusophy.com',
+  'https://secretspace-seven.vercel.app',
+];
+
+// Whether the caller may: this site's own page (Origin, and Sec-Fetch-Site when a browser sends
+// it), or a friend's, whose browser is then told it may read the answer (CORS).
+function caller(req, res) {
   const host = req.headers['x-forwarded-host'] || req.headers.host;
+  const origin = req.headers.origin;
   const site = req.headers['sec-fetch-site'];
-  if (req.headers.origin !== `https://${host}` || (site !== undefined && site !== 'same-origin')) {
-    return fail(res, 403, 'same origin only');
+  if (origin === `https://${host}`) return site === undefined || site === 'same-origin';
+  if (!FRIENDS.includes(origin)) return false;
+  res.setHeader('access-control-allow-origin', origin);
+  res.setHeader('vary', 'origin');
+  return true;
+}
+
+// A friend's browser asks first (a preflight) before a POST it would not send unasked.
+function preflight(req, res) {
+  const ok = caller(req, res);
+  if (ok) {
+    res.setHeader('access-control-allow-methods', 'POST');
+    res.setHeader('access-control-allow-headers', 'content-type');
+    res.setHeader('access-control-max-age', '86400');
   }
+  res.statusCode = ok ? 204 : 403;
+  res.end();
+}
+
+export default async function handler(req, res) {
+  if (req.method === 'OPTIONS') return preflight(req, res);
+  if (req.method !== 'POST') return fail(res, 405, 'POST only');
+  if (!caller(req, res)) return fail(res, 403, 'this site and its friends only');
   const now = Date.now();
   const who = client(req);
   const ok = allow(who, PER_CLIENT, now) && allow(`${who} m`, PER_MINUTE, now, 60e3);

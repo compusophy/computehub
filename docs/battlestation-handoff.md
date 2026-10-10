@@ -60,11 +60,13 @@ if (down && os.typing() && e.key.length === 1 && !e.ctrlKey && !e.metaKey) os.te
 `os.resize(w, h, dpr)` if the screen changes; `os.visible(false)` when the monitor is out of
 view, `true` back (its clock catches up).
 
-## What it does not have mounted
+## Its AI, feedback and pairing, mounted
 
-The OS's `/api/*` functions (the free AI, feedback, the mesh's signaling) are computehub's
-origin's and refuse others, so a mounted OS has no AI and no pairing unless secretspace proxies
-them. Everything else runs: the desktop, its apps and programs, the Terminal, Studio's editor,
+A mounted OS sends its `/api/*` calls (the free AI, feedback, the mesh's signaling) to
+`https://compusophy.com` (`platform::mount::HOME`), whose functions answer their friends
+(`FRIENDS` in each `api/*.mjs`: `compusophy.com`, `secretspace.compusophy.com`,
+`secretspace-seven.vercel.app`) with CORS, a preflight first. Another origin gets 403: add it to
+the list in all three. Everything else runs: the desktop, its apps and programs, the Terminal, Studio's editor,
 the clocks (an app holding apps: Games, Clock shop), and the Monitor (Games, Monitor: the OS
 inside itself, a desktop in a window, 3 deep), so the virtual computer can hold itself too.
 

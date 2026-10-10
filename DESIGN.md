@@ -942,9 +942,10 @@ IndexedDB) is under `ns`, its files under `base`. Its programs run in workers th
 which a browser allows only to a cross-origin isolated page (`Cross-Origin-Opener-Policy:
 same-origin`, `Cross-Origin-Embedder-Policy: require-corp`) and only from its own origin, so the
 host serves the OS's files beside itself: `dist/files.txt` lists them (`os.js`, `os_bg.wasm`,
-`cpu/`, `bin/`, `fonts/`, `licenses/`). The `/api/*` functions (the free AI, feedback, signaling)
-are the OS's own origin's and refuse others, so a mounted OS has no AI and no pairing unless its
-host proxies them. One mount a page.
+`cpu/`, `bin/`, `fonts/`, `licenses/`). A mounted OS sends its `/api/*` calls (the free AI,
+feedback, signaling) to its own site, `https://compusophy.com`, whose functions answer the pages
+it is mounted in (`FRIENDS` in each `api/*.mjs`, with CORS and a preflight) and refuse any other.
+One mount a page.
 
 Seen on 2026-10-10: a plain host page mounted the OS, signed in by its injected clicks, opened the
 Clock shop, and showed the shop's wall clock and both grandfathers running: a page, the OS, the

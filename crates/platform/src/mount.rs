@@ -8,6 +8,8 @@
 //! as [`crate::run`] does. One mount a page (the OS's state is the page's), and none where
 //! [`crate::run`] runs. Its programs run in workers that share memory, so the page must be
 //! cross-origin isolated (COOP `same-origin`, COEP `require-corp`) and its files served beside it.
+//! Its `/api/*` calls (the free AI, feedback, the mesh's signaling) go to the OS's own site
+//! ([`HOME`], whose functions answer the pages it is mounted in: `api/*.mjs`'s friends).
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -33,24 +35,45 @@ pub struct Mount {
     pub ns: String,
 }
 
+/// The OS's own site, whose `/api/*` functions a mounted OS calls.
+pub const HOME: &str = "https://compusophy.com";
+
 thread_local! {
-    /// A mount's base path and storage namespace (a page's: both empty).
-    static PLACE: RefCell<(String, String)> = const { RefCell::new((String::new(), String::new())) };
+    /// A mount's base path and storage namespace (a page's: none).
+    static PLACE: RefCell<Option<(String, String)>> = const { RefCell::new(None) };
 }
 
-/// The mount's files are under `base`, its storage keys begin `ns`.
-pub(crate) fn place(base: String, ns: String) {
-    PLACE.with(|p| *p.borrow_mut() = (base, ns));
+/// The mount's files are under `base`, its storage keys begin `ns` (none: the page's own).
+pub(crate) fn place(at: Option<(String, String)>) {
+    PLACE.with(|p| *p.borrow_mut() = at);
+}
+
+/// The mount's base and namespace, `f` of them (a page's: both empty).
+fn with_place<T>(f: impl FnOnce(&str, &str) -> T) -> T {
+    PLACE.with(|p| match &*p.borrow() {
+        Some((base, ns)) => f(base, ns),
+        None => f("", ""),
+    })
 }
 
 /// `url` (relative) under the mount's base.
 pub(crate) fn based(url: &str) -> String {
-    PLACE.with(|p| [p.borrow().0.as_str(), url].concat())
+    with_place(|base, _| [base, url].concat())
 }
 
 /// Storage key `key` under the mount's namespace.
 pub(crate) fn keyed(key: &str) -> String {
-    PLACE.with(|p| [p.borrow().1.as_str(), key].concat())
+    with_place(|_, ns| [ns, key].concat())
+}
+
+/// `url` as the network takes it: a mounted OS's `/api/*` at [`HOME`] (the page it is mounted in
+/// has none); a page's, and anything else, as it is.
+pub(crate) fn api(url: &str) -> String {
+    let mounted = PLACE.with(|p| p.borrow().is_some());
+    match mounted && url.starts_with("/api/") {
+        true => [HOME, url].concat(),
+        false => url.to_string(),
+    }
 }
 
 /// Whether the page holds `<canvas id="os">`, where [`crate::run`] runs; a page without one may
@@ -74,7 +97,7 @@ pub fn mount<A: App + 'static>(app: A, m: Mount) -> Result<(), JsValue> {
     let document = window.document().ok_or("no document")?;
     let (w, h, dpr) = (m.w.max(1.0), m.h.max(1.0), sane_dpr(m.dpr.into()));
     let off = OffscreenCanvas::new((w * dpr).round() as u32, (h * dpr).round() as u32)?;
-    place(m.base, m.ns);
+    place(Some((m.base, m.ns)));
     let canvas = Surface::Off(off);
     let renderer = Renderer::new(&canvas).map_err(|e| JsValue::from_str(&e))?;
     let app = Box::new(app);

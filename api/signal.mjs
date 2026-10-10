@@ -11,8 +11,8 @@
 //
 // Codes live in this instance's own memory for TTL_MS, then are forgotten, as is an answer once
 // read: nothing is stored anywhere else. Another instance knows none of them, so a tab that misses
-// (404) tries again, which mostly reaches this one. Guards, all best effort: same origin (Origin,
-// and Sec-Fetch-Site when a browser sends it), requests per client a minute, a cap on codes kept
+// (404) tries again, which mostly reaches this one. Guards, all best effort: this site's own pages
+// or a friend's (FRIENDS: pages the OS is mounted in), requests per client a minute, a cap on codes kept
 // and on a body's size. A description holds the tab's addresses, which is why it lives briefly.
 
 const TTL_MS = 180e3;
@@ -75,13 +75,44 @@ function description(sdp) {
   return typeof sdp === 'string' && sdp.startsWith('v=0') && sdp.length <= MAX_BODY;
 }
 
-export default async function handler(req, res) {
-  if (req.method !== 'POST') return send(res, 405, 'POST only');
+// The pages the OS is mounted in as a cartridge (os::cartridge: secretspace's Battlestation),
+// whose OS calls this function from their own origin: compusophy's own sites, nothing else.
+// Each api/*.mjs ships alone, so each holds this list and the two functions below.
+const FRIENDS = [
+  'https://compusophy.com',
+  'https://secretspace.compusophy.com',
+  'https://secretspace-seven.vercel.app',
+];
+
+// Whether the caller may: this site's own page (Origin, and Sec-Fetch-Site when a browser sends
+// it), or a friend's, whose browser is then told it may read the answer (CORS).
+function caller(req, res) {
   const host = req.headers['x-forwarded-host'] || req.headers.host;
+  const origin = req.headers.origin;
   const site = req.headers['sec-fetch-site'];
-  if (req.headers.origin !== `https://${host}` || (site !== undefined && site !== 'same-origin')) {
-    return send(res, 403, 'same origin only');
+  if (origin === `https://${host}`) return site === undefined || site === 'same-origin';
+  if (!FRIENDS.includes(origin)) return false;
+  res.setHeader('access-control-allow-origin', origin);
+  res.setHeader('vary', 'origin');
+  return true;
+}
+
+// A friend's browser asks first (a preflight) before a POST it would not send unasked.
+function preflight(req, res) {
+  const ok = caller(req, res);
+  if (ok) {
+    res.setHeader('access-control-allow-methods', 'POST');
+    res.setHeader('access-control-allow-headers', 'content-type');
+    res.setHeader('access-control-max-age', '86400');
   }
+  res.statusCode = ok ? 204 : 403;
+  res.end();
+}
+
+export default async function handler(req, res) {
+  if (req.method === 'OPTIONS') return preflight(req, res);
+  if (req.method !== 'POST') return send(res, 405, 'POST only');
+  if (!caller(req, res)) return send(res, 403, 'this site and its friends only');
   const now = Date.now();
   const who = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim() || 'unknown';
   if (!allow(who, now)) return send(res, 429, 'rate limited');
