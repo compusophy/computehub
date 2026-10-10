@@ -165,9 +165,9 @@ cp web/worker.js dist/cpu/
 # (pool.wasm), Fractal (fractal.wasm), the IQ verifier, a mesh worker (iq.wasm), and the
 # device's test (gauge.wasm), in one cargo run.
 rustup target list --installed 2>/dev/null | tr -d '\r' | grep -qx wasm32-wasip1 || { echo "ERROR: run: rustup target add wasm32-wasip1" >&2; exit 1; }
-cargo build -p compusophy-terminal -p compusophy-sh -p compusophy-agent -p compusophy-toolbox -p compusophy-studio -p compusophy-assistant -p compusophy-system -p compusophy-pool -p compusophy-fractal -p compusophy-iq -p compusophy-gauge --bins --release --target wasm32-wasip1
+cargo build -p compusophy-terminal -p compusophy-sh -p compusophy-agent -p compusophy-toolbox -p compusophy-studio -p compusophy-assistant -p compusophy-system -p compusophy-pool -p compusophy-fractal -p compusophy-iq -p compusophy-gauge -p compusophy-clock --bins --release --target wasm32-wasip1
 mkdir -p dist/bin
-for p in terminal sh agent toolbox studio assistant system pool fractal iq gauge; do
+for p in terminal sh agent toolbox studio assistant system pool fractal iq gauge clock; do
   cp "$target_dir/wasm32-wasip1/release/$p.wasm" dist/bin/
   # Not the device's test: wasm-opt inlines its hashing into the one long call that loops over
   # it, and a browser never moves a running call to its optimized code, so all cores at once

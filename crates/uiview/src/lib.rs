@@ -67,6 +67,8 @@ pub struct View {
     pub scrolls: Vec<Scrolled>,
     pub reveal: Option<f64>,
     pub grids: Vec<Board>,
+    /// Each [`Node::Embed`] as last drawn: its id and the rect its program's window fills.
+    pub embeds: Vec<(u32, RectF)>,
     pub page: u8,
     pub around: ([f32; 3], [f32; 2]),
 }
@@ -304,9 +306,10 @@ fn tall(ts: &TextSystem, (rows, w, cols, pad): Rows, (fit, tap): (f32, f32)) -> 
 /// A Grid as [`tall`] takes it.
 type Rows = (f32, f32, u16, bool);
 
-/// Whether `n` is a board (a Grid or a Canvas) or holds one.
+/// Whether `n` is a board (a Grid, a Canvas or an Embed) or holds one.
 fn holds_board(n: &Node) -> bool {
-    matches!(n, Node::Grid { .. } | Node::Canvas { .. }) || n.children().iter().any(holds_board)
+    let board = matches!(n, Node::Grid { .. } | Node::Canvas { .. } | Node::Embed { .. });
+    board || n.children().iter().any(holds_board)
 }
 
 /// A Scroll as last drawn: its id, how far down it is, its content's height and its rect.
@@ -373,7 +376,7 @@ pub fn draw(ui: &mut Ui<'_>, nodes: &[Node], texts: &mut Texts, view: &mut View)
     let mut lay = Lay { t, texts, sizes: Vec::new(), extents: Vec::new(), extra: 0.0, fills: 0,
         slack: Vec::new(), again: false, i: 0, e: 0, y: 0.0, touch, right: r.x + r.w, old,
         scrolls: Vec::new(), now, reveal: view.reveal, grids: Vec::new(), fit: (0.0, 0.0),
-        rows: Vec::new(), room: [0.0; 3], top: None, shift: 0.0, nth: 0 };
+        rows: Vec::new(), room: [0.0; 3], top: None, shift: 0.0, nth: 0, embeds: Vec::new() };
     let ts = ui.text_system();
     let mut h = lay.stack(ts, nodes, w, SPACING, None);
     // Again with the boards (measured at their least: Grids of 6 px squares) sharing what the
@@ -430,6 +433,7 @@ pub fn draw(ui: &mut Ui<'_>, nodes: &[Node], texts: &mut Texts, view: &mut View)
     ui.pop_clip();
     ui.thumb(r, view.scroll, view.heights.0);
     (view.scrolls, view.reveal, view.grids) = (lay.scrolls, lay.reveal, lay.grids);
+    view.embeds = lay.embeds;
 }
 
 /// How a Text of `style` is set.
@@ -485,6 +489,7 @@ struct Lay<'t> {
     top: Option<f32>,
     shift: f32,
     nth: u32,
+    embeds: Vec<(u32, RectF)>,
 }
 
 impl Lay<'_> {
@@ -603,12 +608,19 @@ impl Lay<'_> {
                     share = rest;
                 }
                 let mut fills = Vec::new();
+                // Boards side by side need the room of the tallest, not of them all stacked.
+                let (start, mut tallest) = (self.room, [0.0f32; 3]);
                 for (c, o) in children.iter().zip(own) {
                     let first = self.fills;
+                    self.room = start;
                     let s = self.measure(ts, c, o.unwrap_or(share), None);
+                    for (t, (now, was)) in tallest.iter_mut().zip(self.room.iter().zip(start)) {
+                        *t = t.max(now - was);
+                    }
                     (x, h) = (x + s.0 + gap, h.max(s.1));
                     fills.extend((self.fills > first).then_some((first, s.1)));
                 }
+                self.room = [0, 1, 2].map(|i| start[i] + tallest[i]);
                 // A child's first Fill grows by what the child is short of the Row's height.
                 for (fill, ch) in fills.into_iter().filter(|_| !self.again) {
                     self.slack[fill] += h - ch;
@@ -659,8 +671,8 @@ impl Lay<'_> {
                 (w, h + grow.unwrap_or(0.0))
             }
             Node::Separator => (w, 1.0),
-            // Its units square, as wide as it can be, as all of it fits.
-            Node::Canvas { w: cw, h: ch, .. } => {
+            // Its units square, as wide as it can be, as all of it fits (an Embed's px too).
+            Node::Canvas { w: cw, h: ch, .. } | Node::Embed { w: cw, h: ch, .. } => {
                 let most = w / f32::from((*cw).max(1)) * f32::from(*ch);
                 self.board(w, most * self.fit.0, most, most)
             }
@@ -841,6 +853,16 @@ impl Lay<'_> {
                 let (id, nth, n) = (*id, self.nth - 1, u32::from(*cw) * u32::from(*ch));
                 let fine = true;
                 self.grids.extend((id != 0).then_some(Board { id, nth, rect, cols: *cw, n, fine }));
+            }
+            // A well its `w` by `h` fill, the height it was given, centered across: the held
+            // program's window, which its holder draws there (in the rect noted).
+            Node::Embed { id, w: ew, h: eh, .. } => {
+                let k = h / f32::from((*eh).max(1));
+                let x0 = ui.text_system().snap(x + (w - f32::from(*ew) * k) / 2.0);
+                let well = ui.snapped(RectF::new(x0, y, f32::from(*ew) * k, h));
+                ui.fill(well, 0.0, t.surface_lo);
+                ui.border(well, 0.0, ui.px(1.0), t.border);
+                self.embeds.push((*id, well));
             }
         }
     }

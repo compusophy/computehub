@@ -282,6 +282,15 @@ impl Ctl {
         LocalTime::of(&js_sys::Date::new_0())
     }
 
+    /// The local time's offset from UTC now, in minutes east (UTC+2 is 120); 0 natively.
+    pub fn utc_offset(&self) -> i32 {
+        if !cfg!(target_arch = "wasm32") {
+            return 0;
+        }
+        let west = js_sys::Date::new_0().get_timezone_offset();
+        if west.is_finite() { -(west as i32) } else { 0 }
+    }
+
     /// Whether the person asks for reduced motion (`prefers-reduced-motion: reduce`); false
     /// natively.
     pub fn reduced_motion(&self) -> bool {

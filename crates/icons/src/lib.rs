@@ -71,15 +71,17 @@ pub enum Glyph {
     Editor,
     /// Activity: a level line with one beat (a still desktop is a flat line).
     Pulse,
+    /// The clocks: a ring, its hands at three o'clock, a dot at the middle.
+    Clock,
 }
 
 impl Glyph {
     /// Every glyph, in order.
     #[rustfmt::skip]
-    pub const ALL: [Glyph; 17] = {
+    pub const ALL: [Glyph; 18] = {
         use Glyph::*;
         [Mark, Apps, Cog, Studio, Assistant, Terminal, Folder, Home, File, Window, Feedback,
-            About, Chevron, Close, Bug, Editor, Pulse]
+            About, Chevron, Close, Bug, Editor, Pulse, Clock]
     };
 
     /// The function that appends this glyph's contours to its argument.
@@ -103,6 +105,7 @@ impl Glyph {
             Bug => bug,
             Editor => editor,
             Pulse => pulse,
+            Clock => clock,
         }
     }
 }
@@ -405,6 +408,16 @@ fn chevron(o: &mut Outline) {
 fn close(o: &mut Outline) {
     stroke(o, &[(215.0, 215.0), (785.0, 785.0)]);
     stroke(o, &[(215.0, 785.0), (785.0, 215.0)]);
+}
+
+/// A ring as About's, the minute hand up to twelve, the hour hand out to three, a dot where they
+/// meet.
+fn clock(o: &mut Outline) {
+    circle(o, C, 440.0, true);
+    circle(o, C, 440.0 - STROKE, false);
+    stroke(o, &[C, (C.0, C.1 + 270.0)]);
+    stroke(o, &[C, (C.0 + 200.0, C.1)]);
+    circle(o, C, 60.0, true);
 }
 
 /// One stroke: level, up, down past the level, back to it, level.

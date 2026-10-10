@@ -98,6 +98,7 @@ programs/    wasm32-wasip1 programs (dist/bin/), app language, dev crates
   tiny/ lab/ a transformer; dev: its corpus, training, measures
   system/    About, Editor, Feedback, Files, Welcome, Settings
   activity/  resource monitor; pool/ fractal/ sha/: the mesh, demo, hash
+  clock/     the fractal shown: a face, a grandfather clock holding one, a shop
   terminal/  the Terminal; vt/ term/: its parser, screen model
   sh/ agent/ shell: editor, commands, jobs; AI coder
   toolbox/   test programs

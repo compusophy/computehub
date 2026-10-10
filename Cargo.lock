@@ -107,6 +107,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "compusophy-clock"
+version = "0.1.0"
+dependencies = [
+ "compusophy-uiwire",
+]
+
+[[package]]
 name = "compusophy-coder"
 version = "0.1.0"
 dependencies = [

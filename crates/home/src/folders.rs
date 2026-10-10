@@ -18,7 +18,8 @@ use crate::icons::{self, CELL, State};
 pub const PREF: &str = "folders";
 pub const NAMES: [&str; 3] = ["System", "Games", "Productivity"];
 /// The folders before any move.
-const FIRST: &str = "0 activity\n0 settings\n0 feedback\n0 about\n0 welcome\n2 editor\n2 files";
+const FIRST: &str = "0 activity\n0 settings\n0 feedback\n0 about\n0 welcome\n2 editor\n2 files\n\
+    1 shop\n1 grandfather\n1 clock";
 /// The panel's padding, the band its name takes, and its corner radius.
 const PAD: f32 = 21.0;
 const HEAD: f32 = 55.0;

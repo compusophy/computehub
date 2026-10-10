@@ -4,7 +4,22 @@ use ui::icon::Mark;
 use ui::{AppIcon, Key, Mods, THEMES, TextSystem};
 
 use super::dock::{Dock, Look, Spot, Strip, favorites, pin, shift};
-use super::grid::{APPS, Grid, Press};
+use super::grid::{Grid, Press};
+
+/// The apps the grid's tests arrange: the built-ins before the clocks, so that the grid's own
+/// rules are what they check, whatever apps the desktop lists.
+const APPS: [&str; 10] = [
+    "studio",
+    "assistant",
+    "terminal",
+    "files",
+    "editor",
+    "activity",
+    "settings",
+    "feedback",
+    "about",
+    "welcome",
+];
 use super::icons;
 use super::menu::{Item, Menu};
 use super::place::{self, Dims, Place};
@@ -736,7 +751,9 @@ fn folders_hold_their_apps_show_as_one_icon_and_open_as_a_panel() {
     g.open = Some(2);
     g.folders.put("studio", 1, &mut fx);
     ["editor", "files"].iter().for_each(|a| g.folders.put(a, 3, &mut fx));
-    let kept = "0 activity\n0 settings\n0 feedback\n0 about\n0 welcome\n1 studio\n";
+    // The clocks are in Games from the first.
+    let kept = "0 activity\n0 settings\n0 feedback\n0 about\n0 welcome\n1 shop\n1 grandfather\n\
+        1 clock\n1 studio\n";
     assert_eq!(fx.last(), Some(&Effect::Pref { key: folders::PREF.into(), value: kept.into() }));
     assert!(g.list(1, || entries(&APPS), &mut fx) && g.open.is_none());
     // (each where it was; those back from a folder in the first free cells).

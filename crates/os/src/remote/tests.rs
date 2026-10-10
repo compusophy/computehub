@@ -504,3 +504,77 @@ fn ai_requests_stream_back_to_the_program_that_asked() {
     s.r.ai.pump(&mut ctl, &mut s.k);
     assert!(ctl.effects().is_empty() && s.r.ai.0.borrow().counts[0] == 2);
 }
+
+/// What `pid` reads now, an event a read.
+fn events_of(s: &mut Sys, pid: u32) -> Vec<Event> {
+    let (mut out, mut n) = (Vec::new(), usize::MAX);
+    while out.len() != n {
+        n = out.len();
+        s.k.message(&mut s.fs, pid, &[wire::EVENTS, 0, 0, 1, 0]);
+        out.extend(s.k.take_effects().into_iter().filter_map(|e| match e {
+            K::Reply { pid: p, errno: 0, data } if p == pid => {
+                Some(Event::decode(&data).expect("event"))
+            }
+            _ => None,
+        }));
+    }
+    out
+}
+
+#[test]
+fn a_frame_holds_a_program_drawn_in_its_rect_that_hears_its_own_ids() {
+    let mut s = Sys::new(true);
+    s.fs.write("/bin/clock", b"#!wasm bin/clock.wasm\n").unwrap();
+    let (program, args) = ("clock".to_string(), "tz=60".to_string());
+    let embed = Node::Embed { id: 7, w: 200, h: 200, program, args };
+    assert!(s.show(vec![embed.clone()], Vec::new()));
+    assert!(!s.k.runs(3), "it starts at its first size");
+    // Drawn: its rect is noted, and its size is due at once; the tick tells it, which starts it.
+    s.draw();
+    assert_eq!(s.r.frame_in(0.0), Some(0));
+    s.ev(AppEvent::Tick { now_ms: 1.0 });
+    let procs = s.k.procs();
+    assert!(procs.iter().any(|p| p.0 == 3 && p.1 == "clock" && p.2), "{procs:?}");
+    let told = events_of(&mut s, 3);
+    let Some(Event::Resize { w, h }) = told.first() else { panic!("{told:?}") };
+    assert!(*w == *h && *w > 100, "a square, the height it was given: {w} x {h}");
+    // Its frame: drawn in its rect, its ids shifted apart from the holder's; its Close and Size
+    // are not the window's.
+    let button = Node::Button { id: 5, variant: Variant::Primary, label: "Tick".into() };
+    let kid = Frame {
+        seq: 0,
+        title: "c".into(),
+        requests: vec![Request::Close, Request::Size { w: 9, h: 9 }],
+        nodes: vec![button],
+    };
+    assert!(s.cx(|r, cx| r.frame(3, &kid.encode(), cx)));
+    assert!(!s.asked.iter().any(|r| matches!(r, R::CloseSelf | R::Size(..))), "{:?}", s.asked);
+    let (_, hits) = s.draw();
+    let hit =
+        hits.iter().find(|h| h.id.0 & 0xff_ffff == 5 && h.id.0 >> 24 != 0).expect("its button");
+    let (id, r) = (hit.id, hit.rect);
+    // A press and a click on it reach it as its own id 5; the holder's program hears neither.
+    s.ev(AppEvent::PointerDown { x: r.x + 2.0, y: r.y + 2.0, id: Some(id) });
+    s.ev(AppEvent::Click(id));
+    assert!(events_of(&mut s, 3).contains(&Event::Click { id: 5 }));
+    assert!(!s.events().iter().any(|e| matches!(e, Event::Click { .. })));
+    // The same frame again keeps it; a frame without it ends it.
+    assert!(s.show(vec![embed], Vec::new()) && s.k.runs(3));
+    s.show(Vec::new(), Vec::new());
+    assert!(!s.k.runs(3) && !s.k.procs().iter().any(|p| p.0 == 3));
+}
+
+#[test]
+fn a_held_programs_end_leaves_a_note_and_the_window() {
+    let mut s = Sys::new(true);
+    s.fs.write("/bin/clock", b"#!wasm bin/clock.wasm\n").unwrap();
+    let embed = Node::Embed { id: 7, w: 200, h: 200, program: "clock".into(), args: String::new() };
+    s.show(vec![embed], Vec::new());
+    s.draw();
+    s.ev(AppEvent::Tick { now_ms: 1.0 });
+    assert!(s.k.runs(3));
+    s.k.kill(3, 0);
+    s.ev(AppEvent::Io);
+    assert!(!s.asked.iter().any(|r| matches!(r, R::CloseSelf)), "{:?}", s.asked);
+    assert!(s.k.runs(2), "the holder's program runs on");
+}

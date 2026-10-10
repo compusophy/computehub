@@ -18,8 +18,8 @@ use crate::place::{self, Dims, Place};
 
 /// The built-in apps in the home screen's first order (those the registry knows).
 #[rustfmt::skip]
-pub const APPS: [&str; 10] = ["studio", "assistant", "terminal", "files", "editor",
-    "activity", "settings", "feedback", "about", "welcome"];
+pub const APPS: [&str; 13] = ["studio", "assistant", "terminal", "files", "editor",
+    "activity", "settings", "feedback", "about", "welcome", "shop", "grandfather", "clock"];
 /// Travel before a pressed icon is carried: a mouse's, and a finger's once it picked one up.
 const MOUSE_PX: f32 = 4.0;
 const FINGER_PX: f32 = 8.0;

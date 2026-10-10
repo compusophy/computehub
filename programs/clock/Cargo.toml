@@ -1,0 +1,19 @@
+[package]
+name = "compusophy-clock"
+description = "compusophyOS's clocks, the fractal shown: a clock face; a grandfather clock that holds a face (a Node::Embed, the face its own program in its own process); and a clock shop that holds grandfather clocks and a wall clock, three levels deep. One wasm32-wasip1 GUI program on uiwire, run as the name of its /bin marker. Built into dist/bin/, never committed."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[lib]
+name = "clock"
+
+[[bin]]
+name = "clock"
+path = "src/main.rs"
+
+[dependencies]
+compusophy-uiwire.workspace = true

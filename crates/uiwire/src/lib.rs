@@ -305,6 +305,28 @@ pub enum Node {
     /// the first over the rows' names and each other over its column; label `on - 1` lit (0:
     /// none). With an id, a click on label `i` sends [`Event::Click`] with `id + i`.
     Columns { id: u32, on: u8, labels: String },
+    /// Another program's window, `w` logical px wide and `h` tall (each 1 to [`MAX_SIDE`]),
+    /// scaled to fit as a Canvas is: the desktop runs `/bin/<program>` ([`program_name`]) with
+    /// `args` (`\t` apart, [`MAX_ARGS`] bytes at most) in a process of its own and draws its
+    /// frames there, so an app holds apps, and they hold theirs (the fractal: a clock face in a
+    /// grandfather clock in a shop). The program cannot tell: the rect is its window (its
+    /// [`Event::Resize`] says the rect's size, its pointer is the rect's own), its keys come
+    /// while it has the focus (a press in it gives it), its ids are its own (the desktop shifts
+    /// them apart from the holder's). Another `program` or `args` under the id starts it anew;
+    /// a frame without it ends it. Its Open, Feedback and the overlay's requests are honored;
+    /// Close, Size and the OS's own are not (only its holder's frames shape the window).
+    Embed { id: u32, w: u16, h: u16, program: String, args: String },
+}
+
+/// An [`Node::Embed`]'s `args` at most, in bytes, and its `program` name's.
+pub const MAX_ARGS: usize = 1024;
+pub const MAX_PROGRAM: usize = 64;
+
+/// Whether `name` names a program an [`Node::Embed`] may run: 1 to [`MAX_PROGRAM`] bytes of
+/// ASCII letters, digits, `-` and `_` (a `/bin` name, never a path).
+pub fn program_name(name: &str) -> bool {
+    let ok = |c: u8| c.is_ascii_alphanumeric() || c == b'-' || c == b'_';
+    (1..=MAX_PROGRAM).contains(&name.len()) && name.bytes().all(ok)
 }
 
 /// The width of a table's column ([`Node::Columns`], an [`Node::Entry`]'s cells).
@@ -594,6 +616,21 @@ pub enum Event {
     Done { index: u32, node: u8, out: String },
 }
 
+impl Event {
+    /// The node it names (Click, Change, Key, Submit, Tap): the id an [`Node::Embed`]'s holder
+    /// shifts back to the held program's own.
+    pub fn id_mut(&mut self) -> Option<&mut u32> {
+        match self {
+            Self::Click { id }
+            | Self::Change { id, .. }
+            | Self::Key { id, .. }
+            | Self::Submit { id }
+            | Self::Tap { id, .. } => Some(id),
+            _ => None,
+        }
+    }
+}
+
 /// The public `encode` and `decode` of each message, from its `put` and `get`.
 macro_rules! wire {
     ($($t:ident)*) => {$(
@@ -641,6 +678,45 @@ impl Node {
         1 + self.children().iter().map(Node::count).sum::<usize>()
     }
 
+    /// Calls `f` on each id in the tree, this node's first, then its children's in order (a
+    /// Separator, Spacer and Glyph have none; 0, none, is passed too).
+    pub fn ids_mut(&mut self, f: &mut impl FnMut(&mut u32)) {
+        match self {
+            Self::Separator | Self::Spacer { .. } | Self::Glyph { .. } => {}
+            Self::Col { id, children, .. }
+            | Self::Row { id, children, .. }
+            | Self::Card { id, children }
+            | Self::Fill { id, children }
+            | Self::Pane { id, children, .. }
+            | Self::Center { id, children, .. }
+            | Self::Scroll { id, children }
+            | Self::Strip { id, children, .. } => {
+                f(id);
+                children.iter_mut().for_each(|c| c.ids_mut(f));
+            }
+            Self::Text { id, .. }
+            | Self::Button { id, .. }
+            | Self::Input { id, .. }
+            | Self::Code { id, .. }
+            | Self::Item { id, .. }
+            | Self::Entry { id, .. }
+            | Self::Toggle { id, .. }
+            | Self::Area { id, .. }
+            | Self::Grid { id, .. }
+            | Self::Canvas { id, .. }
+            | Self::Pages { id, .. }
+            | Self::Themes { id }
+            | Self::Faces { id, .. }
+            | Self::Screen { id, .. }
+            | Self::Choice { id, .. }
+            | Self::Switch { id, .. }
+            | Self::Chart { id, .. }
+            | Self::Meter { id, .. }
+            | Self::Columns { id, .. }
+            | Self::Embed { id, .. } => f(id),
+        }
+    }
+
     /// Whether the tree, at `depth`, decodes as it is: it is no deeper than [`MAX_DEPTH`] and
     /// each Code's spans are in order, apart and on its text's char boundaries.
     fn valid(&self, depth: usize) -> bool {
@@ -649,6 +725,10 @@ impl Node {
             Self::Canvas { w, h, draws, .. } => canvas(*w, *h, draws),
             Self::Chart { hue, h, values, .. } => chart(*hue, *h, values),
             Self::Meter { hue, value, .. } => *hue <= CANVAS_COLOR && *value <= 1000,
+            Self::Embed { w, h, program, args, .. } => {
+                let side = |s: u16| (1..=MAX_SIDE).contains(&s);
+                side(*w) && side(*h) && program_name(program) && args.len() <= MAX_ARGS
+            }
             Self::Screen { cols, rows, cursor, cells, .. } => {
                 let n = usize::from(*cols) * usize::from(*rows);
                 let inside = cursor.is_none_or(|(r, c)| r < *rows && c < *cols);
@@ -729,6 +809,9 @@ impl Node {
             }
             Self::Meter { id, hue, value } => o.head(27, *id, n).u8(*hue).u16(*value),
             Self::Columns { id, on, labels } => o.head(28, *id, n).u8(*on).str(labels),
+            Self::Embed { id, w, h, program, args } => {
+                o.head(31, *id, n).u16(*w).u16(*h).str(program).str(args)
+            }
         };
         self.children().iter().for_each(|child| child.put(o));
     }
@@ -795,6 +878,11 @@ impl Node {
                 let (cols, rows, at) = (r.u16()?, r.u16()?, (r.u16()?, r.u16()?));
                 let cursor = (at.0 != u16::MAX).then_some(at);
                 Self::Screen { id, cols, rows, cursor, cells: r.bytes()?.to_vec() }
+            }
+            31 => {
+                let (w, h, program, args) = (r.u16()?, r.u16()?, r.str()?, r.str()?);
+                let node = Self::Embed { id, w, h, program, args };
+                node.valid(depth).then_some(node)?
             }
             _ => return None,
         };

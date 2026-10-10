@@ -42,6 +42,8 @@ use vfs::Vfs;
 
 use crate::ai::Ai;
 
+mod nest;
+
 /// The Studio and Assistant programs.
 pub const STUDIO: &str = "/bin/studio";
 pub const ASSISTANT: &str = "/bin/assistant";
@@ -54,6 +56,27 @@ pub const ASSISTANT_ICON: AppIcon = AppIcon { glyph: Glyph::Assistant, hue: Rgba
 pub const TERMINAL_ICON: AppIcon = AppIcon { glyph: Glyph::Terminal, hue: Rgba::hex(0x2dd4bf) };
 /// Fractal's: the mark (a sphere of dots) on cyan, the mesh's first device.
 pub const FRACTAL_ICON: AppIcon = AppIcon { glyph: Glyph::Mark, hue: Rgba::hex(0x22d3ee) };
+/// The clocks (the fractal shown: a grandfather clock holds a face, the shop holds both), as
+/// (name, title, size): one program, bin/clock.wasm, run as the name of its /bin marker, told the
+/// local zone (`tz=<minutes east>`).
+#[rustfmt::skip]
+pub const CLOCKS: [(&str, &str, (f32, f32)); 3] = [
+    ("clock", "Clock", (320.0, 360.0)),
+    ("grandfather", "Grandfather clock", (300.0, 580.0)),
+    ("shop", "Clock shop", (720.0, 780.0)),
+];
+pub const CLOCK_ICON: AppIcon = AppIcon { glyph: Glyph::Clock, hue: Rgba::hex(0xfacc15) };
+
+thread_local! {
+    /// The local zone in minutes east of UTC, as of the page's last minute ([`set_zone`]).
+    static ZONE: std::cell::Cell<i32> = const { std::cell::Cell::new(0) };
+}
+
+/// The local zone the clocks open in, in minutes east of UTC.
+pub fn set_zone(minutes: i32) {
+    ZONE.with(|z| z.set(minutes));
+}
+
 /// A system app as (name, title, icon, size, whether compact).
 pub type SystemApp = (&'static str, &'static str, AppIcon, (f32, f32), bool);
 /// About, Feedback, Files, Welcome, Editor, Activity and Settings: one program, bin/system.wasm,
@@ -98,6 +121,12 @@ pub fn open(name: &str, ai: &Ai) -> Option<Box<dyn App>> {
         Some((head @ ("files" | "editor"), arg)) => (head, Some(arg)),
         _ => (name, None),
     };
+    if let Some(&(prog, title, size)) = CLOCKS.iter().find(|c| c.0 == name) {
+        let tz = ["tz=", &ZONE.with(std::cell::Cell::get).to_string()].concat();
+        let mut r = Remote::new(&["/bin/", prog].concat(), vec![prog.into(), tz], ai);
+        (r.title, r.icon, r.size) = (title.into(), CLOCK_ICON, Some(size));
+        return Some(Box::new(r));
+    }
     if let Some(&(prog, title, icon, size, compact)) = SYSTEM.iter().find(|s| s.0 == head) {
         let argv = [prog].into_iter().chain(arg).map(String::from).collect();
         let mut r = Remote::new(&["/bin/", prog].concat(), argv, ai);
@@ -187,6 +216,8 @@ pub struct Remote {
     origin: (f32, f32),
     drawn: f64,
     play: Play,
+    /// The programs its frame holds, and how it is held ([`nest`]).
+    nest: nest::Nest,
 }
 
 impl Remote {
@@ -229,7 +260,7 @@ impl Remote {
         false
     }
 
-    fn post(&mut self, ev: Event, cx: &mut Cx<'_>) {
+    fn post(&mut self, mut ev: Event, cx: &mut Cx<'_>) {
         if matches!(ev, Event::Click { .. } | Event::Submit { .. } | Event::Tap { .. }) {
             self.play.sent(self.waiting);
         }
@@ -238,6 +269,7 @@ impl Remote {
             self.play.forget();
         }
         let Some(pid) = self.pid else { return };
+        self.shift_out(&mut ev);
         cx.kernel.post_event(pid, &ev.encode());
         let now = ([!cx.ai.reports_off, cx.grain, !cx.ai.unkept], logon::profiles::face());
         if self.own.is_some() && self.prefs.replace(now) != Some(now) {
@@ -332,12 +364,19 @@ impl Remote {
         }
         let Some(status) = cx.kernel.reap(pid) else { return false };
         (self.pid, _) = (None, self.ai.ask(pid, Request::Close));
-        if status == 0 || status == wire::KILLED {
+        let ended = status == 0 || status == wire::KILLED;
+        if ended && !self.is_held() {
             cx.close_self();
             return false;
         }
+        if ended {
+            (self.note, self.frame) = ([&self.argv[0], " ended"].concat(), None);
+            return true;
+        }
         // Failed: whatever it was doing for the person is over (the overlay's status says so).
-        cx.agent(Request::Status { working: false });
+        if !self.is_held() {
+            cx.agent(Request::Status { working: false });
+        }
         self.note = [&self.argv[0], " stopped with status "].concat();
         ui::push_num(&mut self.note, status as u32 as usize);
         self.frame = None;
@@ -347,9 +386,12 @@ impl Remote {
     /// Takes `frame` as the window's tree, keeping the text the user edits.
     fn take(&mut self, mut frame: Frame, cx: &mut Cx<'_>) {
         let (held, _) = mem::take(&mut self.held);
+        self.shift_in(&mut frame);
         self.texts.adopt(&frame.nodes, &self.dirty);
         for r in mem::take(&mut frame.requests) {
             match r {
+                // Only the top window's program shapes the window.
+                Request::Close | Request::Size { .. } if self.is_held() => {}
                 Request::Open { name } => cx.open(&name),
                 Request::Close => cx.close_self(),
                 Request::Size { w, h } if self.frame.is_none() => cx.set_size(w, h),
@@ -372,6 +414,7 @@ impl Remote {
                 r => self.ai.ask(self.pid.unwrap_or_default(), r),
             }
         }
+        self.hold_kids(&frame.nodes, cx);
         (self.frame, self.waiting) = (Some(frame), false);
         self.play.answered();
         self.flush(cx);
@@ -389,7 +432,8 @@ impl App for Remote {
     }
 
     fn wants_text_input(&self) -> bool {
-        self.texts.focus != 0 || self.tty.is_some() || (self.types && self.starting())
+        let own = || self.texts.focus != 0 || self.tty.is_some() || (self.types && self.starting());
+        self.kid_types().unwrap_or_else(own)
     }
 
     fn preferred_size(&self) -> Option<(f32, f32)> {
@@ -406,14 +450,14 @@ impl App for Remote {
 
     fn frame_in(&self, now_ms: f64) -> Option<u32> {
         // A drag's held point waits for the next frame's Tick to tap it.
-        if self.view.animating(now_ms) || self.play.held() {
-            return Some(0);
-        }
-        self.pid.and(self.play.due_in(now_ms))
+        let now = self.view.animating(now_ms) || self.play.held();
+        let own = if now { Some(0) } else { self.pid.and(self.play.due_in(now_ms)) };
+        own.into_iter().chain(self.kids_frame_in(now_ms)).min()
     }
 
     fn squares(&self, id: u32) -> Option<u32> {
-        self.view.grids.iter().find(|b| b.id == id).map(|b| b.n)
+        let own = self.view.grids.iter().find(|b| b.id == id).map(|b| b.n);
+        own.or_else(|| self.kid_squares(id))
     }
 
     fn busy(&self) -> bool {
@@ -427,7 +471,13 @@ impl App for Remote {
     fn event(&mut self, ev: AppEvent, cx: &mut Cx<'_>) -> bool {
         let key = if let AppEvent::Key { key, .. } = ev { Some(key) } else { None };
         let last = mem::replace(&mut self.last_key, key);
-        match ev {
+        // A held program's: the pointer in its rect, a key while it has the focus.
+        if let Some(redraw) = self.route(&ev, cx) {
+            return redraw;
+        }
+        let kids = matches!(ev, AppEvent::Tick { .. } | AppEvent::Io | AppEvent::Focus(_));
+        let kids = kids && self.kids(&ev, cx);
+        kids | match ev {
             AppEvent::Resized { w, h } => {
                 if self.pid.is_none() && self.note.is_empty() && !self.closed {
                     self.start(cx);
@@ -501,6 +551,9 @@ impl App for Remote {
 
     fn frame(&mut self, pid: u32, frame: &[u8], cx: &mut Cx<'_>) -> bool {
         if self.pid != Some(pid) {
+            if self.kids_frame(pid, frame, cx) {
+                return true;
+            }
             // A program the Terminal's shell runs may ask the AI (`apps::asks`).
             let ask = &mut |r| self.ai.ask(pid, r);
             self.tty.iter().for_each(|_| apps::asks(cx, pid, frame, ask));
@@ -516,6 +569,7 @@ impl App for Remote {
     }
 
     fn closing(&mut self, cx: &mut Cx<'_>) {
+        self.kids_closing(cx);
         if !mem::replace(&mut self.closed, true) {
             // The last edits first: the program may keep them.
             self.send(Event::Close, cx);
@@ -538,6 +592,7 @@ impl App for Remote {
             return;
         };
         uiview::draw(ui, &frame.nodes, &mut self.texts, &mut self.view);
+        self.draw_kids(ui);
     }
 }
 

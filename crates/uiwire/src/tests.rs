@@ -831,3 +831,49 @@ fn the_meshs_snapshots_and_frames_come_back_whole() {
     assert_eq!(Frame::take(&out), Some((a, HEAD + 3)));
     assert_eq!(Frame::take(&out[HEAD + 3..]), Some((b, HEAD)));
 }
+
+#[test]
+fn an_embed_round_trips_and_a_bad_one_does_not_decode() {
+    let embed = |w, h, program: &str, args: &str| Node::Embed {
+        id: 9,
+        w,
+        h,
+        program: program.into(),
+        args: args.into(),
+    };
+    let good = [embed(240, 240, "clock", "face\ttz=-360"), embed(1, MAX_SIDE, "a-b_9", "")];
+    good.iter().for_each(|n| strict(n, Node::encode, Node::decode));
+    let long = "x".repeat(MAX_ARGS + 1);
+    let bad = [
+        embed(0, 240, "clock", ""),
+        embed(240, MAX_SIDE + 1, "clock", ""),
+        embed(240, 240, "", ""),
+        embed(240, 240, "../bin/sh", ""),
+        embed(240, 240, &"c".repeat(MAX_PROGRAM + 1), ""),
+        embed(240, 240, "clock", &long),
+    ];
+    for n in &bad {
+        let frame = Frame { nodes: vec![n.clone()], ..Frame::default() };
+        assert!(Node::decode(&n.encode()).is_none() && frame.encode_checked().is_none(), "{n:?}");
+    }
+    assert!(program_name("grandfather") && !program_name("a b") && !program_name("é"));
+}
+
+#[test]
+fn ids_shift_through_a_tree_and_an_event_names_its_own() {
+    let mut frame = sample();
+    let mut before = Vec::new();
+    frame.nodes.iter_mut().for_each(|n| n.ids_mut(&mut |id| before.push(*id)));
+    // Every id, in order, a Separator's, Spacer's and Glyph's left out; 0 (none) passed too.
+    assert_eq!(before.len(), 20);
+    assert_eq!(&before[..4], &[1, 0, 2, 3]);
+    let shift = |id: &mut u32| *id = id.wrapping_add(7 << 24);
+    frame.nodes.iter_mut().for_each(|n| n.ids_mut(&mut |id| shift(id)));
+    let mut after = Vec::new();
+    frame.nodes.iter_mut().for_each(|n| n.ids_mut(&mut |id| after.push(*id)));
+    assert!(before.iter().zip(&after).all(|(b, a)| *a == b.wrapping_add(7 << 24)));
+    let mut ev = Event::Tap { id: 3, cell: 8 };
+    *ev.id_mut().unwrap() += 1;
+    assert_eq!(ev, Event::Tap { id: 4, cell: 8 });
+    assert!(Event::Resize { w: 1, h: 1 }.id_mut().is_none());
+}

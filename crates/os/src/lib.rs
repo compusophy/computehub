@@ -69,8 +69,8 @@ pub const PREFS: [&str; 7] =
 /// verifier (a mesh worker) and the device's test (`gauge`); then the
 /// applets, which share
 /// `bin/toolbox.wasm` (as the windows of [`remote::SYSTEM`] share `bin/system.wasm`).
-const BIN: [&str; 9] =
-    ["sh", "agent", "terminal", "studio", "assistant", "pool", "fractal", "iq", "gauge"];
+const BIN: [&str; 10] =
+    ["sh", "agent", "terminal", "studio", "assistant", "pool", "fractal", "iq", "gauge", "clock"];
 const APPLETS: [&str; 9] =
     ["hello", "rev", "wc", "spin", "nap", "fstest", "keys", "bench", "selftest"];
 
@@ -132,6 +132,8 @@ impl Desktop {
         let mut vfs = Vfs::new();
         let _ = vfs.mkdir_all("/bin"); // Not mkdir: Vfs::new ships mkdir_all already.
         let bin = BIN.iter().map(|&p| (p, p)).chain(APPLETS.iter().map(|&a| (a, "toolbox")));
+        // The clocks other than `clock` run its wasm as their name.
+        let bin = bin.chain(remote::CLOCKS.iter().skip(1).map(|c| (c.0, "clock")));
         for (name, wasm) in bin.chain(remote::SYSTEM.iter().map(|s| (s.0, "system"))) {
             let _ = kernel::install(&mut vfs, name, wasm);
         }
@@ -490,6 +492,10 @@ impl App for Desktop {
     /// if it redraws; all but the watcher's own stir the meters.
     fn event(&mut self, ev: Event, ctl: &mut Ctl) -> Handled {
         let (t, hiding) = (ctl.monotonic_ms(), matches!(ev, Event::Hidden));
+        // The zone the clocks open in, as of the last minute's tick.
+        if matches!(ev, Event::Tick { .. } | Event::Resize { .. }) {
+            remote::set_zone(ctl.utc_offset());
+        }
         let bit = match ev {
             Event::Key { .. } | Event::Text(_) | Event::Wheel { .. } => INPUT,
             Event::PointerMove { .. } | Event::PointerDown { .. } => INPUT,

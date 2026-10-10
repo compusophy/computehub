@@ -40,6 +40,7 @@ members = [
     "programs/activity",
     "programs/pool",
     "programs/fractal",
+    "programs/clock",
     "programs/sha",
     "programs/team",
     "programs/gauge",
@@ -110,6 +111,7 @@ compusophy-system = { path = "programs/system", version = "0.1.0" }
 compusophy-activity = { path = "programs/activity", version = "0.1.0" }
 compusophy-pool = { path = "programs/pool", version = "0.1.0" }
 compusophy-fractal = { path = "programs/fractal", version = "0.1.0" }
+compusophy-clock = { path = "programs/clock", version = "0.1.0" }
 compusophy-sha = { path = "programs/sha", version = "0.1.0" }
 compusophy-team = { path = "programs/team", version = "0.1.0" }
 compusophy-gauge = { path = "programs/gauge", version = "0.1.0" }
