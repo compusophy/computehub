@@ -7,7 +7,7 @@ WebAssembly, drawing everything on one canvas. Floating windows, a home screen w
 terminal with a real shell, files kept in your browser, and AI built in, free. Nothing to
 install, and no server runs your apps: the tab is the machine.
 
-**Try it:** <https://computehub-sigma.vercel.app>
+**Try it:** <https://compusophy.com>
 
 ## What's in it
 

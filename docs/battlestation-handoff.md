@@ -11,7 +11,7 @@ page's own origin, and shares memory only in a cross-origin isolated page, so:
 
 - Mirror computehub's built `dist/` under the game, e.g. `dist/battlestation/os/`: every path
   in computehub's `dist/files.txt` (os.js, os_bg.wasm, cpu/, bin/, fonts/, licenses/). From the
-  live site: `https://computehub-sigma.vercel.app/files.txt`, then each path under the same
+  live site: `https://compusophy.com/files.txt`, then each path under the same
   origin; or build computehub (`bash scripts/build-web.sh`) and copy `dist/`.
 - Serve Battlestation's page (and the mirrored files) with
   `Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Embedder-Policy: require-corp`
