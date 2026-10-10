@@ -198,7 +198,8 @@ impl Ctl {
     /// full or blocked). Natively there is no storage, and it says yes.
     pub fn storage_put(&mut self, key: &str, value: &str) -> bool {
         !cfg!(target_arch = "wasm32")
-            || crate::io::storage().is_some_and(|st| st.set_item(key, value).is_ok())
+            || crate::io::storage()
+                .is_some_and(|st| st.set_item(&crate::mount::keyed(key), value).is_ok())
     }
 
     /// `localStorage[key]`, newest queued write (or removal) first; `None` when absent or
@@ -213,7 +214,7 @@ impl Ctl {
         if queued.is_some() || !cfg!(target_arch = "wasm32") {
             return queued.flatten();
         }
-        crate::io::storage()?.get_item(key).ok().flatten()
+        crate::io::storage()?.get_item(&crate::mount::keyed(key)).ok().flatten()
     }
 
     /// `sessionStorage[key]`, newest queued write first; `None` when absent or unavailable.
@@ -226,7 +227,7 @@ impl Ctl {
         if queued.is_some() || !cfg!(target_arch = "wasm32") {
             return queued.flatten();
         }
-        crate::io::session()?.get_item(key).ok().flatten()
+        crate::io::session()?.get_item(&crate::mount::keyed(key)).ok().flatten()
     }
 
     /// The page's loads as the browser timed them: the page itself, then each resource; none

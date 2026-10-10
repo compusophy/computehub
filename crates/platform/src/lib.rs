@@ -20,6 +20,7 @@
 mod ctl;
 mod io;
 mod link;
+mod mount;
 mod nav;
 mod proc;
 mod render;
@@ -27,8 +28,14 @@ mod render;
 mod tests;
 
 pub use ctl::{Ctl, Effect, Load, LocalTime, Timing};
+pub use mount::{
+    Mount, backing, cursor, frames, inject, mount, page_canvas, pixels, resize_to, surface, typing,
+    visible,
+};
 pub use nav::{Device, Hardware, beacon, device, hardware};
 pub use render::Renderer;
+
+use render::Surface;
 
 use std::cell::{Cell, RefCell};
 use std::rc::{Rc, Weak};
@@ -140,15 +147,45 @@ pub fn run<A: App + 'static>(app: A) -> Result<(), JsValue> {
         .ok_or("no <canvas id=\"os\">")?
         .dyn_into()
         .map_err(|_| "#os is not a <canvas>")?;
+    let canvas = Surface::Page(canvas);
     let renderer = Renderer::new(&canvas).map_err(|e| JsValue::from_str(&e))?;
     let sink = io::text_sink(&document)?;
     let debug = window.location().search().is_ok_and(|q| has(&q, "debug"));
-    let s = Rc::new_cyclic(|me: &Weak<Shared>| Shared {
+    let s = shared(window, document, canvas, Some(sink), Box::new(app), renderer, None, debug);
+    resize(&s);
+    tick(&s, true);
+    s.frame_pending.set(false);
+    frame(&s);
+    mark(&s.window, "first-frame");
+    install(&s)?;
+    watch_dpr(&s);
+    // The callbacks hold only `Weak`s: this keeps the state for the page's life, where Ctl's
+    // live reads find it.
+    let _ = SHARED.try_with(|c| c.set(Some(Box::leak(Box::new(s)))));
+    Ok(())
+}
+
+/// The state of a page or a mount: `sink` the page's textarea (none mounted), `mounted` the
+/// size a host gives (CSS px and the pixel ratio).
+#[allow(clippy::too_many_arguments)]
+fn shared(
+    window: Window,
+    document: Document,
+    canvas: Surface,
+    sink: Option<HtmlTextAreaElement>,
+    app: Box<dyn App>,
+    renderer: Renderer,
+    mounted: Option<(f32, f32, f32)>,
+    debug: bool,
+) -> Rc<Shared> {
+    Rc::new_cyclic(|me: &Weak<Shared>| Shared {
         window,
         document,
         canvas,
         sink,
-        app: RefCell::new(Box::new(app)),
+        mounted: Cell::new(mounted),
+        frames: Cell::new(0),
+        app: RefCell::new(app),
         renderer: RefCell::new(Some(renderer)),
         // No frame can be requested until the first is drawn, below.
         frame_pending: Cell::new(true),
@@ -176,19 +213,7 @@ pub fn run<A: App + 'static>(app: A) -> Result<(), JsValue> {
         derives: RefCell::new(Vec::new()),
         links: RefCell::new(Vec::new()),
         cert: RefCell::default(),
-    });
-
-    resize(&s);
-    tick(&s, true);
-    s.frame_pending.set(false);
-    frame(&s);
-    mark(&s.window, "first-frame");
-    install(&s)?;
-    watch_dpr(&s);
-    // The callbacks hold only `Weak`s: this keeps the state for the page's life, where Ctl's
-    // live reads find it.
-    let _ = SHARED.try_with(|c| c.set(Some(Box::leak(Box::new(s)))));
-    Ok(())
+    })
 }
 
 thread_local! {
@@ -201,9 +226,13 @@ thread_local! {
 struct Shared {
     window: Window,
     document: Document,
-    canvas: HtmlCanvasElement,
-    /// The hidden `<textarea>` that text input goes through.
-    sink: HtmlTextAreaElement,
+    canvas: Surface,
+    /// The hidden `<textarea>` that text input goes through (a mount has none: its host types).
+    sink: Option<HtmlTextAreaElement>,
+    /// A mount's size as its host last gave it: CSS px and the pixel ratio (a page's: none).
+    mounted: Cell<Option<(f32, f32, f32)>>,
+    /// How many frames were drawn: a mount's host copies its surface when this moved.
+    frames: Cell<u32>,
     app: RefCell<Box<dyn App>>,
     /// `None` while the WebGL context is lost.
     renderer: RefCell<Option<Renderer>>,
@@ -270,7 +299,9 @@ fn handler(me: &Weak<Shared>, tag: u32, f: Handler) -> Function {
 fn install(s: &Rc<Shared>) -> Result<(), JsValue> {
     let me = Rc::downgrade(s);
     let (win, doc): (&EventTarget, &EventTarget) = (&s.window, &s.document);
-    let (canvas, sink): (&EventTarget, &EventTarget) = (&s.canvas, &s.sink);
+    let canvas = s.canvas.target();
+    let Some(sink) = &s.sink else { return Ok(()) };
+    let sink: &EventTarget = sink;
     let listeners: [(&EventTarget, &str, Handler); 17] = [
         (win, "keydown", |s, _, e| on_key(s, e, true)),
         (win, "keyup", |s, _, e| on_key(s, e, false)),
@@ -347,7 +378,9 @@ fn on_pointer(s: &Rc<Shared>, e: &DomEvent, kind: Ptr) {
     let button = button_u8(p.button());
     let ev = match kind {
         Ptr::Down => {
-            let _ = s.canvas.set_pointer_capture(p.pointer_id());
+            if let Surface::Page(c) = &s.canvas {
+                let _ = c.set_pointer_capture(p.pointer_id());
+            }
             Event::PointerDown { x, y, button, touch: p.pointer_type() == "touch" }
         }
         Ptr::Move => Event::PointerMove { x, y },
@@ -381,7 +414,11 @@ fn resize(s: &Rc<Shared>) {
 }
 
 fn measure(s: &Shared) -> (f32, f32, f32) {
-    let rect = s.canvas.get_bounding_client_rect();
+    if let Some(size) = s.mounted.get() {
+        return size;
+    }
+    let Surface::Page(c) = &s.canvas else { return (0.0, 0.0, 1.0) };
+    let rect = c.get_bounding_client_rect();
     let dpr = sane_dpr(s.window.device_pixel_ratio());
     (rect.width() as f32, rect.height() as f32, dpr)
 }
@@ -454,6 +491,7 @@ fn frame(s: &Rc<Shared>) {
         let mut slot = s.renderer.borrow_mut();
         let Some(r) = slot.as_mut() else { return };
         s.app.borrow_mut().frame(r, &mut ctl);
+        s.frames.set(s.frames.get().wrapping_add(1));
     }
     mark_debug(s, "frame", &[]);
     io::apply(s, ctl.effects);

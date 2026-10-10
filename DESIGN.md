@@ -899,6 +899,62 @@ reinforcement learning, not only a filter.
   llama.cpp's engine. GLM's same answers, regraded with no new call: everyday apps (tiers 1-2)
   77 to 80 of 101, ambitious games (tiers 3-6) 20 to 23 of 123; none lost.
 
+## The fractal: apps hold apps, the OS is a cartridge
+
+compusophy, 2026-10-09: "everything in the world is one pattern, one rule, the fractal", and
+never an iframe. The rule: a cartridge reads its size and its local input and draws in its own
+coordinates; a holder is a cartridge that holds cartridges. The held one cannot tell, so it
+composes at any depth and any size (localharness's cartridges, a clock face composed into a
+grandfather clock, were the model).
+
+**Apps hold apps** (`uiwire::Node::Embed`, kind 31; `os::remote::nest`). A frame names a `/bin`
+program and its args in a rect (a board, scaled to fit as a Canvas is); the desktop runs it in a
+process of its own and draws its frames there. Every level is the same `Remote`, so a held app
+holds its own. Its window is the rect (its Resize says so), its pointer is the rect's, its keys
+come while it has the focus (a press in it gives it), its ids are shifted apart from the holder's
+by a slot `<< 24` (so a Pages' `id + i` stays one) and back. It cannot close or resize the window;
+its end leaves a note. At most 8 a level, 5 deep, each a kernel process (48 in all). The clocks
+show it: `clock.wasm` runs as a Clock face, a Grandfather clock holding a face above its pendulum,
+and a Clock shop holding a wall clock and two grandfathers: three levels, six processes, one
+window, each at the local time (`tz=`).
+
+**The OS is a cartridge** (`os::cartridge`, `platform::mount`). A page that is not the OS's own
+imports `os.js` (whose start does nothing without `<canvas id="os">`) and mounts the whole
+desktop into an `OffscreenCanvas`, no element of its page:
+
+```js
+import init, { Cartridge } from './os/os.js';
+await init();
+const os = new Cartridge(1280, 720, 1, './os/', 'monitor.'); // CSS px, ratio, files, storage keys
+// each frame of the host's: when os.frames() moved, copy os.surface() (a WebGPU
+// copyExternalImageToTexture, a 2D drawImage) or read os.pixels(u8) (RGBA, top row first,
+// os.width() x os.height() x 4)
+os.pointer(kind, x, y, button); // 0 down 1 move 2 up 3 leave, in the surface's CSS px
+os.wheel(x, y, dy);
+os.key(down, code, key, mods, repeat); // KeyboardEvent's code and key; mods Shift 1 Ctrl 2 Alt 4 Meta 8 AltGr 16
+if (os.typing()) os.text(ch); // a printable key's text while a field has the keys
+os.resize(w, h, dpr); os.visible(onScreen); os.cursor(); // the CSS cursor it wants
+```
+
+The OS schedules its own frames and timers in the host's page and signs in as it always does
+(its welcome on the host's monitor). Its storage (localStorage, sessionStorage, the mesh's
+IndexedDB) is under `ns`, its files under `base`. Its programs run in workers that share memory,
+which a browser allows only to a cross-origin isolated page (`Cross-Origin-Opener-Policy:
+same-origin`, `Cross-Origin-Embedder-Policy: require-corp`) and only from its own origin, so the
+host serves the OS's files beside itself: `dist/files.txt` lists them (`os.js`, `os_bg.wasm`,
+`cpu/`, `bin/`, `fonts/`, `licenses/`). The `/api/*` functions (the free AI, feedback, signaling)
+are the OS's own origin's and refuse others, so a mounted OS has no AI and no pairing unless its
+host proxies them. One mount a page.
+
+Seen on 2026-10-10: a plain host page mounted the OS, signed in by its injected clicks, opened the
+Clock shop, and showed the shop's wall clock and both grandfathers running: a page, the OS, the
+shop, the grandfathers, their faces.
+
+**Next**: secretspace's Battlestation mounts it on its desk's monitor (the glass's texture from
+the surface, the desk mouse raycast onto it); the OS inside itself (a Monitor app holding a
+nested desktop, one atlas, a pid range per nested kernel); foreign cartridges in the OS (a
+secretspace game as an app here, which closes the loop).
+
 ## The team: many models, one mind
 
 compusophy, 2026-10-08, after a flat night (the 3B alone 6% to 8% held out, inside the noise;

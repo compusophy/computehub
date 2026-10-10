@@ -268,3 +268,16 @@ fn a_workers_meters_count_its_run_so_far() {
     assert_eq!(meters([1, u32::MAX, u32::MAX - 9, 0], 10), [19, 0, 1]);
     assert_eq!(meters([1, 5, 1000, 0], 999), [5, 0, 1]);
 }
+
+#[test]
+fn a_mount_keeps_its_files_and_keys_under_its_own() {
+    // A page's: as they are.
+    assert_eq!(
+        (mount::based("cpu/worker.js"), mount::keyed("compusophy.last")),
+        ("cpu/worker.js".to_string(), "compusophy.last".to_string())
+    );
+    mount::place("/battlestation/os/".into(), "monitor.".into());
+    assert_eq!(mount::based("cpu/worker.js"), "/battlestation/os/cpu/worker.js");
+    assert_eq!(mount::keyed("compusophy.last"), "monitor.compusophy.last");
+    mount::place(String::new(), String::new());
+}

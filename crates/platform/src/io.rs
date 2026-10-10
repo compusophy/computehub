@@ -38,12 +38,16 @@ pub(crate) fn apply(s: &Rc<Shared>, effects: Vec<Effect>) {
             Effect::TextInput(on) => text_input(s, on),
             Effect::Fetch { id, url } => fetch(s, id, &url),
             Effect::RequestFrame => request_frame(s),
+            // A mount's host reads it ([`crate::cursor`]).
             Effect::Cursor(c) => {
-                if s.cursor.replace(c) != c {
-                    let _ = s.canvas.style().set_property("cursor", c);
+                if let (false, crate::Surface::Page(canvas)) = (s.cursor.replace(c) == c, &s.canvas)
+                {
+                    let _ = canvas.style().set_property("cursor", c);
                 }
             }
-            Effect::Store { key, value } => _ = storage().map(|st| st.set_item(&key, &value)),
+            Effect::Store { key, value } => {
+                _ = storage().map(|st| st.set_item(&crate::mount::keyed(&key), &value))
+            }
             Effect::Spawn { pid, sab } => proc::spawn(s, pid, sab),
             Effect::Start { pid, msg, program } => proc::post(s, pid, &msg, Some(program)),
             Effect::Send { pid, msg } => proc::post(s, pid, &msg, None),
@@ -54,8 +58,11 @@ pub(crate) fn apply(s: &Rc<Shared>, effects: Vec<Effect>) {
             Effect::FrameIn(ms) => arm(s, &s.frame_timer, &s.frame_fn, ms),
             Effect::Stream { id, url, headers, body } => stream(s, id, &url, headers, &body),
             Effect::Abort(id) => _ = take(s, id).map(|a| a.abort()),
-            Effect::Remove(key) => _ = storage().map(|st| st.remove_item(&key)),
+            Effect::Remove(key) => {
+                _ = storage().map(|st| st.remove_item(&crate::mount::keyed(&key)))
+            }
             Effect::Erase(prefix) => [storage(), session()].into_iter().flatten().for_each(|st| {
+                let prefix = crate::mount::keyed(&prefix);
                 // From the last: a removal moves the keys after it down.
                 for i in (0..st.length().unwrap_or(0)).rev() {
                     let key = st.key(i).ok().flatten().filter(|k| k.starts_with(prefix.as_str()));
@@ -63,15 +70,17 @@ pub(crate) fn apply(s: &Rc<Shared>, effects: Vec<Effect>) {
                 }
             }),
             Effect::Session { key, value } => {
-                let st = session();
+                let (st, key) = (session(), crate::mount::keyed(&key));
                 _ = st.map(|st| value.map_or(st.remove_item(&key), |v| st.set_item(&key, &v)));
             }
+            // Never the host's page.
+            Effect::Reload if s.mounted.get().is_some() => {}
             Effect::Reload => _ = s.window.location().reload(),
             Effect::InputMode(numeric) => {
-                let _ = match numeric {
-                    true => s.sink.set_attribute("inputmode", "numeric"),
-                    false => s.sink.remove_attribute("inputmode"),
-                };
+                let _ = s.sink.as_ref().map(|sink| match numeric {
+                    true => sink.set_attribute("inputmode", "numeric"),
+                    false => sink.remove_attribute("inputmode"),
+                });
             }
             Effect::Derive { id, pin, salt, iterations } => derive(s, id, &pin, &salt, iterations),
             Effect::Link { id, cert, offer } => crate::link::link(s, id, &cert, offer),
@@ -95,23 +104,24 @@ pub(crate) fn session() -> Option<Storage> {
 
 fn text_input(s: &Shared, on: bool) {
     s.typing.set(on);
+    let Some(sink) = &s.sink else { return };
     // Blurring a focused sink first brings back a phone keyboard the user
     // dismissed; blurring one without focus does nothing.
-    let _ = s.sink.blur();
+    let _ = sink.blur();
     if on {
-        let _ = s.sink.focus();
+        let _ = sink.focus();
     }
 }
 
 /// Sends an `input` event's inserted text (not while an IME composes: that
 /// text comes with `compositionend`), then empties the sink.
 pub(crate) fn on_input(s: &Rc<Shared>, e: &DomEvent) {
-    let Some(ie) = e.dyn_ref::<InputEvent>() else { return };
+    let (Some(ie), Some(sink)) = (e.dyn_ref::<InputEvent>(), &s.sink) else { return };
     if ie.is_composing() {
         return;
     }
-    let text = inserted(&ie.input_type(), ie.data(), || s.sink.value());
-    s.sink.set_value("");
+    let text = inserted(&ie.input_type(), ie.data(), || sink.value());
+    sink.set_value("");
     if !text.is_empty() {
         dispatch(s, Event::Text(text));
     }
@@ -120,7 +130,7 @@ pub(crate) fn on_input(s: &Rc<Shared>, e: &DomEvent) {
 /// Sends a composition's committed string, then empties the sink.
 pub(crate) fn on_composition_end(s: &Rc<Shared>, e: &DomEvent) {
     let data = e.dyn_ref::<CompositionEvent>().and_then(CompositionEvent::data);
-    s.sink.set_value("");
+    let _ = s.sink.as_ref().map(|sink| sink.set_value(""));
     if let Some(text) = data.filter(|t| !t.is_empty()) {
         dispatch(s, Event::Text(text));
     }
@@ -157,7 +167,7 @@ fn fetch(s: &Rc<Shared>, id: u32, url: &str) {
         let result = Err(String::from("not a same-origin relative URL: ") + url);
         return later(s, Event::Fetched { id, result });
     }
-    settle(s, id, &s.window.fetch_with_str(url), (on_response, failed));
+    settle(s, id, &s.window.fetch_with_str(&crate::mount::based(url)), (on_response, failed));
 }
 
 /// What runs when a fetch promise settles: `(state, fetch id, value)`.

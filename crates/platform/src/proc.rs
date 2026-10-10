@@ -36,7 +36,9 @@ pub(crate) fn spawn(s: &Rc<Shared>, pid: u32, sab: bool) {
     // Only an isolated page has a SharedArrayBuffer: the kernel refuses to
     // spawn on another, so a `sab` here means isolated (not checked twice).
     // A worker that cannot start hangs its process until a kill, as one that never loads.
-    let Ok(worker) = Worker::new_with_options("cpu/worker.js", &opts) else { return };
+    let Ok(worker) = Worker::new_with_options(&crate::mount::based("cpu/worker.js"), &opts) else {
+        return;
+    };
     let sab = sab.then(|| {
         let b = SharedArrayBuffer::new(RING_AT + RING_BYTES);
         (Int32Array::new(&b), Uint8Array::new(&b), b)

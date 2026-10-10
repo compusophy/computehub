@@ -2,12 +2,46 @@
 //! buffer, one R8 atlas texture, one instanced draw per frame.
 
 use gfx::{Atlas, DrawList, INSTANCE_BYTES, Rgba};
-use wasm_bindgen::JsCast;
+use wasm_bindgen::{JsCast, JsValue};
 use web_sys::WebGl2RenderingContext as Gl;
 use web_sys::{
-    HtmlCanvasElement, WebGlBuffer, WebGlContextAttributes, WebGlPowerPreference, WebGlProgram,
-    WebGlShader, WebGlTexture, WebGlUniformLocation, WebGlVertexArrayObject,
+    EventTarget, HtmlCanvasElement, OffscreenCanvas, WebGlBuffer, WebGlContextAttributes,
+    WebGlPowerPreference, WebGlProgram, WebGlShader, WebGlTexture, WebGlUniformLocation,
+    WebGlVertexArrayObject,
 };
+
+/// What frames are drawn into: the page's `<canvas id="os">`, or an `OffscreenCanvas` another
+/// page shows as it likes (the OS mounted there: [`crate::mount`]), which keeps its last frame
+/// until the next so that page can copy it whenever it draws.
+#[derive(Clone)]
+pub(crate) enum Surface {
+    Page(HtmlCanvasElement),
+    Off(OffscreenCanvas),
+}
+
+impl Surface {
+    /// Where its context's loss and restoring are heard.
+    pub(crate) fn target(&self) -> &EventTarget {
+        match self {
+            Surface::Page(c) => c,
+            Surface::Off(c) => c,
+        }
+    }
+
+    fn context(&self, attrs: &WebGlContextAttributes) -> Result<Option<js_sys::Object>, JsValue> {
+        match self {
+            Surface::Page(c) => c.get_context_with_context_options("webgl2", attrs),
+            Surface::Off(c) => c.get_context_with_context_options("webgl2", attrs),
+        }
+    }
+
+    fn set_size(&self, (w, h): (u32, u32)) {
+        match self {
+            Surface::Page(c) => (c.set_width(w), c.set_height(h)),
+            Surface::Off(c) => (c.set_width(w), c.set_height(h)),
+        };
+    }
+}
 
 /// The instance attributes as (location, GL type, normalized, byte offset),
 /// each a vec4 with divisor 1, matching [`gfx::VERTEX_SHADER`]'s `a_rect`,
@@ -25,7 +59,7 @@ pub(crate) const MIN_CAPACITY: usize = 16 * 1024;
 /// the last [`crate::Event::Resize`]. Lent to [`crate::App::frame`].
 pub struct Renderer {
     gl: Gl,
-    canvas: HtmlCanvasElement,
+    canvas: Surface,
     program: WebGlProgram,
     vao: WebGlVertexArrayObject,
     buffer: WebGlBuffer,
@@ -45,16 +79,17 @@ pub struct Renderer {
 impl Renderer {
     /// Creates the context and GPU objects; an error names the failed step
     /// (with the info log for shaders).
-    pub(crate) fn new(canvas: &HtmlCanvasElement) -> Result<Renderer, String> {
-        // The rest of the attributes keep their defaults (no stencil,
-        // premultiplied alpha, no preserved drawing buffer).
+    pub(crate) fn new(canvas: &Surface) -> Result<Renderer, String> {
+        // The rest of the attributes keep their defaults (no stencil, premultiplied alpha, no
+        // preserved drawing buffer but offscreen, whose host copies the last frame when it will).
         let attrs = WebGlContextAttributes::new();
         attrs.set_alpha(false);
         attrs.set_antialias(false);
         attrs.set_depth(false);
         attrs.set_power_preference(WebGlPowerPreference::LowPower);
+        attrs.set_preserve_drawing_buffer(matches!(canvas, Surface::Off(_)));
         let gl: Gl = canvas
-            .get_context_with_context_options("webgl2", &attrs)
+            .context(&attrs)
             .map_err(|e| String::from("getContext(\"webgl2\") threw: ") + &crate::js_text(&e))?
             .ok_or("WebGL2 is not available")?
             .unchecked_into();
@@ -98,6 +133,37 @@ impl Renderer {
         self.dpr
     }
 
+    /// The last frame's size in device pixels.
+    pub(crate) fn backing(&self) -> (u32, u32) {
+        self.backing
+    }
+
+    /// The last frame as RGBA rows, the top first, into `out` ([`Renderer::backing`]'s width
+    /// times height times 4 bytes); false when `out` is another size or the read fails.
+    pub(crate) fn pixels(&self, out: &mut [u8]) -> bool {
+        let (w, h) = (self.backing.0 as usize, self.backing.1 as usize);
+        if w == 0 || out.len() != w * h * 4 {
+            return false;
+        }
+        let (gw, gh) = (self.backing.0 as i32, self.backing.1 as i32);
+        let read = self.gl.read_pixels_with_opt_u8_array(
+            0,
+            0,
+            gw,
+            gh,
+            Gl::RGBA,
+            Gl::UNSIGNED_BYTE,
+            Some(&mut *out),
+        );
+        // GL reads from the bottom row up.
+        let row = w * 4;
+        for y in 0..h / 2 {
+            let (top, rest) = out.split_at_mut((h - 1 - y) * row);
+            top[y * row..(y + 1) * row].swap_with_slice(&mut rest[..row]);
+        }
+        read.is_ok()
+    }
+
     pub(crate) fn set_size(&mut self, w: f32, h: f32, dpr: f32) {
         self.css = (w, h);
         self.dpr = dpr;
@@ -112,8 +178,7 @@ impl Renderer {
         let gl = &self.gl;
         let size = backing_size(self.css, self.dpr);
         if size != self.backing {
-            self.canvas.set_width(size.0);
-            self.canvas.set_height(size.1);
+            self.canvas.set_size(size);
             self.backing = size;
         }
         gl.viewport(0, 0, gl.drawing_buffer_width(), gl.drawing_buffer_height());

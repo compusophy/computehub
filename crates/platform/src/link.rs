@@ -99,7 +99,8 @@ pub(crate) fn link(s: &Rc<Shared>, id: u32, key: &str, offer: Option<String>) {
     }
     c.key = key.into();
     drop(c);
-    let req = call(&global("indexedDB"), "open", &[&DB.into(), &1.into()]);
+    let db = crate::mount::keyed(DB);
+    let req = call(&global("indexedDB"), "open", &[&db.as_str().into(), &1.into()]);
     if req.is_undefined() {
         return certified(s, JsValue::NULL);
     }

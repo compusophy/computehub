@@ -175,6 +175,11 @@ for p in terminal sh agent toolbox studio assistant system pool fractal iq gauge
   if [ "$p" != gauge ]; then optimize "dist/bin/$p.wasm"; fi
 done
 
+# The files a page that mounts the OS as a cartridge (os::cartridge) serves beside itself, one a
+# line, relative to dist/: its programs run in workers, which a browser loads only from the
+# page's own origin, so the host mirrors them (and serves them cross-origin isolated).
+(cd dist && find . -type f ! -name files.txt | sed 's|^\./||' | LC_ALL=C sort) > dist/files.txt
+
 # dist/ is what visitors download, so it gets scripts/caps.sh's privacy check
 # too (same patterns; -a because the wasm and fonts are binary). A leaky
 # bundle fails the build, and scripts/deploy.sh stops on a failed build.

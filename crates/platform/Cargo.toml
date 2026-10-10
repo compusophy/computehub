@@ -35,6 +35,7 @@ web-sys = { workspace = true, features = [
     "Location",
     "MediaQueryList",
     "MouseEvent",
+    "OffscreenCanvas",
     "Node",
     "Performance",
     "PointerEvent",

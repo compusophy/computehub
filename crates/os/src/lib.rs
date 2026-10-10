@@ -30,6 +30,7 @@
 use std::mem;
 
 pub mod ai;
+mod cartridge;
 pub mod home;
 pub mod remote;
 /// Telemetry: notes, feedback and error reports, the outbox (its own crate).
@@ -74,9 +75,13 @@ const BIN: [&str; 10] =
 const APPLETS: [&str; 9] =
     ["hello", "rev", "wc", "spin", "nap", "fstest", "keys", "bench", "selftest"];
 
-// The wasm entry point. A plain comment: a doc comment would ship in os.js.
+// The wasm entry point. A plain comment: a doc comment would ship in os.js. A page without
+// <canvas id="os"> mounts the OS itself, as a cartridge.
 #[wasm_bindgen(start)]
 pub fn start() -> Result<(), JsValue> {
+    if !platform::page_canvas() {
+        return Ok(());
+    }
     report::install();
     platform::run(Desktop::new()?)
 }
