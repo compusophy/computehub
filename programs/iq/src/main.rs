@@ -102,8 +102,15 @@ impl Args {
 }
 
 /// The repository's root, which this crate is two folders under.
+#[cfg(not(target_os = "wasi"))]
 fn root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..").join("..")
+}
+
+/// In the browser (iq.wasm ships, so no build machine's path may be in it), the current folder.
+#[cfg(target_os = "wasi")]
+fn root() -> PathBuf {
+    PathBuf::from(".")
 }
 
 /// The text of `path`, or what is wrong, said.

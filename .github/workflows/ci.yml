@@ -52,6 +52,13 @@ jobs:
         run: bash scripts/build-web.sh
       - name: size gauge
         run: bash scripts/budget.sh
+      - name: keep the build for the deploy
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist
+          retention-days: 1
 
   # The oldest compiler the manifests promise (rust-version in Cargo.toml).
   # Clippy on stable does not catch newer language features, such as let
@@ -65,3 +72,39 @@ jobs:
           toolchain: "1.85"
       - name: test on the declared MSRV
         run: cargo test --workspace
+
+  # Each push to main goes to production once every check passed, so prod is
+  # main whoever pushed it (this PC, a cloud session), and nobody's branch can
+  # replace it (scripts/deploy.sh deploys prod only from main's tip). Needs the
+  # repository secrets VERCEL_TOKEN, VERCEL_ORG_ID and VERCEL_PROJECT_ID;
+  # without them it says so and deploys nothing.
+  deploy:
+    needs: [check, msrv]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    concurrency:
+      group: deploy-prod
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: deploy to production
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+        run: |
+          if [ -z "$VERCEL_TOKEN" ] || [ -z "$VERCEL_ORG_ID" ] || [ -z "$VERCEL_PROJECT_ID" ]; then
+            echo "::warning::No VERCEL_TOKEN, VERCEL_ORG_ID or VERCEL_PROJECT_ID secret: nothing deployed."
+            exit 0
+          fi
+          npm install -g vercel@58.9.1
+          mkdir -p .vercel
+          printf '{"projectId":"%s","orgId":"%s","projectName":"computehub"}\n' "$VERCEL_PROJECT_ID" "$VERCEL_ORG_ID" > .vercel/project.json
+          BUILT=1 bash scripts/deploy.sh prod
