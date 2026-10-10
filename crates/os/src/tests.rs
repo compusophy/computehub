@@ -489,3 +489,41 @@ fn home_and_the_meters_keep_to_the_one_shot_timer() {
     assert_eq!((desk.pace.wait(0), desk.wake), (Some(1000), 1001.0));
     assert!(read(&mut desk).iter().all(|f| !matches!(f, Fx::Reply { .. } | Fx::Wake(_))));
 }
+
+#[test]
+fn a_monitor_holds_a_desktop_whose_programs_run_in_a_pid_range_of_its_own() {
+    use ui::{App as _, AppEvent as E, Request as R};
+    let ai = ai::Ai::default();
+    assert!(registry(ai.clone(), monitor::MAX_DEPTH)("monitor").is_none(), "no deeper");
+    assert!(registry(ai.clone(), monitor::MAX_DEPTH - 1)("monitor").is_some());
+    let (mut vfs, mut kernel) = (Vfs::new(), kernel::Kernel::new());
+    let mut asks = |m: &mut monitor::Monitor, ev: Option<E>| {
+        let mut cx = ui::Cx::new(&mut vfs, &mut kernel, 0.0);
+        match ev {
+            Some(ev) => _ = m.event(ev, &mut cx),
+            None => m.closing(&mut cx),
+        }
+        cx.take_requests()
+    };
+    monitor::note(true, None);
+    let (mut a, mut b) = (monitor::Monitor::new(&ai, 1), monitor::Monitor::new(&ai, 1));
+    assert!(!a.has_kernel() && !a.runs(monitor::FIRST + 1));
+    asks(&mut a, Some(E::Resized { w: 900.0, h: 600.0 }));
+    asks(&mut b, Some(E::Resized { w: 900.0, h: 600.0 }));
+    // Each its own range past the page's.
+    let (one, two) = (monitor::FIRST, monitor::FIRST + monitor::SPAN);
+    assert!(a.has_kernel() && a.runs(one + 1) && !a.runs(two + 1) && !a.runs(5));
+    assert!(b.runs(two + 1) && !b.runs(one + 1));
+    // Its desktop opens a Terminal (Alt+Enter): the program's worker is asked of the page
+    // through the window, in its range; its READY comes back to it, and its Start goes out.
+    let alt = Mods { alt: true, ..Mods::default() };
+    let spawned = asks(&mut a, Some(E::Key { key: Key::Enter, mods: alt }));
+    let pid = one + 1;
+    assert!(spawned.contains(&R::Kernel(K::Spawn { pid, sab: true })), "{spawned:?}");
+    let ready = vec![kernel::wire::READY, kernel::wire::VERSION];
+    let started = asks(&mut a, Some(E::Proc { pid, msg: ready }));
+    assert!(started.iter().any(|r| matches!(r, R::Kernel(K::Start { pid: p, .. }) if *p == pid)));
+    // Closed, it ends what runs in it.
+    let ended = asks(&mut a, None);
+    assert!(ended.contains(&R::Kernel(K::Kill { pid })), "{ended:?}");
+}

@@ -261,6 +261,17 @@ impl Shell {
         (&mut self.host.kernel, &self.host.vfs)
     }
 
+    /// Closes every window, each app told first: the desktop ends (its effects leave by
+    /// [`Shell::take_effects`]).
+    pub fn close_all(&mut self) {
+        self.host.close_all();
+    }
+
+    /// Whether process `pid` runs for a desktop in one of its windows, however deep.
+    pub fn runs(&self, pid: u32) -> bool {
+        self.host.runs(pid)
+    }
+
     /// The kernel, for os to set up; its effects leave by [`Shell::take_effects`].
     pub fn kernel_mut(&mut self) -> &mut ui::kernel::Kernel {
         &mut self.host.kernel

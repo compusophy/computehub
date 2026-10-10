@@ -89,6 +89,17 @@ pub trait App {
     fn ended(&self) -> bool {
         false
     }
+    /// Whether it runs a kernel of its own in the page (a desktop in a window): what that asks
+    /// of the page goes as [`Request::Kernel`], and it hears the page's wakes
+    /// ([`AppEvent::ProcWake`]).
+    fn has_kernel(&self) -> bool {
+        false
+    }
+    /// Whether process `pid` is its kernel's or one a desktop it holds runs, however deep: the
+    /// process's messages come to it ([`AppEvent::Proc`]).
+    fn runs(&self, _pid: u32) -> bool {
+        false
+    }
 }
 
 /// The marks of [`Ui::mark`]: a widget's role (0: as its hit's sense says) and state flags.
@@ -166,6 +177,13 @@ pub enum AppEvent {
     /// For the overlay: an act settled, or the person stopped its task
     /// ([`uiwire::Event::Acted`], [`uiwire::Event::Halt`]).
     Agent(uiwire::Event),
+    /// For an app whose own kernel runs processes in the page ([`App::has_kernel`]: a desktop in
+    /// a window): a message from process `pid` ([`App::runs`]).
+    Proc { pid: u32, msg: Vec<u8> },
+    /// Process `pid`'s worker failed.
+    ProcError { pid: u32 },
+    /// The page's kernel woke: so must its own.
+    ProcWake,
 }
 
 /// A key by its physical position (`KeyboardEvent.code`); text comes
@@ -244,6 +262,9 @@ pub enum Request {
     /// Erase all the device keeps and start again as a first visit ([`uiwire::Request::Reset`]):
     /// the person's own act, dropped from a window the overlay acted on.
     Reset,
+    /// What the app's own kernel asks of the page ([`App::has_kernel`]): to spawn, start,
+    /// message, answer or end one of its processes, or to be woken.
+    Kernel(kernel::Effect),
 }
 
 /// The preference naming the model the AI answers with ([`AiStatus::model`]).
@@ -342,6 +363,11 @@ impl<'a> Cx<'a> {
     /// Resizes the asking app's window to a `w` x `h` content area.
     pub fn set_size(&mut self, w: u16, h: u16) {
         self.requests.push(Request::Size(w, h));
+    }
+
+    /// What the app's own kernel asks of the page ([`App::has_kernel`]).
+    pub fn kernel_out(&mut self, effect: kernel::Effect) {
+        self.requests.push(Request::Kernel(effect));
     }
 
     /// The requests so far, oldest first, leaving none.

@@ -430,6 +430,9 @@ impl Host {
                     out.effects.push(Effect::Reset);
                 }
                 Request::Reset => {}
+                // A desktop in a window: its kernel's processes are the page's too (asked in
+                // turn with this kernel's, and never lost with a Response thrown away).
+                Request::Kernel(k) => self.kernel.relay(k),
                 Request::Size(w, h) => {
                     let (r, size) = (rect.unwrap_or_default(), window_size((w.into(), h.into())));
                     let rect = size.map(|(w, h)| Rect::new(r.x, r.y, w, h));
@@ -466,14 +469,36 @@ impl Host {
         }
     }
 
+    /// Closes every window, each app told first ([`ui::App::closing`]): the desktop ends.
+    pub fn close_all(&mut self) {
+        let open: Vec<WinId> = self.wins.iter().map(|w| w.id).filter(|&w| self.live(w)).collect();
+        open.into_iter().for_each(|win| self.apply(Cmd::Close(win)));
+    }
+
+    /// Whether process `pid` runs for a desktop in one of its windows, however deep.
+    pub fn runs(&self, pid: u32) -> bool {
+        self.wins.iter().any(|w| w.app.runs(pid))
+    }
+
     /// Hands the kernel what the platform heard from workers and timers; pumps.
     pub fn kernel_in(&mut self, ev: KernelIn, out: &mut Response) {
+        // A process of a desktop in a window ([`ui::App::runs`]) is its own kernel's.
+        let held = |h: &Host, pid: u32| h.wins.iter().find(|w| w.app.runs(pid)).map(|w| w.id);
         match ev {
-            KernelIn::Msg { pid, msg } => self.kernel.message(&mut self.vfs, pid, &msg),
-            KernelIn::Error { pid } => self.kernel.failed(pid),
+            KernelIn::Msg { pid, msg } => match held(self, pid) {
+                Some(win) => self.deliver(win, AppEvent::Proc { pid, msg }, out),
+                None => self.kernel.message(&mut self.vfs, pid, &msg),
+            },
+            KernelIn::Error { pid } => match held(self, pid) {
+                Some(win) => self.deliver(win, AppEvent::ProcError { pid }, out),
+                None => self.kernel.failed(pid),
+            },
             KernelIn::Wake | KernelIn::Hidden => {
                 self.kernel.wake();
                 self.woken();
+                let nested: Vec<WinId> =
+                    self.wins.iter().filter(|w| w.app.has_kernel()).map(|w| w.id).collect();
+                nested.into_iter().for_each(|win| self.deliver(win, AppEvent::ProcWake, out));
             }
         }
         self.pump(out);

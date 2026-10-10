@@ -196,3 +196,26 @@ fn programs_are_wasm_or_markers_naming_wasm() {
         assert_eq!(program(&fs, p), want, "{p}");
     }
 }
+
+#[test]
+fn a_kernel_in_a_range_spawns_only_in_it() {
+    // A kernel of a desktop in a window: its pids past 100 and before 103, its asks relayed.
+    let mut s = Sh::new();
+    let k = &mut s.k;
+    k.set_pids(100, 103);
+    let spawn = |k: &mut Kernel| {
+        let (argv, program) = (vec!["a".into()], Program::Url("bin/toolbox.wasm".into()));
+        let (cwd, stdout, roots) = ("/".into(), Stdout::Console, vec!["/".into()]);
+        k.spawn(Spawn { argv, program, cwd, tty: None, stdout, roots })
+    };
+    assert_eq!(spawn(k), Ok(101));
+    k.relay(Effect::Kill { pid: 7 });
+    let spawned = Effect::Spawn { pid: 101, sab: true };
+    assert_eq!(k.take_effects(), [spawned, Effect::Kill { pid: 7 }], "in turn");
+    // A job of two would pass the range; of one, it fits; then nothing does.
+    let two = [("/bin/a", "a"), ("/bin/a", "a")];
+    assert_eq!(s.spawn(&job(&two, Stdin::Console, Stdout::Console, b"")).0, wire::EAGAIN);
+    assert_eq!(s.spawn(&job(&two[..1], Stdin::Console, Stdout::Console, b"")).0, 0);
+    assert_eq!(spawn(&mut s.k), Err("no pids are left"));
+    assert_eq!(s.k.procs().iter().map(|p| p.0).max(), Some(102));
+}

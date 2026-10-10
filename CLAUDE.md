@@ -84,7 +84,7 @@ crates/      the OS (boot, kernel, worker); talks WASI and uiwire
   mesh/      relays links and workers to the pool program
   report/    telemetry: notes, reports, outbox, panic beacon
   os/        wasm entry: fonts, VFS, registry, prefs, events, Remote
-             windows, ai, /home
+             windows, ai, /home; the cartridge; Monitor: itself inside
   kernel/    wire protocol, processes, consoles, jobs, file
              server (main), snap (/home), module
   wasi/      the kernel's worker half: WASI preview 1, fds, /dev

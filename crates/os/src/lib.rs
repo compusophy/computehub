@@ -32,6 +32,7 @@ use std::mem;
 pub mod ai;
 mod cartridge;
 pub mod home;
+pub mod monitor;
 pub mod remote;
 /// Telemetry: notes, feedback and error reports, the outbox (its own crate).
 pub use ::report;
@@ -134,15 +135,7 @@ const TIMER: u8 = 16;
 impl Desktop {
     fn new() -> Result<Desktop, String> {
         let text = TextSystem::new(SANS.to_vec())?;
-        let mut vfs = Vfs::new();
-        let _ = vfs.mkdir_all("/bin"); // Not mkdir: Vfs::new ships mkdir_all already.
-        let bin = BIN.iter().map(|&p| (p, p)).chain(APPLETS.iter().map(|&a| (a, "toolbox")));
-        // The clocks other than `clock` run its wasm as their name.
-        let bin = bin.chain(remote::CLOCKS.iter().skip(1).map(|c| (c.0, "clock")));
-        for (name, wasm) in bin.chain(remote::SYSTEM.iter().map(|s| (s.0, "system"))) {
-            let _ = kernel::install(&mut vfs, name, wasm);
-        }
-        Ok(Desktop { parts: Some((text, vfs)), ..Desktop::default() })
+        Ok(Desktop { parts: Some((text, system_vfs())), ..Desktop::default() })
     }
 
     /// Hands `input` to the welcome while it shows, else to the shell; at the first usable size
@@ -182,7 +175,9 @@ impl Desktop {
         self.home.restore(&mut vfs, ctl, &mut self.report);
         report::note(&record::home_note(self.home.kept_len(), ctl.monotonic_ms() - t));
         let prefs = prefs(ctl);
-        let shell = Shell::new(w, h, text, vfs, registry(self.ai.clone()), prefs);
+        let mut shell = Shell::new(w, h, text, vfs, registry(self.ai.clone(), 0), prefs);
+        // The pids past its range are its Monitors' desktops'.
+        shell.kernel_mut().set_pids(0, monitor::FIRST);
         let shell = self.shell.insert(shell);
         self.ai.load(ctl);
         self.mesh.load(&logon::own("compusophy.mesh"));
@@ -500,6 +495,8 @@ impl App for Desktop {
         // The zone the clocks open in, as of the last minute's tick.
         if matches!(ev, Event::Tick { .. } | Event::Resize { .. }) {
             remote::set_zone(ctl.utc_offset());
+            let time = if let Event::Tick { time } = &ev { Some(local(*time)) } else { None };
+            monitor::note(ctl.isolated(), time);
         }
         let bit = match ev {
             Event::Key { .. } | Event::Text(_) | Event::Wheel { .. } => INPUT,
@@ -666,9 +663,30 @@ fn local(t: platform::LocalTime) -> LocalTime {
     LocalTime { year, month, day, weekday, hour, minute }
 }
 
-/// Makes apps by name: the built-ins, then the GUI programs and `.app` files.
-fn registry(ai: ai::Ai) -> Registry {
-    Box::new(move |name| remote::open(name, &ai))
+/// Makes apps by name for a desktop at `depth` (the page's is 0): a Monitor holding a desktop
+/// ([`monitor::MAX_DEPTH`] deep at most), the GUI programs and `.app` files.
+pub(crate) fn registry(ai: ai::Ai, depth: u8) -> Registry {
+    Box::new(move |name| match name {
+        "monitor" if depth < monitor::MAX_DEPTH => {
+            Some(Box::new(monitor::Monitor::new(&ai, depth + 1)) as Box<dyn ui::App>)
+        }
+        "monitor" => None,
+        _ => remote::open(name, &ai),
+    })
+}
+
+/// A desktop's filesystem as it starts: `/bin` with each program's marker ([`BIN`], the applets
+/// on `toolbox`, the clocks on `clock`, the system's windows on `system`).
+pub(crate) fn system_vfs() -> Vfs {
+    let mut vfs = Vfs::new();
+    let _ = vfs.mkdir_all("/bin"); // Not mkdir: Vfs::new ships mkdir_all already.
+    let bin = BIN.iter().map(|&p| (p, p)).chain(APPLETS.iter().map(|&a| (a, "toolbox")));
+    // The clocks other than `clock` run its wasm as their name.
+    let bin = bin.chain(remote::CLOCKS.iter().skip(1).map(|c| (c.0, "clock")));
+    for (name, wasm) in bin.chain(remote::SYSTEM.iter().map(|s| (s.0, "system"))) {
+        let _ = kernel::install(&mut vfs, name, wasm);
+    }
+    vfs
 }
 
 /// `a` then `b`, as one response.

@@ -950,10 +950,26 @@ Seen on 2026-10-10: a plain host page mounted the OS, signed in by its injected 
 Clock shop, and showed the shop's wall clock and both grandfathers running: a page, the OS, the
 shop, the grandfathers, their faces.
 
+**The OS inside itself** (`os::monitor`, Games, Monitor). The Monitor app holds a whole desktop,
+a `Shell` of its own laid out at the window's size, its home screen, windows and programs: its
+draw list replayed into the window (vector; the desktop's text system lent it while it draws, so
+its glyphs share the one atlas and are as crisp), its input the window's (a press, a drag, the
+release, keys, text, the wheel). Its kernel runs its programs in the page beside the page's own,
+in a pid range of its own (the page's below 2^31, each held desktop's a block of 2^22 above, a
+spawn past its range failing): what it asks of the page leaves through the window
+(`Request::Kernel`, relayed in turn with the page kernel's, never lost), and a process's
+messages come back to the window that runs it (`App::runs`, asked down through every desktop it
+holds, so a Monitor in a Monitor routes as one). Closed, it closes every window it holds, so
+the desktops and programs inside end too. A held desktop is a guest's: nothing kept, no AI, no
+fetches, no telemetry. Monitors hold Monitors 3 deep.
+
+Seen on 2026-10-10: the page's desktop held a Monitor holding a Monitor whose desktop ran the
+Clock shop (six composed levels, the clocks keeping time), its Terminal ran `ls /bin | wc -l`
+(28) three desktops deep, and closing the outer Monitor ended all six workers.
+
 **Next**: secretspace's Battlestation mounts it on its desk's monitor (the glass's texture from
-the surface, the desk mouse raycast onto it); the OS inside itself (a Monitor app holding a
-nested desktop, one atlas, a pid range per nested kernel); foreign cartridges in the OS (a
-secretspace game as an app here, which closes the loop).
+the surface, the desk mouse raycast onto it); foreign cartridges in the OS (a secretspace game
+as an app here, which closes the loop).
 
 ## The team: many models, one mind
 

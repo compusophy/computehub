@@ -13,9 +13,10 @@ const SANS: &[u8] = include_bytes!("../../../assets/fonts/Inter-Regular.ttf");
 const SYM_A: &[u8] = include_bytes!("../../../assets/fonts/lazy/symbols-a.ttf");
 const SYM_B: &[u8] = include_bytes!("../../../assets/fonts/lazy/symbols-b.ttf");
 /// The names the registry knows (`welcome` and `sized` are compact; `page` draws a page, `long`
-/// a page of too much, `board` a grid of 9 squares).
+/// a page of too much, `board` a grid of 9 squares; `desk` is a desktop in a window, its
+/// kernel's pids 1000 to 1999).
 const KNOWN: &str =
-    "welcome terminal /apps/counter.app sized huge nan assistant files about page long board";
+    "welcome terminal /apps/counter.app sized huge nan assistant files about page long board desk";
 
 thread_local! {
     /// What a Probe told `agent` asks of the desktop, the Probe that is busy, the one that ended.
@@ -63,6 +64,12 @@ impl App for Probe {
     fn ended(&self) -> bool {
         ENDED.with(|b| b.get() == self.0)
     }
+    fn has_kernel(&self) -> bool {
+        self.1 == "desk"
+    }
+    fn runs(&self, pid: u32) -> bool {
+        self.1 == "desk" && (1000..2000).contains(&pid)
+    }
     fn event(&mut self, ev: E, cx: &mut Cx<'_>) -> bool {
         self.2.borrow_mut().push((self.0, ev.clone()));
         let E::Text(cmds) = ev else { return false };
@@ -73,6 +80,7 @@ impl App for Probe {
                 ("fonts", _) => cx.load_fallback_fonts(),
                 ("theme", arg) => cx.set_theme(arg),
                 ("spawn", _) => _ = cx.kernel.spawn(spin()),
+                ("relay", _) => cx.kernel_out(kernel::Effect::Kill { pid: 1001 }),
                 ("size", _) => cx.set_size(500, 300),
                 ("seen", _) => cx.pref("seen", &cx.ai.model.clone()),
                 ("reset", _) => cx.reset(),
@@ -102,8 +110,11 @@ impl App for Probe {
         self.2.borrow_mut().push((self.0, E::Text(said)));
         pid == self.0
     }
-    fn closing(&mut self, _: &mut Cx<'_>) {
+    fn closing(&mut self, cx: &mut Cx<'_>) {
         self.2.borrow_mut().push((self.0, E::Text("closing".into())));
+        if self.1 == "desk" {
+            cx.kernel_out(kernel::Effect::Kill { pid: 1001 });
+        }
     }
 }
 
@@ -889,4 +900,34 @@ fn acts_wait_for_busy_windows_and_their_time() {
     assert!(h.open_overlay() && *made.borrow() == me + 1);
     ENDED.with(|e| e.set(me + 1));
     assert!(h.open_overlay() && *made.borrow() == me + 2);
+}
+
+#[test]
+fn a_desktop_in_a_window_hears_its_processes_and_asks_through_the_page() {
+    let (mut h, log, _) = host();
+    h.open("desk", None, &mut Response::default());
+    log.take();
+    let mut out = Response::default();
+    h.kernel_in(KernelIn::Msg { pid: 1500, msg: vec![1, 2] }, &mut out);
+    h.kernel_in(KernelIn::Error { pid: 1999 }, &mut out);
+    h.kernel_in(KernelIn::Msg { pid: 2000, msg: vec![3] }, &mut out); // The page's own.
+    h.kernel_in(KernelIn::Wake, &mut out);
+    let proc = |e: &(u32, E)| matches!(e.1, E::Proc { .. } | E::ProcError { .. } | E::ProcWake);
+    let heard: Vec<(u32, E)> = log.take().into_iter().filter(proc).collect();
+    let msg = E::Proc { pid: 1500, msg: vec![1, 2] };
+    assert_eq!(heard, [(3, msg), (3, E::ProcError { pid: 1999 }), (3, E::ProcWake)]);
+    assert!(h.runs(1000) && !h.runs(999) && !h.runs(2000));
+    // What its kernel asks leaves in turn with the page kernel's, even when the Response of
+    // the call that asked is thrown away (closing it, it ends its processes).
+    let kill = || Effect::Kernel(kernel::Effect::Kill { pid: 1001 });
+    assert_eq!(h.say(3, "relay").effects, [kill()]);
+    h.apply(Cmd::Close(WinId(3)));
+    let mut out = Response::default();
+    h.pump(&mut out);
+    assert_eq!(out.effects, [kill()]);
+    // Closing every window tells each first.
+    h.close_all();
+    let closing = |e: &(u32, E)| e.1 == E::Text("closing".into());
+    let told: Vec<u32> = log.take().iter().filter(|e| closing(e)).map(|e| e.0).collect();
+    assert_eq!((told, h.wm().layout().len()), (vec![3, 1, 2], 0));
 }

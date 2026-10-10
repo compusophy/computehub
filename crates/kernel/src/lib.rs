@@ -158,6 +158,8 @@ pub struct Kernel {
     isolated: bool,
     owner: u32,
     last_pid: u32,
+    /// The first pid past its range ([`Kernel::set_pids`]), if it has one.
+    end_pid: Option<u32>,
     procs: Vec<Process>,
     woken: Vec<u32>,
     effects: Vec<Effect>,
@@ -189,6 +191,9 @@ impl Kernel {
         }
         let Spawn { argv, program, cwd, tty, stdout, roots } = s;
         let pid = self.last_pid.max(wire::HOME_PID) + 1;
+        if !self.room(pid, 1) {
+            return Err("no pids are left");
+        }
         let (role, stdin, env) = (wire::Role::Process, wire::Stdin::Console, vec![]);
         let st = wire::Start { role, pid, tty, stdin, stdout, cwd, roots, argv, env };
         let msg = st.encode();
@@ -368,6 +373,19 @@ impl Kernel {
         }
     }
 
+    /// Its processes' pids run past `base` and before `end` (kernels sharing a page, the page's
+    /// and a desktop's in a window, each its own range); none past `base` run yet. A spawn
+    /// that would pass `end` fails.
+    pub fn set_pids(&mut self, base: u32, end: u32) {
+        self.last_pid = self.last_pid.max(base);
+        self.end_pid = Some(end);
+    }
+
+    /// Whether `n` pids from `first` stay in its range.
+    fn room(&self, first: u32, n: usize) -> bool {
+        self.end_pid.is_none_or(|end| u64::from(first) + n as u64 <= u64::from(end))
+    }
+
     /// Ends `pid` with `status` (130 for Ctrl+C, 137 for kill) if it runs; wakes its owner.
     pub fn kill(&mut self, pid: u32, status: i32) {
         if let Some(i) = self.find(pid, true) {
@@ -473,6 +491,12 @@ impl Kernel {
     /// The one-shot timer fired, or the page was hidden: nothing yet.
     pub fn wake(&mut self) {}
 
+    /// Asks `e` of the page for another kernel (a desktop's in a window, whose processes share
+    /// the page), in turn with its own asks.
+    pub fn relay(&mut self, e: Effect) {
+        self.effects.push(e);
+    }
+
     /// The effects asked for so far, oldest first, leaving none.
     pub fn take_effects(&mut self) -> Vec<Effect> {
         core::mem::take(&mut self.effects)
@@ -577,7 +601,7 @@ impl Kernel {
         }
         match n {
             0 => return Err(wire::EINVAL),
-            _ if running + n > wire::MAX_PROCS => return Err(wire::EAGAIN),
+            _ if running + n > wire::MAX_PROCS || !self.room(first, n) => return Err(wire::EAGAIN),
             _ => {}
         }
         self.effects.extend(made.iter().map(|p| Effect::Spawn { pid: p.pid, sab: true }));

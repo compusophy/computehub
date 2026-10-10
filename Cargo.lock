@@ -271,6 +271,7 @@ version = "0.1.0"
 dependencies = [
  "compusophy-apps",
  "compusophy-gfx",
+ "compusophy-host",
  "compusophy-logon",
  "compusophy-mesh",
  "compusophy-platform",

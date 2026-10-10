@@ -65,7 +65,8 @@ view, `true` back (its clock catches up).
 The OS's `/api/*` functions (the free AI, feedback, the mesh's signaling) are computehub's
 origin's and refuse others, so a mounted OS has no AI and no pairing unless secretspace proxies
 them. Everything else runs: the desktop, its apps and programs, the Terminal, Studio's editor,
-the clocks (an app holding apps: Games, Clock shop).
+the clocks (an app holding apps: Games, Clock shop), and the Monitor (Games, Monitor: the OS
+inside itself, a desktop in a window, 3 deep), so the virtual computer can hold itself too.
 
 Seen working (2026-10-10): a plain host page mounted the OS, signed in by its injected clicks,
 opened the Clock shop, and showed its wall clock and grandfather clocks running.

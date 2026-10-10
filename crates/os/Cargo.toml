@@ -16,6 +16,7 @@ crate-type = ["cdylib", "rlib"]
 compusophy-wm.workspace = true
 compusophy-gfx.workspace = true
 compusophy-shell.workspace = true
+compusophy-host.workspace = true
 compusophy-platform.workspace = true
 wasm-bindgen.workspace = true
 compusophy-ui.workspace = true
