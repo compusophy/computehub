@@ -7,9 +7,12 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain 1.96.0
-# shellcheck source=/dev/null
-. "$HOME/.cargo/env"
+# Vercel's image has rustup already (its CARGO_HOME is /rust); elsewhere, get it.
+if ! command -v rustup >/dev/null 2>&1; then
+  curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none
+fi
+export PATH="${CARGO_HOME:-$HOME/.cargo}/bin:$PATH" RUSTUP_TOOLCHAIN=1.96.0
+rustup toolchain install 1.96.0 --profile minimal
 rustup target add wasm32-unknown-unknown wasm32-wasip1
 
 tools=$(mktemp -d)
