@@ -43,6 +43,7 @@ pub enum Effect {
     LinkSend { id: u32, data: Vec<u8> },
     Unlink(u32),
     Estimate,
+    Lock(bool),
 }
 
 /// A load the browser timed ([`Ctl::timings`]): its URL (empty for the page itself), then its
@@ -179,6 +180,13 @@ impl Ctl {
         unlink(id: u32) => Effect::Unlink(id);
         /// Asks for the page's storage quota: [`crate::Event::Estimated`].
         estimate() => Effect::Estimate;
+    }
+
+    /// Locks the pointer to the canvas (`on`; asked from a press or a key, as browsers allow),
+    /// or lets it go: [`crate::Event::Locked`] says when it is. A mount only says it wants it
+    /// ([`crate::mount::capture`]), its host locks.
+    pub fn lock_pointer(&mut self, on: bool) {
+        self.effects.push(Effect::Lock(on));
     }
 
     /// Asks for one more frame; from a frame, exactly one after it.

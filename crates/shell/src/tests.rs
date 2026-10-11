@@ -13,7 +13,7 @@ use wm::{Snap, State};
 use super::*;
 
 const SANS: &[u8] = include_bytes!("../../../assets/fonts/Inter-Regular.ttf");
-const KNOWN: &str = "welcome terminal assistant studio settings about files feedback .app";
+const KNOWN: &str = "welcome terminal assistant studio settings about files feedback game .app";
 /// The compact apps, each 680 x 480 as a window.
 const COMPACT: &str = "welcome settings about feedback";
 type Log = Rc<RefCell<Vec<(&'static str, E)>>>;
@@ -74,6 +74,11 @@ impl App for Probe {
 
     fn wants_text_input(&self) -> bool {
         self.0 == "terminal" || self.0 == "assistant"
+    }
+
+    /// A game takes its input whole.
+    fn raw(&self) -> bool {
+        self.0 == "game"
     }
 
     fn compact(&self) -> bool {
@@ -996,4 +1001,46 @@ fn a_finger_taps_however_late_its_lift_is_heard() {
     assert_eq!((s.names(), s.wm().focused(), s.overlay.open), (names, Some(WinId(1)), true));
     let o = s.overlay_rects().1;
     assert_eq!(tap(&mut s, (o.x + 10.0, o.y + 30.0), 12_000.0, 0.0).text_input, Some(true));
+}
+
+#[test]
+fn a_game_takes_its_input_whole() {
+    let (mut s, log) = desk();
+    assert!(!s.takes_raw(), "Welcome has the keys");
+    s.host.open("game", None, &mut Response::default());
+    s.rest(1000.0);
+    let game = s.host.focused_app().expect("the game");
+    assert!(s.takes_raw());
+    let place = s.host.wm().layout().into_iter().find(|p| p.win == game).unwrap();
+    let c = content_rect(rectf(place.rect));
+    // Welcome takes the keys back; a press in the game's content gives them to the game.
+    s.host.apply(wm::Cmd::Focus(WinId(1)));
+    assert!(!s.takes_raw());
+    log.take();
+    let (x, y) = (c.x + 10.0, c.y + 20.0);
+    s.input(Input::PointerMove { x, y });
+    s.input(Input::PointerDown { x, y, button: 2, touch: false });
+    assert_eq!(s.host.focused_app(), Some(game));
+    // A press that began there keeps the pointer its own, out of its content too.
+    s.input(Input::PointerMove { x: c.x - 50.0, y });
+    s.input(Input::PointerUp { x: c.x - 50.0, y, button: 2 });
+    s.input(Input::Wheel { x, y, dy: 16.0 });
+    let key =
+        ui::Raw::Key { code: "KeyW".into(), key: "w".into(), down: false, repeat: false, mods: 1 };
+    s.input(Input::Raw(key.clone()));
+    // Over the desktop again, the pointer is the desktop's: the game hears it leave.
+    s.input(Input::PointerMove { x: 5.0, y: 400.0 });
+    let raw: Vec<ui::Raw> = log
+        .take()
+        .into_iter()
+        .filter_map(|(n, e)| match e {
+            E::Raw(r) if n == "game" => Some(r),
+            _ => None,
+        })
+        .collect();
+    let at = |kind, x, button| ui::Raw::Pointer { kind, x, y: 20.0, button };
+    let left = ui::Raw::Pointer { kind: 3, x: 5.0 - c.x, y: 400.0 - c.y, button: 0 };
+    let wheel = ui::Raw::Wheel { x: 10.0, y: 20.0, dy: 16.0 };
+    let want = [at(1, 10.0, 0), at(0, 10.0, 2), at(1, -50.0, 0), at(2, -50.0, 2), wheel, key, left];
+    assert_eq!(raw, want);
 }

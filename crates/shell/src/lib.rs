@@ -40,6 +40,7 @@ mod keys;
 mod menus;
 mod motion;
 mod overlay;
+mod raw;
 mod touch;
 
 pub use host::{Cursor, Effect, Input, KernelIn, LocalTime, Registry, Response};
@@ -117,6 +118,10 @@ pub struct Shell {
     hush: Option<Target>,
     app_hover: Option<Widget>,
     app_press: Option<Widget>,
+    /// An app that takes its input whole ([`ui::App::raw`]): the window a press began in and the
+    /// buttons it holds, and the one the pointer is over.
+    raw_press: Option<(WinId, u8)>,
+    raw_hover: Option<WinId>,
     /// A finger's press into content, delivered when it lifts as a tap.
     down: Option<(WinId, AppEvent)>,
     grab: Option<host::grab::Grab>,
@@ -165,7 +170,7 @@ impl Shell {
         let dock = home::dock::Dock::new(prefs.dock.as_deref());
         let grid = home::grid::Grid::new(prefs.home.as_deref(), prefs.folders.as_deref());
         let mut shell = Shell { host, pending: Vec::new(), size, pointer: None, hover: None,
-            armed: None, hush: None, app_hover: None, app_press: None, down: None, grab: None,
+            armed: None, hush: None, app_hover: None, app_press: None, raw_press: None, raw_hover: None, down: None, grab: None,
             last_title: None,
             ime: None, focus: None, cursor: Cursor::Default, clock: None, dock, tiles: Vec::new(),
             marks: Vec::new(), grid, reduced: false, menu: None, touch: None, fling: None,
@@ -324,6 +329,10 @@ impl Shell {
             Input::PointerLeave => None,
             _ => self.pointer,
         };
+        if self.raw_input(&input, &mut out) {
+            self.finish(before, &mut out);
+            return out;
+        }
         match input {
             Input::Key { key, mods } => self.key(key, mods, &mut out),
             Input::Text(s) => {
@@ -360,6 +369,7 @@ impl Shell {
                 out.redraw |= self.clock.replace(time) != Some(time);
                 self.host.tick(true, &mut out);
             }
+            Input::Raw(_) => {}
         }
         self.finish(before, &mut out);
         out

@@ -147,8 +147,10 @@ impl Lerp for Vis {
 pub fn replay(dst: &mut DrawList, src: &DrawList, v: Vis) {
     const ICONS: [Icon; 6] =
         [Icon::Plus, Icon::Cross, Icon::Minus, Icon::Dot, Icon::Square, Icon::Grid];
-    use Kind::{Border, Fill, Glow, Glyph, Gradient, Grain, Line, Shadow};
-    const KINDS: [Kind; 9] = [Fill, Border, Shadow, Kind::Icon, Glyph, Gradient, Glow, Grain, Line];
+    use Kind::{Border, Fill, Glow, Glyph, Gradient, Grain, Image, Line, Shadow};
+    #[rustfmt::skip]
+    const KINDS: [Kind; 10] =
+        [Fill, Border, Shadow, Kind::Icon, Glyph, Gradient, Glow, Grain, Line, Image];
     let (ox, oy, s) = (v.rect.x + v.rect.w / 2.0, v.rect.y + v.rect.h / 2.0, v.s);
     let rect = |[x, y, w, h]: [f32; 4]| {
         RectF::new(ox + (x - ox) * s + v.dx, oy + (y - oy) * s + v.dy, w * s, h * s)
@@ -167,6 +169,7 @@ pub fn replay(dst: &mut DrawList, src: &DrawList, v: Vis) {
             Glow => dst.glow(r, c),
             Grain => dst.grain(r, c.3, i.p0),
             Line => dst.segment(r, i.p0 * s, i.p1 > 0.5, c),
+            Image => dst.image(r, radius, i.p0 as u32, c.3),
         }
         dst.pop_clip();
     }

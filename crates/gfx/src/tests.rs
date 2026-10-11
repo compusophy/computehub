@@ -255,14 +255,15 @@ fn shaders_name_the_contract() {
     for (loc, name) in names.iter().enumerate() {
         assert!(vs.contains(&format!("layout(location = {loc}) in vec4 {name};")), "{name}");
     }
-    // Glyphs and glows draw no antialiasing margin.
+    // Glyphs, glows and images draw no antialiasing margin.
     let vert = ["uniform vec2 u_viewport;", "gl_VertexID", "v_color2 = a_color2;"];
-    for name in vert.into_iter().chain(["kind == 4 || kind == 6 ? 0.0 : px"]) {
+    for name in vert.into_iter().chain(["kind == 4 || kind == 6 || kind == 9 ? 0.0 : px"]) {
         assert!(vs.contains(name), "vertex shader lacks {name}");
     }
     let frag = "precision highp int;|out vec4 fragColor;|uniform sampler2D u_atlas;|\
-        uniform vec2 u_atlas_size;|v_color2|floatBitsToUint(v_params.z)|gl_FragCoord";
-    let kinds = (1..9).map(|k| format!("kind == {k}"));
+        uniform vec2 u_atlas_size;|uniform sampler2D u_image;|v_color2|floatBitsToUint(v_params.z)|\
+        gl_FragCoord";
+    let kinds = (1..10).map(|k| format!("kind == {k}"));
     for name in frag.split('|').map(String::from).chain(kinds) {
         assert!(fs.contains(&name), "fragment shader lacks {name}");
     }
@@ -394,4 +395,19 @@ fn a_recording_list_keeps_the_text_that_shows_and_the_marks() {
     list.clear();
     assert_eq!(list.sem(), Some(&Sem::default()));
     assert!(list.take_sem().is_some() && list.sem().is_none());
+}
+
+#[test]
+fn images_are_instances_the_renderer_finds_in_order() {
+    let mut list = DrawList::new();
+    list.fill(RectF::new(0.0, 0.0, 10.0, 10.0), 0.0, Rgba(1, 2, 3, 255));
+    list.image(RectF::new(2.0, 2.0, 50.0, 40.0), 6.0, 7, 255);
+    list.push_clip(RectF::new(0.0, 0.0, 30.0, 30.0));
+    list.image(RectF::new(40.0, 40.0, 5.0, 5.0), 0.0, 8, 255); // Clipped away: never drawn.
+    list.image(RectF::new(1.0, 1.0, 5.0, 5.0), 0.0, 3, 255);
+    list.pop_clip();
+    assert_eq!(list.images().collect::<Vec<_>>(), [(1, 7), (2, 3)]);
+    let it = list.instances()[1];
+    assert_eq!((it.kind, it.p0, it.radius, it.uv), (9.0, 7.0, 6.0, [0.0, 0.0, 1.0, 1.0]));
+    assert_eq!(it.color, Rgba(255, 255, 255, 255));
 }

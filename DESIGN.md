@@ -968,9 +968,30 @@ Seen on 2026-10-10: the page's desktop held a Monitor holding a Monitor whose de
 Clock shop (six composed levels, the clocks keeping time), its Terminal ran `ls /bin | wc -l`
 (28) three desktops deep, and closing the outer Monitor ended all six workers.
 
-**Next**: secretspace's Battlestation mounts it on its desk's monitor (the glass's texture from
-the surface, the desk mouse raycast onto it); foreign cartridges in the OS (a secretspace game
-as an app here, which closes the loop).
+**Cartridges in the OS** (`platform::cart`, `os::game`, Games). The loop closes: a cartridge
+from another site runs in a window as an app, never in an iframe. One protocol both ways, the
+one the OS serves as a cartridge: an ES module whose `default` loads its wasm and whose
+`Cartridge(w, h, dpr, base, ns, opts)` draws into an `OffscreenCanvas` of its own and takes
+`pointer`, `wheel`, `key`, `text`/`typing`, `capture`/`locked`/`motion` (the pointer lock),
+`resize`, `visible`, `frames`/`surface`, `closed`, `error`, `end`. The OS imports the module
+under a URL of its own (one cartridge a module instance: the same game twice, or a game inside
+itself, gets two; a page is claimed by its first OS instance, so a second only mounts), awaits
+`default`, constructs it, and each frame copies its surface into a texture when its frame count
+moved: a new draw-list kind, `Image`, drawn in the window's place (the renderer draws in runs, one
+per image). The window takes its input whole (`App::raw`): every key down and up as it came but
+the desktop's Alt and Meta bindings, the pointer's every move and button over its content, the
+wheel, typed text while a field of it has the keys, and the pointer locked while it asks (the
+lock asked inside the press or key, as browsers require; a locked pointer's moves come as
+motion). A cartridge that shows the OS on a screen of its own (Battlestation) is handed a module
+of this OS's own files (`opts.os`, `opts.osModule`), so every level runs the same files from one
+origin. Games: Wyrm, Wandfall, Battlestation from secretspace.compusophy.com (served open to
+other sites); and Computer, compusophyOS itself as a cartridge.
+
+Seen on 2026-10-11: Computer in a window, a separate instance signed in by clicks inside it, its
+Terminal ran `ls /bin | wc -l` (28) from typed keys, and a Computer inside it ran too.
+
+**Next**: secretspace's games export the protocol's `Cartridge`; Battlestation inside the OS
+shows the OS on its monitor, and inside that the desk again.
 
 ## The team: many models, one mind
 

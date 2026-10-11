@@ -92,6 +92,13 @@ pub trait App {
     /// Whether it runs a kernel of its own in the page (a desktop in a window): what that asks
     /// of the page goes as [`Request::Kernel`], and it hears the page's wakes
     /// ([`AppEvent::ProcWake`]).
+    /// Whether it takes its input whole (a game): while it has the keys, every key down and up
+    /// as it came (but the desktop's own Alt and Meta bindings), and while the pointer is over
+    /// its content (or a press began there) every move, button and wheel turn, and a locked
+    /// pointer's motion, as [`AppEvent::Raw`]; typed text still comes as [`AppEvent::Text`].
+    fn raw(&self) -> bool {
+        false
+    }
     fn has_kernel(&self) -> bool {
         false
     }
@@ -184,6 +191,34 @@ pub enum AppEvent {
     ProcError { pid: u32 },
     /// The page's kernel woke: so must its own.
     ProcWake,
+    /// Input as it came, for an app that takes it whole ([`App::raw`]).
+    Raw(Raw),
+}
+
+/// Input as it came, for an app that takes it whole ([`App::raw`]: a game), positions in its
+/// content's logical pixels.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Raw {
+    /// A key went down (or repeated) or up: `KeyboardEvent`'s `code` and `key`, `mods` the bits
+    /// [`Raw::SHIFT`], [`Raw::CTRL`], [`Raw::ALT`], [`Raw::META`], [`Raw::ALTGR`].
+    Key { code: String, key: String, down: bool, repeat: bool, mods: u8 },
+    /// The pointer: `kind` 0 a button went down, 1 it moved (held or not), 2 a button went up, 3
+    /// it left; `button` the DOM's (0 main, 1 middle, 2 secondary).
+    Pointer { kind: u8, x: f32, y: f32, button: u8 },
+    /// The wheel: `dy` > 0 scrolls down.
+    Wheel { x: f32, y: f32, dy: f32 },
+    /// The pointer, locked ([`Cx::lock_pointer`]), moved by `(dx, dy)`.
+    Motion { dx: f32, dy: f32 },
+    /// The pointer was locked, or let go (Escape, the browser, an unlock).
+    Locked(bool),
+}
+
+impl Raw {
+    pub const SHIFT: u8 = 1;
+    pub const CTRL: u8 = 2;
+    pub const ALT: u8 = 4;
+    pub const META: u8 = 8;
+    pub const ALTGR: u8 = 16;
 }
 
 /// A key by its physical position (`KeyboardEvent.code`); text comes
@@ -265,6 +300,8 @@ pub enum Request {
     /// What the app's own kernel asks of the page ([`App::has_kernel`]): to spawn, start,
     /// message, answer or end one of its processes, or to be woken.
     Kernel(kernel::Effect),
+    /// Lock the pointer to the app (a game's look), or let it go.
+    Lock(bool),
 }
 
 /// The preference naming the model the AI answers with ([`AiStatus::model`]).
@@ -368,6 +405,12 @@ impl<'a> Cx<'a> {
     /// What the app's own kernel asks of the page ([`App::has_kernel`]).
     pub fn kernel_out(&mut self, effect: kernel::Effect) {
         self.requests.push(Request::Kernel(effect));
+    }
+
+    /// Locks the pointer to the app (`on`: asked while handling a press or a key, as browsers
+    /// allow), or lets it go: [`Raw::Locked`] says when it is, [`Raw::Motion`] how it moves.
+    pub fn lock_pointer(&mut self, on: bool) {
+        self.requests.push(Request::Lock(on));
     }
 
     /// The requests so far, oldest first, leaving none.

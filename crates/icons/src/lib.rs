@@ -73,15 +73,19 @@ pub enum Glyph {
     Pulse,
     /// The clocks: a ring, its hands at three o'clock, a dot at the middle.
     Clock,
+    /// The games: Wyrm's snake, Wandfall's wand, Battlestation's monitor.
+    Wyrm,
+    Wand,
+    Desk,
 }
 
 impl Glyph {
     /// Every glyph, in order.
     #[rustfmt::skip]
-    pub const ALL: [Glyph; 18] = {
+    pub const ALL: [Glyph; 21] = {
         use Glyph::*;
         [Mark, Apps, Cog, Studio, Assistant, Terminal, Folder, Home, File, Window, Feedback,
-            About, Chevron, Close, Bug, Editor, Pulse, Clock]
+            About, Chevron, Close, Bug, Editor, Pulse, Clock, Wyrm, Wand, Desk]
     };
 
     /// The function that appends this glyph's contours to its argument.
@@ -106,6 +110,9 @@ impl Glyph {
             Editor => editor,
             Pulse => pulse,
             Clock => clock,
+            Wyrm => wyrm,
+            Wand => wand,
+            Desk => desk,
         }
     }
 }
@@ -418,6 +425,27 @@ fn clock(o: &mut Outline) {
     stroke(o, &[C, (C.0, C.1 + 270.0)]);
     stroke(o, &[C, (C.0 + 200.0, C.1)]);
     circle(o, C, 60.0, true);
+}
+
+/// Wyrm, the snake game: a body winding up in two bends to a round head.
+fn wyrm(o: &mut Outline) {
+    let body = [(150.0, 230.0), (560.0, 230.0), (700.0, 360.0), (560.0, 490.0), (440.0, 490.0)];
+    let neck = [(300.0, 620.0), (440.0, 750.0), (720.0, 750.0)];
+    stroke(o, &[&body[..], &neck[..]].concat());
+    circle(o, (790.0, 750.0), 90.0, true);
+}
+
+/// Wandfall, the wand battle: a wand leaning right, a sparkle at its tip.
+fn wand(o: &mut Outline) {
+    stroke(o, &[(180.0, 160.0), (560.0, 540.0)]);
+    sparkle(o, (690.0, 670.0), 210.0);
+}
+
+/// Battlestation, the desk: a monitor on a stand.
+fn desk(o: &mut Outline) {
+    frame(o, &[(140.0, 360.0), (860.0, 360.0), (860.0, 830.0), (140.0, 830.0)]);
+    stroke(o, &[(C.0, 360.0), (C.0, 200.0)]);
+    stroke(o, &[(320.0, 170.0), (680.0, 170.0)]);
 }
 
 /// One stroke: level, up, down past the level, back to it, level.

@@ -29,7 +29,8 @@ prod) without asking. Never stop work over a size. The night runs from
 ## Constitution (`scripts/caps.sh` holds the gates, gauges the sizes)
 
 1. **Rust only.** No hand-written JS beyond two one-line bootstraps
-   (web/index.html, web/worker.js) and `api/*.mjs`, the server functions
+   (web/index.html, web/worker.js), `import(u)` as a function (platform's
+   cartridges: the one word Rust lacks) and `api/*.mjs`, the server functions
    (`node:` modules only): what cannot live in a tab, the free AI's
    credentials and the feedback inbox. Python: `train/` only; Claude Code JS: `.claude/`.
 2. **Zero external dependencies.** Only `compusophy-*` workspace siblings.
@@ -84,7 +85,8 @@ crates/      the OS (boot, kernel, worker); talks WASI and uiwire
   mesh/      relays links and workers to the pool program
   report/    telemetry: notes, reports, outbox, panic beacon
   os/        wasm entry: fonts, VFS, registry, prefs, events, Remote
-             windows, ai, /home; the cartridge; Monitor: itself inside
+             windows, ai, /home; cartridge (the OS as one), game (one
+             in a window: Wyrm, Wandfall, Battlestation, Computer); the cartridge; Monitor: itself inside
   kernel/    wire protocol, processes, consoles, jobs, file
              server (main), snap (/home), module
   wasi/      the kernel's worker half: WASI preview 1, fds, /dev

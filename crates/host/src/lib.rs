@@ -54,15 +54,42 @@ pub const NARROW: i32 = 720;
 /// wheel (`dy` > 0 down), size, time.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Input {
-    Key { key: Key, mods: Mods },
+    Key {
+        key: Key,
+        mods: Mods,
+    },
     Text(String),
-    PointerMove { x: f32, y: f32 },
-    PointerDown { x: f32, y: f32, button: u8, touch: bool },
-    PointerUp { x: f32, y: f32, button: u8 },
+    PointerMove {
+        x: f32,
+        y: f32,
+    },
+    PointerDown {
+        x: f32,
+        y: f32,
+        button: u8,
+        touch: bool,
+    },
+    PointerUp {
+        x: f32,
+        y: f32,
+        button: u8,
+    },
     PointerLeave,
-    Wheel { x: f32, y: f32, dy: f32 },
-    Resize { w: f32, h: f32 },
-    Tick { time: LocalTime },
+    Wheel {
+        x: f32,
+        y: f32,
+        dy: f32,
+    },
+    Resize {
+        w: f32,
+        h: f32,
+    },
+    Tick {
+        time: LocalTime,
+    },
+    /// For an app that takes its input whole ([`ui::App::raw`]): a key down or up, a locked
+    /// pointer's motion, the lock (the pointer itself comes as the inputs above).
+    Raw(ui::Raw),
 }
 
 /// A local time to the minute: `month` 1..=12, `weekday` 0..=6 from Sunday, `hour` 0..=23.
@@ -108,12 +135,24 @@ impl LocalTime {
 /// keeps ([`ui::Request::Reset`], never from a window the Assistant acted on).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Effect {
-    Fetch { id: u32, url: String },
+    Fetch {
+        id: u32,
+        url: String,
+    },
     Kernel(kernel::Effect),
-    Pref { key: String, value: String },
-    Feedback { kind: String, text: String, context: bool },
+    Pref {
+        key: String,
+        value: String,
+    },
+    Feedback {
+        kind: String,
+        text: String,
+        context: bool,
+    },
     SignOut,
     Reset,
+    /// Lock the pointer to the page (an app's [`ui::Request::Lock`]), or let it go.
+    Lock(bool),
 }
 
 /// For the kernel: a worker's message or failure, the one-shot timer, the page hidden.
@@ -433,6 +472,7 @@ impl Host {
                 // A desktop in a window: its kernel's processes are the page's too (asked in
                 // turn with this kernel's, and never lost with a Response thrown away).
                 Request::Kernel(k) => self.kernel.relay(k),
+                Request::Lock(on) => out.effects.push(Effect::Lock(on)),
                 Request::Size(w, h) => {
                     let (r, size) = (rect.unwrap_or_default(), window_size((w.into(), h.into())));
                     let rect = size.map(|(w, h)| Rect::new(r.x, r.y, w, h));

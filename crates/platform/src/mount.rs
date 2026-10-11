@@ -66,6 +66,19 @@ pub(crate) fn keyed(key: &str) -> String {
     with_place(|_, ns| [ns, key].concat())
 }
 
+/// Where the OS's own files are, as an absolute URL ending in `/`: a mount's base, else the
+/// page's folder; what a cartridge that shows the OS on a screen of its own loads it from, so
+/// every level runs the same files from the same origin. Natively, the base as given.
+pub fn files_url() -> String {
+    let base = with_place(|base, _| if base.is_empty() { "./".to_string() } else { base.into() });
+    if !cfg!(target_arch = "wasm32") {
+        return base;
+    }
+    let doc = window().and_then(|w| w.document()).and_then(|d| d.base_uri().ok().flatten());
+    let abs = doc.and_then(|doc| web_sys::Url::new_with_base(&base, &doc).ok()).map(|u| u.href());
+    abs.unwrap_or(base)
+}
+
 /// `url` as the network takes it: a mounted OS's `/api/*` at [`HOME`] (the page it is mounted in
 /// has none); a page's, and anything else, as it is.
 pub(crate) fn api(url: &str) -> String {
@@ -81,6 +94,18 @@ pub(crate) fn api(url: &str) -> String {
 pub fn page_canvas() -> bool {
     let doc = window().and_then(|w| w.document());
     doc.and_then(|d| d.get_element_by_id("os")).is_some()
+}
+
+/// Claims the page for this module instance's OS: true only the first time in the page. A
+/// second instance (the OS loaded as a cartridge into a page that runs it already: Computer, a
+/// desk's monitor) finds the page's canvas taken and must mount instead.
+pub fn claim_page() -> bool {
+    let Some(w) = window() else { return false };
+    let key = JsValue::from_str("compusophyOS");
+    if js_sys::Reflect::get(&w, &key).is_ok_and(|v| v.is_truthy()) {
+        return false;
+    }
+    js_sys::Reflect::set(&w, &key, &JsValue::TRUE).is_ok()
 }
 
 /// Boots `app` into an `OffscreenCanvas` as `m` says: sends the first Resize and Tick and draws
@@ -176,6 +201,20 @@ pub fn frames() -> u32 {
 /// The CSS cursor the OS wants over its screen.
 pub fn cursor() -> &'static str {
     with(|s| s.cursor.get()).unwrap_or("default")
+}
+
+/// Whether the OS wants the pointer locked (a game of it does): the host locks it and says so
+/// ([`locked`]), then sends its moves as [`Event::Motion`].
+pub fn capture() -> bool {
+    with(|s| s.lock_wish.get()).unwrap_or(false)
+}
+
+/// The host locked the pointer to the mount, or let it go.
+pub fn locked(on: bool) {
+    with(|s| {
+        s.locked.set(on);
+        dispatch(s, Event::Locked(on))
+    });
 }
 
 /// Whether the OS takes typed text now (a field has the keys): send it as [`Event::Text`].

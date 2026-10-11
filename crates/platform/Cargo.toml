@@ -44,6 +44,7 @@ web-sys = { workspace = true, features = [
     "RequestInit",
     "Response",
     "Storage",
+    "Url",
     "WebGl2RenderingContext",
     "WebGlBuffer",
     "WebGlContextAttributes",

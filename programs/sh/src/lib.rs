@@ -18,8 +18,9 @@ use vfs::Vfs;
 
 /// The apps `open` knows by name.
 #[rustfmt::skip]
-pub const APPS: [&str; 10] = ["studio", "assistant", "terminal", "files", "editor",
-    "activity", "settings", "feedback", "about", "welcome"];
+pub const APPS: [&str; 15] = ["studio", "assistant", "terminal", "files", "editor",
+    "activity", "settings", "feedback", "about", "welcome", "monitor", "computer", "wyrm",
+    "wandfall", "battlestation"];
 /// The desktop's themes, in its order.
 const THEMES: [&str; 4] = ["Dusk", "Dawn", "Mono Dark", "Mono Light"];
 const GREETING: &str = "\x1b[1mcompusophyOS terminal\x1b[m \u{2014} type 'help'.\n";

@@ -1,5 +1,6 @@
 //! The WebGL2 side of the gfx contract: one program, one VAO, one instance
-//! buffer, one R8 atlas texture, one instanced draw per frame.
+//! buffer, one R8 atlas texture, one instanced draw per frame, and one more
+//! per image a frame shows (a cartridge's surface, copied as it changes).
 
 use gfx::{Atlas, DrawList, INSTANCE_BYTES, Rgba};
 use wasm_bindgen::{JsCast, JsValue};
@@ -68,6 +69,8 @@ pub struct Renderer {
     u_dpr: Option<WebGlUniformLocation>,
     u_atlas: Option<WebGlUniformLocation>,
     u_atlas_size: Option<WebGlUniformLocation>,
+    u_image: Option<WebGlUniformLocation>,
+    images: Vec<Image>,
     bytes: Vec<u8>,             // the reused encode buffer
     capacity: usize,            // the GL buffer's size in bytes
     backing: (u32, u32),        // the size last written to the canvas
@@ -98,6 +101,7 @@ impl Renderer {
         let uniform = |name| gl.get_uniform_location(&program, name);
         let (u_viewport, u_dpr) = (uniform("u_viewport"), uniform("u_dpr"));
         let (u_atlas, u_atlas_size) = (uniform("u_atlas"), uniform("u_atlas_size"));
+        let u_image = uniform("u_image");
 
         let vao = gl.create_vertex_array().ok_or("createVertexArray failed")?;
         let buffer = gl.create_buffer().ok_or("createBuffer failed")?;
@@ -123,8 +127,8 @@ impl Renderer {
 
         #[rustfmt::skip]
         let r = Renderer { gl, canvas: canvas.clone(), program, vao, buffer, texture, u_viewport,
-            u_dpr, u_atlas, u_atlas_size, bytes: Vec::new(), capacity: 0, backing: (0, 0),
-            texels: None, css: (0.0, 0.0), dpr: 1.0 };
+            u_dpr, u_atlas, u_atlas_size, u_image, images: Vec::new(), bytes: Vec::new(),
+            capacity: 0, backing: (0, 0), texels: None, css: (0.0, 0.0), dpr: 1.0 };
         Ok(r)
     }
 
@@ -170,7 +174,9 @@ impl Renderer {
     }
 
     /// Sizes the backing store to `round(css * dpr)`, clears to `clear`
-    /// (opaque) and draws every instance of `list` in one call. Glyphs sample
+    /// (opaque) and draws every instance of `list` in one call, or a run per
+    /// image it shows, that image's texture bound (a cartridge's surface,
+    /// copied when its frame count moved). Glyphs sample
     /// `atlas` through an `R8` texture: uploaded whole at first, after a
     /// context restore or a size change, else just its dirty row band, so
     /// pass the same atlas every frame.
@@ -212,10 +218,85 @@ impl Renderer {
         gl.uniform1f(self.u_dpr.as_ref(), self.dpr);
         gl.uniform1i(self.u_atlas.as_ref(), 0);
         gl.uniform2f(self.u_atlas_size.as_ref(), aw as f32, ah as f32);
+        gl.uniform1i(self.u_image.as_ref(), 1);
         gl.bind_vertex_array(Some(&self.vao));
-        let n = i32::try_from(list.len()).unwrap_or(i32::MAX);
+        // A run ends at each image, drawn with its texture on unit 1.
+        let mut start = 0;
+        let ends: Vec<(usize, Option<u32>)> =
+            list.images().map(|(i, id)| (i + 1, Some(id))).collect();
+        for (end, image) in ends.into_iter().chain([(list.len(), None)]) {
+            if let Some(id) = image {
+                self.image(id);
+            }
+            self.run(start, end);
+            start = end;
+        }
+        self.gl.bind_vertex_array(None);
+        let gl = &self.gl;
+        gl.active_texture(Gl::TEXTURE0);
+        // Textures of cartridges that ended go.
+        for i in self.images.iter().filter(|i| !crate::cart::alive(i.id)) {
+            gl.delete_texture(Some(&i.texture));
+        }
+        self.images.retain(|i| crate::cart::alive(i.id));
+    }
+
+    /// Instances `start..end` of the encoded list, in one instanced call.
+    fn run(&self, start: usize, end: usize) {
+        if end <= start {
+            return;
+        }
+        let gl = &self.gl;
+        gl.bind_buffer(Gl::ARRAY_BUFFER, Some(&self.buffer));
+        let at = (start * INSTANCE_BYTES) as i32;
+        for (loc, ty, normalized, offset) in ATTRIBS {
+            let stride = INSTANCE_BYTES as i32;
+            gl.vertex_attrib_pointer_with_i32(loc, 4, ty, normalized, stride, offset + at);
+        }
+        let n = i32::try_from(end - start).unwrap_or(i32::MAX);
         gl.draw_arrays_instanced(Gl::TRIANGLE_STRIP, 0, 4, n);
-        gl.bind_vertex_array(None);
+    }
+
+    /// Binds image `id`'s texture to unit 1, first copying the cartridge's surface into it if
+    /// its frame count moved since the last copy (the cartridge draws on its own clock).
+    fn image(&mut self, id: u32) {
+        let gl = &self.gl;
+        gl.active_texture(Gl::TEXTURE1);
+        let at = match self.images.iter().position(|i| i.id == id) {
+            Some(at) => at,
+            None => {
+                let Some(texture) = gl.create_texture() else { return };
+                gl.bind_texture(Gl::TEXTURE_2D, Some(&texture));
+                #[rustfmt::skip]
+                let params = [(Gl::TEXTURE_MIN_FILTER, Gl::LINEAR), (Gl::TEXTURE_MAG_FILTER, Gl::LINEAR),
+                    (Gl::TEXTURE_WRAP_S, Gl::CLAMP_TO_EDGE), (Gl::TEXTURE_WRAP_T, Gl::CLAMP_TO_EDGE)];
+                for (p, v) in params {
+                    gl.tex_parameteri(Gl::TEXTURE_2D, p, v as i32);
+                }
+                self.images.push(Image { id, texture, frames: None });
+                self.images.len() - 1
+            }
+        };
+        let image = &mut self.images[at];
+        gl.bind_texture(Gl::TEXTURE_2D, Some(&image.texture));
+        let Some((frames, surface)) = crate::cart::source(id) else { return };
+        if image.frames != Some(frames) {
+            image.frames = Some(frames);
+            // texImage2D(target, level, internalformat, format, type, source): web-sys has no
+            // form taking an OffscreenCanvas, so the call is made by name.
+            let f = js_sys::Reflect::get(gl, &"texImage2D".into()).ok();
+            let f = f.and_then(|f| f.dyn_into::<js_sys::Function>().ok());
+            let rgba = Gl::RGBA as f64;
+            let args: js_sys::Array = [Gl::TEXTURE_2D as f64, 0.0, rgba, rgba]
+                .into_iter()
+                .chain([Gl::UNSIGNED_BYTE as f64])
+                .map(JsValue::from)
+                .chain([surface])
+                .collect();
+            if let Some(f) = f {
+                let _ = f.apply(gl, &args);
+            }
+        }
     }
 
     /// Binds the atlas texture to unit 0 and uploads what changed.
@@ -241,6 +322,13 @@ impl Renderer {
                 Gl::TEXTURE_2D, 0, 0, y0, w, rows, fmt, ty, Some(&px[bytes]));
         }
     }
+}
+
+/// A cartridge's frames as a texture: whose, and the frame count last copied into it.
+struct Image {
+    id: u32,
+    texture: WebGlTexture,
+    frames: Option<u32>,
 }
 
 /// For the dirty rows `[y0, y1)` of an atlas `w` wide holding `len` bytes:

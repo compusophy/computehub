@@ -31,6 +31,7 @@ use std::mem;
 
 pub mod ai;
 mod cartridge;
+mod game;
 pub mod home;
 pub mod monitor;
 pub mod remote;
@@ -44,7 +45,7 @@ use logon::{Logon, Out};
 use platform::{App, Ctl, Event, Handled, Renderer};
 use shell::{Effect, Input, KernelIn, Key, LocalTime, Mods, Registry, Response, Shell};
 use ui::kernel::{self, Effect as K};
-use ui::{FontId, TextSystem};
+use ui::{FontId, Raw, TextSystem};
 use uiwire::stat;
 use vfs::Vfs;
 use wasm_bindgen::prelude::*;
@@ -80,7 +81,8 @@ const APPLETS: [&str; 9] =
 // <canvas id="os"> mounts the OS itself, as a cartridge.
 #[wasm_bindgen(start)]
 pub fn start() -> Result<(), JsValue> {
-    if !platform::page_canvas() {
+    // The page's OS is the first instance in it; another (a cartridge of the OS) only mounts.
+    if !platform::page_canvas() || !platform::claim_page() {
         return Ok(());
     }
     report::install();
@@ -239,8 +241,10 @@ impl Desktop {
         }
         let release =
             if let Event::PointerUp { x, y, button: 0 } = ev { Some((x, y)) } else { None };
+        // A game in a window takes its keys whole, its key-ups too.
+        let raw = self.shell.as_ref().is_some_and(Shell::takes_raw);
         let r = match ev {
-            Event::Key { down: false, ref code, .. } => return key_up(code),
+            Event::Key { down: false, ref code, .. } if !raw => return key_up(code),
             ev @ Event::Fetched { .. } if matches!(ev, Event::Fetched { id, .. } if self.mesh.streams(id)) =>
             {
                 self.mesh.heard(ev, ctl.monotonic_ms());
@@ -297,7 +301,7 @@ impl Desktop {
                 let got = self.logon.as_mut().map(|l| l.derived(id, result, now, &get));
                 got.map(|(r, outs)| self.outs(outs, r, ctl))
             }
-            ev => input_of(ev).and_then(|input| self.input(input, ctl)),
+            ev => input_of(ev, raw).and_then(|input| self.input(input, ctl)),
         };
         let Some(r) = r else { return Handled::default() };
         let (asked, out) = (r.text_input.is_some(), r.effects.contains(&Effect::SignOut));
@@ -595,6 +599,7 @@ fn effect(fx: Effect, ctl: &mut Ctl, ai: &ai::Ai) {
         Effect::Kernel(K::Word { pid, index, value }) => ctl.word(pid, index, value),
         Effect::Kernel(K::Kill { pid }) => ctl.kill(pid),
         Effect::Kernel(K::Wake { ms }) => ctl.wake_in(ms),
+        Effect::Lock(on) => ctl.lock_pointer(on),
         Effect::Pref { key, value } => pref(&key, &value, ctl, ai),
         // Telemetry took it ([`apply`]): it goes at the next flush, which can say what is open.
         // Signing out and resetting are the desktop's own, after the effects before them.
@@ -671,7 +676,10 @@ pub(crate) fn registry(ai: ai::Ai, depth: u8) -> Registry {
             Some(Box::new(monitor::Monitor::new(&ai, depth + 1)) as Box<dyn ui::App>)
         }
         "monitor" => None,
-        _ => remote::open(name, &ai),
+        _ => match game::GAMES.iter().find(|g| g.name == name) {
+            Some(g) => Some(Box::new(game::Game::new(g)) as Box<dyn ui::App>),
+            None => remote::open(name, &ai),
+        },
     })
 }
 
@@ -700,9 +708,21 @@ fn merge(mut a: Response, b: Response) -> Response {
     a
 }
 
-/// The shell input for an event; `None` for key-ups, fetches and kernel events.
-fn input_of(ev: Event) -> Option<Input> {
+/// The shell input for an event; `None` for key-ups (but `raw`'s), fetches and kernel events.
+/// With `raw` (a game has the keys: `Shell::takes_raw`) a key is the game's as it came, but the
+/// desktop's Alt and Meta bindings.
+fn input_of(ev: Event, raw: bool) -> Option<Input> {
     Some(match ev {
+        Event::Key { code, key, down, repeat, shift, ctrl, alt, meta, altgr }
+            if raw && !(down && chord(ctrl, alt, meta, altgr)) =>
+        {
+            let bit = |on: bool, b: u8| if on { b } else { 0 };
+            let mods = bit(shift, Raw::SHIFT) | bit(ctrl, Raw::CTRL) | bit(alt, Raw::ALT);
+            let mods = mods | bit(meta, Raw::META) | bit(altgr, Raw::ALTGR);
+            Input::Raw(Raw::Key { code, key, down, repeat, mods })
+        }
+        Event::Motion { dx, dy } => Input::Raw(Raw::Motion { dx, dy }),
+        Event::Locked(on) => Input::Raw(Raw::Locked(on)),
         Event::Key { down: false, .. } | Event::Fetched { .. } => return None,
         Event::Chunk { .. } | Event::StreamEnd { .. } => return None,
         Event::Proc { .. } | Event::ProcError { .. } | Event::Wake | Event::Hidden => return None,
@@ -745,6 +765,12 @@ fn key_of(code: &str, key: &str, chord: bool) -> Key {
         },
         code => Key::from_code(code),
     }
+}
+
+/// Whether a key-down is one of the desktop's bindings' chords: Alt or Meta, without Ctrl.
+fn chord(ctrl: bool, alt: bool, meta: bool, altgr: bool) -> bool {
+    let (ctrl, alt) = without_altgr(ctrl, alt, altgr);
+    (alt || meta) && !ctrl
 }
 
 /// Ctrl and Alt as the shell sees them: AltGr reported as both types text.

@@ -74,6 +74,15 @@ pub(crate) fn apply(s: &Rc<Shared>, effects: Vec<Effect>) {
                 _ = st.map(|st| value.map_or(st.remove_item(&key), |v| st.set_item(&key, &v)));
             }
             // Never the host's page.
+            Effect::Lock(on) => {
+                s.lock_wish.set(on);
+                if let crate::Surface::Page(canvas) = &s.canvas {
+                    match on {
+                        true => canvas.request_pointer_lock(),
+                        false => s.document.exit_pointer_lock(),
+                    }
+                }
+            }
             Effect::Reload if s.mounted.get().is_some() => {}
             Effect::Reload => _ = s.window.location().reload(),
             Effect::InputMode(numeric) => {

@@ -104,7 +104,9 @@ fn events_map_to_inputs_and_keys_by_code_or_by_meaning() {
         KeyW/z/s=Char('w') KeyQ/@/cag=Char('q') Backquote/\u{b2}/a=Char('`')";
     for entry in table.split(' ') {
         let (ev, want) = entry.split_once('=').expect("ev=want");
-        let Some(Input::Key { key: k, .. }) = input_of(key(ev, true)) else { panic!("{entry}") };
+        let Some(Input::Key { key: k, .. }) = input_of(key(ev, true), false) else {
+            panic!("{entry}")
+        };
         assert_eq!(format!("{k:?}"), want, "{entry}");
     }
     assert_eq!(key_of("", " ", false), Key::Space);
@@ -114,10 +116,10 @@ fn events_map_to_inputs_and_keys_by_code_or_by_meaning() {
         let (held, seen) = entry.split_once('=').expect("held=seen");
         let [shift, ctrl, alt, meta] = ['s', 'c', 'a', 'm'].map(|c| seen.contains(c));
         let want = Input::Key { key: Key::Char('q'), mods: Mods { shift, ctrl, alt, meta } };
-        assert_eq!(input_of(key(&["KeyQ/q/", held].concat(), true)), Some(want), "{held}");
+        assert_eq!(input_of(key(&["KeyQ/q/", held].concat(), true), false), Some(want), "{held}");
     }
-    assert_eq!(input_of(key("KeyQ/q/a", false)), None);
-    assert_eq!(input_of(fetched(1, Ok(vec![1]))), None);
+    assert_eq!(input_of(key("KeyQ/q/a", false), false), None);
+    assert_eq!(input_of(fetched(1, Ok(vec![1])), false), None);
     let (x, y, button, dy, touch) = (3.0, 4.0, 2, -48.0, true);
     let t = platform::LocalTime { year: 2026, month: 9, day: 30, weekday: 3, hour: 14, minute: 7 };
     let shell_time = LocalTime { year: 2026, month: 9, day: 30, weekday: 3, hour: 14, minute: 7 };
@@ -128,7 +130,9 @@ fn events_map_to_inputs_and_keys_by_code_or_by_meaning() {
         (Event::PointerUp { x, y, button }, Input::PointerUp { x, y, button }),
         (Event::Wheel { x, y, dy }, Input::Wheel { x, y, dy }), (resize(8.0, 6.0), Input::Resize { w: 8.0, h: 6.0 }),
         (Event::Tick { time: t }, Input::Tick { time: shell_time })];
-    pairs.into_iter().for_each(|(ev, want)| assert_eq!(input_of(ev.clone()), Some(want), "{ev:?}"));
+    pairs
+        .into_iter()
+        .for_each(|(ev, want)| assert_eq!(input_of(ev.clone(), false), Some(want), "{ev:?}"));
 }
 
 #[test]
@@ -410,7 +414,10 @@ fn programs_reach_the_kernel_and_its_effects_the_page() {
     assert_eq!((ctl.effects(), desk.ai.status().model.as_str()), (&stored[..], ai::MODELS[1]));
     let end = Event::StreamEnd { id: 1, status: 0, error: "".into() };
     for ev in [Event::Chunk { id: 1, data: vec![1] }, end] {
-        assert_eq!((send(&mut desk, ev.clone()), input_of(ev)), (((false, false), vec![]), None));
+        assert_eq!(
+            (send(&mut desk, ev.clone()), input_of(ev, false)),
+            (((false, false), vec![]), None)
+        );
     }
 }
 

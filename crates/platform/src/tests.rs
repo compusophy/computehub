@@ -285,3 +285,18 @@ fn a_mount_keeps_its_files_and_keys_under_its_own() {
     assert_eq!(mount::api("fonts/x.ttf"), "fonts/x.ttf");
     mount::place(None);
 }
+
+#[test]
+fn a_cartridge_needs_a_browser_and_answers_nothing_until_it_runs() {
+    let id = crate::cart::load(crate::cart::Spec { url: "x.js".into(), ..Default::default() });
+    assert!(matches!(crate::cart::state(id), Some(crate::cart::State::Failed(_))));
+    assert!(
+        !crate::cart::pointer(id, 0, 1.0, 1.0, 0)
+            && !crate::cart::key(id, true, "KeyA", "a", 0, false)
+    );
+    assert!(!crate::cart::typing(id) && !crate::cart::capture(id) && !crate::cart::closed(id));
+    assert_eq!((crate::cart::error(id), crate::cart::cursor(id)), (String::new(), String::new()));
+    assert!(crate::cart::source(id).is_none());
+    crate::cart::end(id);
+    assert_eq!(crate::cart::state(id), None);
+}

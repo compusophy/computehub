@@ -17,6 +17,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod cart;
 mod ctl;
 mod io;
 mod link;
@@ -29,8 +30,8 @@ mod tests;
 
 pub use ctl::{Ctl, Effect, Load, LocalTime, Timing};
 pub use mount::{
-    Mount, backing, cursor, frames, inject, mount, page_canvas, pixels, resize_to, surface, typing,
-    visible,
+    Mount, backing, capture, claim_page, cursor, files_url, frames, inject, locked, mount,
+    page_canvas, pixels, resize_to, surface, typing, visible,
 };
 pub use nav::{Device, Hardware, beacon, device, hardware};
 pub use render::Renderer;
@@ -79,6 +80,11 @@ pub enum Event {
     PointerUp { x: f32, y: f32, button: u8 },
     /// The pointer left the canvas.
     PointerLeave,
+    /// The pointer, locked to the canvas ([`Ctl::lock_pointer`]), moved by `(dx, dy)` CSS px:
+    /// while locked it sends this in place of [`Event::PointerMove`].
+    Motion { dx: f32, dy: f32 },
+    /// The pointer was locked to the canvas, or let go (Escape, the browser, an unlock).
+    Locked(bool),
     /// `dy` in CSS pixels, positive down: a line is 16 px, a page the canvas.
     Wheel { x: f32, y: f32, dy: f32 },
     /// The canvas CSS size or `devicePixelRatio` (1 if nonsense) changed; also sent at start.
@@ -192,6 +198,8 @@ fn shared(
         pressed: Cell::new(None),
         css_h: Cell::new(0.0),
         typing: Cell::new(false),
+        locked: Cell::new(false),
+        lock_wish: Cell::new(false),
         raf: handler(me, 0, |s, _, _| {
             s.frame_pending.set(false);
             frame(s);
@@ -244,6 +252,10 @@ struct Shared {
     css_h: Cell<f32>,
     /// Whether the app asked for text input.
     typing: Cell<bool>,
+    /// Whether the pointer is locked to the canvas, and whether the app wants it (a mount's host
+    /// reads the wish: [`mount::capture`]).
+    locked: Cell<bool>,
+    lock_wish: Cell<bool>,
     raf: Function,
     /// The minute timer: its callback, its handle, and the time last sent.
     tick_fn: Function,
@@ -302,7 +314,7 @@ fn install(s: &Rc<Shared>) -> Result<(), JsValue> {
     let canvas = s.canvas.target();
     let Some(sink) = &s.sink else { return Ok(()) };
     let sink: &EventTarget = sink;
-    let listeners: [(&EventTarget, &str, Handler); 17] = [
+    let listeners: [(&EventTarget, &str, Handler); 18] = [
         (win, "keydown", |s, _, e| on_key(s, e, true)),
         (win, "keyup", |s, _, e| on_key(s, e, false)),
         (win, "resize", |s, _, _| resize(s)),
@@ -333,6 +345,12 @@ fn install(s: &Rc<Shared>) -> Result<(), JsValue> {
             }
         }),
         (win, "pagehide", |s, _, _| _ = dispatch(s, Event::Hidden)),
+        (doc, "pointerlockchange", |s, _, _| {
+            let held = s.document.pointer_lock_element();
+            let on = held.is_some_and(|e| AsRef::<EventTarget>::as_ref(&e) == s.canvas.target());
+            s.locked.set(on);
+            dispatch(s, Event::Locked(on));
+        }),
         (sink, "input", |s, _, e| io::on_input(s, e)),
         (sink, "compositionend", |s, _, e| io::on_composition_end(s, e)),
     ];
@@ -382,6 +400,9 @@ fn on_pointer(s: &Rc<Shared>, e: &DomEvent, kind: Ptr) {
                 let _ = c.set_pointer_capture(p.pointer_id());
             }
             Event::PointerDown { x, y, button, touch: p.pointer_type() == "touch" }
+        }
+        Ptr::Move if s.locked.get() => {
+            Event::Motion { dx: p.movement_x() as f32, dy: p.movement_y() as f32 }
         }
         Ptr::Move => Event::PointerMove { x, y },
         Ptr::Up => Event::PointerUp { x, y, button },

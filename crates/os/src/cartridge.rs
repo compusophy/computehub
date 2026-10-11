@@ -25,9 +25,17 @@ pub struct Cartridge(());
 #[wasm_bindgen]
 impl Cartridge {
     // Boots the OS into a surface `w` x `h` CSS px at `dpr`, its files under `base` (ending in
-    // `/`), its storage keys beginning `ns`.
+    // `/`), its storage keys beginning `ns`; `opts` (the protocol's sixth argument) it needs not.
     #[wasm_bindgen(constructor)]
-    pub fn new(w: f32, h: f32, dpr: f32, base: String, ns: String) -> Result<Cartridge, JsValue> {
+    pub fn new(
+        w: f32,
+        h: f32,
+        dpr: f32,
+        base: String,
+        ns: String,
+        opts: JsValue,
+    ) -> Result<Cartridge, JsValue> {
+        let _ = opts;
         report::install();
         platform::mount(crate::Desktop::new()?, platform::Mount { w, h, dpr, base, ns })?;
         Ok(Cartridge(()))
@@ -106,5 +114,36 @@ impl Cartridge {
     // Whether the host shows it (the monitor in view): shown again, its clock catches up.
     pub fn visible(&self, on: bool) {
         platform::visible(on);
+    }
+
+    // Whether it wants the pointer locked (a game in it does): lock it, say so with `locked`,
+    // then send the moves with `motion`.
+    pub fn capture(&self) -> bool {
+        platform::capture()
+    }
+
+    // The host locked the pointer to it, or let it go.
+    pub fn locked(&self, on: bool) {
+        platform::locked(on);
+    }
+
+    // The locked pointer moved by `(dx, dy)` CSS px.
+    pub fn motion(&self, dx: f32, dy: f32) {
+        platform::inject(Event::Motion { dx, dy });
+    }
+
+    // Whether it asked to be closed: an OS never does.
+    pub fn closed(&self) -> bool {
+        false
+    }
+
+    // Why it stopped: it does not ("").
+    pub fn error(&self) -> String {
+        String::new()
+    }
+
+    // The host lets it go: hidden for good (its programs and links go with the page).
+    pub fn end(&self) {
+        platform::visible(false);
     }
 }

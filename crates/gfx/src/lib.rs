@@ -111,6 +111,10 @@ pub enum Kind {
     /// A segment `p0` wide with round ends across the rect, its bounding box grown by `p0 / 2`:
     /// from the top-left to the bottom-right, or with `p1` 1 from the bottom-left to the top-right.
     Line = 8,
+    /// Image `p0` (a texture the renderer holds by number: a cartridge's frames) over the rounded
+    /// rect, its `uv` (0 to 1) stretched across it, times the color's alpha. The renderer draws
+    /// the list in runs, one per image, in order.
+    Image = 9,
 }
 
 /// Vector icons in the rect's centered square, of side `s = min(w, h)`.
@@ -318,6 +322,19 @@ impl DrawList {
         }
     }
 
+    /// Image `id` (see [`Kind::Image`]) stretched over `r`, rounded by `radius`, at `alpha`.
+    pub fn image(&mut self, r: RectF, radius: f32, id: u32, alpha: u8) {
+        let c = Rgba(255, 255, 255, alpha);
+        self.push(r, radius, Kind::Image, [id as f32, 0.0], [c, CLEAR], [0.0, 0.0, 1.0, 1.0]);
+    }
+
+    /// The image of each [`Kind::Image`] instance, by index, in draw order.
+    pub fn images(&self) -> impl Iterator<Item = (usize, u32)> + '_ {
+        let image = Kind::Image as u8 as f32;
+        let at = move |(i, it): (usize, &Instance)| (it.kind == image).then_some((i, it.p0 as u32));
+        self.items.iter().enumerate().filter_map(at)
+    }
+
     /// Pushes `r` intersected with the current clip; a non-finite `r` hides all.
     pub fn push_clip(&mut self, r: RectF) {
         let cur = self.clip();
@@ -358,11 +375,11 @@ impl DrawList {
     fn push(&mut self, r: RectF, radius: f32, kind: Kind, p: [f32; 2], c: [Rgba; 2], uv: [f32; 4]) {
         let ([p0, p1], [color, color2], clip) = (p, c, self.clip());
         let finite = [r.x, r.y, r.w, r.h, radius, p0, p1].iter().chain(&uv).all(|v| v.is_finite());
-        // Widths, blurs and strokes are lengths; an angle or a seed is not.
-        let length = !matches!(kind, Kind::Gradient | Kind::Grain);
+        // Widths, blurs and strokes are lengths; an angle, a seed or an image's number is not.
+        let length = !matches!(kind, Kind::Gradient | Kind::Grain | Kind::Image);
         let (p0, p1) = if length { (p0.max(0.0), p1.max(0.0)) } else { (p0, p1) };
         // How far past the rect it draws, by kind: a shadow its blur + 1, a glyph or glow 0.
-        let reach = [1.0, 1.0, p0 + 1.0, 1.0, 0.0, 1.0, 0.0, 1.0, 1.0][kind as usize];
+        let reach = [1.0, 1.0, p0 + 1.0, 1.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0][kind as usize];
         let seen = r.inset(-reach).intersect(clip);
         let empty = r.w <= 0.0 || r.h <= 0.0 || seen.w <= 0.0 || seen.h <= 0.0;
         if !finite || empty || (color.3 == 0 && color2.3 == 0) {

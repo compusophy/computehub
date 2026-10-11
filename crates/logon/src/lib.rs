@@ -282,6 +282,8 @@ impl Logon {
                 (self.menu, r.redraw) = (None, true);
             }
             Input::Tick { time } => r.redraw = self.clock.replace(time) != Some(time),
+            // The welcome holds no game.
+            Input::Raw(_) => {}
             Input::PointerMove { x, y } => {
                 let at = self.at(x, y);
                 let far = |(_, (x0, y0)): (f64, (f32, f32))| (x - x0).hypot(y - y0) > WANDER;

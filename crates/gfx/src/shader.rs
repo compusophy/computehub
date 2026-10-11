@@ -19,7 +19,7 @@ flat out vec4 v_params, v_color, v_clip, v_color2;
 void main() {
   vec2 corner = vec2(float(gl_VertexID & 1), float(gl_VertexID >> 1));
   float px = 1.0 / u_dpr; int kind = int(a_params.y + 0.5);
-  float grow = kind == 2 ? max(a_params.z, px) : (kind == 4 || kind == 6 ? 0.0 : px);
+  float grow = kind == 2 ? max(a_params.z, px) : (kind == 4 || kind == 6 || kind == 9 ? 0.0 : px);
   vec2 hs = a_rect.zw * 0.5, center = a_rect.xy + hs;
   vec2 pos = clamp(center + (corner * 2.0 - 1.0) * (hs + grow), a_clip.xy, a_clip.xy + a_clip.zw);
   vec2 local = pos - center;
@@ -33,7 +33,8 @@ void main() {
 /// Fragment shader: coverage from the signed distance to the rounded rect, icon or line
 /// (antialiased over one physical pixel), the atlas texel's red channel, or the glow falloff; zero outside the
 /// clip; written premultiplied. Shadows, gradients and glows are dithered by under half an 8-bit
-/// step. Uniforms: `u_atlas` (an `R8` `NEAREST` texture on unit 0), `u_atlas_size`.
+/// step. Uniforms: `u_atlas` (an `R8` `NEAREST` texture on unit 0), `u_atlas_size`, `u_image` (the
+/// image of the run being drawn, on unit 1; straight alpha, top row first).
 pub const FRAGMENT_SHADER: &str = r"#version 300 es
 precision highp float;
 precision highp int;
@@ -43,6 +44,7 @@ flat in vec4 v_params, v_color, v_clip, v_color2;
 uniform float u_dpr;
 uniform sampler2D u_atlas;
 uniform vec2 u_atlas_size;
+uniform sampler2D u_image;
 out vec4 fragColor;
 float rbox(vec2 p, vec2 b, float r) {
   vec2 q = abs(p) - b + r;
@@ -102,6 +104,9 @@ void main() {
     float n = (float(h & 0xffffu) + float(h >> 16)) / 65535.0 - 1.0;
     float a = abs(n) * v_color.a;
     c = vec4(vec3(n > 0.0 ? a : 0.0), a);
+  } else if (kind == 9) {
+    vec4 t = texture(u_image, v_tex);
+    c = vec4(t.rgb * t.a, t.a) * v_color.a;
   } else if (kind == 8) {
     vec2 e = max(v_half - v_params.z * 0.5, 0.0);
     if (v_params.w > 0.5) e.y = -e.y;
