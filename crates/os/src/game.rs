@@ -50,15 +50,14 @@ pub struct Game {
     /// Its cartridge, once the window has a size; the size and pixel ratio it was last given.
     cart: Option<u32>,
     size: (f32, f32, f32),
-    /// Whether the pointer is locked to it; whether a field of it has the keys; why it failed.
+    /// Whether the pointer is locked to it; why it failed.
     locked: bool,
-    typing: bool,
     failed: Option<String>,
 }
 
 impl Game {
     pub fn new(kind: &'static Kind) -> Game {
-        Game { kind, cart: None, size: (0.0, 0.0, 1.0), locked: false, typing: false, failed: None }
+        Game { kind, cart: None, size: (0.0, 0.0, 1.0), locked: false, failed: None }
     }
 
     /// Its cartridge, starting it at `w` x `h` CSS px and `dpr` the first time.
@@ -114,10 +113,6 @@ impl App for Game {
         true
     }
 
-    fn wants_text_input(&self) -> bool {
-        self.typing
-    }
-
     // It draws on its own clock: while it loads or runs, the window shows each new frame.
     fn frame_in(&self, _now_ms: f64) -> Option<u32> {
         let live = self.cart.and_then(cart::state);
@@ -135,6 +130,12 @@ impl App for Game {
             }
             AppEvent::Raw(Raw::Key { code, key, down, repeat, mods }) => {
                 cart::key(id, down, &code, &key, mods, repeat);
+                // A printable key types while a field of it has the keys: the host types for it
+                // (the window takes its keys whole, so no text input of the page's comes).
+                let chord = mods & (Raw::CTRL | Raw::META) != 0;
+                if down && !chord && key.chars().count() == 1 && cart::typing(id) {
+                    cart::text(id, &key);
+                }
                 self.lock(id, cx);
             }
             AppEvent::Raw(Raw::Wheel { x, y, dy }) => _ = cart::wheel(id, x, y, dy),
@@ -181,7 +182,6 @@ impl App for Game {
                     self.size = (r.w, r.h, dpr);
                     cart::resize(id, r.w, r.h, dpr);
                 }
-                self.typing = cart::typing(id);
                 let error = cart::error(id);
                 if error.is_empty() {
                     ui.list().image(r, 0.0, id, 255);
