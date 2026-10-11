@@ -79,6 +79,12 @@ pub fn files_url() -> String {
     abs.unwrap_or(base)
 }
 
+/// What this OS's storage keys begin with: a mount's namespace ("" for a page's). A cartridge it
+/// runs keeps its keys under it, so a desk inside a desk keeps its own.
+pub fn storage_ns() -> String {
+    with_place(|_, ns| ns.to_string())
+}
+
 /// `url` as the network takes it: a mounted OS's `/api/*` at [`HOME`] (the page it is mounted in
 /// has none); a page's, and anything else, as it is.
 pub(crate) fn api(url: &str) -> String {

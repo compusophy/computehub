@@ -5,8 +5,8 @@
 //! press there gives it the keys. A locked pointer's motion, and the lock, go to what has the
 //! keys. Menus, an open folder and the overlay come first.
 
-use host::{Input, OVERLAY, Response, content_rect};
-use ui::{AppEvent, Raw};
+use host::{Cursor, Input, OVERLAY, Response, content_rect};
+use ui::{AppEvent, Pointer, Raw};
 use wm::{Cmd, WinId};
 
 use crate::{Shell, coord, desktop::Target, rectf};
@@ -103,6 +103,22 @@ impl Shell {
             }
             _ => false,
         }
+    }
+
+    /// The pointer's look while over (or pressing in) the content of an app that takes its input
+    /// whole: the app's own.
+    pub(crate) fn raw_cursor(&self) -> Option<Cursor> {
+        let win = match (self.raw_press, self.hover) {
+            (Some((win, _)), _) | (None, Some(Target::Body(win))) => win,
+            _ => return None,
+        };
+        let app = self.host.win(win).filter(|w| w.app.raw())?;
+        Some(match app.app.pointer() {
+            Pointer::Default => Cursor::Default,
+            Pointer::None => Cursor::None,
+            Pointer::Crosshair => Cursor::Crosshair,
+            Pointer::Hand => Cursor::Pointer,
+        })
     }
 
     /// `(x, y)` on the screen as in window `win`'s content.

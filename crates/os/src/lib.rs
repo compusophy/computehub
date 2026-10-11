@@ -660,8 +660,9 @@ fn load(program: kernel::Load) -> platform::Load {
 }
 
 /// The CSS `cursor` keyword of each [`Cursor`], in its order.
-const CURSORS: [&str; 8] =
-    ["default", "text", "grab", "grabbing", "ew-resize", "ns-resize", "nwse-resize", "nesw-resize"];
+#[rustfmt::skip]
+const CURSORS: [&str; 11] = ["default", "text", "grab", "grabbing", "ew-resize", "ns-resize",
+    "nwse-resize", "nesw-resize", "none", "crosshair", "pointer"];
 
 fn local(t: platform::LocalTime) -> LocalTime {
     let platform::LocalTime { year, month, day, weekday, hour, minute } = t;

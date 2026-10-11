@@ -76,9 +76,13 @@ impl App for Probe {
         self.0 == "terminal" || self.0 == "assistant"
     }
 
-    /// A game takes its input whole.
+    /// A game takes its input whole, and draws its own pointer.
     fn raw(&self) -> bool {
         self.0 == "game"
+    }
+
+    fn pointer(&self) -> ui::Pointer {
+        if self.0 == "game" { ui::Pointer::None } else { ui::Pointer::Default }
     }
 
     fn compact(&self) -> bool {
@@ -1018,7 +1022,8 @@ fn a_game_takes_its_input_whole() {
     assert!(!s.takes_raw());
     log.take();
     let (x, y) = (c.x + 10.0, c.y + 20.0);
-    s.input(Input::PointerMove { x, y });
+    // Over its content the pointer is its own (it draws one).
+    assert_eq!(s.input(Input::PointerMove { x, y }).cursor, Some(Cursor::None));
     s.input(Input::PointerDown { x, y, button: 2, touch: false });
     assert_eq!(s.host.focused_app(), Some(game));
     // A press that began there keeps the pointer its own, out of its content too.

@@ -140,6 +140,7 @@ impl Shell {
             (Some(Grab::Size { edge, .. }), _) => edge_cursor(edge),
             (None, Some(Target::Title(_))) if !self.host.narrow() => Cursor::Grab,
             (None, Some(Target::Edge(_, dx, dy))) => edge_cursor((dx, dy)),
+            _ if self.raw_cursor().is_some() => self.raw_cursor().unwrap_or_default(),
             _ if text => Cursor::Text,
             _ => Cursor::Default,
         }

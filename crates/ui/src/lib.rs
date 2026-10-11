@@ -89,9 +89,6 @@ pub trait App {
     fn ended(&self) -> bool {
         false
     }
-    /// Whether it runs a kernel of its own in the page (a desktop in a window): what that asks
-    /// of the page goes as [`Request::Kernel`], and it hears the page's wakes
-    /// ([`AppEvent::ProcWake`]).
     /// Whether it takes its input whole (a game): while it has the keys, every key down and up
     /// as it came (but the desktop's own Alt and Meta bindings), and while the pointer is over
     /// its content (or a press began there) every move, button and wheel turn, and a locked
@@ -99,6 +96,13 @@ pub trait App {
     fn raw(&self) -> bool {
         false
     }
+    /// The pointer's look over its content while it takes its input whole ([`App::raw`]).
+    fn pointer(&self) -> Pointer {
+        Pointer::Default
+    }
+    /// Whether it runs a kernel of its own in the page (a desktop in a window): what that asks
+    /// of the page goes as [`Request::Kernel`], and it hears the page's wakes
+    /// ([`AppEvent::ProcWake`]).
     fn has_kernel(&self) -> bool {
         false
     }
@@ -211,6 +215,17 @@ pub enum Raw {
     Motion { dx: f32, dy: f32 },
     /// The pointer was locked, or let go (Escape, the browser, an unlock).
     Locked(bool),
+}
+
+/// The pointer's look over an app that takes its input whole: the arrow, none (it draws its
+/// own), a crosshair, a hand.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Pointer {
+    #[default]
+    Default,
+    None,
+    Crosshair,
+    Hand,
 }
 
 impl Raw {

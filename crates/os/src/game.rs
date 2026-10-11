@@ -9,7 +9,7 @@
 
 use platform::cart::{self, Spec, State};
 use ui::icon::Glyph;
-use ui::{App, AppEvent, AppIcon, Cx, Raw, Rgba, Sense, Ui, WidgetId};
+use ui::{App, AppEvent, AppIcon, Cx, Pointer, Raw, Rgba, Sense, Ui, WidgetId};
 
 /// Where secretspace serves its games (each `<id>/pkg/<id>.js`, open to other sites).
 pub const SECRETSPACE: &str = "https://secretspace.compusophy.com";
@@ -73,7 +73,8 @@ impl Game {
             h,
             dpr,
             base,
-            ns: ["compusophy.game.", name, "."].concat(),
+            // Under this OS's own keys: a desk inside a desk keeps its own.
+            ns: [&platform::storage_ns(), "compusophy.game.", name, "."].concat(),
             query: String::new(),
             os: self.kind.os.then(platform::files_url),
         };
@@ -111,6 +112,16 @@ impl App for Game {
 
     fn raw(&self) -> bool {
         true
+    }
+
+    fn pointer(&self) -> Pointer {
+        let at = self.running().map(cart::cursor).unwrap_or_default();
+        match at.as_str() {
+            "none" => Pointer::None,
+            "crosshair" => Pointer::Crosshair,
+            "pointer" => Pointer::Hand,
+            _ => Pointer::Default,
+        }
     }
 
     // It draws on its own clock: while it loads or runs, the window shows each new frame.

@@ -164,11 +164,13 @@ pub enum KernelIn {
     Hidden,
 }
 
-/// The pointer: arrow, I-beam on text, open hand on a titlebar (closed while moving), resizes.
+/// The pointer: arrow, I-beam on text, open hand on a titlebar (closed while moving), resizes;
+/// over a game's content, its own: none, a crosshair, a pointing hand.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[rustfmt::skip]
 pub enum Cursor {
-    #[default] Default, Text, Grab, Grabbing, EwResize, NsResize, NwseResize, NeswResize,
+    #[default] Default, Text, Grab, Grabbing, EwResize, NsResize, NwseResize, NeswResize, None,
+    Crosshair, Pointer,
 }
 
 /// After an input: draw, `preventDefault`, text input and cursor (if changed), effects, animate,

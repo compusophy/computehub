@@ -31,7 +31,7 @@ mod tests;
 pub use ctl::{Ctl, Effect, Load, LocalTime, Timing};
 pub use mount::{
     Mount, backing, capture, claim_page, cursor, files_url, frames, inject, locked, mount,
-    page_canvas, pixels, resize_to, surface, typing, visible,
+    page_canvas, pixels, resize_to, storage_ns, surface, typing, visible,
 };
 pub use nav::{Device, Hardware, beacon, device, hardware};
 pub use render::Renderer;
@@ -416,7 +416,10 @@ fn on_pointer(s: &Rc<Shared>, e: &DomEvent, kind: Ptr) {
 fn on_wheel(s: &Rc<Shared>, e: &DomEvent) {
     let Some(w) = e.dyn_ref::<WheelEvent>() else { return };
     let (x, y) = (w.offset_x() as f32, w.offset_y() as f32);
-    let dy = wheel_px(w.delta_y(), w.delta_mode(), s.css_h.get());
+    // Shift turns a wheel sideways in Chrome on Windows and Linux: then the sideways turn is it.
+    let sideways = w.delta_y() == 0.0 && w.shift_key();
+    let d = if sideways { w.delta_x() } else { w.delta_y() };
+    let dy = wheel_px(d, w.delta_mode(), s.css_h.get());
     if dispatch(s, Event::Wheel { x, y, dy }).prevent_default {
         e.prevent_default();
     }
