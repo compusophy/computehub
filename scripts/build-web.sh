@@ -141,6 +141,9 @@ optimize() {
 optimize dist/os_bg.wasm
 
 cp web/index.html dist/
+# The card image link previews show (the X player card: compusophy.com plays in the feed).
+mkdir -p dist/card
+cp web/card/*.png dist/card/
 # The fonts outside the wasm, none of them part of the boot download: the
 # deferred ones the page fetches right after its first frame (Inter SemiBold
 # and JetBrains Mono, from fonts/deferred/), the lazy symbol fonts a terminal
@@ -178,7 +181,7 @@ done
 # The files a page that mounts the OS as a cartridge (os::cartridge) serves beside itself, one a
 # line, relative to dist/: its programs run in workers, which a browser loads only from the
 # page's own origin, so the host mirrors them (and serves them cross-origin isolated).
-(cd dist && find . -type f ! -name files.txt | sed 's|^\./||' | LC_ALL=C sort) > dist/files.txt
+(cd dist && find . -type f ! -name files.txt ! -path './card/*' | sed 's|^\./||' | LC_ALL=C sort) > dist/files.txt
 
 # dist/ is what visitors download, so it gets scripts/caps.sh's privacy check
 # too (same patterns; -a because the wasm and fonts are binary). A leaky

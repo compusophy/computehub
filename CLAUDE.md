@@ -111,6 +111,7 @@ tools/serve/   dev-only server for dist/; mocks /api/*
 tools/eval/    dev-only eval runner (the free AI)
 train/         dev: fine-tuning on the 3090 (Python)
 web/index.html the page: <canvas id="os"> + a one-line bootstrap
+web/card/      the link-preview image (the X player card: the OS plays in the feed)
 web/worker.js  the program worker's one-line bootstrap
 scripts/       caps.sh, budget.sh, build-web.sh, deploy.sh (`prod`: main's
              tip only); Vercel builds each push to main (vercel.json)

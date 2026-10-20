@@ -43,8 +43,10 @@ for f in api/*.mjs; do
 }
 EOF
 done
-# Every response: no other site keeps a handle on the page's window or
-# frames it, and the page is cross-origin isolated (COOP plus COEP
+# Every response: no other site keeps a handle on the page's window, only X
+# frames it (its player card plays the OS in the feed; a framed page is not
+# isolated, so its programs wait for the page opened on its own), and the
+# page is cross-origin isolated (COOP plus COEP
 # require-corp; Safari has no credentialless), which programs need for
 # SharedArrayBuffer. CORP same-origin on every file too, so no engine's rules
 # for how workers inherit COEP matter.
@@ -58,7 +60,7 @@ cat > .vercel/output/config.json <<'EOF'
         "Cross-Origin-Opener-Policy": "same-origin",
         "Cross-Origin-Embedder-Policy": "require-corp",
         "Cross-Origin-Resource-Policy": "same-origin",
-        "Content-Security-Policy": "frame-ancestors 'none'"
+        "Content-Security-Policy": "frame-ancestors https://x.com https://*.x.com https://twitter.com https://*.twitter.com"
       },
       "continue": true
     }
