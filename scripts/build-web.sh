@@ -141,7 +141,7 @@ optimize() {
 optimize dist/os_bg.wasm
 
 cp web/index.html dist/
-# The card image link previews show (the X player card: compusophy.com plays in the feed).
+# The card image link previews show (the X player card: compusophy.com/play plays in the feed).
 mkdir -p dist/card
 cp web/card/*.png dist/card/
 # The fonts outside the wasm, none of them part of the boot download: the

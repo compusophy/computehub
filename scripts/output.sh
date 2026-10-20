@@ -43,14 +43,15 @@ for f in api/*.mjs; do
 }
 EOF
 done
-# Every response: no other site keeps a handle on the page's window, only X
-# frames it (its player card plays the OS in the feed; a framed page is not
-# isolated, so its programs wait for the page opened on its own), and the
-# page is cross-origin isolated (COOP plus COEP
-# require-corp; Safari has no credentialless), which programs need for
-# SharedArrayBuffer. CORP same-origin on every file too, so no engine's rules
-# for how workers inherit COEP matter.
-cat > .vercel/output/config.json <<'EOF'
+# Every response: no other site keeps a handle on the page's window, and the
+# page is cross-origin isolated (COOP plus COEP require-corp; Safari has no
+# credentialless), which programs need for SharedArrayBuffer. CORP
+# same-origin on every file too, so no engine's rules for how workers inherit
+# COEP matter. No site frames the page but X, at /embed: the X player card
+# (the testbed's recipe). The link to post is /play, its tags point the card
+# at /embed; both are the page itself, never cached. A framed page is not
+# isolated, so its programs wait for the page opened on its own.
+cat > .vercel/output/config.json <<'EOF2'
 {
   "version": 3,
   "routes": [
@@ -58,12 +59,38 @@ cat > .vercel/output/config.json <<'EOF'
       "src": "/(.*)",
       "headers": {
         "Cross-Origin-Opener-Policy": "same-origin",
-        "Cross-Origin-Embedder-Policy": "require-corp",
-        "Cross-Origin-Resource-Policy": "same-origin",
-        "Content-Security-Policy": "frame-ancestors https://x.com https://*.x.com https://twitter.com https://*.twitter.com"
+        "Cross-Origin-Embedder-Policy": "require-corp"
       },
       "continue": true
-    }
+    },
+    {
+      "src": "^/(?!embed$).*",
+      "headers": {
+        "Cross-Origin-Resource-Policy": "same-origin",
+        "Content-Security-Policy": "frame-ancestors 'none'"
+      },
+      "continue": true
+    },
+    {
+      "src": "^/embed$",
+      "headers": {
+        "Cross-Origin-Resource-Policy": "cross-origin",
+        "Content-Security-Policy": "frame-ancestors *",
+        "Access-Control-Allow-Origin": "*",
+        "Cache-Control": "private, no-cache, no-store, max-age=0, must-revalidate"
+      },
+      "continue": true
+    },
+    {
+      "src": "^/play$",
+      "headers": {
+        "Access-Control-Allow-Origin": "*",
+        "Cache-Control": "private, no-cache, no-store, max-age=0, must-revalidate"
+      },
+      "continue": true
+    },
+    { "handle": "filesystem" },
+    { "src": "^/(play|embed)$", "dest": "/index.html" }
   ]
 }
-EOF
+EOF2
