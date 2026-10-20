@@ -86,25 +86,26 @@ fn then(id: u32, p: &Promise, ok: impl FnOnce(JsValue) + 'static) {
 }
 
 /// The modules are in (the cartridge's and, for one that shows the OS, the OS's): runs the
-/// cartridge's `default`, then constructs it.
+/// cartridge's `default`, then constructs it. A module without a `Cartridge` is a page's, not a
+/// cartridge's: its `default` would start that page inside this one, so it is never run.
 fn start(id: u32, spec: Spec, both: &JsValue) {
     let both = Array::from(both);
     let (module, os) = (both.get(0), both.get(1));
+    let class = Reflect::get(&module, &"Cartridge".into()).ok().and_then(|c| c.dyn_into().ok());
+    let Some(class) = class.map(|c: Function| c) else {
+        return set(id, State::Failed("not a cartridge (no Cartridge)".into()), JsValue::NULL);
+    };
     let init = Reflect::get(&module, &"default".into()).ok().and_then(|f| f.dyn_into().ok());
     let ready = match init.map(|f: Function| f.call0(&module)) {
         Some(Ok(v)) => Promise::resolve(&v),
         Some(Err(e)) => return set(id, State::Failed(crate::js_text(&e)), JsValue::NULL),
         None => return set(id, State::Failed("the module has no default".into()), JsValue::NULL),
     };
-    then(id, &ready, move |_| construct(id, &spec, &module, &os));
+    then(id, &ready, move |_| construct(id, &spec, &class, &os));
 }
 
 /// `new Cartridge(w, h, dpr, base, ns, opts)`, the protocol's constructor.
-fn construct(id: u32, spec: &Spec, module: &JsValue, os: &JsValue) {
-    let class = Reflect::get(module, &"Cartridge".into()).ok().and_then(|c| c.dyn_into().ok());
-    let Some(class) = class.map(|c: Function| c) else {
-        return set(id, State::Failed("the module has no Cartridge".into()), JsValue::NULL);
-    };
+fn construct(id: u32, spec: &Spec, class: &Function, os: &JsValue) {
     let opts = Object::new();
     let put = |k: &str, v: &JsValue| _ = Reflect::set(&opts, &k.into(), v);
     put("v", &1.into());
@@ -121,7 +122,7 @@ fn construct(id: u32, spec: &Spec, module: &JsValue, os: &JsValue) {
         args.push(&v.into());
     }
     args.push(&opts);
-    match Reflect::construct(&class, &args) {
+    match Reflect::construct(class, &args) {
         Ok(obj) => set(id, State::Ready, obj),
         Err(e) => set(id, State::Failed(crate::js_text(&e)), JsValue::NULL),
     }
