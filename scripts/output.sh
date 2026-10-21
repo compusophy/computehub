@@ -47,10 +47,14 @@ done
 # page is cross-origin isolated (COOP plus COEP require-corp; Safari has no
 # credentialless), which programs need for SharedArrayBuffer. CORP
 # same-origin on every file too, so no engine's rules for how workers inherit
-# COEP matter. No site frames the page but X, at /embed: the X player card
-# (the testbed's recipe). The link to post is /play, its tags point the card
-# at /embed; both are the page itself, never cached. A framed page is not
-# isolated, so its programs wait for the page opened on its own.
+# COEP matter. Only /embed may be framed, by any page at all: the X player
+# card's player (the testbed's recipe; the link to post is /play, whose tags
+# point the card at /embed; both are the page itself, never cached) and any
+# site's iframe. It sends no frame-ancestors, since even `*` refuses a
+# sandboxed host page (origin null, as xframes.nanocode.xyz serves its
+# pages); such a frame is null-origin too, so every file but /api/* allows
+# any origin to fetch it. A framed page is not isolated, so its programs wait
+# for the page opened on its own.
 cat > .vercel/output/config.json <<'EOF2'
 {
   "version": 3,
@@ -60,6 +64,13 @@ cat > .vercel/output/config.json <<'EOF2'
       "headers": {
         "Cross-Origin-Opener-Policy": "same-origin",
         "Cross-Origin-Embedder-Policy": "require-corp"
+      },
+      "continue": true
+    },
+    {
+      "src": "^/(?!api/).*",
+      "headers": {
+        "Access-Control-Allow-Origin": "*"
       },
       "continue": true
     },
@@ -75,8 +86,6 @@ cat > .vercel/output/config.json <<'EOF2'
       "src": "^/embed$",
       "headers": {
         "Cross-Origin-Resource-Policy": "cross-origin",
-        "Content-Security-Policy": "frame-ancestors *",
-        "Access-Control-Allow-Origin": "*",
         "Cache-Control": "private, no-cache, no-store, max-age=0, must-revalidate"
       },
       "continue": true
@@ -84,7 +93,6 @@ cat > .vercel/output/config.json <<'EOF2'
     {
       "src": "^/play$",
       "headers": {
-        "Access-Control-Allow-Origin": "*",
         "Cache-Control": "private, no-cache, no-store, max-age=0, must-revalidate"
       },
       "continue": true
