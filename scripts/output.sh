@@ -53,8 +53,10 @@ done
 # site's iframe. It sends no frame-ancestors, since even `*` refuses a
 # sandboxed host page (origin null, as xframes.nanocode.xyz serves its
 # pages); such a frame is null-origin too, so every file but /api/* allows
-# any origin to fetch it. A framed page is not isolated, so its programs wait
-# for the page opened on its own.
+# any origin to fetch it. /embed isolates itself (Document-Isolation-Policy,
+# Chrome), so framed by any page its programs run; elsewhere, and in a
+# null-origin frame (no worker of this origin starts there), they wait for the
+# page opened on its own.
 cat > .vercel/output/config.json <<'EOF2'
 {
   "version": 3,
@@ -86,6 +88,7 @@ cat > .vercel/output/config.json <<'EOF2'
       "src": "^/embed$",
       "headers": {
         "Cross-Origin-Resource-Policy": "cross-origin",
+        "Document-Isolation-Policy": "isolate-and-require-corp",
         "Cache-Control": "private, no-cache, no-store, max-age=0, must-revalidate"
       },
       "continue": true
